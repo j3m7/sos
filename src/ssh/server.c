@@ -52,6 +52,8 @@
      buffer holds a full window.
    - I/O callbacks return WS_CBIO_ERR_WANT_READ/WRITE instead of WS_WANT_READ/WRITE; a full
      TCP send buffer was treated as a fatal socket error.
+   - Output flow control instead of dropping output: ssh_session_read() holds input back while
+     rb_out is more than half full, and ssh_session_write() waits (bounded) for room.
    - Channel input is drained on every pass, not only on WS_CHAN_RXD. Client EOF ends the
      session cleanly once its input is consumed; stderr-type extended data is discarded
      instead of ending the session.
@@ -85,6 +87,11 @@
    hit would-block part way through them (wolfSSH_stream_exit cannot be resumed). */
 #define SSH_EXIT_MSGS_ROOM 512
 #define SSH_EXIT_MSGS_QUEUE 8
+/* Output flow control. The shell gets no more input while less than this share of rb_out is
+   free, so a command's output always fits; a write that still finds rb_out full keeps the
+   session moving for up to SSH_WRITE_WAIT_US before giving up on a client that isn't reading. */
+#define SSH_OUTPUT_RESERVE_DIV 2
+#define SSH_WRITE_WAIT_US (500 * 1000)
 /* Connections that have not logged in within this time are dropped (like sshd LoginGraceTime),
    so idle or stalled clients cannot hold every session slot. */
 #define SSH_LOGIN_GRACE_US (30 * 1000 * 1000)
@@ -379,6 +386,7 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	ss->setup_pending = false;
 	ss->eof_received = false;
 	ss->exit_sent = false;
+	ss->output_stalled = false;
 	if (ss->client) {
 		err = close_client_connection(ss->client);
 		ss->client = NULL;
@@ -577,6 +585,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ss->setup_pending = true;
 	ss->eof_received = false;
 	ss->exit_sent = false;
+	ss->output_stalled = false;
 	ss->client = pcb;
 	ss->auth_tries = 0;
 	ss->login[0] = 0;
@@ -797,6 +806,8 @@ static int ssh_session_flush(ssh_session_t *ss)
 		ssh_ringbuffer_read(&ss->rb_out, NULL, (size_t)res);
 		wcount++;
 	}
+	if (ssh_ringbuffer_used(&ss->rb_out) == 0)
+		ss->output_stalled = false;
 
 	return wcount;
 }
@@ -819,13 +830,8 @@ static void ssh_session_drain_channels(ssh_session_t *ss, word32 channel_id)
 
 	for (;;) {
 		size_t room = ssh_ringbuffer_free(&ss->rb_in);
-		if (room < 1) {
-			/* Full: the shell drains rb_in every poll, so come back on the next pass rather
-			   than waiting for the client to send more (it may be out of window). */
-			if (wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) > 0)
-				ss->work_pending = true;
-			break;
-		}
+		if (room < 1)
+			break;	/* ssh_session_service() resumes once the shell has made room */
 		res = wolfSSH_ChannelIdRead(ss->ssh, 0, tmp, room < sizeof(tmp) ? room : sizeof(tmp));
 		if (res <= 0)
 			break;
@@ -1040,6 +1046,12 @@ static void ssh_session_service(ssh_session_t *ss)
 		return;
 	}
 
+	/* Input left in wolfSSH because rb_in was full: resume once the shell has made room,
+	   without waiting for the client to send more (it may be out of window). */
+	if (ss->cstate == CS_CONNECT && !ss->work_pending && ssh_ringbuffer_free(&ss->rb_in) > 0 &&
+	    wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) > 0)
+		ss->work_pending = true;
+
 	if (!ss->work_pending)
 		return;
 	ss->work_pending = false;
@@ -1245,16 +1257,39 @@ int ssh_server_add_priv_key(ssh_server_t *st, int type, const uint8_t *key, uint
 
 int ssh_session_write(ssh_session_t *ss, const char *buf, int length)
 {
+	ssh_server_t *st = ss ? ss->server : NULL;
 	int written = 0;
 
 	if (!ss || ss->cstate != CS_CONNECT)
 		return -1;
 
 	/* rb_out is only used in thread context; send_cb takes the lwIP lock itself. */
+	uint64_t deadline = 0;
 	while (written < length && ss->cstate == CS_CONNECT) {
 		size_t len = ssh_ringbuffer_free(&ss->rb_out);
-		if (len < 1)
-			break;	/* output buffer full and not draining: drop the rest */
+		if (len < 1) {
+			/* Full despite the input-side flow control in ssh_session_read() (one command
+			   printing more than the reserve). Keep the session moving: lwIP processes ACKs
+			   in the background, and the worker handles the client's window adjusts. */
+			if (ss->output_stalled || ss->peer_closed)
+				break;	/* client not reading (or gone): drop without waiting */
+			if (!deadline)
+				deadline = time_us_64() + SSH_WRITE_WAIT_US;
+			if (time_us_64() > deadline) {
+				LOG_MSG(LOG_NOTICE, "SSH session %u: client not reading, dropping output",
+					ss->index + 1);
+				ss->output_stalled = true;
+				break;
+			}
+			if (ss->work_pending) {
+				ss->work_pending = false;
+				ssh_session_process_input(ss);
+			} else {
+				sleep_us(200);
+			}
+			ssh_session_flush(ss);
+			continue;
+		}
 		if (len > (size_t)(length - written))
 			len = length - written;
 		ssh_ringbuffer_add(&ss->rb_out, buf + written, len, false);
@@ -1273,6 +1308,11 @@ int ssh_session_read(ssh_session_t *ss, char *buf, int length)
 	if (!ss || ss->cstate != CS_CONNECT)
 		return -1;
 	if (length < 1 || (len = ssh_ringbuffer_used(&ss->rb_in)) < 1)
+		return 0;
+	/* Output flow control: hold input back while earlier output is still queued, so the
+	   commands it runs have room for theirs. Unread input stays in rb_in and then in wolfSSH,
+	   whose window then makes the client wait too. */
+	if (ssh_ringbuffer_free(&ss->rb_out) < ss->rb_out.size / SSH_OUTPUT_RESERVE_DIV)
 		return 0;
 
 	if (len > (size_t)length)

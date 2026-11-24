@@ -32,6 +32,11 @@ static ssh_server_t *server;
 // One shell per session slot, restarted whenever the slot gets a new login.
 static shell_t session_shells[SOS_SSH_MAX_SESSIONS];
 static uint32_t session_shell_ids[SOS_SSH_MAX_SESSIONS];   // session_id each shell serves; 0 = none
+// Output each session's shell has produced in the current shell_poll() call. Once it reaches
+// SESSION_POLL_OUTPUT_BUDGET the shell gets no more input until the next main-loop pass, so a
+// burst of piped commands can't hold up the USB console and the other sessions for seconds.
+#define SESSION_POLL_OUTPUT_BUDGET 2048
+static uint32_t session_poll_output[SOS_SSH_MAX_SESSIONS];
 static uint8_t authorized_key[SSH_KEY_BLOB_MAX];
 static uint32_t authorized_key_len;
 static char hostkey_fingerprint[64];
@@ -175,12 +180,17 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
 // --- per-session shells ---------------------------------------------------------
 
 static int session_read(void *ctx, char *buf, int len) {
-    int n = ssh_session_read((ssh_session_t *)ctx, buf, len);
+    ssh_session_t *ss = ctx;
+    if (session_poll_output[ss->index] >= SESSION_POLL_OUTPUT_BUDGET)
+        return 0;                   // budget used up: continue on the next pass
+    int n = ssh_session_read(ss, buf, len);
     return n > 0 ? n : 0;
 }
 
 static void session_write(void *ctx, const char *buf, int len) {
-    ssh_session_write((ssh_session_t *)ctx, buf, len);
+    ssh_session_t *ss = ctx;
+    session_poll_output[ss->index] += (uint32_t)len;
+    ssh_session_write(ss, buf, len);
 }
 
 static void session_logout(void *ctx) {
@@ -210,6 +220,7 @@ void sshd_poll(void) {
             session_shell_ids[i] = ss->session_id;
             shell_init(&session_shells[i], &session_io, ss);
         }
+        session_poll_output[i] = 0;
         shell_poll(&session_shells[i]);
     }
 }

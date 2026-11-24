@@ -87,6 +87,7 @@ typedef struct ssh_session_t {
 	volatile bool peer_closed;         /* (irq) client closed or connection failed */
 	volatile bool setup_pending;       /* (irq) accepted; wolfSSH session not created yet */
 	bool eof_received;                 /* client sent channel EOF: end once input is consumed */
+	bool output_stalled;               /* client stopped reading: writes drop until rb_out drains */
 	volatile bool exit_sent;           /* CS_CLOSING: exit status and channel close sent (the
 	                                      slot may then be reclaimed by a new connection) */
 	uint64_t accept_start_us;          /* when the connection was accepted */
@@ -153,9 +154,12 @@ void ssh_server_service(ssh_server_t *st);
 /* Session slot by index (0 .. max_sessions-1), or NULL. */
 ssh_session_t *ssh_server_session(ssh_server_t *st, unsigned index);
 
-/* Session I/O. Non-blocking; both return -1 unless the session is logged in (CS_CONNECT).
-   Read returns the number of bytes copied (0 if none are waiting); write returns the number of
-   bytes queued, dropping what does not fit in the output buffer. */
+/* Session I/O. Both return -1 unless the session is logged in (CS_CONNECT).
+   Read returns the number of bytes copied; 0 if none are waiting, or while more than half of
+   the output buffer is still queued (flow control: input is held back until output drains).
+   Write returns the number of bytes queued. If the output buffer is full it waits for room
+   (at most SSH_WRITE_WAIT_US, in server.c); only if the client isn't reading by then is the
+   rest dropped, and later writes drop without waiting until the buffer has drained. */
 int ssh_session_read(ssh_session_t *ss, char *buf, int length);
 int ssh_session_write(ssh_session_t *ss, const char *buf, int length);
 
