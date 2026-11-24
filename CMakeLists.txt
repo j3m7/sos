@@ -46,6 +46,16 @@ foreach(check "WOLFSSL_ROOT;wolfssl/ssl.h" "WOLFSSH_ROOT;wolfssh/ssh.h")
     endif()
 endforeach()
 
+# microSD driver + FatFs (carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico), lib/sdcard by default.
+if (NOT DEFINED SDCARD_ROOT)
+    set(SDCARD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/lib/sdcard" CACHE PATH "SD card library source")
+endif()
+if (NOT EXISTS "${SDCARD_ROOT}/src/CMakeLists.txt")
+    message(FATAL_ERROR "SDCARD_ROOT (${SDCARD_ROOT}) is empty or missing. "
+        "Run 'git submodule update --init', or point SDCARD_ROOT at a checkout in local.cmake.")
+endif()
+add_subdirectory(${SDCARD_ROOT}/src ${CMAKE_CURRENT_BINARY_DIR}/sdcard)
+
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
 
@@ -74,6 +84,7 @@ set(SOS_SOURCES
     src/timeconv.c
     src/timesync.c
     src/wdog.c
+    src/sdcard.c
 )
 add_executable(sos ${SOS_SOURCES})
 
@@ -123,6 +134,7 @@ target_link_libraries(sos
     hardware_i2c
     hardware_watchdog
     sos-ssh
+    no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 )
 
 pico_set_program_name(sos "SOS")

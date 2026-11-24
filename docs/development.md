@@ -7,7 +7,7 @@ Machine-specific values (paths, network, VM names) belong in git-ignored files s
 
 ## Dependencies outside the repository
 
-wolfSSL and wolfSSH are about 220 MB checked out. To share one copy between projects, or keep
+wolfSSL and wolfSSH are about 220 MB checked out (the SD card library is about 5 MB). To share one copy between projects, or keep
 large trees out of the source directory, clone them anywhere at the versions pinned by the
 submodules and point the build at them in `local.cmake`:
 
@@ -16,12 +16,14 @@ cd <deps-dir>
 git clone --depth 1 -b 2.3.1 --recurse-submodules --shallow-submodules https://github.com/raspberrypi/pico-sdk.git
 git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git
 git clone --depth 1 -b v1.6.0-stable https://github.com/wolfSSL/wolfssh.git
+git clone --depth 1 -b v3.6.2 https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico.git
 ```
 
 ```cmake
 # local.cmake
 set(WOLFSSL_ROOT "<deps-dir>/wolfssl")
 set(WOLFSSH_ROOT "<deps-dir>/wolfssh")
+set(SDCARD_ROOT  "<deps-dir>/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico")
 ```
 
 ```sh

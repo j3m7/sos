@@ -15,6 +15,7 @@
 
 #include "config.h"
 #include "log.h"
+#include "sdcard.h"
 #include "settings.h"
 #include "sshd.h"
 #include "stackmon.h"
@@ -583,6 +584,8 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "user"))
         set_field(sh, "ssh user", args, settings()->ssh_user, sizeof(settings()->ssh_user),
                   config_check_user);
+    else if (!strcmp(cmd, "sd"))
+        sdcard_command(sh, args);
     else if (!strcmp(cmd, "setup"))
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))
