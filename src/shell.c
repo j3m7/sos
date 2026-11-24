@@ -15,6 +15,8 @@
 
 #include "config.h"
 #include "log.h"
+#include "files.h"
+#include "sdcard.h"
 #include "settings.h"
 #include "sshd.h"
 #include "stackmon.h"
@@ -57,6 +59,8 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
+    shell_printf(sh, "sd [info]         SD card status (also: sd test [KB], sd speed, sd unmount)\n");
+    files_help(sh);
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
@@ -67,6 +71,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "time auto <h>|off sync the clock from NTS every h hours (default off)\n");
         shell_printf(sh, "time server <name>|default  set the NTS server\n");
         shell_printf(sh, "config reset      erase the configuration\n");
+        shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
     shell_printf(sh, "reboot            restart the device\n");
@@ -626,6 +631,8 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "user"))
         set_field(sh, "ssh user", args, settings()->ssh_user, sizeof(settings()->ssh_user),
                   config_check_user);
+    else if (!strcmp(cmd, "sd"))
+        sdcard_command(sh, args);
     else if (!strcmp(cmd, "setup"))
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))
@@ -634,6 +641,6 @@ void shell_execute(shell_t *sh, char *cmd) {
         shell_printf(sh, "rebooting...\n");
         sleep_ms(100);
         watchdog_reboot(0, 0, 0);
-    } else
+    } else if (!files_command(sh, cmd, args))
         shell_printf(sh, "%s: unknown command (try 'help')\n", cmd);
 }
