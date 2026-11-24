@@ -71,6 +71,7 @@ set(SOS_SOURCES
     src/shell.c
     src/shell_core.c
     src/stackmon.c
+    src/wdog.c
 )
 add_executable(sos ${SOS_SOURCES})
 
@@ -90,8 +91,12 @@ set(SOS_CORE0_STACK_SIZE 0x2000 CACHE STRING "Core 0 stack size in bytes")
 # Concurrent SSH sessions. Each slot preallocates ~23K of buffers (TCP input sized to TCP_WND,
 # decrypted input, output); logins need ~25K transiently.
 set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
+# Hardware watchdog: the main loop must come round within this time or the chip resets.
+# 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
+set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
 target_compile_definitions(sos PRIVATE
     SOS_SSH_MAX_SESSIONS=${SOS_SSH_MAX_SESSIONS}
+    SOS_WATCHDOG_MS=${SOS_WATCHDOG_MS}
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
     PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
     PICO_USE_STACK_GUARDS=1         # MSPLIM: stack overflow faults instead of corrupting the heap
@@ -105,6 +110,7 @@ target_link_libraries(sos
     pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
     hardware_flash
+    hardware_watchdog
     sos-ssh
 )
 

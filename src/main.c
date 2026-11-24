@@ -16,6 +16,7 @@
 #include "stackmon.h"
 #include "sos_config.h"
 #include "sshd.h"
+#include "wdog.h"
 
 // The USB/UART console shell. stdio already translates "\n" to "\r\n".
 static int console_read(void *ctx, char *buf, int len) {
@@ -43,14 +44,42 @@ static const shell_io_t console_io = {
 
 static shell_t console_shell;
 
+// cyw43_arch_wifi_connect_timeout_ms(), but feeding the watchdog while it waits (a connect
+// attempt takes longer than the watchdog timeout). Same logic as the SDK's version.
+static int wifi_connect_once(uint32_t timeout_ms) {
+    int err = cyw43_arch_wifi_connect_async(SOS_WIFI_SSID, SOS_WIFI_PASSWORD,
+                                            CYW43_AUTH_WPA2_AES_PSK);
+    if (err)
+        return err;
+    absolute_time_t until = make_timeout_time_ms(timeout_ms);
+    for (;;) {
+        int st = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+        if (st == CYW43_LINK_UP)
+            return PICO_OK;
+        if (st == CYW43_LINK_BADAUTH)
+            return PICO_ERROR_BADAUTH;
+        if (st == CYW43_LINK_FAIL)
+            return PICO_ERROR_CONNECT_FAILED;
+        if (st == CYW43_LINK_NONET) {   // network not found yet: keep trying until the timeout
+            err = cyw43_arch_wifi_connect_async(SOS_WIFI_SSID, SOS_WIFI_PASSWORD,
+                                                CYW43_AUTH_WPA2_AES_PSK);
+            if (err)
+                return err;
+        }
+        if (time_reached(until))
+            return PICO_ERROR_TIMEOUT;
+        wdog_feed();
+        sleep_ms(10);
+    }
+}
+
 static bool wifi_connect(void) {
     cyw43_arch_enable_sta_mode();
     netif_set_hostname(&cyw43_state.netif[CYW43_ITF_STA], SOS_HOSTNAME);
 
     for (int attempt = 1; attempt <= 5; attempt++) {
         printf("wifi: connecting to '%s' (attempt %d)...\n", SOS_WIFI_SSID, attempt);
-        int err = cyw43_arch_wifi_connect_timeout_ms(SOS_WIFI_SSID, SOS_WIFI_PASSWORD,
-                                                     CYW43_AUTH_WPA2_AES_PSK, 30000);
+        int err = wifi_connect_once(30000);
         if (err == 0) {
             cyw43_arch_lwip_begin();
             printf("wifi: connected, ip %s\n",
@@ -71,6 +100,11 @@ int main(void) {
     for (int i = 0; i < 20 && !stdio_usb_connected(); i++)
         sleep_ms(100);
     printf("\nSOS booting\n");
+
+    // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
+    wdog_start();
+    if (wdog_caused_reset())
+        printf("last reset: watchdog timeout\n");
 
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
         printf("crypto init failed\n");
@@ -95,6 +129,7 @@ int main(void) {
     absolute_time_t next_blink = get_absolute_time();
     bool led = false;
     for (;;) {
+        wdog_feed();
         shell_poll(&console_shell);
         sshd_poll();
         if (time_reached(next_blink)) {

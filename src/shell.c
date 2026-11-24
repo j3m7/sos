@@ -14,6 +14,7 @@
 
 #include "sshd.h"
 #include "stackmon.h"
+#include "wdog.h"
 
 // --- commands ------------------------------------------------------------------
 
@@ -29,8 +30,9 @@ static void cmd_help(shell_t *sh) {
 
 static void cmd_uptime(shell_t *sh) {
     uint64_t s = to_us_since_boot(get_absolute_time()) / 1000000;
-    shell_printf(sh, "up %llud %02llu:%02llu:%02llu\n",
-                 s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60);
+    shell_printf(sh, "up %llud %02llu:%02llu:%02llu%s\n",
+                 s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60,
+                 wdog_caused_reset() ? " (last reset: watchdog)" : "");
 }
 
 static void cmd_mem(shell_t *sh) {
