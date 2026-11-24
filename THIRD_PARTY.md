@@ -15,9 +15,9 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics |
+| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics; output batched into few packets (`ssh_session_send_output()`, `ssh_session_write_space()`); Nagle disabled |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics |
+| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics; `ssh_session_send_output()`, `ssh_session_write_space()` |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
 | `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |
@@ -82,6 +82,12 @@ and stall the session (SOS's copy has the same code path; it uses 4096, which av
    free space) instead of `ssh_ringbuffer_destroy()`, so the buffers are never released.
 10. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
    built with `WOLFSSH_TERM` (plus `NO_TERMIOS` on the Pico); the bundled settings omit it.
+11. `src/server.c`: every write to the session (the stdio driver's `write`) flushes at once,
+   so output written in small pieces (`printf` per line, a newline translated separately)
+   becomes one encrypted SSH packet and one TCP segment per piece. On SOS, printing a text
+   file ran at about 33 KB/s; queuing the output and sending once per pass gave about
+   130 KB/s (aes128-gcm, debug build). Nagle is also left enabled, which delays sub-MSS
+   segments behind delayed ACKs.
 
 ## Linked into the firmware (not copied)
 

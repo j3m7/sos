@@ -17,18 +17,21 @@ static void write_out(shell_t *sh, const char *buf, size_t len) {
         sh->io->write(sh->ctx, buf, (int)len);
         return;
     }
-    // Translate "\n" to "\r\n", writing the runs in between in one go.
-    size_t start = 0;
+    // Translate "\n" to "\r\n" through a buffer, so the channel gets a few large writes (on
+    // SSH, each write can become an encrypted packet) rather than one per line and per "\r\n".
+    char out[256];
+    size_t n = 0;
     for (size_t i = 0; i < len; i++) {
-        if (buf[i] == '\n') {
-            if (i > start)
-                sh->io->write(sh->ctx, buf + start, (int)(i - start));
-            sh->io->write(sh->ctx, "\r\n", 2);
-            start = i + 1;
+        if (n + 2 > sizeof(out)) {
+            sh->io->write(sh->ctx, out, (int)n);
+            n = 0;
         }
+        if (buf[i] == '\n')
+            out[n++] = '\r';
+        out[n++] = buf[i];
     }
-    if (len > start)
-        sh->io->write(sh->ctx, buf + start, (int)(len - start));
+    if (n)
+        sh->io->write(sh->ctx, out, (int)n);
 }
 
 void shell_printf(shell_t *sh, const char *fmt, ...) {

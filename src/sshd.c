@@ -210,6 +210,7 @@ void sshd_poll(void) {
         }
         session_poll_output[i] = 0;
         shell_poll(&session_shells[i]);
+        ssh_session_send_output(ss);        // everything the shell wrote, in as few packets as fit
     }
 }
 

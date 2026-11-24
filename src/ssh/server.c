@@ -59,6 +59,10 @@
    - Channel input is drained on every pass, not only on WS_CHAN_RXD. Client EOF ends the
      session cleanly once its input is consumed; stderr-type extended data is discarded
      instead of ending the session.
+   - Output is batched: ssh_session_write() only queues (sending early only when rb_out is
+     full) and ssh_session_send_output() sends it once the shell has run, so a burst of small
+     writes becomes a few large packets. ssh_session_write_space() reports the free room.
+   - Nagle's algorithm is disabled on client connections (like TCP_NODELAY elsewhere).
 */
 
 #include <stdio.h>
@@ -618,6 +622,10 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	tcp_recv(pcb, ssh_server_recv);
 	tcp_poll(pcb, ssh_server_poll, SSH_CLIENT_POLL_TIME);
 	tcp_err(pcb, ssh_server_err);
+	/* Like TCP_NODELAY in other SSH servers. With Nagle, a packet smaller than the MSS waits
+	   for the previous one to be ACKed, and clients delay ACKs (~40 ms): output written in
+	   small pieces (a shell job printing a file) then crawled at ~1 KB per round trip. */
+	tcp_nagle_disable(pcb);
 
 	return ERR_OK;
 }
@@ -1307,6 +1315,13 @@ int ssh_server_add_priv_key(ssh_server_t *st, int type, const uint8_t *key, uint
 
 /* --- session API (thread context) ------------------------------------------------------ */
 
+int ssh_session_write_space(ssh_session_t *ss)
+{
+	if (!ss || ss->cstate != CS_CONNECT || ss->output_stalled || ss->peer_closed)
+		return 0;
+	return (int)ssh_ringbuffer_free(&ss->rb_out);
+}
+
 int ssh_session_write(ssh_session_t *ss, const char *buf, int length)
 {
 	ssh_server_t *st = ss ? ss->server : NULL;
@@ -1346,10 +1361,16 @@ int ssh_session_write(ssh_session_t *ss, const char *buf, int length)
 			len = length - written;
 		ssh_ringbuffer_add(&ss->rb_out, buf + written, len, false);
 		written += len;
-		ssh_session_flush(ss);
 	}
-
+	/* Sent by ssh_session_send_output() after the shell has run (or above when rb_out fills):
+	   one write per piece of output would cost one encrypted packet each. */
 	return written;
+}
+
+void ssh_session_send_output(ssh_session_t *ss)
+{
+	if (ss && ss->cstate == CS_CONNECT && ssh_ringbuffer_used(&ss->rb_out) > 0)
+		ssh_session_flush(ss);
 }
 
 
