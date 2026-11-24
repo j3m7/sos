@@ -145,6 +145,21 @@ ssh <user>@<device-ip>
 - `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
   Ctrl-D ends the session.
 
+## Testing
+
+There are no automated unit tests yet. `tools/test/ssh-hw-test.sh` checks the SSH server on a
+board that is flashed with SOS and on the network:
+
+```sh
+tools/test/ssh-hw-test.sh -u <user> <device-ip>     # -q for a quick run, -h for options
+```
+
+It covers login and logout, authentication (only public key; unknown key, wrong user and
+password refused), concurrent sessions kept separate, the "too many connections" message, slot
+reuse, a large input burst, clients that disappear, back-to-back logins, and heap use before and
+after. It exits with the number of failed checks. It uses every session slot for a few seconds,
+so run it while nobody else is using the board; it warns if the device rebooted mid-run.
+
 ## Memory layout
 
 | Region | Use |
