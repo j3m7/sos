@@ -24,6 +24,8 @@
 #define CONFIG_MAX_KEYS      8
 #define CONFIG_KEY_BLOB_MAX  128    // SSH wire-format public key (Ed25519 51, ECDSA P-256 104)
 #define CONFIG_KEY_COMMENT_MAX 40
+#define CONFIG_NTP_SYNC_HOURS_MAX 720       // 30 days
+#define CONFIG_NTP_SERVER_MAX 63
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -38,6 +40,10 @@ typedef struct {
     char ssh_user[CONFIG_USER_MAX + 1];
     uint8_t key_count;
     config_key_t keys[CONFIG_MAX_KEYS];
+    // Fields below were added later. The layout is append-only: a record saved by older
+    // firmware is shorter, and the fields it lacks load as 0, so 0 must mean "default".
+    uint16_t ntp_sync_hours;                    // periodic NTP sync interval; 0 = off
+    char ntp_server[CONFIG_NTP_SERVER_MAX + 1]; // host name or IPv4 address; empty = build default
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------
@@ -73,6 +79,8 @@ const char *config_check_ssid(const char *ssid);
 const char *config_check_password(const char *password);
 const char *config_check_hostname(const char *hostname);
 const char *config_check_user(const char *user);
+// A DNS name or IPv4 address: letters, digits, '-' and '.', no empty labels.
+const char *config_check_ntp_server(const char *server);
 
 // Parse an authorized_keys line: "<type> <base64> [comment]". Supported types: ssh-ed25519,
 // ecdsa-sha2-nistp256. Returns NULL on success, otherwise a short reason.

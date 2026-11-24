@@ -140,6 +140,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
+| `time auto <hours>` / `time auto off` | periodic NTP sync (default off; see [Timekeeping](#timekeeping)) |
+| `time server <name>` / `time server default` | NTP server: host name or IPv4 address / back to `SOS_NTP_SERVER` |
 | `config reset` | erase everything (back to the build-time defaults, if any) |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
@@ -151,6 +153,9 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 - Storage: one record in two alternating flash sectors below the host key, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
   reflashing. The Wi-Fi password and keys are stored unencrypted, like the build-time defaults.
+  The record format only grows at the end: a record saved by older firmware still loads, with
+  newer settings at their defaults. Firmware older than a saved record ignores it and starts
+  from the build-time defaults.
 
 ## Logging
 
@@ -206,6 +211,35 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
   RP2350 maximum is 16777 ms and `0` disables the watchdog. It pauses while a debugger halts
   the core.
 
+## Timekeeping
+
+The Adalogger's PCF8523 RTC (I2C0: SDA GP4, SCL GP5), kept running by its CR1220 coin cell,
+is the source of truth for wall-clock time. At boot SOS sets the system clock (`time()`,
+`gettimeofday()`) from it and turns on the chip's battery switch-over, which is off by default.
+All times are UTC.
+
+SOS asks an NTP server for the time in three cases. The server is set on the console with
+`time server <name>`. Until then SOS uses the build-time `SOS_NTP_SERVER`, which defaults to
+`pool.ntp.org`. A new server is used from the next sync.
+
+- **The RTC has no valid time:** no chip, a first power-up, or a coin cell that ran out while
+  the board was unpowered.
+- **`time sync`**, typed in any shell, SSH included.
+- **Periodically, if turned on** with `time auto <hours>` on the console (1 to 720; default off).
+  It syncs once the network is up (unless NTP already set the clock since boot), then one
+  interval after the last successful sync, whatever started it. This corrects RTC drift, which is
+  up to about 10 s a week. Without it, run `time sync` now and then.
+
+A successful reply sets the system clock and the RTC, then the NTP client stops. NTP isn't
+authenticated, so a reply earlier than the firmware's configure time is always rejected. A
+periodic sync also refuses to move the clock by more than 5 minutes, so a forged reply can't
+quietly shift a clock that's already set. If that happens, the log says so and `time sync`
+accepts the new time.
+
+- `time` shows the date and time and where it came from, the RTC's reading and backup-battery
+  state, the last NTP sync, and the periodic setting with the time until the next sync.
+- `time auto` and `time server` (without a value) show those settings; `config` lists both.
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
@@ -218,7 +252,8 @@ cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir b
 They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized comparison
 against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
 with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
-fail or lose power mid-write) and the log (`src/log.c`). `tests/test.h` is a minimal harness; add a suite as
+fail or lose power mid-write), the log (`src/log.c`) and the date and RTC register conversions
+(`src/timeconv.c`, compared against the host C library). `tests/test.h` is a minimal harness; add a suite as
 `tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
 
 **Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed

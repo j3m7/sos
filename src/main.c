@@ -17,6 +17,7 @@
 #include "shell.h"
 #include "stackmon.h"
 #include "sshd.h"
+#include "timesync.h"
 #include "wdog.h"
 #include "wifi.h"
 
@@ -80,6 +81,9 @@ int main(void) {
     if (wdog_caused_reset())
         log_msg(SOS_LOG_WARNING, "last reset: watchdog timeout");
 
+    // System clock from the RTC, before anything that might want the time.
+    timesync_boot();
+
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
         log_msg(SOS_LOG_ERR, "crypto init failed");
         return 1;
@@ -110,6 +114,9 @@ int main(void) {
         // Serve SSH once there's a network and someone to let in (keys may be added later).
         if (!sshd_running() && !sshd_failed && have_hostkey && wifi_up() && settings()->key_count)
             sshd_failed = !sshd_start(hostkey, hostkey_len);
+        if (wifi_up())
+            timesync_network_up();      // starts SNTP only if the RTC had no valid time
+        timesync_poll();
         shell_poll(&console_shell);
         sshd_poll();
         log_flush();                    // messages logged in interrupt context

@@ -36,3 +36,8 @@ add_test(NAME config COMMAND test_config)
 add_executable(test_log test_log.c ${SOS_ROOT}/src/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
 add_test(NAME log COMMAND test_log)
+
+# src/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
+add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/timeconv.c)
+target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)
+add_test(NAME timeconv COMMAND test_timeconv)

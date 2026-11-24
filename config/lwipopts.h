@@ -47,6 +47,22 @@
 #define LWIP_NETIF_TX_SINGLE_PBUF   1
 #define LWIP_CHKSUM_ALGORITHM       3
 
+// SNTP (src/timesync.c): used only when the RTC has no valid time, or on request.
+#define SNTP_SERVER_DNS             1
+#define SNTP_CHECK_RESPONSE         2   // reply must come from the server and echo our timestamp
+#define SNTP_COMP_ROUNDTRIP         1   // correct for network delay (when the clock is roughly set)
+void sos_sntp_set_time(unsigned int sec, unsigned int us);
+void sos_sntp_get_time(unsigned int *sec, unsigned int *us);
+#define SNTP_SET_SYSTEM_TIME_US(sec, us)  sos_sntp_set_time((sec), (us))
+#define SNTP_GET_SYSTEM_TIME(sec, us) do {                                                      \
+        unsigned int s_, u_;                                                                    \
+        sos_sntp_get_time(&s_, &u_);                                                            \
+        (sec) = s_;                                                                             \
+        (us) = u_;                                                                              \
+    } while (0)
+// The SNTP client's timer isn't counted in lwIP's default.
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 1)
+
 #define MEM_STATS                   0
 #define SYS_STATS                   0
 #define MEMP_STATS                  0

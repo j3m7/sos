@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "sshd.h"
 #include "stackmon.h"
+#include "timesync.h"
 #include "wdog.h"
 #include "wifi.h"
 
@@ -42,6 +43,8 @@ static void save(shell_t *sh) {
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
+    shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTP\n");
+    shell_printf(sh, "time auto|server  periodic NTP sync / NTP server settings\n");
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
@@ -57,6 +60,8 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "key del <n>       stop trusting key n\n");
         shell_printf(sh, "hostname <name>   set the hostname\n");
         shell_printf(sh, "user <name>       set the SSH user name\n");
+        shell_printf(sh, "time auto <h>|off sync the clock from NTP every h hours (default off)\n");
+        shell_printf(sh, "time server <name>|default  set the NTP server\n");
         shell_printf(sh, "config reset      erase the configuration\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -318,6 +323,12 @@ static void cmd_config(shell_t *sh, char *args) {
     shell_printf(sh, "ssh user: %s\n", c->ssh_user);
     wifi_show(sh);
     shell_printf(sh, "keys:     %u trusted ('key list')\n", c->key_count);
+    shell_printf(sh, "ntp:      %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTP_SERVER,
+                 c->ntp_server[0] ? "" : " (build default)");
+    if (c->ntp_sync_hours)
+        shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
+    else
+        shell_printf(sh, "periodic sync off\n");
     if (!settings_persistent())
         shell_printf(sh, "warning:  flash storage unavailable; changes aren't saved\n");
 }
@@ -442,6 +453,95 @@ static void cmd_setup(shell_t *sh) {
     shell_ask(sh, prompt, false, on_setup_ssid, NULL);
 }
 
+static void show_ntp_sync_hours(shell_t *sh) {
+    unsigned h = settings()->ntp_sync_hours;
+    if (h)
+        shell_printf(sh, "ntp sync: every %u h\n", h);
+    else
+        shell_printf(sh, "ntp sync: off (RTC only; 'time sync' syncs once)\n");
+}
+
+// `time auto [off | <hours>]`: periodic NTP sync (a setting, so console only to change).
+static void cmd_time_auto(shell_t *sh, const char *value) {
+    while (*value == ' ')
+        value++;
+    if (!*value) {
+        show_ntp_sync_hours(sh);
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    unsigned long hours = 0;
+    if (strcmp(value, "off")) {
+        char *end;
+        hours = strtoul(value, &end, 10);
+        if (*end || end == value || hours < 1 || hours > CONFIG_NTP_SYNC_HOURS_MAX) {
+            shell_printf(sh, "not changed: give 'off' or hours from 1 to %u\n",
+                         CONFIG_NTP_SYNC_HOURS_MAX);
+            return;
+        }
+    }
+    settings()->ntp_sync_hours = (uint16_t)hours;
+    save(sh);
+    if (hours)
+        log_msg(SOS_LOG_NOTICE, "config: ntp sync every %lu h", hours);
+    else
+        log_msg(SOS_LOG_NOTICE, "config: ntp sync off");
+    show_ntp_sync_hours(sh);
+}
+
+static void show_ntp_server(shell_t *sh) {
+    const char *s = settings()->ntp_server;
+    if (*s)
+        shell_printf(sh, "ntp server: %s\n", s);
+    else
+        shell_printf(sh, "ntp server: %s (build default)\n", SOS_NTP_SERVER);
+}
+
+// `time server [<name> | default]`: NTP server (a setting, so console only to change).
+static void cmd_time_server(shell_t *sh, const char *value) {
+    while (*value == ' ')
+        value++;
+    if (!*value) {
+        show_ntp_server(sh);
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    sos_config_t *c = settings();
+    if (!strcmp(value, "default")) {
+        c->ntp_server[0] = '\0';
+    } else {
+        const char *err = config_check_ntp_server(value);
+        if (err) {
+            shell_printf(sh, "not changed: %s\n", err);
+            return;
+        }
+        snprintf(c->ntp_server, sizeof(c->ntp_server), "%s", value);
+    }
+    save(sh);
+    log_msg(SOS_LOG_NOTICE, "config: ntp server set to '%s'",
+            c->ntp_server[0] ? c->ntp_server : SOS_NTP_SERVER);
+    show_ntp_server(sh);
+    shell_printf(sh, "used from the next sync ('time sync' to sync now)\n");
+}
+
+// Clock sync is allowed from SSH too: it can't lock anyone out, and the RTC drifts.
+static void cmd_time(shell_t *sh, char *args) {
+    if (!args)
+        timesync_status(sh);
+    else if (!strcmp(args, "sync"))
+        shell_printf(sh, timesync_request_ntp()
+                     ? "ntp: sync started; 'time' shows the result\n"
+                     : "ntp: a sync is already running\n");
+    else if (!strncmp(args, "auto", 4) && (args[4] == ' ' || !args[4]))
+        cmd_time_auto(sh, args + 4);
+    else if (!strncmp(args, "server", 6) && (args[6] == ' ' || !args[6]))
+        cmd_time_server(sh, args + 6);
+    else
+        shell_printf(sh, "usage: time [sync | auto [off | <hours>] | server [<name> | default]]\n");
+}
+
 // --- dispatch ------------------------------------------------------------------------------------
 
 void shell_execute(shell_t *sh, char *cmd) {
@@ -459,6 +559,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_help(sh);
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
+    else if (!strcmp(cmd, "time"))
+        cmd_time(sh, args);
     else if (!strcmp(cmd, "mem"))
         cmd_mem(sh);
     else if (!strcmp(cmd, "net"))
