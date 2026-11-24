@@ -12,9 +12,12 @@
 // field is never cut off partway. When adding fields to sos_config_t, append the new size.
 #define CONFIG_V1_LENGTH offsetof(sos_config_t, ntp_sync_hours)    // up to the end of keys[]
 _Static_assert(CONFIG_V1_LENGTH == 1540, "fields before ntp_sync_hours must not move");
+#define CONFIG_V2_LENGTH offsetof(sos_config_t, certs_hash)        // + ntp_sync_hours, ntp_server
+_Static_assert(CONFIG_V2_LENGTH == 1606, "fields before certs_hash must not move");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
-    sizeof(sos_config_t),   // + ntp_sync_hours, ntp_server
+    CONFIG_V2_LENGTH,
+    sizeof(sos_config_t),   // + certs_hash
 };
 
 static bool known_length(uint16_t length) {
