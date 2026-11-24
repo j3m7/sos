@@ -145,6 +145,21 @@ ssh <user>@<device-ip>
 - `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
   Ctrl-D ends the session.
 
+## Watchdog
+
+SOS enables the RP2350 hardware watchdog right after the boot banner. Everything runs from the
+main loop, which feeds it on every pass; if the loop stops coming round for `SOS_WATCHDOG_MS`
+(default 8000 ms), the chip resets. A hang during boot therefore resets and retries too; the
+Wi-Fi connect, where one attempt can take 30 s, feeds it while it waits.
+
+- After a watchdog reset the boot log shows `last reset: watchdog timeout` and `uptime`
+  appends `(last reset: watchdog)`. Power-on and the `reboot` command don't count.
+- `ssh` shows the longest single SSH work step (`longest ... ms`), a guide to how much margin
+  the timeout has.
+- Set the timeout when configuring, e.g. `cmake --preset debug -DSOS_WATCHDOG_MS=12000`; the
+  RP2350 maximum is 16777 ms and `0` disables the watchdog. It pauses while a debugger halts
+  the core.
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
