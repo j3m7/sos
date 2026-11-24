@@ -57,7 +57,10 @@ static const config_store_t store = { flash_slot_read, flash_slot_write, NULL };
 
 // --- build-time defaults -------------------------------------------------------------------------
 
-static void seed_defaults(sos_config_t *c) {
+// With `with_key`, the build-time trusted key too: only on first boot. A reset doesn't bring it
+// back, so a key that was removed (or all of them, by the reset) stays untrusted until someone
+// at the console adds it again.
+static void seed_defaults(sos_config_t *c, bool with_key) {
     config_defaults(c);
 #ifdef SOS_WIFI_SSID
     if (!config_check_ssid(SOS_WIFI_SSID))
@@ -76,12 +79,16 @@ static void seed_defaults(sos_config_t *c) {
         strcpy(c->ssh_user, SOS_SSH_USER);
 #endif
 #ifdef SOS_SSH_AUTHORIZED_KEY
+    if (!with_key)
+        return;
     config_key_t key;
     const char *err = config_key_parse(SOS_SSH_AUTHORIZED_KEY, &key);
     if (err)
         log_msg(SOS_LOG_WARNING, "config: build-time SOS_SSH_AUTHORIZED_KEY ignored: %s", err);
     else
         config_key_add(c, &key);
+#else
+    (void)with_key;
 #endif
 }
 
@@ -92,7 +99,7 @@ void settings_init(void) {
     persistent = (uintptr_t)&__flash_binary_end <= XIP_BASE + SLOT_OFFSET(0);
     if (!persistent) {
         log_msg(SOS_LOG_ERR, "config: firmware overlaps the config area; settings won't be saved");
-        seed_defaults(&live);
+        seed_defaults(&live, true);
         return;
     }
 
@@ -101,7 +108,7 @@ void settings_init(void) {
         log_msg(SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
         return;
     }
-    seed_defaults(&live);
+    seed_defaults(&live, true);
     log_msg(SOS_LOG_NOTICE, "config: none saved yet; using %s",
             live.wifi_ssid[0] || live.key_count ? "build-time defaults" : "empty defaults");
     if (live.wifi_ssid[0] || live.key_count)
@@ -123,8 +130,10 @@ bool settings_save(void) {
 
 bool settings_reset(void) {
     bool ok = persistent && config_erase(&store);
-    seed_defaults(&live);
-    if (ok && (live.wifi_ssid[0] || live.key_count))
+    seed_defaults(&live, false);
+    // Always save, even an empty configuration: with nothing saved, the next boot would count
+    // as a first boot and trust the build-time key again.
+    if (ok)
         ok = settings_save();
     log_msg(SOS_LOG_NOTICE, "config: reset to %s", ok ? "defaults" : "defaults (not saved)");
     return ok;

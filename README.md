@@ -156,7 +156,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
-| `config reset` | erase everything (back to the build-time defaults, if any) |
+| `config reset` | erase everything: back to the build-time defaults, if any, for Wi-Fi, hostname and user; no trusted keys |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
   so a remote session can't lock itself out; physical access to the console is the trust
@@ -178,6 +178,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
   The record format only grows at the end: a record saved by older firmware still loads, with
   newer settings at their defaults. Firmware older than a saved record ignores it and starts
   from the build-time defaults.
+- The build-time trusted key is only used on first boot (nothing saved yet). `config reset`
+  leaves no trusted keys, so SSH logins need a `key add` on the console again.
 
 ## Logging
 
@@ -305,7 +307,7 @@ working directory:
 | `sd` | card and volume information, SPI clock |
 | `sd format [exfat\|fat32]` | console only: erase the card and format it (one partition) |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
-| `sd unmount` | unmount the card, to remove it |
+| `sd unmount` | console only: unmount the card, to remove it |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -438,10 +440,10 @@ so run it while nobody else is using the board; it warns if the device rebooted 
 
 `tools/test/sftp-hw-test.sh` checks SFTP on the SD card. It puts and gets a 2 MB random file
 and a small one, overwrites a file with a smaller one, resumes both ways (`reget`, `reput`), and
-checks that a failed rename or rmdir is reported. During a download it checks that unmounting
-the card and removing the file are refused, then kills the client and checks that the file is
-released. It ends by comparing heap use before and after. It works in `/sftp-hw-test` (removed
-at the end), unmounts the card, and exits with the number of failed checks. Run it while
+checks that a failed rename or rmdir is reported. During a download it checks that the card
+is reported as in use and that removing the file is refused, then kills the client and checks
+that the file is released. It ends by comparing heap use before and after. It works in
+`/sftp-hw-test` (removed at the end) and exits with the number of failed checks. Run it while
 nobody else is using the board.
 
 ## Memory layout

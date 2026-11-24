@@ -42,6 +42,8 @@ Two layers:
     `… firmware … | slot A | slot B | host key |` (end of flash).
   - **First boot:** with nothing saved, the configuration is seeded from the build-time
     defaults in `local.cmake` (the generated `sos_defaults.h`) and saved.
+  - **Reset:** `config reset` goes back to those defaults except the trusted key: it saves a
+    configuration without keys, so a key that was removed doesn't come back.
   - **Flash writes** go through `flash_safe_execute()`, which pauses core 1 (Lua) while
     flash is busy.
 

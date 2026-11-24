@@ -62,7 +62,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
-    shell_printf(sh, "sd [info]         SD card status (also: sd speed, sd unmount)\n");
+    shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     if (sh->io->admin) {
@@ -82,6 +82,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
         shell_printf(sh, "config reset      erase the configuration\n");
         shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
+        shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -351,6 +352,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     if (!settings_reset())
         shell_printf(sh, "error: erasing the configuration failed\n");
     shell_printf(sh, "configuration reset; reconnecting Wi-Fi\n");
+    shell_printf(sh, "no trusted keys: add one with 'key add' to allow SSH logins\n");
     wifi_apply_power();
     wifi_reconnect();
 }
@@ -635,7 +637,7 @@ static void cmd_nts(shell_t *sh, char *args) {
     while (*host == ' ')
         host++;
     // Another host makes the device connect out to it: console only. A session may run the
-    // exchange with the configured server.
+    // exchange with the build-time default server (SOS_NTS_SERVER).
     if (*host && !require_admin(sh))
         return;
     if (*host && config_check_ntp_server(host)) {

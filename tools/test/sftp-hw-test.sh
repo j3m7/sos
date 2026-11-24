@@ -13,7 +13,7 @@
 #                    filled from ssh-keyscan; the fingerprint is printed so it can be checked)
 #
 # It works in /sftp-hw-test on the card (removed at the end) and moves a few MB each way. Don't
-# run it while others use the board: it unmounts the card, and the heap check needs it idle.
+# run it while others use the board: the heap check needs it idle.
 
 # check() takes its condition single-quoted on purpose and evaluates it later.
 # shellcheck disable=SC2016
@@ -151,7 +151,9 @@ wait 2>/dev/null
 released=
 for i in 1 2 3 4 5 6; do
     sleep 2.5
-    if shell "sd unmount" | grep -q unmounted; then
+    # Over SSH `sd unmount` says "files are open" while any are, and otherwise that it's a
+    # console command (it never unmounts from here).
+    if shell "sd unmount" | grep -q "serial console"; then
         released=$((i * 5 / 2))
         break
     fi
