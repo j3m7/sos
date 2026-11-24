@@ -236,6 +236,12 @@ static int verify_cb(int preverify, WOLFSSL_X509_STORE_CTX *store) {
     return 0;
 }
 
+int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len) {
+    word32 flags = timesync_clock_set() ? WOLFSSL_LOAD_VERIFY_DEFAULT_FLAGS
+                                        : WOLFSSL_LOAD_FLAG_DATE_ERR_OKAY;
+    return wolfSSL_CTX_load_verify_buffer_ex(ctx, der, (long)len, WOLFSSL_FILETYPE_ASN1, 0, flags);
+}
+
 // --- connection steps (main loop) ------------------------------------------------------------
 
 static bool wolf_initialised;
@@ -279,8 +285,7 @@ static void start_handshake(tls_conn_t *c) {
         return;
     }
     for (unsigned i = 0; i < tls_root_count; i++) {
-        int r = wolfSSL_CTX_load_verify_buffer(c->ctx, tls_roots[i].der, tls_roots[i].len,
-                                               WOLFSSL_FILETYPE_ASN1);
+        int r = tls_load_root(c->ctx, tls_roots[i].der, tls_roots[i].len);
         if (r != WOLFSSL_SUCCESS) {
             wolf_error(c, "loading root certificate", r);
             return;

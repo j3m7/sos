@@ -41,6 +41,12 @@ typedef struct tls_conn tls_conn_t;
 // wolfSSL/wolfSSH initialisation. The count covers every wolfSSL user (SSH sessions too).
 void tls_init(void);
 
+// Add a trust anchor (DER) to a TLS context. While the clock isn't set, a root's own dates
+// can't be checked, so they're ignored then, as verify_cb() does for the chain. Returns the
+// wolfSSL result (WOLFSSL_SUCCESS).
+struct WOLFSSL_CTX;
+int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len);
+
 // Start a connection. alpn may be NULL. Returns NULL if out of memory; otherwise check
 // tls_poll() for progress. timeout_ms covers DNS, connect and handshake together.
 tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms);

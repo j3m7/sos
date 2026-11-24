@@ -22,6 +22,7 @@
 #include "settings.h"
 #include "timeconv.h"
 #include "timesync.h"
+#include "tls.h"
 #include "tls_roots.h"
 
 typedef enum {
@@ -151,8 +152,7 @@ unsigned certstore_load(struct WOLFSSL_CTX *ctx) {
     free(file);
     unsigned loaded = 0;
     for (size_t i = 0; der && i < count; i++)
-        if (wolfSSL_CTX_load_verify_buffer(ctx, der + certs[i].off, (long)certs[i].len,
-                                           WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS)
+        if (tls_load_root(ctx, der + certs[i].off, certs[i].len) == WOLFSSL_SUCCESS)
             loaded++;
     free(der);
     if (!der && !why)
@@ -279,8 +279,7 @@ static void cmd_approve(shell_t *sh) {
     shell_printf(sh, "%s holds %u certificate(s):\n", CERTSTORE_FILE, (unsigned)count);
     for (size_t i = 0; i < count; i++) {
         describe(sh, (unsigned)i + 1, der + certs[i].off, certs[i].len);
-        if (ctx && wolfSSL_CTX_load_verify_buffer(ctx, der + certs[i].off, (long)certs[i].len,
-                                                  WOLFSSL_FILETYPE_ASN1) == WOLFSSL_SUCCESS)
+        if (ctx && tls_load_root(ctx, der + certs[i].off, certs[i].len) == WOLFSSL_SUCCESS)
             usable++;
         else
             shell_printf(sh, "    (TLS can't use this one: unsupported key type or size?)\n");
