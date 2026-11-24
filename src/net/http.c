@@ -303,7 +303,11 @@ static void print_headers(shell_t *sh, const http_resp_t *p) {
     while (s < end) {
         const char *nl = memchr(s, '\n', (size_t)(end - s));
         const char *colon = memchr(s, ':', (size_t)(nl - s));
-        shell_printf(sh, "%.*s: %.*s\n", (int)(colon - s), s, (int)(nl - colon - 1), colon + 1);
+        // shell_write, not shell_printf: a value can be longer than shell_printf's 256 bytes
+        // (Content-Security-Policy, say). The parser let no control characters through.
+        shell_write(sh, s, (size_t)(colon - s));
+        shell_write(sh, ": ", 2);
+        shell_write(sh, colon + 1, (size_t)(nl - colon));      // the value and its '\n'
         s = nl + 1;
     }
 }
