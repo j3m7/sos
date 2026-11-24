@@ -357,8 +357,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     }
     if (!settings_reset())
         shell_printf(sh, "error: erasing the configuration failed\n");
-    shell_printf(sh, "configuration reset; reconnecting Wi-Fi\n");
-    shell_printf(sh, "no trusted keys: add one with 'key add' to allow SSH logins\n");
+    shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run 'setup'\n");
     wifi_apply_power();
     wifi_reconnect();
 }

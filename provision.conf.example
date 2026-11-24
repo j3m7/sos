@@ -1,0 +1,23 @@
+# A board's configuration, written by `ninja -C build provision` (tools/provision.sh).
+# Copy to provision.conf (git-ignored) and fill in. Lines are "name = value".
+#
+# This is the automated way to set up a board (the other is `setup` on its console): nothing
+# here is compiled into the firmware. Provisioning replaces everything saved on the board,
+# so list all you want it to have; what's left out gets its default.
+
+# Wi-Fi network to join (2.4 GHz, WPA2 personal). No password line: an open network.
+wifi_ssid = my-network
+wifi_password = my-password
+
+# Hostname sent with DHCP requests (default: sos).
+hostname = sos
+
+# SSH login: the user name (default: admin) and the public keys to trust, one authorized_keys
+# line each (ssh-ed25519 or ecdsa-sha2-nistp256), up to 8.
+ssh_user = admin
+ssh_key = ssh-ed25519 AAAA... user@host
+
+# Optional:
+# wifi_powersave = on            (default off)
+# nts_server = time.example.org  (default: the firmware's SOS_NTS_SERVER)
+# nts_sync_hours = 24            (periodic clock sync; default 0 = off)

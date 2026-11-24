@@ -5,8 +5,9 @@
 //
 //   ... firmware ... | config slot A | config slot B | host key |   <- end of flash
 //
-// On first boot (no saved configuration) it is seeded from the optional build-time defaults in
-// local.cmake (sos_defaults.h) and saved.
+// With nothing saved (a new board, or after `config reset`) it is empty: no network, no trusted
+// keys. The firmware holds no configuration of its own; a board gets one from `setup` on the
+// console or from tools/provision.sh, which writes the saved record over USB.
 
 #ifndef SOS_SETTINGS_H
 #define SOS_SETTINGS_H
@@ -24,8 +25,8 @@ sos_config_t *settings(void);
 // Write the live configuration to flash. False on failure (the previous version stays).
 bool settings_save(void);
 
-// Erase the saved configuration and go back to the build-time defaults (if any) for the Wi-Fi
-// network, hostname and user. No keys are trusted afterwards, not the build-time one either.
+// Erase the saved configuration: back to the defaults (hostname "sos", user "admin"), with no
+// network and no trusted keys.
 bool settings_reset(void);
 
 // False if flash can't be used (the firmware image overlaps the config slots).

@@ -40,7 +40,7 @@ Changes are saved in flash immediately and survive reflashing (see
 | Command | Where | What it does |
 |---|---|---|
 | `config` | any | Show the configuration: hostname, SSH user, Wi-Fi, number of trusted keys, NTS server and periodic sync |
-| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device goes back to the build-time defaults from `local.cmake` for the Wi-Fi network, hostname and SSH user, then reconnects Wi-Fi. No keys are trusted afterwards (not the build-time one either): add one with `key add` |
+| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`, user `admin`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
 | `setup` | console only | Guided setup: Wi-Fi network and password, SSH user, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |
 | `user [<name>]` | console only to change | Show or set the SSH user name |
