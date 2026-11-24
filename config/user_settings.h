@@ -114,7 +114,7 @@ extern time_t ssh_server_my_time(time_t *);
 /* ------------------------------------------------------------------------- */
 /* Wolf Single Precision Math */
 #if 1
-/* SP_INT_BITS: wolfSSL picks it (521 with SP_MATH_ALL). 384 was too small for TLS: handshake failed with WC_KEY_SIZE_E. */
+#define SP_INT_BITS 4096 /* RSA-4096 verify on generic math (no SP RSA code) */
 //#define WOLFSSL_HAVE_SP_RSA
 //#define WOLFSSL_HAVE_SP_DH
 #define WOLFSSL_HAVE_SP_ECC
@@ -163,7 +163,9 @@ extern time_t ssh_server_my_time(time_t *);
 #endif
 #endif
 
-#if 0
+#if 1 /* RSA: certificate chains */
+#define WOLFSSL_RSA_PUBLIC_ONLY /* verify only: a TLS client without its own certificate */
+#define WOLFSSH_NO_RSA          /* SSH stays as before: no RSA host keys or RSA logins */
 /* half as much memory but twice as slow */
 // #define RSA_LOW_MEM
 
