@@ -71,7 +71,7 @@ See [Timekeeping](../README.md#timekeeping) and
 | `time auto [<hours>\|off]` | console only to change | Show, or set, the periodic NTS sync: every 1 or more hours, or off (default) |
 | `time server [<name>\|default]` | console only to change | Show, or set, the NTS server (host name or IPv4 address). `default` goes back to the build-time server. Used from the next sync |
 | `nts` | any | NTS state: the last key exchange (cookies held, NTP server) and the last query |
-| `nts ke` | any | Run a key exchange with the configured server (development; doesn't set the clock) |
+| `nts ke` | any | Run a key exchange with the build-time default server, not the one set with `time server` (development; doesn't set the clock) |
 | `nts ke <host>` | console only | Run a key exchange with another server (development) |
 | `nts query` | any | One authenticated NTS time query; `nts` then shows the offset. Doesn't set the clock |
 | `tls roots` | any | The built-in root certificates, and the state of `/certs/roots.pem` |
