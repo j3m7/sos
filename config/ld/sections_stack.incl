@@ -1,0 +1,16 @@
+/* SOS override of pico_standard_link/script_include/sections_stack.incl.
+ *
+ * Core 0 stack goes in the STACK0 region at the top of main RAM (see memory_ram.incl) instead of
+ * SCRATCH_Y. The core 1 stack stays in SCRATCH_X as in the SDK default.
+ */
+SECTIONS
+{
+    .stack1_dummy (NOLOAD):
+    {
+        *(.stack1*)
+    } > SCRATCH_X
+    .stack_dummy (NOLOAD):
+    {
+        KEEP(*(.stack*))
+    } > STACK0
+}

@@ -1,0 +1,12 @@
+/* SOS override of pico_standard_link/script_include/memory_ram.incl.
+ *
+ * Reserve the top SOS_CORE0_STACK_SIZE bytes of main RAM (passed with --defsym from CMake) as a
+ * dedicated region for the core 0 stack. RAM shrinks by the same amount, so the heap limit
+ * (__HeapLimit / __StackLimit, both ORIGIN(RAM) + LENGTH(RAM)) ends below the stack.
+ * The scratch banks keep their SDK roles: SCRATCH_X for the core 1 stack, SCRATCH_Y free.
+ */
+MEMORY
+{
+    RAM(rwx)    : ORIGIN = RAM_ORIGIN, LENGTH = RAM_LENGTH - SOS_CORE0_STACK_SIZE
+    STACK0(rw)  : ORIGIN = RAM_ORIGIN + RAM_LENGTH - SOS_CORE0_STACK_SIZE, LENGTH = SOS_CORE0_STACK_SIZE
+}

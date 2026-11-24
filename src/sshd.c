@@ -1,0 +1,181 @@
+#include "sshd.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "pico/cyw43_arch.h"
+
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/coding.h>
+#include <wolfssl/wolfcrypt/ed25519.h>
+#include <wolfssl/wolfcrypt/asn_public.h>
+#include <wolfssl/wolfcrypt/hash.h>
+#include <wolfssh/ssh.h>
+
+#include "pico-sshd.h"
+#include "pico-sshd/log.h"
+
+#include "sos_config.h"
+
+#define SSH_KEY_TYPE        "ssh-ed25519"
+#define SSH_KEY_BLOB_MAX    128     // wire-format Ed25519 public key is 51 bytes
+
+static ssh_server_t *server;
+static uint8_t authorized_key[SSH_KEY_BLOB_MAX];
+static uint32_t authorized_key_len;
+static char hostkey_fingerprint[64];
+
+static const char banner[] = "\r\nSOS - Small/Secure OS\r\n\r\n";
+
+// --- helpers ---------------------------------------------------------------
+
+static void put_u32be(uint8_t *p, uint32_t v) {
+    p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+}
+
+// "SHA256:<base64 without padding>", as printed by ssh-keygen -l.
+static void fingerprint(const uint8_t *blob, uint32_t len, char *out, size_t out_len) {
+    uint8_t digest[WC_SHA256_DIGEST_SIZE];
+    uint8_t b64[64];
+    word32 b64_len = sizeof(b64);
+
+    snprintf(out, out_len, "(unknown)");
+    if (wc_Sha256Hash(blob, len, digest) != 0)
+        return;
+    if (Base64_Encode_NoNl(digest, sizeof(digest), b64, &b64_len) != 0)
+        return;
+    while (b64_len > 0 && (b64[b64_len - 1] == '=' || b64[b64_len - 1] == '\0'))
+        b64_len--;
+    snprintf(out, out_len, "SHA256:%.*s", (int)b64_len, b64);
+}
+
+// Parse "ssh-ed25519 <base64> [comment]" into the SSH wire-format public key blob,
+// which is what wolfSSH hands to the auth callback.
+static bool parse_authorized_key(const char *line) {
+    size_t type_len = strlen(SSH_KEY_TYPE);
+    if (strncmp(line, SSH_KEY_TYPE " ", type_len + 1) != 0) {
+        printf("sshd: authorized key must be of type " SSH_KEY_TYPE "\n");
+        return false;
+    }
+    const char *b64 = line + type_len + 1;
+    size_t b64_len = strcspn(b64, " \t\r\n");
+
+    word32 out_len = sizeof(authorized_key);
+    if (Base64_Decode((const byte *)b64, (word32)b64_len, authorized_key, &out_len) != 0) {
+        printf("sshd: authorized key is not valid base64\n");
+        return false;
+    }
+    // Blob must start with the length-prefixed key type string.
+    if (out_len < 4 + type_len || authorized_key[3] != type_len ||
+        memcmp(authorized_key + 4, SSH_KEY_TYPE, type_len) != 0) {
+        printf("sshd: authorized key blob is malformed\n");
+        return false;
+    }
+    authorized_key_len = out_len;
+    return true;
+}
+
+// Derive the host public key from the private DER and compute its fingerprint, so it can be
+// checked over the trusted USB console before trusting the device on first connect.
+static void compute_host_fingerprint(const uint8_t *der, uint32_t der_len) {
+    ed25519_key key;
+    word32 idx = 0;
+    uint8_t pub[ED25519_PUB_KEY_SIZE];
+    word32 pub_len = sizeof(pub);
+    uint8_t blob[4 + sizeof(SSH_KEY_TYPE) - 1 + 4 + ED25519_PUB_KEY_SIZE];
+    size_t type_len = strlen(SSH_KEY_TYPE);
+
+    snprintf(hostkey_fingerprint, sizeof(hostkey_fingerprint), "(unknown)");
+    if (wc_ed25519_init(&key) != 0)
+        return;
+    if (wc_Ed25519PrivateKeyDecode(der, &idx, &key, der_len) == 0 &&
+        wc_ed25519_export_public(&key, pub, &pub_len) == 0) {
+        put_u32be(blob, type_len);
+        memcpy(blob + 4, SSH_KEY_TYPE, type_len);
+        put_u32be(blob + 4 + type_len, pub_len);
+        memcpy(blob + 8 + type_len, pub, pub_len);
+        fingerprint(blob, 8 + type_len + pub_len, hostkey_fingerprint, sizeof(hostkey_fingerprint));
+    }
+    wc_ed25519_free(&key);
+}
+
+// --- pico-sshd callbacks -----------------------------------------------------
+
+static void log_cb(int priority, const char *format, ...) {
+    if (priority > LOG_NOTICE)
+        return;
+    va_list ap;
+    va_start(ap, format);
+    printf("sshd: ");
+    vprintf(format, ap);
+    printf("\n");
+    va_end(ap);
+}
+
+// Public key only: the user name and key blob must both match exactly.
+// wolfSSH verifies the client's signature itself once this returns success.
+static int auth_cb(void *ctx, const byte *login, word32 login_len,
+                   const byte *auth, word32 auth_len, int auth_type) {
+    (void)ctx;
+    if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY)
+        return WOLFSSH_USERAUTH_FAILURE;
+    if (!login || !auth)
+        return WOLFSSH_USERAUTH_FAILURE;
+    if (login_len != strlen(SOS_SSH_USER) || memcmp(login, SOS_SSH_USER, login_len) != 0)
+        return WOLFSSH_USERAUTH_INVALID_USER;
+    if (auth_len != authorized_key_len || memcmp(auth, authorized_key, auth_len) != 0)
+        return WOLFSSH_USERAUTH_INVALID_PUBLICKEY;
+    return WOLFSSH_USERAUTH_SUCCESS;
+}
+
+// --- public API --------------------------------------------------------------
+
+bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
+    if (!parse_authorized_key(SOS_SSH_AUTHORIZED_KEY))
+        return false;
+    compute_host_fingerprint(hostkey, hostkey_len);
+
+    if (!(server = ssh_server_new(4096, 8192))) {
+        printf("sshd: out of memory\n");
+        return false;
+    }
+    server->auth_enabled = true;
+    server->auth_cb = auth_cb;
+    server->auth_cb_ctx = NULL;
+    server->log_cb = log_cb;
+    server->banner = banner;
+    server->max_auth_tries = 3;
+
+    if (ssh_server_add_priv_key(server, WOLFSSH_FORMAT_ASN1, hostkey, hostkey_len) != 0) {
+        printf("sshd: failed to load host key\n");
+        return false;
+    }
+    if (!ssh_server_start(server, true)) {
+        printf("sshd: failed to start\n");
+        return false;
+    }
+    printf("sshd: listening on port %u, host key %s %s\n",
+           server->port, SSH_KEY_TYPE, hostkey_fingerprint);
+    return true;
+}
+
+void sshd_status(void) {
+    if (!server) {
+        printf("sshd: not running\n");
+        return;
+    }
+    printf("host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
+    printf("state:     %s\n", ssh_server_connection_state_name(server->cstate));
+    if (ssh_server_client_connected(server)) {
+        ip_addr_t ip;
+        uint16_t port;
+        if (ssh_server_get_client_ip(server, &ip, &port) == ERR_OK)
+            printf("client:    %s@%s:%u\n", server->login, ipaddr_ntoa(&ip), port);
+    }
+}
+
+void sshd_disconnect(void) {
+    if (server && ssh_server_client_connected(server))
+        ssh_server_disconnect_client(server);
+}

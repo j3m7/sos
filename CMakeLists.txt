@@ -22,15 +22,81 @@ endif()
 
 pico_sdk_init()
 
-add_executable(sos
+# --- Per-machine settings (Wi-Fi, SSH user/key) -----------------------------
+include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL RESULT_VARIABLE SOS_LOCAL_CMAKE)
+if (NOT SOS_LOCAL_CMAKE)
+    message(FATAL_ERROR "local.cmake not found: copy local.cmake.example to local.cmake and fill it in")
+endif()
+foreach(var SOS_WIFI_SSID SOS_WIFI_PASSWORD SOS_HOSTNAME SOS_SSH_USER SOS_SSH_AUTHORIZED_KEY)
+    if (NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
+        message(FATAL_ERROR "${var} must be set in local.cmake")
+    endif()
+endforeach()
+configure_file(config/sos_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_config.h @ONLY)
+
+# --- External libraries (kept outside the repo, under ~/slop by default) ----
+set(SOS_DEPS_DIR "$ENV{HOME}/slop" CACHE PATH "Directory holding wolfssl, wolfssh and pico-sshd checkouts")
+set(WOLFSSL_ROOT   "${SOS_DEPS_DIR}/wolfssl"   CACHE PATH "wolfSSL source")
+set(WOLFSSH_ROOT   "${SOS_DEPS_DIR}/wolfssh"   CACHE PATH "wolfSSH source")
+set(PICO_SSHD_ROOT "${SOS_DEPS_DIR}/pico-sshd" CACHE PATH "pico-sshd source")
+foreach(dir WOLFSSL_ROOT WOLFSSH_ROOT PICO_SSHD_ROOT)
+    if (NOT EXISTS "${${dir}}")
+        message(FATAL_ERROR "${dir} not found at ${${dir}}")
+    endif()
+endforeach()
+
+include(${PICO_SSHD_ROOT}/cmake/wolfssl_pico.cmake)
+include(${PICO_SSHD_ROOT}/cmake/wolfssh_pico.cmake)
+
+# pico-sshd's own CMakeLists adds its sources to the wrong target (pico-telnetd-lib),
+# so define the library here instead of using add_subdirectory().
+add_library(pico-sshd-lib INTERFACE)
+target_include_directories(pico-sshd-lib INTERFACE ${PICO_SSHD_ROOT}/include)
+target_sources(pico-sshd-lib INTERFACE
+    ${PICO_SSHD_ROOT}/src/server.c
+    ${PICO_SSHD_ROOT}/src/ringbuffer.c
+    ${PICO_SSHD_ROOT}/src/sha512crypt.c
+)
+target_link_libraries(pico-sshd-lib INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+
+# --- SOS firmware ------------------------------------------------------------
+set(SOS_SOURCES
     src/main.c
+    src/hostkey.c
+    src/sshd.c
+    src/shell.c
+    src/stackmon.c
+)
+add_executable(sos ${SOS_SOURCES})
+
+# Warnings for our own code only (third-party sources are compiled into this target too).
+set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
+
+target_include_directories(sos PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/config          # lwipopts.h, user_settings.h
+    ${CMAKE_CURRENT_BINARY_DIR}/generated       # sos_config.h
 )
 
-target_compile_options(sos PRIVATE -Wall -Wextra)
+# Core 0 stack: lives in its own region at the top of main RAM (config/ld/*.incl) rather than
+# the 4K SCRATCH_Y bank, leaving both scratch banks to their SDK roles (SCRATCH_X = core 1
+# stack). Measured peak is ~3.2K during an SSH login (`mem` shows it); the rest is headroom
+# for TLS and future work. Interrupt handlers, including lwIP/cyw43 processing, use this stack.
+set(SOS_CORE0_STACK_SIZE 0x2000 CACHE STRING "Core 0 stack size in bytes")
+target_compile_definitions(sos PRIVATE
+    PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
+    PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
+    PICO_USE_STACK_GUARDS=1         # MSPLIM: stack overflow faults instead of corrupting the heap
+)
+pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
+pico_add_linker_script_override_path(sos ${CMAKE_CURRENT_SOURCE_DIR}/config/ld
+    FILES memory_ram.incl sections_stack.incl section_end.incl)
 
 target_link_libraries(sos
     pico_stdlib
-    pico_cyw43_arch_none    # needed for the on-board LED, which is wired to the CYW43439
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_flash
+    hardware_flash
+    pico-sshd-lib
 )
 
 pico_set_program_name(sos "SOS")

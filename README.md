@@ -46,8 +46,41 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 - [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) 2.3.1 (`~/slop/pico-sdk`)
 - `arm-none-eabi-gcc` toolchain, CMake, Ninja
 - `picotool` for flashing, `openocd` (Raspberry Pi fork) for SWD debugging
+- [wolfSSL](https://github.com/wolfSSL/wolfssl) 5.9.4 and [wolfSSH](https://github.com/wolfSSL/wolfssh) 1.6.0
+  for cryptography and the SSH protocol
+- [pico-sshd](https://github.com/tjko/pico-sshd), the lwIP glue that runs wolfSSH as a server
+  on the Pico W / Pico 2 W
+
+wolfSSL, wolfSSH and pico-sshd are GPL-3.0 (wolfSSL/wolfSSH are also available commercially),
+so SOS firmware that links them is distributed under GPL-3.0.
 
 Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README.md).
+
+## Setup
+
+Large dependencies live outside the repository, next to it in `~/slop`:
+
+```sh
+cd ~/slop
+git clone --depth 1 -b 2.3.1 --recurse-submodules --shallow-submodules https://github.com/raspberrypi/pico-sdk.git
+git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git
+git clone --depth 1 -b v1.6.0-stable https://github.com/wolfSSL/wolfssh.git
+git clone https://github.com/tjko/pico-sshd.git
+```
+
+`PICO_SDK_PATH` is taken from the environment, falling back to `~/slop/pico-sdk`. The other
+three are looked up in `SOS_DEPS_DIR` (default `~/slop`); override with
+`-DSOS_DEPS_DIR=...` or the individual `WOLFSSL_ROOT`, `WOLFSSH_ROOT`, `PICO_SSHD_ROOT`.
+
+Per-machine settings (Wi-Fi network, hostname, SSH user and authorized key) go in
+`local.cmake`, which is git-ignored:
+
+```sh
+cp local.cmake.example local.cmake
+$EDITOR local.cmake   # SOS_SSH_AUTHORIZED_KEY is the full line from ~/.ssh/id_ed25519.pub
+```
+
+These values are compiled into the firmware image, so treat `build/` outputs as secret.
 
 ## Building
 
@@ -55,8 +88,6 @@ Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README
 cmake --preset debug          # or: release
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
-
-`PICO_SDK_PATH` is taken from the environment, falling back to `~/slop/pico-sdk`.
 
 ## Flashing
 
@@ -79,4 +110,40 @@ The console runs over USB CDC (`/dev/ttyACM0` on Linux) and is mirrored on UART0
 ```sh
 picocom -b 115200 /dev/ttyACM0
 ```
+
+## Remote access (SSH)
+
+On boot SOS joins the Wi-Fi network from `local.cmake` and starts an SSH server on port 22.
+The boot log on the console shows the IP address and the host key fingerprint:
+
+```
+wifi: connected, ip 192.168.1.89
+sshd: listening on port 22, host key ssh-ed25519 SHA256:...
+```
+
+Check that fingerprint (also shown by the `ssh` shell command over USB) against the one your
+client prints on first connection, then log in:
+
+```sh
+ssh <user>@<device-ip>
+```
+
+- Only public-key login for the single user/key in `local.cmake` is accepted (Ed25519).
+- The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
+  flash sector; it survives reflashing. The private key never leaves the device.
+- One client at a time. The shell is the same one as on the USB console; `help` lists
+  commands, `logout` or Ctrl-D ends the session.
+
+## Memory layout
+
+| Region | Use |
+|---|---|
+| Main RAM (512 KB) | data, heap, and the core 0 stack (top 8 KB, `SOS_CORE0_STACK_SIZE`) |
+| SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default |
+| SCRATCH_Y (4 KB) | free |
+| Flash, last 4 KB sector | SSH host key |
+
+The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
+Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command
+reports the stack high-water mark; an SSH login peaks at about 3.2 KB.
 
