@@ -155,7 +155,9 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
     server->auth_cb_ctx = NULL;
     server->log_cb = log_cb;
     server->banner = banner;
-    server->max_auth_tries = 3;
+    // Every key a client offers counts as a try, including ones it only asks about, so keep
+    // OpenSSH's default: with 3, an ssh-agent holding several keys fails before the right one.
+    server->max_auth_tries = 6;
 
     if (ssh_server_add_priv_key(server, WOLFSSH_FORMAT_ASN1, hostkey, hostkey_len) != 0) {
         printf("sshd: failed to load host key\n");

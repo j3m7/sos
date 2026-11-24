@@ -84,6 +84,8 @@ typedef struct ssh_session_t {
 	uint32_t session_id;               /* unique per login (server->logins at login time) */
 	volatile bool work_pending;        /* (irq) input arrived, data sent, or poll tick */
 	volatile bool peer_closed;         /* (irq) client closed or connection failed */
+	volatile bool setup_pending;       /* (irq) accepted; wolfSSH session not created yet */
+	bool eof_received;                 /* client sent channel EOF: end once input is consumed */
 	uint64_t accept_start_us;          /* when the connection was accepted */
 	uint64_t closing_deadline_us;      /* force close in CS_CLOSING after this time */
 	uint32_t handshake_us;             /* accept to logged-in */

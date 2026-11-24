@@ -19,6 +19,15 @@
    along with pico-sshd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+/* Copied into SOS from https://github.com/tjko/pico-sshd at commit
+   697e33c65a3a36231e91b0d2d121611110978454 (see THIRD_PARTY.md).
+
+   Modified for SOS (Copyright (C) 2026 Julio Martinez, GPL-3.0-or-later):
+   - ssh_ringbuffer_offset() checks rb before using it.
+   - ssh_ringbuffer_read_char() no longer reports a full buffer as empty.
+   - No arithmetic on void pointers in ssh_ringbuffer_add().
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -94,11 +103,12 @@ inline size_t ssh_ringbuffer_free(const ssh_ringbuffer_t *rb)
 
 inline size_t ssh_ringbuffer_offset(ssh_ringbuffer_t *rb, size_t offset, size_t delta, int direction)
 {
+	if (!rb || rb->size == 0)
+		return 0;
+
 	size_t o = offset % rb->size;
 	size_t d = delta % rb->size;
 
-	if (!rb)
-		return 0;
 	if (d == 0)
 		return o;
 
@@ -143,7 +153,7 @@ int ssh_ringbuffer_add(ssh_ringbuffer_t *rb, const void *data, size_t len, bool 
 		size_t part1 = rb->size - rb->tail;
 		size_t part2 = len - part1;
 		memcpy(rb->buf + rb->tail, data, part1);
-		memcpy(rb->buf, data + part1, part2);
+		memcpy(rb->buf, (const uint8_t*)data + part1, part2);
 	}
 
 	rb->tail = new_tail;
@@ -186,7 +196,7 @@ inline int ssh_ringbuffer_read_char(ssh_ringbuffer_t *rb)
 {
 	if (!rb)
 		return -1;
-	if (rb->head == rb->tail)
+	if (rb->free >= rb->size)	/* empty (head == tail also when full) */
 		return -2;
 
 	int val = rb->buf[rb->head];
