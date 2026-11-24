@@ -21,3 +21,8 @@ endif()
 add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/ringbuffer.c)
 target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/include)
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
+
+# src/shell_core.c: shell line editing and output (commands are faked by the test).
+add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell_core.c)
+target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
+add_test(NAME shell_line COMMAND test_shell_line)

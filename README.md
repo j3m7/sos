@@ -154,8 +154,9 @@ under AddressSanitizer and UndefinedBehaviorSanitizer:
 cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests
 ```
 
-They currently cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`), including a randomized
-comparison against a reference model. `tests/test.h` is a minimal harness; add a suite as
+They currently cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized
+comparison against a reference model) and the shell's line editing and output
+(`src/shell_core.c`, with the commands faked). `tests/test.h` is a minimal harness; add a suite as
 `tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
 
 **Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed

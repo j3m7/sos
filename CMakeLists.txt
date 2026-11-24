@@ -69,6 +69,7 @@ set(SOS_SOURCES
     src/hostkey.c
     src/sshd.c
     src/shell.c
+    src/shell_core.c
     src/stackmon.c
 )
 add_executable(sos ${SOS_SOURCES})

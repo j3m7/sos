@@ -38,4 +38,11 @@ void shell_poll(shell_t *sh);
 // printf-style output to the shell's channel.
 void shell_printf(shell_t *sh, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+// End the session through io->logout, or say that this channel can't be ended.
+void shell_logout(shell_t *sh);
+
+// Run one command line (spaces trimmed, never empty). Implemented by the command module
+// (shell.c); shell_core.c (line editing) calls it.
+void shell_execute(shell_t *sh, char *cmd);
+
 #endif

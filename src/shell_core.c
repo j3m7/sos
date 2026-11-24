@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Julio Martinez
+//
+// Shell line editing and output. Depends only on shell.h and the C library, so it builds on the
+// host for unit tests; the commands live in shell.c (shell_execute).
+
+#include "shell.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+// --- output --------------------------------------------------------------------
+
+static void write_out(shell_t *sh, const char *buf, size_t len) {
+    if (!sh->io->crlf) {
+        sh->io->write(sh->ctx, buf, (int)len);
+        return;
+    }
+    // Translate "\n" to "\r\n", writing the runs in between in one go.
+    size_t start = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            if (i > start)
+                sh->io->write(sh->ctx, buf + start, (int)(i - start));
+            sh->io->write(sh->ctx, "\r\n", 2);
+            start = i + 1;
+        }
+    }
+    if (len > start)
+        sh->io->write(sh->ctx, buf + start, (int)(len - start));
+}
+
+void shell_printf(shell_t *sh, const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    if ((size_t)n >= sizeof(buf))
+        n = sizeof(buf) - 1;    // truncated; callers keep individual lines short
+    write_out(sh, buf, (size_t)n);
+}
+
+static void prompt(shell_t *sh) {
+    shell_printf(sh, "sos> ");
+}
+
+void shell_logout(shell_t *sh) {
+    if (sh->io->logout)
+        sh->io->logout(sh->ctx);
+    else
+        shell_printf(sh, "logout: the %s session can't be ended\n", sh->io->name);
+}
+
+// Trim spaces and hand non-empty commands to the command module.
+static void run_line(shell_t *sh, char *cmd) {
+    while (*cmd == ' ')
+        cmd++;
+    char *end = cmd + strlen(cmd);
+    while (end > cmd && end[-1] == ' ')
+        *--end = '\0';
+    if (*cmd)
+        shell_execute(sh, cmd);
+}
+
+// --- input ---------------------------------------------------------------------
+
+void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
+    sh->io = io;
+    sh->ctx = ctx;
+    sh->line_len = 0;
+    sh->last_was_cr = false;
+    shell_printf(sh, "\nType 'help' for commands.\n");
+    prompt(sh);
+}
+
+void shell_poll(shell_t *sh) {
+    char buf[32];
+    int n;
+    while ((n = sh->io->read(sh->ctx, buf, sizeof(buf))) > 0) {
+        for (int i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n' && sh->last_was_cr) {      // swallow LF of a CRLF pair
+                sh->last_was_cr = false;
+                continue;
+            }
+            sh->last_was_cr = (c == '\r');
+
+            if (c == '\r' || c == '\n') {
+                shell_printf(sh, "\n");
+                sh->line[sh->line_len] = '\0';
+                run_line(sh, sh->line);
+                sh->line_len = 0;
+                prompt(sh);
+            } else if (c == 0x7f || c == '\b') {
+                if (sh->line_len > 0) {
+                    sh->line_len--;
+                    shell_printf(sh, "\b \b");
+                }
+            } else if (c == 0x03) {                  // Ctrl-C: discard line
+                shell_printf(sh, "^C\n");
+                sh->line_len = 0;
+                prompt(sh);
+            } else if (c == 0x04) {                  // Ctrl-D on an empty line: logout
+                if (sh->line_len == 0) {
+                    shell_printf(sh, "\n");
+                    shell_logout(sh);
+                    prompt(sh);
+                }
+            } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {
+                sh->line[sh->line_len++] = c;
+                write_out(sh, &c, 1);
+            }
+        }
+    }
+}
