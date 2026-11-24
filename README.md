@@ -11,8 +11,8 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 
 - **Remote shell**: log in over the network to a command shell to run commands, inspect the
   system and manage files.
-- **Email**: check a mailbox (list, read and delete messages) over IMAP, and send short
-  messages over SMTP.
+- **Communication**: tools for sending and receiving messages with people and other systems
+  over standard messaging protocols, encrypted and authenticated like every other connection.
 - **File transfer**: upload files to and download files from the device's storage (microSD
   card on the Adalogger).
 - **Timekeeping**: keep accurate wall-clock time across power loss using the Adalogger's
