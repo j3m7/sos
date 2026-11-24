@@ -40,6 +40,8 @@
      (at most SSH_DRAIN_TIMEOUT_US), then exit status 0 and channel close, then it waits (at
      most SSH_CLOSING_TIMEOUT_US) for the client to close the TCP connection. A new connection arriving when no slot is free reclaims a closing session.
    - Timing statistics for wolfSSH calls.
+   - Session buffers are allocated when a connection is set up (thread context) and freed when
+     it closes, so idle session slots cost no heap.
    - When every slot is busy, the client gets an SSH_MSG_DISCONNECT with reason "too many
      connections" and a readable description instead of a TCP reset.
    - wolfSSH sessions are created and freed only in thread context (the accept callback no
@@ -230,20 +232,18 @@ ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t tx
 	/* rb_tcp_in must hold a full TCP window: lwIP may deliver everything the window allows in
 	   one pbuf chain (e.g. after reassembling out-of-order segments), and a chain that can
 	   never fit would stall the connection. */
-	size_t tcp_in_size = rxbuf_size > TCP_WND ? rxbuf_size : TCP_WND;
+	st->tcp_in_size = rxbuf_size > TCP_WND ? rxbuf_size : TCP_WND;
+	st->rxbuf_size = rxbuf_size;
+	st->txbuf_size = txbuf_size;
 
+	/* Session buffers (about tcp_in_size + rxbuf_size + txbuf_size per session) are allocated
+	   when a connection is set up and freed when it closes, so idle slots cost no heap. The
+	   zeroed ring buffers from calloc() are valid empty buffers until then. */
 	for (unsigned i = 0; i < max_sessions; i++) {
 		ssh_session_t *ss = &st->sessions[i];
 		ss->server = st;
 		ss->index = i;
 		ss->cstate = CS_NONE;
-		if (ssh_ringbuffer_init(&ss->rb_tcp_in, NULL, tcp_in_size) ||
-		    ssh_ringbuffer_init(&ss->rb_in, NULL, rxbuf_size) ||
-		    ssh_ringbuffer_init(&ss->rb_out, NULL, txbuf_size)) {
-			LOG_MSG(LOG_ERR, "ssh_server_new: out of memory for session %u", i);
-			ssh_server_destroy(st);
-			return NULL;
-		}
 	}
 
 	LOG_MSG(LOG_DEBUG, "ssh_server_new(%u,%u,%u): %p",
@@ -300,6 +300,19 @@ static err_t ssh_server_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err
 		LOG_MSG(LOG_WARNING, "ssh_server_recv: error received: %d", err);
 		pbuf_free(p);
 		ss->peer_closed = true;
+		return ERR_OK;
+	}
+
+	/* The buffers are allocated by ssh_session_setup() in thread context (this callback runs in
+	   interrupt context, where the heap must not be used). Hold input that arrives before then;
+	   the window isn't reopened until wolfSSH consumes data, so it can't exceed TCP_WND, which
+	   is the size of rb_tcp_in. */
+	if (!ss->rb_tcp_in.buf) {
+		if (ss->rx_held)
+			pbuf_cat(ss->rx_held, p);
+		else
+			ss->rx_held = p;
+		ss->work_pending = true;
 		return ERR_OK;
 	}
 
@@ -395,9 +408,14 @@ static err_t ssh_close_session(ssh_session_t *ss)
 		wolfSSH_free(ss->ssh);
 		ss->ssh = NULL;
 	}
-	ssh_ringbuffer_flush(&ss->rb_tcp_in);
-	ssh_ringbuffer_flush(&ss->rb_in);
-	ssh_ringbuffer_flush(&ss->rb_out);
+	if (ss->rx_held) {
+		pbuf_free(ss->rx_held);
+		ss->rx_held = NULL;
+	}
+	/* Release the session buffers; the next connection in this slot allocates new ones. */
+	ssh_ringbuffer_destroy(&ss->rb_tcp_in);
+	ssh_ringbuffer_destroy(&ss->rb_in);
+	ssh_ringbuffer_destroy(&ss->rb_out);
 	cyw43_arch_lwip_end();
 
 	LOG_MSG(LOG_DEBUG, "ssh_close_session(%u): %d", ss->index, err);
@@ -961,6 +979,40 @@ static bool ssh_session_setup(ssh_session_t *ss)
 	if (ss->ssh) {
 		wolfSSH_free(ss->ssh);
 		ss->ssh = NULL;
+	}
+
+	/* Allocate the session buffers, unless this slot was reclaimed from a closing session
+	   (interrupt context can't free, so it keeps them and they are reused). */
+	if (!ss->rb_tcp_in.buf) {
+		ssh_ringbuffer_t tcp_in = {0}, in = {0}, out = {0};
+		if (ssh_ringbuffer_init(&tcp_in, NULL, st->tcp_in_size) ||
+		    ssh_ringbuffer_init(&in, NULL, st->rxbuf_size) ||
+		    ssh_ringbuffer_init(&out, NULL, st->txbuf_size)) {
+			ssh_ringbuffer_destroy(&tcp_in);
+			ssh_ringbuffer_destroy(&in);
+			ssh_ringbuffer_destroy(&out);
+			LOG_MSG(LOG_ERR, "ssh_session_setup: out of memory for session buffers");
+			return false;
+		}
+		/* Install them and move any input held by ssh_server_recv() under the lock, so the
+		   receive callback sees either no buffer or a complete one. */
+		bool fits = true;
+		cyw43_arch_lwip_begin();
+		ss->rb_in = in;
+		ss->rb_out = out;
+		ss->rb_tcp_in = tcp_in;
+		if (ss->rx_held) {
+			fits = ss->rx_held->tot_len <= ssh_ringbuffer_free(&ss->rb_tcp_in);
+			for (struct pbuf *q = ss->rx_held; fits && q; q = q->next)
+				ssh_ringbuffer_add(&ss->rb_tcp_in, q->payload, q->len, false);
+			pbuf_free(ss->rx_held);
+			ss->rx_held = NULL;
+		}
+		cyw43_arch_lwip_end();
+		if (!fits) {	/* can't happen while the window is bounded by TCP_WND */
+			LOG_MSG(LOG_ERR, "ssh_session_setup: early input larger than the input buffer");
+			return false;
+		}
 	}
 	ssh_ringbuffer_flush(&ss->rb_in);
 	ssh_ringbuffer_flush(&ss->rb_out);

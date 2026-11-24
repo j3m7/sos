@@ -78,6 +78,8 @@ typedef struct ssh_session_t {
 	volatile ssh_connection_state_t cstate;
 	WOLFSSH *ssh;                      /* wolfSSH session */
 	ssh_ringbuffer_t rb_tcp_in;        /* TCP (encrypted) input buffer (irq: filled) */
+	struct pbuf *rx_held;              /* (irq) input that arrived before the buffers were
+	                                      allocated; moved into rb_tcp_in by setup */
 	ssh_ringbuffer_t rb_in;            /* Decrypted input buffer */
 	ssh_ringbuffer_t rb_out;           /* Unencrypted output buffer */
 	char login[MAX_LOGIN_LENGTH + 1];  /* Logged in user */
@@ -100,6 +102,8 @@ struct ssh_server_t {
 	struct tcp_pcb *listen;            /* lwIP listening socket */
 	WOLFSSH_CTX *ssh_ctx;              /* SSH server context */
 	ssh_session_t *sessions;           /* session slots */
+	size_t rxbuf_size, txbuf_size;     /* per-session buffer sizes (rb_in, rb_out) */
+	size_t tcp_in_size;                /* rb_tcp_in size: at least TCP_WND */
 	unsigned max_sessions;             /* number of slots */
 
 	/* Statistics */

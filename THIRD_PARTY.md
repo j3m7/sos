@@ -15,7 +15,7 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; timing statistics |
+| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
 | `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
