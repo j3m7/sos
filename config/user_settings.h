@@ -314,10 +314,12 @@ extern time_t ssh_server_my_time(time_t *);
 #endif
 #endif
 
-/* Ed448 / Curve448 */
+/* Ed448 / Curve448: off. TLS offers only X25519 and P-256 (src/tls.c), no trusted chain is
+ * signed with Ed448, and wolfSSH would use Ed448 only for ML-DSA composite host keys (no ML-DSA
+ * here). Saves about 95 KB of flash. */
 #undef HAVE_CURVE448
 #undef HAVE_ED448
-#if 1
+#if 0
 #define HAVE_CURVE448
 #define HAVE_ED448 /* ED448 Requires SHA512 */
 #define WOLFSSL_SHAKE256
