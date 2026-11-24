@@ -45,9 +45,16 @@ git -C /tmp/pico-sshd diff 697e33c65a3a36231e91b0d2d121611110978454 HEAD   # ups
 diff -u /tmp/pico-sshd/src/server.c src/ssh/server.c                       # SOS changes
 ```
 
-### Fixes to offer upstream (TODO)
+### Fixes to offer upstream
 
-Generic bugs found while integrating pico-sshd that apply to upstream as well. Not yet reported.
+Generic bugs found while integrating pico-sshd that apply to upstream as well.
+
+Reported 2026-11-23: items 1, 2, 3, 5, 8 and 9 as fixes in
+[tjko/pico-sshd#2](https://github.com/tjko/pico-sshd/pull/2) (tested on a Pico 2 W); items 4,
+6, 7 and 10, the ML-KEM stack finding and the multi-session work as notes in
+[tjko/pico-sshd#3](https://github.com/tjko/pico-sshd/issues/3). Also noted there: with an rx
+buffer smaller than the SSH window (4096), `ssh_process_input()` can leave channel data unread
+and stall the session (SOS's copy has the same code path; it uses 4096, which avoids it).
 
 1. `CMakeLists.txt`: `target_sources(pico-telnetd-lib ...)` adds the library's sources to the
    wrong target, so `pico-sshd-lib` only builds in projects that also use pico-telnetd.
