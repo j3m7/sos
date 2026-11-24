@@ -60,7 +60,9 @@ void shell_execute(shell_t *sh, char *cmd);
 
 // Ask a question: `prompt` replaces "sos> " and the next line typed is passed to `answer`
 // instead of being run as a command. With `secret`, the answer isn't echoed. Never blocks: call
-// it from a command (or from an answer callback, to chain questions) and return.
+// it from a command (or from an answer callback, to chain questions) and return. `prompt` is
+// kept, not copied (it's redrawn around log lines), so it must stay valid until answered: use a
+// string literal or a static buffer.
 void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
 
 // For output that isn't the shell's own (log messages): clear the line being typed, and

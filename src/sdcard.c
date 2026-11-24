@@ -9,6 +9,7 @@
 
 #include "sdcard.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 
@@ -50,6 +51,68 @@ sd_card_t *sd_get_by_num(size_t num) { return num == 0 ? &card : NULL; }
 // The library's messages (weak hooks, silent by default) go to the system log.
 void put_out_error_message(const char *s) { log_msg(SOS_LOG_ERR, "sd: %s", s); }
 void put_out_info_message(const char *s) { log_msg(SOS_LOG_INFO, "sd: %s", s); }
+
+// While formatting (one long FatFs call), feed the watchdog from each block write: the main loop
+// doesn't run until it returns, but every completed write is progress.
+static bool formatting;
+static block_dev_err_t (*lib_write_blocks)(sd_card_t *, const uint8_t *, uint32_t, uint32_t);
+static block_dev_err_t (*lib_read_blocks)(sd_card_t *, uint8_t *, uint32_t, uint32_t);
+static uint32_t (*lib_get_num_sectors)(sd_card_t *);
+
+// FatFs asks for the card size again at the end of a format, right after a long write, when the
+// card can still be busy: the driver's CMD9 (read CSD) then fails and it reports 0 sectors, which
+// fails the format. The size can't change while the card stays initialized (init stores it), so
+// fall back to that.
+static uint32_t get_num_sectors_cached(sd_card_t *c) {
+    uint32_t n = lib_get_num_sectors(c);
+    if (!n && c->state.sectors) {
+        log_msg(SOS_LOG_INFO, "sd: size query failed, using %lu sectors from init",
+                (unsigned long)c->state.sectors);
+        n = c->state.sectors;
+    }
+    return n;
+}
+
+static struct { uint32_t writes, reads, sectors, last_sector, last_count; } io_stats;
+
+static block_dev_err_t read_blocks_logged(sd_card_t *c, uint8_t *buf, uint32_t sector,
+                                          uint32_t count) {
+    block_dev_err_t r = lib_read_blocks(c, buf, sector, count);
+    io_stats.reads++;
+    if (r != SD_BLOCK_DEVICE_ERROR_NONE)
+        log_msg(SOS_LOG_ERR, "sd: reading %lu sectors at %lu failed (%d)", (unsigned long)count,
+                (unsigned long)sector, (int)r);
+    return r;
+}
+
+static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32_t sector,
+                                        uint32_t count) {
+    block_dev_err_t r = lib_write_blocks(c, buf, sector, count);
+    io_stats.writes++;
+    io_stats.sectors += count;
+    io_stats.last_sector = sector;
+    io_stats.last_count = count;
+    if (formatting)
+        wdog_feed();
+    if (r != SD_BLOCK_DEVICE_ERROR_NONE)
+        log_msg(SOS_LOG_ERR, "sd: writing %lu sectors at %lu failed (%d)", (unsigned long)count,
+                (unsigned long)sector, (int)r);
+    return r;
+}
+
+static bool driver_init(void) {
+    static bool ready;
+    if (!ready && sd_init_driver()) {
+        lib_write_blocks = card.write_blocks;   // set by sd_init_driver()
+        card.write_blocks = write_blocks_fed;
+        lib_read_blocks = card.read_blocks;
+        card.read_blocks = read_blocks_logged;
+        lib_get_num_sectors = card.get_num_sectors;
+        card.get_num_sectors = get_num_sectors_cached;
+        ready = true;
+    }
+    return ready;
+}
 
 // --- shell command -----------------------------------------------------------------------------
 
@@ -205,22 +268,107 @@ static void cmd_test(shell_t *sh) {
                  kb * 1000000ull / rus, ok ? "verified" : "MISMATCH");
 }
 
+// --- format --------------------------------------------------------------------------------------
+
+#define FORMAT_ALIGN_SECTORS 8192           // 4 MB: a multiple of the card's allocation unit
+#define FORMAT_WORK_BYTES    (32 * 1024)    // bigger is faster (f_mkfs writes this much at once)
+
+static BYTE format_type;                    // FM_EXFAT or FM_FAT32
+
+static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer || strcmp(answer, "yes")) {
+        shell_printf(sh, "not formatted\n");
+        return;
+    }
+    void *work = malloc(FORMAT_WORK_BYTES);
+    if (!work) {
+        shell_printf(sh, "not formatted: out of memory\n");
+        return;
+    }
+    const char *drive = sd_get_drive_prefix(&card);
+    f_unmount(drive);
+    card.state.mounted = false;
+    sync_fat_clock();                       // volume and directory dates
+    const char *name = format_type == FM_EXFAT ? "exFAT" : "FAT32";
+    log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s", name);
+
+    MKFS_PARM opt = { .fmt = format_type, .n_fat = 1, .align = FORMAT_ALIGN_SECTORS };
+    uint64_t t0 = time_us_64();
+    memset(&io_stats, 0, sizeof(io_stats));
+    formatting = true;
+    // No FM_SFD: writes a new partition table with one partition over the whole card.
+    FRESULT fr = f_mkfs(drive, &opt, work, FORMAT_WORK_BYTES);
+    formatting = false;
+    uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
+    free(work);
+    log_msg(SOS_LOG_INFO, "sd: format did %lu reads, %lu writes (%lu sectors), last write %lu+%lu",
+            (unsigned long)io_stats.reads, (unsigned long)io_stats.writes,
+            (unsigned long)io_stats.sectors, (unsigned long)io_stats.last_sector,
+            (unsigned long)io_stats.last_count);
+    if (fr != FR_OK) {
+        log_msg(SOS_LOG_ERR, "sd: format failed: %s (%d) after %lu ms", FRESULT_str(fr), fr,
+                (unsigned long)ms);
+        shell_printf(sh, "format failed: %s\n", FRESULT_str(fr));
+        return;
+    }
+    log_msg(SOS_LOG_NOTICE, "sd: formatted as %s in %lu ms", name, (unsigned long)ms);
+    if (!mount(sh))
+        return;
+    shell_printf(sh, "formatted in %lu.%lu s\n", (unsigned long)(ms / 1000),
+                 (unsigned long)(ms % 1000 / 100));
+    cmd_info(sh);
+}
+
+static void cmd_format(shell_t *sh, const char *type) {
+    if (!sh->io->admin) {
+        shell_printf(sh, "the card can only be formatted on the serial console\n");
+        return;
+    }
+    if (!type || !strcmp(type, "exfat"))
+        format_type = FM_EXFAT;
+    else if (!strcmp(type, "fat32"))
+        format_type = FM_FAT32;
+    else {
+        shell_printf(sh, "usage: sd format [exfat|fat32]\n");
+        return;
+    }
+
+    // Make sure there's a card, and show what's on it now.
+    if (card.state.mounted || mount(sh))
+        cmd_info(sh);
+    else if (!card.state.sectors) {
+        shell_printf(sh, "no card\n");
+        return;
+    }
+    // One-line prompt: log lines redraw only the input line.
+    shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s.\n"
+                 "SSH sessions pause until it's done.\n",
+                 format_type == FM_EXFAT ? "exFAT" : "FAT32");
+    shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
+}
+
+// --- dispatch ------------------------------------------------------------------------------------
+
 void sdcard_command(shell_t *sh, char *args) {
     char *sub = args ? strtok(args, " ") : NULL;
     char *arg = sub ? strtok(NULL, " ") : NULL;
-    static bool driver_ready;
-    if (!driver_ready)
-        driver_ready = sd_init_driver();
+    if (!driver_init()) {
+        shell_printf(sh, "sd: driver init failed\n");
+        return;
+    }
     if (!sub || !strcmp(sub, "info"))
         cmd_info(sh);
     else if (!strcmp(sub, "ls"))
         cmd_ls(sh, arg);
     else if (!strcmp(sub, "test"))
         cmd_test(sh);
+    else if (!strcmp(sub, "format"))
+        cmd_format(sh, arg);
     else if (!strcmp(sub, "unmount")) {
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
         shell_printf(sh, "unmounted\n");
     } else
-        shell_printf(sh, "usage: sd [info|ls [path]|test|unmount]\n");
+        shell_printf(sh, "usage: sd [info|ls [path]|test|format [exfat|fat32]|unmount]\n");
 }
