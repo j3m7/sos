@@ -17,47 +17,47 @@ if (SOS_TEST_SANITIZE)
     add_link_options(-fsanitize=address,undefined)
 endif()
 
-# src/ssh/ringbuffer.c: buffers for all SSH session I/O.
-add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/ringbuffer.c)
-target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/include)
+# src/ssh/pico-sshd/ringbuffer.c: buffers for all SSH session I/O.
+add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/pico-sshd/ringbuffer.c)
+target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd/include)
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
-# src/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell_core.c)
+# src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
+add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell/shell_core.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
-# src/path.c: path resolution for the file commands.
-add_executable(test_path test_path.c ${SOS_ROOT}/src/path.c)
+# src/files/path.c: path resolution for the file commands.
+add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_path PRIVATE ${SOS_ROOT}/src)
 add_test(NAME path COMMAND test_path)
 
-# src/config.c: persistent configuration (A/B flash records, key parsing, validation).
-add_executable(test_config test_config.c ${SOS_ROOT}/src/config.c)
+# src/core/config.c: persistent configuration (A/B flash records, key parsing, validation).
+add_executable(test_config test_config.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)
 add_test(NAME config COMMAND test_config)
 
-# src/log.c: log levels, console output with input-line redraw, RAM history.
-add_executable(test_log test_log.c ${SOS_ROOT}/src/log.c)
+# src/core/log.c: log levels, console output with input-line redraw, RAM history.
+add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
 add_test(NAME log COMMAND test_log)
 
-# src/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
-add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/timeconv.c)
+# src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
+add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)
 target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)
 add_test(NAME timeconv COMMAND test_timeconv)
 
-# src/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
-add_executable(test_nts_ke test_nts_ke.c ${SOS_ROOT}/src/nts_ke.c)
+# src/time/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
+add_executable(test_nts_ke test_nts_ke.c ${SOS_ROOT}/src/time/nts_ke.c)
 target_include_directories(test_nts_ke PRIVATE ${SOS_ROOT}/src)
 add_test(NAME nts_ke COMMAND test_nts_ke)
 
-# src/nts_ntp.c: NTS-protected NTP packets (RFC 8915 section 5), with a stand-in AEAD.
-add_executable(test_nts_ntp test_nts_ntp.c ${SOS_ROOT}/src/nts_ntp.c)
+# src/time/nts_ntp.c: NTS-protected NTP packets (RFC 8915 section 5), with a stand-in AEAD.
+add_executable(test_nts_ntp test_nts_ntp.c ${SOS_ROOT}/src/time/nts_ntp.c)
 target_include_directories(test_nts_ntp PRIVATE ${SOS_ROOT}/src)
 add_test(NAME nts_ntp COMMAND test_nts_ntp)
 
-# src/certbundle.c: PEM bundles and DER certificates for /certs/roots.pem (base64 from config.c).
-add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/certbundle.c ${SOS_ROOT}/src/config.c)
+# src/tls/certbundle.c: PEM bundles and DER certificates for /certs/roots.pem (base64 from config.c).
+add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_certbundle PRIVATE ${SOS_ROOT}/src)
 add_test(NAME certbundle COMMAND test_certbundle)

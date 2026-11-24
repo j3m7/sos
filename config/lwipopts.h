@@ -47,7 +47,7 @@
 #define LWIP_NETIF_TX_SINGLE_PBUF   1
 #define LWIP_CHKSUM_ALGORITHM       3
 
-// SNTP (src/timesync.c): used only when the RTC has no valid time, or on request.
+// SNTP (src/time/timesync.c): used only when the RTC has no valid time, or on request.
 #define SNTP_SERVER_DNS             1
 #define SNTP_CHECK_RESPONSE         2   // reply must come from the server and echo our timestamp
 #define SNTP_COMP_ROUNDTRIP         1   // correct for network delay (when the clock is roughly set)

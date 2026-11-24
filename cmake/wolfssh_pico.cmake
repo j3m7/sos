@@ -1,6 +1,6 @@
 # Copied into SOS from https://github.com/tjko/pico-sshd (cmake/wolfssh_pico.cmake) at commit
 # 697e33c65a3a36231e91b0d2d121611110978454; pico-sshd is GPL-3.0-or-later (see THIRD_PARTY.md).
-# SOS changes: src/wolfsftp.c is left out of the glob; SOS compiles it through src/sftp_wolf.c
+# SOS changes: src/wolfsftp.c is left out of the glob; SOS compiles it through src/ssh/sftp_wolf.c
 # (with its own file functions, see config/user_settings.h).
 
 # wolfssh_pico.cmake

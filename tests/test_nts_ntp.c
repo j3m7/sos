@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/nts_ntp.c: NTS-protected NTP packets (RFC 8915 section 5), with a stand-in
+// Unit tests for src/time/nts_ntp.c: NTS-protected NTP packets (RFC 8915 section 5), with a stand-in
 // AEAD (keyed checksum tag + XOR) in place of AES-SIV, and NTP time conversions.
 
 #include <stdint.h>
 
-#include "nts_ntp.h"
+#include "time/nts_ntp.h"
 #include "test.h"
 
 // --- stand-in AEAD: the tag is a keyed FNV-1a over ad, nonce and plaintext -----------------------

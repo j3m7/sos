@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/timeconv.c: Unix time <-> calendar, and the PCF8523 register encoding.
+// Unit tests for src/time/timeconv.c: Unix time <-> calendar, and the PCF8523 register encoding.
 
 #define _DEFAULT_SOURCE     // timegm, gmtime_r
 #include <stdint.h>
@@ -9,7 +9,7 @@
 #include <time.h>
 
 #include "test.h"
-#include "timeconv.h"
+#include "time/timeconv.h"
 
 static int64_t make(int y, int mo, int d, int h, int mi, int s) {
     timeconv_cal_t cal = {.year = y, .month = mo, .day = d, .hour = h, .min = mi, .sec = s};
