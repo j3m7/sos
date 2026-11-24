@@ -42,8 +42,8 @@ typedef struct {
     config_key_t keys[CONFIG_MAX_KEYS];
     // Fields below were added later. The layout is append-only: a record saved by older
     // firmware is shorter, and the fields it lacks load as 0, so 0 must mean "default".
-    uint16_t ntp_sync_hours;                    // periodic NTP sync interval; 0 = off
-    char ntp_server[CONFIG_NTP_SERVER_MAX + 1]; // host name or IPv4 address; empty = build default
+    uint16_t ntp_sync_hours;                    // periodic NTS sync interval; 0 = off
+    char ntp_server[CONFIG_NTP_SERVER_MAX + 1]; // NTS-KE server; empty = build default (SOS_NTS_SERVER)
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------

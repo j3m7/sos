@@ -86,6 +86,7 @@ set(SOS_SOURCES
     src/tls.c
     src/tls_roots.c
     src/nts_ke.c
+    src/nts_ntp.c
     src/nts.c
     src/wdog.c
     src/sdcard.c
@@ -116,14 +117,18 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # Hardware watchdog: the main loop must come round within this time or the chip resets.
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
-# Default SNTP server, until one is set on the device with `time server`.
+# Default NTS server (authenticated time), until one is set on the device with `time server`.
+# Its certificate chain must end at a root in src/tls_roots.c.
+set(SOS_NTS_SERVER "time.cloudflare.com" CACHE STRING "NTS-KE server host name")
+# Plain SNTP server, used only on `time sync sntp` (unauthenticated).
 set(SOS_NTP_SERVER "pool.ntp.org" CACHE STRING "SNTP server host name")
-# Lower bound for any accepted time (SNTP is unauthenticated). Taken at configure time;
-# SOURCE_DATE_EPOCH overrides it for reproducible builds.
+# Lower bound for any accepted time. Taken at configure time; SOURCE_DATE_EPOCH overrides it for
+# reproducible builds.
 string(TIMESTAMP SOS_BUILD_EPOCH "%s" UTC)
 target_compile_definitions(sos PRIVATE
     SOS_SSH_MAX_SESSIONS=${SOS_SSH_MAX_SESSIONS}
     SOS_WATCHDOG_MS=${SOS_WATCHDOG_MS}
+    SOS_NTS_SERVER="${SOS_NTS_SERVER}"
     SOS_NTP_SERVER="${SOS_NTP_SERVER}"
     SOS_BUILD_EPOCH=${SOS_BUILD_EPOCH}LL
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}

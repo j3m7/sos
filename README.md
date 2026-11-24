@@ -140,8 +140,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
-| `time auto <hours>` / `time auto off` | periodic NTP sync (default off; see [Timekeeping](#timekeeping)) |
-| `time server <name>` / `time server default` | NTP server: host name or IPv4 address / back to `SOS_NTP_SERVER` |
+| `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
+| `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
 | `config reset` | erase everything (back to the build-time defaults, if any) |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
@@ -218,27 +218,41 @@ is the source of truth for wall-clock time. At boot SOS sets the system clock (`
 `gettimeofday()`) from it and turns on the chip's battery switch-over, which is off by default.
 All times are UTC.
 
-SOS asks an NTP server for the time in three cases. The server is set on the console with
-`time server <name>`. Until then SOS uses the build-time `SOS_NTP_SERVER`, which defaults to
-`pool.ntp.org`. A new server is used from the next sync.
+Network time comes from **NTS** (Network Time Security, RFC 8915): NTP whose replies are
+authenticated. SOS does a TLS key exchange with the NTS server (TCP port 4460), then sends
+NTP requests that carry a single-use cookie and an AES-SIV tag, and accepts only replies that
+check out under the server's key. Each sync sends 4 queries and uses the one with the shortest
+round trip, which keeps Wi-Fi power-saving delays out of the result. The server is set on the
+console with `time server <name>`; the default is the build-time `SOS_NTS_SERVER`
+(`time.cloudflare.com`). The server's certificate chain must end at a built-in root
+(`src/tls_roots.c`), which today covers Cloudflare's NTS service.
+
+SOS syncs in three cases:
 
 - **The RTC has no valid time:** no chip, a first power-up, or a coin cell that ran out while
-  the board was unpowered.
+  the board was unpowered. A failed sync is retried after 30 s, then with doubling delays up to
+  30 minutes, until one works.
 - **`time sync`**, typed in any shell, SSH included.
 - **Periodically, if turned on** with `time auto <hours>` on the console (1 to 720; default off).
-  It syncs once the network is up (unless NTP already set the clock since boot), then one
-  interval after the last successful sync, whatever started it. This corrects RTC drift, which is
-  up to about 10 s a week. Without it, run `time sync` now and then.
+  It syncs once the network is up (unless the clock was synced since boot), then one interval
+  after the last successful sync, whatever started it. This corrects RTC drift, which is up to
+  about 10 s a week. Without it, run `time sync` now and then.
 
-A successful reply sets the system clock and the RTC, then the NTP client stops. NTP isn't
-authenticated, so a reply earlier than the firmware's configure time is always rejected. A
-periodic sync also refuses to move the clock by more than 5 minutes, so a forged reply can't
-quietly shift a clock that's already set. If that happens, the log says so and `time sync`
-accepts the new time.
+A successful sync sets the system clock and the RTC. NTS time is authenticated, so a sync may
+move the clock any distance; a correction of more than 5 minutes is logged as a warning. Any
+time earlier than the firmware's configure time is rejected.
 
-- `time` shows the date and time and where it came from, the RTC's reading and backup-battery
-  state, the last NTP sync, and the periodic setting with the time until the next sync.
+There is no automatic fallback to plain, unauthenticated NTP: if the NTS server can't be
+reached (for example because the network blocks port 4460) and the RTC has no time, the clock
+stays unset until NTS works. `time sync sntp` does one plain SNTP sync on request, from the
+build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the time as unauthenticated.
+
+- `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading
+  and backup-battery state, the last sync with its correction and round trip, a failed attempt
+  and when it's retried, and the server and periodic settings.
 - `time auto` and `time server` (without a value) show those settings; `config` lists both.
+- `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
+  `nts query` run the two steps by hand, for diagnosis; they don't set the clock.
 
 ## Files (SD card)
 
