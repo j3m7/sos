@@ -46,3 +46,8 @@ add_test(NAME timeconv COMMAND test_timeconv)
 add_executable(test_nts_ke test_nts_ke.c ${SOS_ROOT}/src/nts_ke.c)
 target_include_directories(test_nts_ke PRIVATE ${SOS_ROOT}/src)
 add_test(NAME nts_ke COMMAND test_nts_ke)
+
+# src/nts_ntp.c: NTS-protected NTP packets (RFC 8915 section 5), with a stand-in AEAD.
+add_executable(test_nts_ntp test_nts_ntp.c ${SOS_ROOT}/src/nts_ntp.c)
+target_include_directories(test_nts_ntp PRIVATE ${SOS_ROOT}/src)
+add_test(NAME nts_ntp COMMAND test_nts_ntp)

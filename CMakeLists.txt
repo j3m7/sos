@@ -76,6 +76,7 @@ set(SOS_SOURCES
     src/tls.c
     src/tls_roots.c
     src/nts_ke.c
+    src/nts_ntp.c
     src/nts.c
     src/wdog.c
 )
