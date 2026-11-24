@@ -83,6 +83,10 @@ set(SOS_SOURCES
     src/rtc.c
     src/timeconv.c
     src/timesync.c
+    src/tls.c
+    src/tls_roots.c
+    src/nts_ke.c
+    src/nts.c
     src/wdog.c
     src/sdcard.c
 )

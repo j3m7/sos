@@ -13,12 +13,24 @@
 #define CONNECT_TIMEOUT_MS  30000   // one attempt
 #define REJOIN_INTERVAL_MS  3000    // re-issue the join while the network isn't found
 #define RETRY_DELAY_MS      15000   // after a failed attempt or a dropped link
+// Attempts that are retried after QUICK_RETRY_DELAY_MS instead. Some access points leave
+// authentication frames unanswered now and then; when the firmware's own retry times out too,
+// the join fails (SET_SSID status 1, CYW43_LINK_FAIL) but an immediate new attempt usually works.
+#define QUICK_RETRIES       2
+#define QUICK_RETRY_DELAY_MS 1000
+// How long CYW43_LINK_BADAUTH must last before it counts as a wrong password. The driver also
+// reports it briefly when an authentication frame times out (AUTH event status 2) and clears it
+// when the retry succeeds ~10 ms later; some access points do this on every join. Giving up on
+// the first sighting made joins fail at random, depending on whether a poll landed in that window.
+#define BADAUTH_GRACE_MS    3000
 
 typedef enum { W_OFF, W_CONNECTING, W_UP, W_WAIT } wifi_st_t;
 
 static wifi_st_t state = W_OFF;
 static absolute_time_t deadline;        // W_CONNECTING: give up; W_WAIT: retry
 static absolute_time_t next_rejoin;
+static absolute_time_t badauth_until;   // W_CONNECTING: BADAUTH still showing then = wrong password
+static bool badauth_seen;
 static unsigned attempt;
 
 static struct netif *sta(void) {
@@ -49,13 +61,16 @@ static void begin_attempt(void) {
     state = W_CONNECTING;
     deadline = make_timeout_time_ms(CONNECT_TIMEOUT_MS);
     next_rejoin = make_timeout_time_ms(REJOIN_INTERVAL_MS);
+    badauth_seen = false;
 }
 
 static void retry_later(const char *why) {
-    log_msg(SOS_LOG_WARNING, "wifi: %s; retrying in %d s", why, RETRY_DELAY_MS / 1000);
+    // The first failures are often transient (see QUICK_RETRIES), so retry those soon.
+    int delay_ms = attempt <= QUICK_RETRIES ? QUICK_RETRY_DELAY_MS : RETRY_DELAY_MS;
+    log_msg(SOS_LOG_WARNING, "wifi: %s; retrying in %d s", why, delay_ms / 1000);
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     state = W_WAIT;
-    deadline = make_timeout_time_ms(RETRY_DELAY_MS);
+    deadline = make_timeout_time_ms(delay_ms);
 }
 
 void wifi_start(void) {
@@ -80,6 +95,12 @@ void wifi_poll(void) {
         break;
     case W_CONNECTING:
         link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+        if (link != CYW43_LINK_BADAUTH)
+            badauth_seen = false;
+        else if (!badauth_seen) {
+            badauth_seen = true;
+            badauth_until = make_timeout_time_ms(BADAUTH_GRACE_MS);
+        }
         if (link == CYW43_LINK_UP) {
             char ip[16];
             cyw43_arch_lwip_begin();
@@ -88,7 +109,7 @@ void wifi_poll(void) {
             log_msg(SOS_LOG_NOTICE, "wifi: connected, ip %s", ip);
             state = W_UP;
             attempt = 0;
-        } else if (link == CYW43_LINK_BADAUTH) {
+        } else if (link == CYW43_LINK_BADAUTH && time_reached(badauth_until)) {
             retry_later("wrong password");
         } else if (link == CYW43_LINK_FAIL) {
             retry_later("connection failed");

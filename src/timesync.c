@@ -166,6 +166,10 @@ void timesync_boot(void) {
         log_msg(SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
 }
 
+bool timesync_clock_set(void) {
+    return source != SRC_NONE;
+}
+
 void timesync_network_up(void) {
     if (ntp_running)
         return;
