@@ -55,7 +55,8 @@ typedef enum ssh_connection_state {
 	CS_NONE = 0,    /* slot free */
 	CS_ACCEPT,      /* TCP connected, SSH handshake / authentication in progress */
 	CS_CONNECT,     /* logged in */
-	CS_CLOSING,     /* exit status and channel close sent; waiting for the client to close */
+	CS_CLOSING,     /* disconnecting: sending remaining output, then exit status and channel
+	                   close (exit_sent), then waiting for the client to close */
 } ssh_connection_state_t;
 
 /* SSH Server Private Key */
@@ -86,6 +87,8 @@ typedef struct ssh_session_t {
 	volatile bool peer_closed;         /* (irq) client closed or connection failed */
 	volatile bool setup_pending;       /* (irq) accepted; wolfSSH session not created yet */
 	bool eof_received;                 /* client sent channel EOF: end once input is consumed */
+	volatile bool exit_sent;           /* CS_CLOSING: exit status and channel close sent (the
+	                                      slot may then be reclaimed by a new connection) */
 	uint64_t accept_start_us;          /* when the connection was accepted */
 	uint64_t closing_deadline_us;      /* force close in CS_CLOSING after this time */
 	uint32_t handshake_us;             /* accept to logged-in */

@@ -36,9 +36,9 @@
      Logins no longer wait for the 500 ms TCP poll between handshake steps.
    - ssh_server_recv() no longer drops/leaks input when the buffer is full (returns ERR_MEM so
      lwIP redelivers it).
-   - Graceful disconnect: ssh_session_disconnect() sends exit status 0 and channel close, then
-     waits (CS_CLOSING, at most SSH_CLOSING_TIMEOUT_US) for the client to close the TCP
-     connection. A new connection arriving when no slot is free reclaims a closing session.
+   - Graceful disconnect: ssh_session_disconnect() enters CS_CLOSING; queued output is sent
+     (at most SSH_DRAIN_TIMEOUT_US), then exit status 0 and channel close, then it waits (at
+     most SSH_CLOSING_TIMEOUT_US) for the client to close the TCP connection. A new connection arriving when no slot is free reclaims a closing session.
    - Timing statistics for wolfSSH calls.
    - When every slot is busy, the client gets an SSH_MSG_DISCONNECT with reason "too many
      connections" and a readable description instead of a TCP reset.
@@ -50,6 +50,8 @@
    - Login grace timeout and TCP keepalive, so stalled or vanished clients release their slot.
    - TCP receive flow control: the window reopens as wolfSSH consumes input, and the TCP input
      buffer holds a full window.
+   - I/O callbacks return WS_CBIO_ERR_WANT_READ/WRITE instead of WS_WANT_READ/WRITE; a full
+     TCP send buffer was treated as a fatal socket error.
    - Channel input is drained on every pass, not only on WS_CHAN_RXD. Client EOF ends the
      session cleanly once its input is consumed; stderr-type extended data is discarded
      instead of ending the session.
@@ -76,6 +78,13 @@
 
 #define LOG_MAX_MSG_LEN 256
 #define SSH_CLOSING_TIMEOUT_US (2 * 1000 * 1000)
+/* Longest a disconnecting session may spend sending its remaining output before the exit status
+   and channel close go out. */
+#define SSH_DRAIN_TIMEOUT_US (10 * 1000 * 1000)
+/* lwIP send space required before sending exit status, EOF and channel close: wolfSSH must not
+   hit would-block part way through them (wolfSSH_stream_exit cannot be resumed). */
+#define SSH_EXIT_MSGS_ROOM 512
+#define SSH_EXIT_MSGS_QUEUE 8
 /* Connections that have not logged in within this time are dropped (like sshd LoginGraceTime),
    so idle or stalled clients cannot hold every session slot. */
 #define SSH_LOGIN_GRACE_US (30 * 1000 * 1000)
@@ -369,6 +378,7 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	ss->peer_closed = false;
 	ss->setup_pending = false;
 	ss->eof_received = false;
+	ss->exit_sent = false;
 	if (ss->client) {
 		err = close_client_connection(ss->client);
 		ss->client = NULL;
@@ -394,13 +404,14 @@ static ssh_session_t *find_free_session(ssh_server_t *st)
 			return &st->sessions[i];
 
 	/* No free slot: reclaim one that is only waiting for its client to hang up. Such a session
-	   has already sent its exit status and channel close, and thread context only touches it
-	   under the lwIP lock (ssh_session_service), so the TCP side can be closed here. Its
+	   has already sent its exit status and channel close (exit_sent; before that, thread context
+	   is still flushing its output), and thread context only touches it under the lwIP lock
+	   (ssh_session_service), so the TCP side can be closed here. Its
 	   wolfSSH session is left for ssh_session_setup() to free: this runs in interrupt
 	   context, where the (unlocked) heap must not be used. */
 	for (unsigned i = 0; i < st->max_sessions; i++) {
 		ssh_session_t *ss = &st->sessions[i];
-		if (ss->cstate == CS_CLOSING) {
+		if (ss->cstate == CS_CLOSING && ss->exit_sent) {
 			if (ss->client) {
 				close_client_connection(ss->client);
 				ss->client = NULL;
@@ -565,6 +576,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 
 	ss->setup_pending = true;
 	ss->eof_received = false;
+	ss->exit_sent = false;
 	ss->client = pcb;
 	ss->auth_tries = 0;
 	ss->login[0] = 0;
@@ -600,7 +612,7 @@ static int receive_cb(WOLFSSH* ssh, void* buf, word32 buf_len, void *ctx)
 	cyw43_arch_lwip_begin();
 	if ((size = ssh_ringbuffer_used(&ss->rb_tcp_in)) < 1) {
 		cyw43_arch_lwip_end();
-		return ss->peer_closed ? WS_CBIO_ERR_CONN_CLOSE : WS_WANT_READ;
+		return ss->peer_closed ? WS_CBIO_ERR_CONN_CLOSE : WS_CBIO_ERR_WANT_READ;
 	}
 	if (size > buf_len)
 		size = buf_len;
@@ -631,12 +643,19 @@ static int send_cb(WOLFSSH* ssh, void* buf, word32 buf_len, void *ctx)
 		cyw43_arch_lwip_end();
 		return WS_CBIO_ERR_CONN_CLOSE;
 	}
-	err = tcp_write(ss->client, buf, buf_len, TCP_WRITE_FLAG_COPY);
+	/* Queue what fits; wolfSSH calls again with the rest (it handles partial sends). */
+	word32 len = tcp_sndbuf(ss->client);
+	if (len > buf_len)
+		len = buf_len;
+	err = len > 0 ? tcp_write(ss->client, buf, (u16_t)len, TCP_WRITE_FLAG_COPY) : ERR_MEM;
 	if (err == ERR_OK)
 		tcp_output(ss->client);
 	cyw43_arch_lwip_end();
 
-	return err == ERR_OK ? (int)buf_len : WS_WANT_WRITE;
+	/* I/O callbacks report WS_CBIO_ERR_* codes. WS_WANT_WRITE is not one: wolfSSH treated it
+	   as a socket error, killing the session (and duplicating the unsent packet) whenever the
+	   TCP send buffer filled. The sent callback retries once lwIP has room. */
+	return err == ERR_OK ? (int)len : WS_CBIO_ERR_WANT_WRITE;
 }
 
 
@@ -761,7 +780,7 @@ static int ssh_session_flush(ssh_session_t *ss)
 	int wcount = 0;
 	word32 channel_id = 0;
 
-	if (ss->cstate != CS_CONNECT) {
+	if (ss->cstate != CS_CONNECT && ss->cstate != CS_CLOSING) {
 		ssh_ringbuffer_flush(&ss->rb_out);
 		return 0;
 	}
@@ -812,6 +831,11 @@ static void ssh_session_drain_channels(ssh_session_t *ss, word32 channel_id)
 			break;
 		ssh_ringbuffer_add(&ss->rb_in, tmp, res, false);
 	}
+
+	/* Backstop for a missed WS_EOF status: the channel itself records the client's EOF. */
+	WOLFSSH_CHANNEL *ch = wolfSSH_ChannelFind(ss->ssh, 0, WS_CHANNEL_ID_SELF);
+	if (ch && wolfSSH_ChannelGetEof(ch))
+		ss->eof_received = true;
 }
 
 
@@ -823,7 +847,10 @@ static void ssh_session_process_input(ssh_session_t *ss)
 
 	res = SSH_TIMED(st, wolfSSH_worker(ss->ssh, &channel_id));
 	if (res < 0) {
-		rc = wolfSSH_get_error(ss->ssh);
+		/* The return value carries once-only statuses (WS_EOF, WS_EXTDATA, WS_CHAN_RXD) even
+		   when a failed output flush in the same pass left WS_WANT_WRITE in ssh->error; only a
+		   generic WS_FATAL_ERROR needs the detail from wolfSSH_get_error(). */
+		rc = (res == WS_FATAL_ERROR) ? wolfSSH_get_error(ss->ssh) : res;
 		switch (rc) {
 		case WS_CHAN_RXD:
 		case WS_EXTDATA:
@@ -853,6 +880,68 @@ static void ssh_session_process_input(ssh_session_t *ss)
 	/* Always drain, not only on WS_CHAN_RXD: data left behind when rb_in was full would
 	   otherwise wait for the client to send more. */
 	ssh_session_drain_channels(ss, channel_id);
+}
+
+
+static bool ssh_session_tcp_room(ssh_session_t *ss, u16_t bytes, u16_t queue)
+{
+	bool ok;
+
+	cyw43_arch_lwip_begin();
+	ok = ss->client && tcp_sndbuf(ss->client) >= bytes &&
+		tcp_sndqueuelen(ss->client) + queue <= TCP_SND_QUEUELEN;
+	cyw43_arch_lwip_end();
+	return ok;
+}
+
+
+/* First phase of a graceful disconnect (CS_CLOSING, exit not sent yet): keep wolfSSH running
+   (window adjusts, output flushing) until everything the session produced has gone out, then
+   send exit status 0, EOF and channel close, once. Client input is discarded. */
+static void ssh_session_finish(ssh_session_t *ss)
+{
+	ssh_server_t *st = ss->server;
+	uint8_t tmp[64];
+	int res, rc;
+
+	if (time_us_64() > ss->closing_deadline_us) {
+		LOG_MSG(LOG_NOTICE, "SSH session %u: output not drained in time, closing",
+			ss->index + 1);
+		ssh_close_session(ss);
+		return;
+	}
+
+	if (ss->work_pending) {
+		ss->work_pending = false;
+		res = SSH_TIMED(st, wolfSSH_worker(ss->ssh, NULL));
+		rc = (res == WS_FATAL_ERROR) ? wolfSSH_get_error(ss->ssh) : res;
+		if (res < 0 && rc != WS_CHAN_RXD && rc != WS_EXTDATA && rc != WS_EOF &&
+		    rc != WS_WANT_READ && rc != WS_WANT_WRITE && rc != WS_REKEYING) {
+			/* WS_CHANNEL_CLOSED included: the client closed first, nothing left to say. */
+			ssh_close_session(ss);
+			return;
+		}
+		while (wolfSSH_ChannelIdRead(ss->ssh, 0, tmp, sizeof(tmp)) > 0)
+			;
+		while (wolfSSH_ChannelIdReadExt(ss->ssh, 0, tmp, sizeof(tmp)) > 0)
+			;
+		if (ssh_ringbuffer_used(&ss->rb_tcp_in) > 0)
+			ss->work_pending = true;
+	}
+
+	ssh_session_flush(ss);
+	if (ssh_ringbuffer_used(&ss->rb_out) > 0 || wolfSSH_OutputPending(ss->ssh) ||
+	    wolfSSH_RekeyPending(ss->ssh) ||
+	    !ssh_session_tcp_room(ss, SSH_EXIT_MSGS_ROOM, SSH_EXIT_MSGS_QUEUE))
+		return;	/* the sent callback or poll tick brings us back */
+
+	if ((res = wolfSSH_stream_exit(ss->ssh, 0)) != WS_SUCCESS)
+		LOG_MSG(LOG_NOTICE, "SSH session %u: sending exit status failed: %d",
+			ss->index + 1, res);
+	/* Second phase: wait for the client to close. From here interrupt context may reclaim
+	   the slot, so exit_sent is set last and the session is not touched again here. */
+	ss->closing_deadline_us = time_us_64() + SSH_CLOSING_TIMEOUT_US;
+	ss->exit_sent = true;
 }
 
 
@@ -890,9 +979,10 @@ static void ssh_session_service(ssh_session_t *ss)
 	ssh_server_t *st = ss->server;
 	int res, err;
 
-	/* Interrupt context may reclaim a CS_CLOSING slot for a new connection at any time, so
-	   decide what to do with closed and closing sessions under the lock. Past this block the
-	   session is in CS_ACCEPT or CS_CONNECT, which interrupt context never takes over. */
+	/* Interrupt context may reclaim a CS_CLOSING slot whose exit has been sent for a new
+	   connection at any time, so decide what to do with closed and closing sessions under the
+	   lock. Past this block the session is in CS_ACCEPT, CS_CONNECT or the output-draining part
+	   of CS_CLOSING, none of which interrupt context takes over. */
 	cyw43_arch_lwip_begin();
 	if (ss->cstate == CS_NONE) {
 		cyw43_arch_lwip_end();
@@ -901,6 +991,12 @@ static void ssh_session_service(ssh_session_t *ss)
 	if (ss->peer_closed) {
 		ssh_close_session(ss);
 		cyw43_arch_lwip_end();
+		return;
+	}
+	if (ss->cstate == CS_CLOSING && !ss->exit_sent) {
+		/* Still sending output: not reclaimable until exit_sent, so work unlocked. */
+		cyw43_arch_lwip_end();
+		ssh_session_finish(ss);
 		return;
 	}
 	if (ss->cstate == CS_CLOSING) {
@@ -1226,14 +1322,15 @@ err_t ssh_session_disconnect(ssh_session_t *ss)
 			ss->index + 1);
 
 	if (ss->cstate == CS_CONNECT && ss->ssh && !ss->peer_closed) {
-		/* Send what the session still has queued, then exit status 0, EOF and channel
-		   close. The client answers by closing; ssh_server_service() finishes the job. */
-		ssh_session_flush(ss);
-		if (wolfSSH_stream_exit(ss->ssh, 0) == WS_SUCCESS) {
-			ss->closing_deadline_us = time_us_64() + SSH_CLOSING_TIMEOUT_US;
-			ss->cstate = CS_CLOSING;
-			return ERR_OK;
-		}
+		/* ssh_session_finish() (via ssh_server_service) sends what the session still has
+		   queued, then exit status 0, EOF and channel close; the client answers by closing.
+		   exit_sent is cleared before entering CS_CLOSING so the slot cannot be reclaimed
+		   while output is still going out. */
+		ss->exit_sent = false;
+		ss->closing_deadline_us = time_us_64() + SSH_DRAIN_TIMEOUT_US;
+		ss->cstate = CS_CLOSING;
+		ss->work_pending = true;
+		return ERR_OK;
 	}
 
 	return ssh_close_session(ss);
