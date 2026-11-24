@@ -27,6 +27,11 @@ add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell_core.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
+# src/path.c: path resolution for the file commands.
+add_executable(test_path test_path.c ${SOS_ROOT}/src/path.c)
+target_include_directories(test_path PRIVATE ${SOS_ROOT}/src)
+add_test(NAME path COMMAND test_path)
+
 # src/config.c: persistent configuration (A/B flash records, key parsing, validation).
 add_executable(test_config test_config.c ${SOS_ROOT}/src/config.c)
 target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)

@@ -180,6 +180,17 @@ static void session_write(void *ctx, const char *buf, int len) {
     ssh_session_write(ss, buf, len);
 }
 
+// Jobs (cat, cp ...) size their output by this, so a slow client slows the job instead of the
+// write blocking or dropping output. Capped by what's left of this pass's fairness budget.
+static int session_write_space(void *ctx) {
+    ssh_session_t *ss = ctx;
+    int left = SESSION_POLL_OUTPUT_BUDGET - (int)session_poll_output[ss->index];
+    int space = ssh_session_write_space(ss);
+    if (left < 0)
+        left = 0;
+    return space < left ? space : left;
+}
+
 static void session_logout(void *ctx) {
     ssh_session_disconnect((ssh_session_t *)ctx);
 }
@@ -191,6 +202,7 @@ static const shell_io_t session_io = {
     .logout = session_logout,
     .crlf = true,               // raw channel: no stdio CRLF translation
     .admin = false,             // configuration changes only on the console
+    .write_space = session_write_space,
 };
 
 void sshd_poll(void) {
@@ -201,10 +213,14 @@ void sshd_poll(void) {
     for (unsigned i = 0; i < server->max_sessions; i++) {
         ssh_session_t *ss = ssh_server_session(server, i);
         if (ss->cstate != CS_CONNECT) {
+            if (session_shell_ids[i])
+                shell_end(&session_shells[i]);      // cancel a running job (closes its files)
             session_shell_ids[i] = 0;
             continue;
         }
         if (session_shell_ids[i] != ss->session_id) {
+            if (session_shell_ids[i])
+                shell_end(&session_shells[i]);
             session_shell_ids[i] = ss->session_id;
             shell_init(&session_shells[i], &session_io, ss);
         }

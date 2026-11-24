@@ -13,6 +13,8 @@
 // --- output --------------------------------------------------------------------
 
 static void write_out(shell_t *sh, const char *buf, size_t len) {
+    if (len)
+        sh->at_line_start = buf[len - 1] == '\n';
     if (!sh->io->crlf) {
         sh->io->write(sh->ctx, buf, (int)len);
         return;
@@ -32,6 +34,10 @@ static void write_out(shell_t *sh, const char *buf, size_t len) {
     }
     if (n)
         sh->io->write(sh->ctx, out, (int)n);
+}
+
+void shell_write(shell_t *sh, const char *buf, size_t len) {
+    write_out(sh, buf, len);
 }
 
 void shell_printf(shell_t *sh, const char *fmt, ...) {
@@ -71,12 +77,18 @@ static bool answer_question(shell_t *sh, char *answer) {
 }
 
 void shell_hide_input(shell_t *sh) {
-    if (sh->io)
-        sh->io->write(sh->ctx, "\r\x1b[K", 4);    // to column 0, erase the line
+    if (!sh->io)
+        return;
+    if (sh->job) {                              // job output on screen: don't erase it
+        if (!sh->at_line_start)
+            write_out(sh, "\n", 1);
+        return;
+    }
+    sh->io->write(sh->ctx, "\r\x1b[K", 4);    // to column 0, erase the line
 }
 
 void shell_show_input(shell_t *sh) {
-    if (!sh->io)
+    if (!sh->io || sh->job)                     // no prompt while a job runs
         return;
     prompt(sh);
     if (!sh->secret && sh->line_len)
@@ -145,53 +157,143 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->esc = ESC_NONE;
     sh->answer = NULL;
     sh->secret = false;
+    sh->job = NULL;             // a job of an earlier session was cancelled by shell_end()
+    sh->job_arg = NULL;
+    sh->ahead_len = 0;
+    strcpy(sh->cwd, "/");
     shell_printf(sh, "\nType 'help' for commands.\n");
     prompt(sh);
+}
+
+void shell_run_job(shell_t *sh, shell_job_fn step, void *arg) {
+    sh->job = step;
+    sh->job_arg = arg;
+}
+
+bool shell_job_running(const shell_t *sh) {
+    return sh->job != NULL;
+}
+
+int shell_write_space(shell_t *sh) {
+    if (!sh->io->write_space)
+        return 1024;
+    int n = sh->io->write_space(sh->ctx);
+    return n > 0 ? n : 0;
+}
+
+void shell_end(shell_t *sh) {
+    if (sh->job) {
+        shell_job_fn step = sh->job;
+        sh->job = NULL;
+        step(sh, sh->job_arg, true);
+    }
+    sh->answer = NULL;
+}
+
+// While a job runs: only Ctrl-C counts; then one step.
+// Keep input that arrives while a job runs, to process once it's done. Beyond the buffer, input
+// stays unread in the channel (an SSH client then waits).
+static void stash(shell_t *sh, const char *buf, size_t n) {
+    size_t room = sizeof(sh->ahead) - sh->ahead_len;
+    if (n > room)
+        n = room;               // only when a single read brought more than the buffer holds
+    memcpy(sh->ahead + sh->ahead_len, buf, n);
+    sh->ahead_len += n;
+}
+
+// Line editing for `n` input bytes. Stops early (stashing the rest) if a command starts a job.
+static void process_input(shell_t *sh, const char *buf, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char c = buf[i];
+        if (c == '\n' && sh->last_was_cr) {      // swallow LF of a CRLF pair
+            sh->last_was_cr = false;
+            continue;
+        }
+        sh->last_was_cr = (c == '\r');
+
+        if (escape_sequence(sh, (unsigned char)c))
+            continue;
+        if (c == '\r' || c == '\n') {
+            shell_printf(sh, "\n");
+            sh->line[sh->line_len] = '\0';
+            sh->line_len = 0;
+            if (!answer_question(sh, sh->line))
+                run_line(sh, sh->line);
+            if (sh->job) {  // the command started a job: keep the rest for afterwards
+                stash(sh, buf + i + 1, n - (i + 1));
+                return;
+            }
+            prompt(sh);
+        } else if (c == 0x7f || c == '\b') {
+            if (sh->line_len > 0) {
+                sh->line_len--;
+                if (!sh->secret)
+                    shell_printf(sh, "\b \b");
+            }
+        } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
+            shell_printf(sh, "^C\n");
+            sh->line_len = 0;
+            answer_question(sh, NULL);
+            prompt(sh);
+        } else if (c == 0x04) {                  // Ctrl-D on an empty line: logout
+            if (sh->line_len == 0) {
+                shell_printf(sh, "\n");
+                shell_logout(sh);
+                prompt(sh);
+            }
+        } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {
+            sh->line[sh->line_len++] = c;
+            if (!sh->secret)
+                write_out(sh, &c, 1);
+        }
+    }
+}
+
+// While a job runs: Ctrl-C cancels it (and drops input typed meanwhile); other input is kept.
+static void poll_job(shell_t *sh) {
+    char buf[32];
+    int n;
+    bool cancel = false;
+    while (!cancel && sh->ahead_len < sizeof(sh->ahead)) {
+        size_t room = sizeof(sh->ahead) - sh->ahead_len;
+        if ((n = sh->io->read(sh->ctx, buf, room < sizeof(buf) ? (int)room : (int)sizeof(buf))) <= 0)
+            break;
+        for (int i = 0; i < n && !cancel; i++) {
+            if (buf[i] == 0x03)
+                cancel = true;
+            else
+                stash(sh, &buf[i], 1);
+        }
+    }
+    if (cancel) {
+        sh->ahead_len = 0;
+        shell_printf(sh, "%s^C\n", sh->at_line_start ? "" : "\n");
+    }
+    if (!sh->job(sh, sh->job_arg, cancel) || cancel) {
+        sh->job = NULL;
+        sh->job_arg = NULL;
+        if (!sh->at_line_start)
+            write_out(sh, "\n", 1);
+        prompt(sh);
+    }
 }
 
 void shell_poll(shell_t *sh) {
     char buf[32];
     int n;
-    while ((n = sh->io->read(sh->ctx, buf, sizeof(buf))) > 0) {
-        for (int i = 0; i < n; i++) {
-            char c = buf[i];
-            if (c == '\n' && sh->last_was_cr) {      // swallow LF of a CRLF pair
-                sh->last_was_cr = false;
-                continue;
-            }
-            sh->last_was_cr = (c == '\r');
-
-            if (escape_sequence(sh, (unsigned char)c))
-                continue;
-            if (c == '\r' || c == '\n') {
-                shell_printf(sh, "\n");
-                sh->line[sh->line_len] = '\0';
-                sh->line_len = 0;
-                if (!answer_question(sh, sh->line))
-                    run_line(sh, sh->line);
-                prompt(sh);
-            } else if (c == 0x7f || c == '\b') {
-                if (sh->line_len > 0) {
-                    sh->line_len--;
-                    if (!sh->secret)
-                        shell_printf(sh, "\b \b");
-                }
-            } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
-                shell_printf(sh, "^C\n");
-                sh->line_len = 0;
-                answer_question(sh, NULL);
-                prompt(sh);
-            } else if (c == 0x04) {                  // Ctrl-D on an empty line: logout
-                if (sh->line_len == 0) {
-                    shell_printf(sh, "\n");
-                    shell_logout(sh);
-                    prompt(sh);
-                }
-            } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {
-                sh->line[sh->line_len++] = c;
-                if (!sh->secret)
-                    write_out(sh, &c, 1);
-            }
-        }
+    if (sh->job) {
+        poll_job(sh);
+        return;
     }
+    if (sh->ahead_len) {        // input typed during the last job
+        char ahead[sizeof(sh->ahead)];
+        size_t len = sh->ahead_len;
+        memcpy(ahead, sh->ahead, len);
+        sh->ahead_len = 0;
+        process_input(sh, ahead, len);
+        if (sh->job)
+            return;
+    }
+    while (!sh->job && (n = sh->io->read(sh->ctx, buf, sizeof(buf))) > 0)
+        process_input(sh, buf, (size_t)n);
 }

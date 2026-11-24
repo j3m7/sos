@@ -58,10 +58,32 @@ static const shell_io_t io_console = {      // can't be logged out of
 static char executed[16][SHELL_LINE_MAX + 1];
 static int n_executed;
 
+// "job": starts a job that prints "step N" for job_steps steps (without a final newline when
+// job_partial), then finishes. Records cancels.
+static int job_steps, job_calls, job_cancels;
+static bool job_partial;
+static int job_arg_token;
+
+static bool fake_job(shell_t *sh, void *arg, bool cancel) {
+    CHECK(arg == &job_arg_token);
+    job_calls++;
+    if (cancel) {
+        job_cancels++;
+        return false;
+    }
+    shell_printf(sh, job_partial ? "step %d" : "step %d\n", job_calls);
+    return job_calls < job_steps;
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
     n_executed++;
+    if (!strcmp(cmd, "job")) {
+        job_calls = job_cancels = 0;
+        shell_run_job(sh, fake_job, &job_arg_token);
+        return;
+    }
     shell_printf(sh, "<%s>\n", cmd);
 }
 
@@ -88,6 +110,26 @@ static void type_n(const char *s, size_t n) {
     CHECK_EQ(fake.in_pos, n);   // shell_poll() drains everything available
 }
 #define type(s) type_n((s), sizeof(s) - 1)
+
+// Deliver input and poll once, without requiring it all to be read.
+static void feed(const char *s) {
+    fake.in = s;
+    fake.in_len = strlen(s);
+    fake.in_pos = 0;
+    shell_poll(&sh);
+}
+
+static void clear_out(void) {
+    fake.out_len = 0;
+    fake.out[0] = '\0';
+}
+
+static int fake_space = -1;
+static int fake_write_space(void *ctx) { (void)ctx; return fake_space; }
+static const shell_io_t io_space = {
+    .name = "ssh", .read = fake_read, .write = fake_write, .logout = fake_logout, .crlf = false,
+    .write_space = fake_write_space,
+};
 
 #define CHECK_OUT(expected) do {                                                            \
         test_checks++;                                                                      \
@@ -434,6 +476,154 @@ TEST(printf_truncates_long_output) {
     CHECK_EQ(fake.out_len, 255);                            // 256-byte buffer, NUL excluded
 }
 
+TEST(job_runs_in_steps_then_prompts) {
+    start(&io_plain);
+    job_steps = 3;
+    job_partial = false;
+    type("job\r");
+    CHECK(shell_job_running(&sh));
+    CHECK_OUT("job\n");                        // no prompt while the job runs
+    CHECK_EQ(job_calls, 0);                     // the first step runs on the next poll
+    clear_out();
+    type("");
+    CHECK_OUT("step 1\n");
+    type("");
+    type("");
+    CHECK_EQ(job_calls, 3);
+    CHECK(!shell_job_running(&sh));
+    CHECK_OUT("step 1\nstep 2\nstep 3\nsos> ");
+    type("");                                   // finished: not called again
+    CHECK_EQ(job_calls, 3);
+}
+
+TEST(job_ends_output_with_newline_before_prompt) {
+    start(&io_plain);
+    job_steps = 1;
+    job_partial = true;
+    type("job\r");
+    clear_out();
+    type("");
+    CHECK_OUT("step 1\nsos> ");
+}
+
+TEST(input_during_job_runs_afterwards) {
+    start(&io_plain);
+    job_steps = 3;
+    job_partial = false;
+    type("job\r");
+    type("ls\r");                              // kept, not run during the job
+    CHECK_EQ(n_executed, 1);
+    CHECK_EQ(job_calls, 1);
+    type("");
+    type("");                                   // job finishes: prompt
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(n_executed, 1);
+    clear_out();
+    type("");                                   // then the kept line runs, echoed as typed
+    CHECK_EQ(n_executed, 2);
+    CHECK(!strcmp(executed[1], "ls"));
+    CHECK_OUT("ls\n<ls>\nsos> ");
+}
+
+TEST(ctrl_c_cancels_job) {
+    start(&io_plain);
+    job_steps = 100;
+    job_partial = true;
+    type("job\r");
+    type("");
+    clear_out();
+    type("x\x03");                             // also drops "x", typed during the job
+    CHECK_EQ(job_cancels, 1);
+    CHECK(!shell_job_running(&sh));
+    CHECK_OUT("\n^C\nsos> ");                 // the partial line is ended first
+    type("a\r");                               // back to normal
+    CHECK(!strcmp(executed[1], "a"));
+}
+
+TEST(piped_commands_run_in_order) {
+    start(&io_plain);
+    job_steps = 2;
+    job_partial = false;
+    feed("job\rls\rjob\rpwd\r");            // one read, like commands piped into ssh
+    CHECK_EQ(n_executed, 1);                    // "ls" waits for the job
+    for (int i = 0; i < 8; i++)
+        feed("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(n_executed, 4);
+    CHECK(!strcmp(executed[1], "ls") && !strcmp(executed[2], "job") && !strcmp(executed[3], "pwd"));
+}
+
+TEST(full_type_ahead_leaves_input_unread) {
+    static char lots[SHELL_LINE_MAX + 100];
+    start(&io_plain);
+    job_steps = 3;
+    type("job\r");
+    memset(lots, 'z', sizeof(lots) - 1);
+    lots[sizeof(lots) - 1] = '\0';
+    feed(lots);
+    CHECK_EQ(fake.in_pos, SHELL_LINE_MAX);      // the rest stays in the channel
+    CHECK_EQ(sh.ahead_len, SHELL_LINE_MAX);
+}
+
+TEST(shell_end_cancels_job) {
+    start(&io_plain);
+    job_steps = 100;
+    type("job\r");
+    type("");
+    shell_end(&sh);
+    CHECK_EQ(job_cancels, 1);
+    CHECK(!shell_job_running(&sh));
+    shell_end(&sh);                             // idempotent
+    CHECK_EQ(job_cancels, 1);
+}
+
+TEST(init_resets_job_and_cwd) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/docs");
+    job_steps = 100;
+    type("job\r");
+    shell_end(&sh);
+    shell_init(&sh, &io_plain, &fake);
+    CHECK(!shell_job_running(&sh));
+    CHECK(!strcmp(sh.cwd, "/"));
+}
+
+TEST(redraw_during_job_keeps_output) {
+    start(&io_plain);
+    job_steps = 100;
+    job_partial = true;
+    type("job\r");
+    type("");                                   // "step 1" with no newline
+    clear_out();
+    shell_hide_input(&sh);                      // a log line arrives: end the line, don't erase
+    CHECK_OUT("\n");
+    clear_out();
+    shell_show_input(&sh);                      // and no prompt afterwards
+    CHECK_OUT("");
+    job_partial = false;
+    type("");                                   // "step 2\n"
+    clear_out();
+    shell_hide_input(&sh);                      // at a line start: nothing to do
+    CHECK_OUT("");
+}
+
+TEST(write_space) {
+    start(&io_plain);
+    CHECK_EQ(shell_write_space(&sh), 1024);     // channel without a limit
+    start(&io_space);
+    fake_space = 300;
+    CHECK_EQ(shell_write_space(&sh), 300);
+    fake_space = -5;
+    CHECK_EQ(shell_write_space(&sh), 0);
+}
+
+TEST(raw_write_translates_newlines) {
+    start(&io_crlf);
+    shell_write(&sh, "a\0b\n", 4);
+    CHECK_EQ(fake.out_len, 5);
+    CHECK(!memcmp(fake.out, "a\0b\r\n", 5));
+}
+
 TEST_MAIN(
     RUN(init_prints_greeting_and_prompt);
     RUN(command_is_echoed_and_executed);
@@ -470,4 +660,15 @@ TEST_MAIN(
     RUN(crlf_channel_translates_newlines);
     RUN(plain_channel_leaves_newlines);
     RUN(printf_truncates_long_output);
+    RUN(job_runs_in_steps_then_prompts);
+    RUN(job_ends_output_with_newline_before_prompt);
+    RUN(input_during_job_runs_afterwards);
+    RUN(ctrl_c_cancels_job);
+    RUN(piped_commands_run_in_order);
+    RUN(full_type_ahead_leaves_input_unread);
+    RUN(shell_end_cancels_job);
+    RUN(init_resets_job_and_cwd);
+    RUN(redraw_during_job_keeps_output);
+    RUN(write_space);
+    RUN(raw_write_translates_newlines);
 )

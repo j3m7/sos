@@ -89,6 +89,8 @@ set(SOS_SOURCES
     src/nts.c
     src/wdog.c
     src/sdcard.c
+    src/files.c
+    src/path.c
 )
 add_executable(sos ${SOS_SOURCES})
 

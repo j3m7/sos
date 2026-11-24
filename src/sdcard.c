@@ -9,6 +9,7 @@
 
 #include "sdcard.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
@@ -22,6 +23,7 @@
 #include "hw_config.h"
 #include "sd_card.h"
 
+#include "files.h"
 #include "log.h"
 #include "wdog.h"
 
@@ -191,40 +193,26 @@ static void cmd_info(shell_t *sh) {
                  (unsigned long long)(free_clusters * csize >> 20), (unsigned long long)csize);
 }
 
-static void cmd_ls(shell_t *sh, const char *path) {
-    if (!mount(sh))
-        return;
-    DIR dir;
-    FILINFO fi;
-    FRESULT fr = f_opendir(&dir, path ? path : "/");
-    if (fr != FR_OK) {
-        shell_printf(sh, "ls: %s\n", FRESULT_str(fr));
-        return;
-    }
-    int n = 0;
-    while (f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
-        if (fi.fattrib & AM_DIR)
-            shell_printf(sh, "%10s  %s/\n", "<dir>", fi.fname);
-        else
-            shell_printf(sh, "%10llu  %04u-%02u-%02u %02u:%02u  %s\n",
-                         (unsigned long long)fi.fsize, (fi.fdate >> 9) + 1980,
-                         (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11,
-                         (fi.ftime >> 5) & 63, fi.fname);
-        n++;
-    }
-    f_closedir(&dir);
-    shell_printf(sh, "%d entries\n", n);
+// Write then read back a test file, timing both. Feeds the watchdog between blocks.
+// Test data: numbered text lines of 64 bytes ("0000123 " + letters + newline), so a kept test
+// file can be checked after `cat` or `cp` (line n of the file is test_line(n)).
+#define TEST_LINE 64
+
+static void test_line(uint32_t n, char *line) {
+    snprintf(line, 9, "%07lu ", (unsigned long)(n % 10000000));
+    memset(line + 8, 'a' + (int)(n % 26), TEST_LINE - 9);
+    line[TEST_LINE - 1] = '\n';
 }
 
-// Write then read back a test file, timing both. Feeds the watchdog between blocks.
-static void cmd_test(shell_t *sh, const char *size_kb) {
+static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
     static uint8_t buf[4096];
+    const uint32_t lines_per_block = sizeof(buf) / TEST_LINE;
     int blocks = size_kb ? atoi(size_kb) / 4 : 64;     // default 256 KB
-    if (blocks < 1 || blocks > 16384) {
-        shell_printf(sh, "usage: sd test [KB], 4 to 65536\n");
+    if (blocks < 1 || blocks > 16384 || (keep && strcmp(keep, "keep"))) {
+        shell_printf(sh, "usage: sd test [KB [keep]], 4 to 65536 KB; keep leaves /sos-test.txt\n");
         return;
     }
-    const char *name = "/sos-test.bin";
+    const char *name = "/sos-test.txt";
     if (!mount(sh))
         return;
     FIL f;
@@ -235,7 +223,8 @@ static void cmd_test(shell_t *sh, const char *size_kb) {
     }
     uint64_t t0 = time_us_64(), worst = 0;
     for (int i = 0; i < blocks && fr == FR_OK; i++) {
-        memset(buf, i, sizeof(buf));
+        for (uint32_t l = 0; l < lines_per_block; l++)
+            test_line(i * lines_per_block + l, (char *)buf + l * TEST_LINE);
         UINT bw;
         uint64_t b0 = time_us_64();
         fr = f_write(&f, buf, sizeof(buf), &bw);
@@ -259,8 +248,11 @@ static void cmd_test(shell_t *sh, const char *size_kb) {
     for (int i = 0; i < blocks && ok; i++) {
         UINT br;
         ok = f_read(&f, buf, sizeof(buf), &br) == FR_OK && br == sizeof(buf);
-        for (size_t j = 0; ok && j < sizeof(buf); j++)
-            ok = buf[j] == (uint8_t)i;
+        char line[TEST_LINE];
+        for (uint32_t l = 0; ok && l < lines_per_block; l++) {
+            test_line(i * lines_per_block + l, line);
+            ok = !memcmp(buf + l * TEST_LINE, line, TEST_LINE);
+        }
         wdog_feed();
     }
     uint64_t rus = time_us_64() - t0;
@@ -269,12 +261,31 @@ static void cmd_test(shell_t *sh, const char *size_kb) {
     if (f_stat(name, &fi) == FR_OK)
         shell_printf(sh, "test file dated %04u-%02u-%02u %02u:%02u (UTC)\n", (fi.fdate >> 9) + 1980,
                      (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63);
-    f_unlink(name);
+    if (keep)
+        shell_printf(sh, "kept %s\n", name);
+    else
+        f_unlink(name);
     unsigned kb = (unsigned)(blocks * sizeof(buf) / 1024);
     shell_printf(sh, "write %u KB: %llu ms (%llu KB/s), slowest 4 KB write %llu ms\n", kb,
                  wus / 1000, kb * 1000000ull / wus, worst / 1000);
     shell_printf(sh, "read  %u KB: %llu ms (%llu KB/s), data %s\n", kb, rus / 1000,
                  kb * 1000000ull / rus, ok ? "verified" : "MISMATCH");
+}
+
+// Formatting, unmounting or reinitializing the card would break file commands with open files.
+static bool files_in_use(shell_t *sh) {
+    if (!files_busy())
+        return false;
+    shell_printf(sh, "a file command is running (cat, cp, ls); wait for it or stop it with Ctrl-C\n");
+    return true;
+}
+
+bool sdcard_mount(shell_t *sh) {
+    if (!driver_init()) {
+        shell_printf(sh, "sd: driver init failed\n");
+        return false;
+    }
+    return mount(sh);
 }
 
 // --- SPI clock -----------------------------------------------------------------------------------
@@ -298,6 +309,8 @@ static void cmd_speed(shell_t *sh, const char *mhz) {
         shell_printf(sh, "the SPI clock can only be changed on the serial console\n");
         return;
     }
+    if (files_in_use(sh))
+        return;
     f_unmount(sd_get_drive_prefix(&card));
     card.state.mounted = false;
     card.state.m_Status |= STA_NOINIT;      // next mount initializes the card at the new rate
@@ -321,6 +334,8 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "not formatted\n");
         return;
     }
+    if (files_in_use(sh))
+        return;
     void *work = malloc(FORMAT_WORK_BYTES);
     if (!work) {
         shell_printf(sh, "not formatted: out of memory\n");
@@ -365,6 +380,8 @@ static void cmd_format(shell_t *sh, const char *type) {
         shell_printf(sh, "the card can only be formatted on the serial console\n");
         return;
     }
+    if (files_in_use(sh))
+        return;
     if (!type || !strcmp(type, "exfat"))
         format_type = FM_EXFAT;
     else if (!strcmp(type, "fat32"))
@@ -393,24 +410,26 @@ static void cmd_format(shell_t *sh, const char *type) {
 void sdcard_command(shell_t *sh, char *args) {
     char *sub = args ? strtok(args, " ") : NULL;
     char *arg = sub ? strtok(NULL, " ") : NULL;
+    char *arg2 = arg ? strtok(NULL, " ") : NULL;
     if (!driver_init()) {
         shell_printf(sh, "sd: driver init failed\n");
         return;
     }
     if (!sub || !strcmp(sub, "info"))
         cmd_info(sh);
-    else if (!strcmp(sub, "ls"))
-        cmd_ls(sh, arg);
     else if (!strcmp(sub, "test"))
-        cmd_test(sh, arg);
+        cmd_test(sh, arg, arg2);
     else if (!strcmp(sub, "speed"))
         cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg);
     else if (!strcmp(sub, "unmount")) {
+        if (files_in_use(sh))
+            return;
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
-        shell_printf(sh, "unmounted\n");
+        card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
+        shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
-        shell_printf(sh, "usage: sd [info|ls [path]|test [KB]|speed [MHz]|format [exfat|fat32]|unmount]\n");
+        shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32]|unmount]\n");
 }

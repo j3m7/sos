@@ -39,7 +39,7 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 ## Hardware
 
 - RPI Pico2W
-- Pi Cowbell Adalogger - https://www.adafruit.com/product/5703
+- Pi Cowbell Adalogger - https://www.adafruit.com/product/5703 (RTC and microSD slot)
 
 ## Software Stack
 
@@ -240,6 +240,36 @@ accepts the new time.
   state, the last NTP sync, and the periodic setting with the time until the next sync.
 - `time auto` and `time server` (without a value) show those settings; `config` lists both.
 
+## Files (SD card)
+
+The Adalogger's microSD slot (SPI0: SCK GP18, MOSI GP19, MISO GP16, CS GP17, at 25 MHz) holds
+the device's files. Cards over 2 GB (SDHC/SDXC) with exFAT or FAT32 work; the card is mounted
+when first used. The file commands work in every shell, SSH included, and each shell has its own
+working directory:
+
+| Command | |
+|---|---|
+| `ls [path]`, `cd [dir]`, `pwd` | list, change and show the working directory |
+| `cat <file>` | print a file |
+| `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
+| `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
+| `echo <text> [> file \| >> file]` | print, or write/append a line |
+| `sd` | card and volume information, SPI clock |
+| `sd format [exfat\|fat32]` | console only: erase the card and format it (one partition) |
+| `sd test [KB [keep]]`, `sd speed [MHz]`, `sd unmount` | write/read benchmark; console only: SPI clock; unmount |
+
+- **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
+  loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
+  `cp` removes its partial copy). Commands typed meanwhile run afterwards.
+- **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
+  at about 130 KB/s (encryption-bound); copying on the card at about 580 KB/s.
+- **Open files are protected:** a file that a running command has open can't be deleted or
+  renamed, and the card can't be formatted or unmounted meanwhile.
+- File names with spaces aren't supported by the commands yet. Files are dated from the RTC.
+- No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
+  doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
+  initializes and mounts the new card.
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
@@ -253,7 +283,8 @@ They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomiz
 against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
 with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
 fail or lose power mid-write), the log (`src/log.c`) and the date and RTC register conversions
-(`src/timeconv.c`, compared against the host C library). `tests/test.h` is a minimal harness; add a suite as
+(`src/timeconv.c`, compared against the host C library) and path handling for the file
+commands (`src/path.c`). `tests/test.h` is a minimal harness; add a suite as
 `tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
 
 **Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed
