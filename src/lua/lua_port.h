@@ -17,7 +17,17 @@ void sos_lua_write(const char *s, size_t len);     // src/lua/lua_core1.c: the s
 
 #define lua_getlocaledecpoint()         '.'
 
-// Nested C calls (and parser nesting). Each level uses C stack; core 1's stack is 32 KB.
-#define LUAI_MAXCCALLS                  120
+// Nested C calls: each pcall, callback from C (string.gsub, table.sort, load), metamethod,
+// coroutine and parser nesting level uses core 1's C stack (32 KB, LUA_CORE1_STACK). Plain
+// Lua-to-Lua calls don't count. Measured per level on the board (`mem` after a script):
+// string.gsub callback 1168 bytes, __tostring via string.format 968, pcall 520, coroutine 456,
+// __index function 200, parser 128. A script starts at ~1.8 KB, and the traceback built at the
+// deepest point takes ~1.6 KB more. 20 levels of the worst path, plus the 10% Lua allows while
+// handling the overflow (20 / 10 * 11 = 22: keep it a multiple of 10, or integer division
+// leaves no room and the traceback fails with "error in error handling"), stay under ~29 KB. The earlier 120 (Lua's default is 200) faulted the
+// stack guard and reset the board instead of raising "C stack overflow". An error within a few
+// levels of the limit can leave the traceback handler no room: Lua then reports "error in error
+// handling", which src/lua/lua_core1.c reports as a C stack overflow.
+#define LUAI_MAXCCALLS                  20
 
 #endif
