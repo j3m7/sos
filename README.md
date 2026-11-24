@@ -300,9 +300,11 @@ SOS syncs in three cases:
   30 minutes, until one works.
 - **`time sync`**, typed in any shell, SSH included.
 - **Periodically, if turned on** with `time auto <hours>` on the console (1 to 720; default off).
-  It syncs once the network is up (unless the clock was synced since boot), then one interval
-  after the last successful sync, whatever started it. This corrects RTC drift, which is up to
-  about 10 s a week. Without it, run `time sync` now and then.
+  It syncs one interval after the last successful sync, whatever started it, or after boot if
+  there has been none: a restart doesn't sync by itself when the RTC had the time, so a board
+  that restarts often doesn't keep asking the server. This corrects RTC drift, which is up to
+  about 10 s a week, on a board that stays up. Without it, or on a board that restarts more
+  often than the interval, run `time sync` now and then.
 
 A successful sync sets the system clock and the RTC. NTS time is authenticated, so a sync may
 move the clock any distance; a correction of more than 5 minutes is logged as a warning. Any

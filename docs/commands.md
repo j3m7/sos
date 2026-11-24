@@ -69,7 +69,7 @@ See [Timekeeping](../README.md#timekeeping) and
 | `time` | any | The time (UTC) and where it came from, the RTC, the last sync and any failure, the NTS server, and the periodic sync |
 | `time sync` | any | Sync the clock and the RTC from NTS now |
 | `time sync sntp` | console only | One unauthenticated SNTP sync. `time` then shows the time as unauthenticated |
-| `time auto [<hours>\|off]` | console only to change | Show, or set, the periodic NTS sync: every 1 or more hours, or off (default) |
+| `time auto [<hours>\|off]` | console only to change | Show, or set, the periodic NTS sync: every 1 to 720 hours after the last sync (or after boot, if the RTC had the time), or off (default) |
 | `time server [<name>\|default]` | console only to change | Show, or set, the NTS server (host name or IPv4 address). `default` goes back to the build-time server. Used from the next sync |
 | `nts` | any | NTS state: the last key exchange (cookies held, NTP server) and the last query |
 | `nts ke` | any | Run a key exchange with the build-time default server, not the one set with `time server` (development; doesn't set the clock) |

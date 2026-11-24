@@ -33,7 +33,8 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
   - automatically while the RTC had no valid time, retrying after 30 s, then doubling up to
     30 minutes;
   - on `time sync`;
-  - every N hours with `time auto` (off by default).
+  - every N hours with `time auto` (off by default): N hours after the last accepted sync, or
+    after boot if there was none. A boot with a valid RTC time doesn't sync.
 - **Applying a sync** sets the clock and then the RTC. A step over 5 minutes is logged as a
   warning.
 - **SNTP:** NTS is the only automatic source, with no fallback to plain NTP. `time sync sntp`
