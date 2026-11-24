@@ -111,6 +111,13 @@ TEST(protected_dir_fails_closed) {
     lng[0] = '/';
     lng[sizeof(lng) - 1] = '\0';
     CHECK(path_is_protected(lng));                  // too long to check
+    // FatFs ends a path at a control character: "/certs\x01" is "/certs" to it.
+    CHECK(path_is_protected("/certs\x01"));
+    CHECK(path_is_protected("/certs\x01zz/y"));
+    CHECK(path_is_protected("/certs\tz"));
+    CHECK(path_is_protected("certs\x1f"));
+    CHECK(path_is_protected("/docs/a\nb"));         // anywhere in the path
+    CHECK(path_is_protected("/docs\x7f"));
 }
 
 TEST_MAIN(

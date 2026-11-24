@@ -27,7 +27,8 @@ bool path_join(const char *dir, const char *name, char *out, size_t n);
 // True if `path` (absolute) is the protected directory or inside it, as FatFs would resolve it:
 // '\' separates like '/', "." and ".." are followed, names match case-insensitively, and
 // trailing spaces and dots are ignored ("/CERTS.", "/x/../Certs\\a" are protected). Also true
-// (refuse) for paths too long to check and for any ':' (a FatFs drive prefix).
+// (refuse) for paths too long to check, for any ':' (a FatFs drive prefix) and for any control
+// character (FatFs ends the path there, so "/certs\x01" is "/certs" to it).
 bool path_is_protected(const char *path);
 
 #endif

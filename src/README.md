@@ -53,7 +53,9 @@ network, the log or the shells; it asks core 0 through a mailbox. Writing flash 
 
 The USB/UART console is the only *admin* channel (`shell_io_t.admin`). Only the console can
 change the configuration, write `/certs`, format the card or approve root certificates. SSH
-sessions can view the configuration and use files, but can't change any of that. Physical
+sessions can view the configuration and use files, but can't change any of that. The console is
+also needed for what affects everyone or what TLS trusts: log levels, `time sync sntp`,
+`nts ke <host>` and `sd test`. Physical
 access is the trust boundary, since it already allows reflashing.
 
 ## Tests

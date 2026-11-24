@@ -48,7 +48,8 @@ const char *path_basename(const char *path) {
 
 // FatFs (ff.c create_name) splits on '/' and '\', recognises "." and ".." only exactly, strips
 // trailing spaces and dots from each name, and compares names case-insensitively. Its case
-// table only folds ASCII letters to ASCII, so no non-ASCII name can match "certs".
+// table only folds ASCII letters to ASCII, so no non-ASCII name can match "certs". It also takes
+// any control character (< 0x20) as the end of the path.
 bool path_is_protected(const char *path) {
     char raw[512], norm[512];
     size_t len = strlen(path);
@@ -58,6 +59,10 @@ bool path_is_protected(const char *path) {
         char c = path[i];
         if (c == ':')
             return true;                        // drive prefix ("0:/certs"); invalid in names
+        // FatFs ends the path at any control character ("/certs\x01" is "/certs" to it), so
+        // what follows wouldn't be what gets checked here: refuse.
+        if (c != '\0' && ((unsigned char)c < 0x20 || c == 0x7f))
+            return true;
         raw[i] = c == '\\' ? '/' : c;
     }
     if (!path_resolve("/", raw, norm, sizeof(norm)))

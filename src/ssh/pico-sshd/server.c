@@ -794,9 +794,11 @@ static int channel_req_subsys_cb(WOLFSSH_CHANNEL *channel, void *ctx)
 	const char *cmd = wolfSSH_ChannelGetSessionCommand(channel);
 
 	/* "sftp" exactly (length too: no embedded NUL), and on the session's first channel:
-	   wolfSSH_SFTP_accept() works on the head of the channel list. */
+	   wolfSSH_SFTP_accept() works on the head of the channel list. Only while logging in
+	   (CS_ACCEPT, where wolfSSH_accept() then does the SFTP version exchange): a session that
+	   already runs a shell can't turn into an SFTP one. */
 	if (ss && cmd && wolfSSH_ChannelGetSessionCommandSz(channel) == 4 && !strcmp(cmd, "sftp") &&
-	    channel == wolfSSH_ChannelNext(ss->ssh, NULL)) {
+	    channel == wolfSSH_ChannelNext(ss->ssh, NULL) && ss->cstate == CS_ACCEPT) {
 		ss->sftp = true;
 		return WS_SUCCESS;
 	}

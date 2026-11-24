@@ -98,9 +98,16 @@ void log_vmsg(int level, const char *fmt, va_list ap) {
     size_t len = strlen(line);
     while (len > 0 && line[len - 1] == '\n')    // one message, one line
         line[--len] = '\0';
-    for (size_t i = 0; i < len; i++)            // keep the ring's framing intact
-        if (line[i] == '\n' || (unsigned char)line[i] < 0x09)
+    // Messages quote text from outside (an SSH client's user name, file names): only printable
+    // ASCII goes through, so it can't send escape sequences to a terminal, fake a log line with
+    // a carriage return, or break the ring's framing.
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)line[i];
+        if (c < 0x20)
             line[i] = ' ';
+        else if (c > 0x7e)
+            line[i] = '?';
+    }
 
     uint32_t saved = hooks->lock();
     append(level, line, len);

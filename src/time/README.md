@@ -37,7 +37,7 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
 - **Applying a sync** sets the clock and then the RTC. A step over 5 minutes is logged as a
   warning.
 - **SNTP:** NTS is the only automatic source, with no fallback to plain NTP. `time sync sntp`
-  does one unauthenticated SNTP sync (lwIP's SNTP app), and `time` then shows the time as
+  (console only) does one unauthenticated SNTP sync (lwIP's SNTP app), and `time` then shows the time as
   unauthenticated.
 
 ## NTS: authenticated NTP (RFC 8915)
@@ -63,6 +63,9 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
     done. When the cookies run out, the server sends an NTSN Kiss-o'-Death, or the configured
     server changes, the next sync does a new key exchange.
   - `nts ke [host]` and `nts query` run the two steps by hand; they don't set the clock.
+    Naming another host is console only.
+  - An NTS NAK is not authenticated, so it only counts if no valid reply follows before the
+    query times out; then the keys are dropped and the sync does one new key exchange.
 
 ## Before the clock is set
 

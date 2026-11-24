@@ -209,8 +209,18 @@ static bool describe(shell_t *sh, unsigned n, const uint8_t *der, size_t len) {
     if (!ok) {
         shell_printf(sh, "(wolfSSL can't parse this certificate)\n");
     } else {
-        if (dc->subjectCN && dc->subjectCNLen > 0)
-            shell_printf(sh, "%.*s", dc->subjectCNLen, dc->subjectCN);
+        if (dc->subjectCN && dc->subjectCNLen > 0) {
+            // The name is the file's to choose: only printable ASCII reaches the terminal, so
+            // it can't redraw what the approval shows.
+            char cn[65];
+            int n = dc->subjectCNLen < (int)sizeof(cn) - 1 ? dc->subjectCNLen : (int)sizeof(cn) - 1;
+            for (int i = 0; i < n; i++) {
+                unsigned char c = (unsigned char)dc->subjectCN[i];
+                cn[i] = (c >= 0x20 && c <= 0x7e) ? (char)c : '?';
+            }
+            cn[n] = '\0';
+            shell_printf(sh, "%s", cn);
+        }
         else
             shell_printf(sh, "(no common name)");
         shell_printf(sh, ": %s%s", dc->keyOID == RSAk ? "RSA" : dc->keyOID == ECDSAk ? "ECDSA"
@@ -294,7 +304,7 @@ static void cmd_approve(shell_t *sh) {
     shell_printf(sh, "File SHA-256: ");
     print_hex(sh, pending_hash, sizeof(pending_hash));
     shell_printf(sh, "\n");
-    char prompt[96];
+    static char prompt[96];                     // shell_ask() keeps the pointer
     snprintf(prompt, sizeof(prompt), "Trust %s certificate(s) above for TLS? Type 'yes': ",
              usable == count ? "the" : "the usable");
     shell_ask(sh, prompt, false, on_approve, NULL);

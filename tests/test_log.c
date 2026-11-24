@@ -149,6 +149,13 @@ TEST(message_is_one_line) {
     CHECK_OUT("<hide>[    1.234] a b\n<show>");
 }
 
+TEST(control_characters_removed) {
+    reset();
+    // As from an SSH client's user name: escape sequence, carriage return, tab, DEL, 8-bit CSI.
+    log_msg(SOS_LOG_NOTICE, "user %s", "x\x1b[2J\rroot\tA\x7f\x9b");
+    CHECK_OUT("<hide>[    1.234] user x [2J root A??\n<show>");
+}
+
 TEST(long_message_truncated) {
     char big[400];
     memset(big, 'z', sizeof(big) - 1);
@@ -247,6 +254,7 @@ TEST_MAIN(
     RUN(deferred_mode_waits_for_flush);
     RUN(timestamp_format);
     RUN(message_is_one_line);
+    RUN(control_characters_removed);
     RUN(long_message_truncated);
     RUN(history_cursor_continues);
     RUN(history_drops_oldest_when_full);
