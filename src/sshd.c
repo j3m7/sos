@@ -25,6 +25,8 @@
 #define SSH_KEY_BLOB_MAX    128     // wire-format Ed25519 public key is 51 bytes
 
 static ssh_server_t *server;
+static shell_t session_shell;
+static uint32_t session_shell_id;      // server->session_id the shell was started for; 0 = none
 static uint8_t authorized_key[SSH_KEY_BLOB_MAX];
 static uint32_t authorized_key_len;
 static char hostkey_fingerprint[64];
@@ -154,7 +156,7 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
         printf("sshd: failed to load host key\n");
         return false;
     }
-    if (!ssh_server_start(server, true)) {
+    if (!ssh_server_start(server, false)) {
         printf("sshd: failed to start\n");
         return false;
     }
@@ -163,18 +165,59 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
     return true;
 }
 
-void sshd_status(void) {
-    if (!server) {
-        printf("sshd: not running\n");
+// --- per-session shell ----------------------------------------------------------
+
+static int session_read(void *ctx, char *buf, int len) {
+    int n = ssh_server_read((ssh_server_t *)ctx, buf, len);
+    return n > 0 ? n : 0;
+}
+
+static void session_write(void *ctx, const char *buf, int len) {
+    ssh_server_write((ssh_server_t *)ctx, buf, len);
+}
+
+static void session_logout(void *ctx) {
+    (void)ctx;
+    sshd_disconnect();
+}
+
+static const shell_io_t session_io = {
+    .name = "ssh",
+    .read = session_read,
+    .write = session_write,
+    .logout = session_logout,
+    .crlf = true,               // raw channel: no stdio CRLF translation
+};
+
+void sshd_poll(void) {
+    if (!server)
+        return;
+    if (server->cstate != CS_CONNECT) {
+        session_shell_id = 0;
         return;
     }
-    printf("host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
-    printf("state:     %s\n", ssh_server_connection_state_name(server->cstate));
+    if (session_shell_id != server->session_id) {
+        session_shell_id = server->session_id;
+        shell_init(&session_shell, &session_io, server);
+    }
+    shell_poll(&session_shell);
+}
+
+void sshd_status(shell_t *sh) {
+    if (!server) {
+        shell_printf(sh, "sshd: not running\n");
+        return;
+    }
+    shell_printf(sh, "host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
+    shell_printf(sh, "state:     %s\n", ssh_server_connection_state_name(server->cstate));
     if (ssh_server_client_connected(server)) {
         ip_addr_t ip;
         uint16_t port;
-        if (ssh_server_get_client_ip(server, &ip, &port) == ERR_OK)
-            printf("client:    %s@%s:%u\n", server->login, ipaddr_ntoa(&ip), port);
+        char ipstr[IPADDR_STRLEN_MAX];
+        if (ssh_server_get_client_ip(server, &ip, &port) == ERR_OK) {
+            ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
+            shell_printf(sh, "client:    %s@%s:%u\n", server->login, ipstr, port);
+        }
     }
 }
 

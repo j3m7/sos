@@ -17,6 +17,32 @@
 #include "sos_config.h"
 #include "sshd.h"
 
+// The USB/UART console shell. stdio already translates "\n" to "\r\n".
+static int console_read(void *ctx, char *buf, int len) {
+    (void)ctx;
+    int n = 0;
+    int c;
+    while (n < len && (c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT)
+        buf[n++] = (char)c;
+    return n;
+}
+
+static void console_write(void *ctx, const char *buf, int len) {
+    (void)ctx;
+    fwrite(buf, 1, (size_t)len, stdout);
+    fflush(stdout);
+}
+
+static const shell_io_t console_io = {
+    .name = "console",
+    .read = console_read,
+    .write = console_write,
+    .logout = NULL,
+    .crlf = false,
+};
+
+static shell_t console_shell;
+
 static bool wifi_connect(void) {
     cyw43_arch_enable_sta_mode();
     netif_set_hostname(&cyw43_state.netif[CYW43_ITF_STA], SOS_HOSTNAME);
@@ -64,12 +90,13 @@ int main(void) {
     if (wifi_connect() && have_hostkey)
         sshd_start(hostkey, hostkey_len);
 
-    shell_init();
+    shell_init(&console_shell, &console_io, NULL);
 
     absolute_time_t next_blink = get_absolute_time();
     bool led = false;
     for (;;) {
-        shell_poll();
+        shell_poll(&console_shell);
+        sshd_poll();
         if (time_reached(next_blink)) {
             led = !led;
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led);

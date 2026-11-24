@@ -15,9 +15,9 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Password authentication removed; only public key advertised; key length checked before comparison |
+| `src/ssh/server.c` | `src/server.c` | Password authentication removed; only public key advertised; key length checked before comparison; `ssh_server_read()`/`ssh_server_write()` and a per-login `session_id` |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | none |
+| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `session_id` field; declarations for `ssh_server_read()`/`ssh_server_write()` |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
 | `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |

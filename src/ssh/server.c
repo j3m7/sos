@@ -26,6 +26,8 @@
    - Password authentication removed (sha512_crypt dependency dropped); the default
      authentication callback and the advertised methods are public key only.
    - Default public key check compares key lengths before contents.
+   - Direct session I/O (ssh_server_read/ssh_server_write) and a per-login session_id, so a
+     session can be served without the global stdio driver.
 */
 
 #include <stdio.h>
@@ -373,6 +375,7 @@ static err_t ssh_server_poll(void *arg, struct tcp_pcb *pcb)
 		if ((res = wolfSSH_accept(st->ssh)) == WS_SUCCESS) {
 			LOG_MSG(LOG_DEBUG, "wolfSSH_accept(): ok");
 			st->cstate = CS_CONNECT;
+			st->session_id++;
 			strncpy(st->login, wolfSSH_GetUsername(st->ssh), sizeof(st->login) - 1);
 			st->login[sizeof(st->login) - 1] = 0;
 			ssh_ringbuffer_add(&st->rb_out, connected_text, strlen(connected_text), true);
@@ -772,47 +775,61 @@ static err_t ssh_server_close(void *arg) {
 }
 
 
-static void stdio_ssh_out_chars(const char *buf, int length)
+int ssh_server_write(ssh_server_t *st, const char *buf, int length)
+{
+	int written = 0;
+
+	if (!st || st->cstate != CS_CONNECT)
+		return -1;
+
+	cyw43_arch_lwip_begin();
+	while (written < length && st->cstate == CS_CONNECT) {
+		size_t len = ssh_ringbuffer_free(&st->rb_out);
+		if (len < 1)
+			break;	/* output buffer full and not draining: drop the rest */
+		if (len > (size_t)(length - written))
+			len = length - written;
+		ssh_ringbuffer_add(&st->rb_out, buf + written, len, false);
+		written += len;
+		ssh_server_flush_buffer(st);
+	}
+	cyw43_arch_lwip_end();
+
+	return written;
+}
+
+
+int ssh_server_read(ssh_server_t *st, char *buf, int length)
 {
 	size_t len;
 
-	if (!stdio_sshserv)
-		return;
-	if (stdio_sshserv->cstate != CS_CONNECT)
-		return;
+	if (!st || st->cstate != CS_CONNECT)
+		return -1;
+	if (length < 1 || (len = ssh_ringbuffer_used(&st->rb_in)) < 1)
+		return 0;
 
-	if ((len = ssh_ringbuffer_free(&stdio_sshserv->rb_out)) < 1)
-		return;
-
-	if (len > length)
+	if (len > (size_t)length)
 		len = length;
 
 	cyw43_arch_lwip_begin();
-	ssh_ringbuffer_add(&stdio_sshserv->rb_out, buf, len, false);
-	ssh_server_flush_buffer(stdio_sshserv);
+	ssh_ringbuffer_read(&st->rb_in, (uint8_t*)buf, len);
 	cyw43_arch_lwip_end();
+
+	return len;
+}
+
+
+static void stdio_ssh_out_chars(const char *buf, int length)
+{
+	ssh_server_write(stdio_sshserv, buf, length);
 }
 
 
 static int stdio_ssh_in_chars(char *buf, int length)
 {
-	size_t len;
+	int len = ssh_server_read(stdio_sshserv, buf, length);
 
-	if (!stdio_sshserv || length < 1)
-		return PICO_ERROR_NO_DATA;
-	if (stdio_sshserv->cstate != CS_CONNECT)
-		return PICO_ERROR_NO_DATA;
-	if ((len = ssh_ringbuffer_used(&stdio_sshserv->rb_in)) < 1)
-		return PICO_ERROR_NO_DATA;
-
-	if (len > length)
-		len = length;
-
-	cyw43_arch_lwip_begin();
-	ssh_ringbuffer_read(&stdio_sshserv->rb_in, (uint8_t*)buf, len);
-	cyw43_arch_lwip_end();
-
-	return len;
+	return len > 0 ? len : PICO_ERROR_NO_DATA;
 }
 
 

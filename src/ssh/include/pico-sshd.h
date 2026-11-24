@@ -22,6 +22,10 @@
 #ifndef PICO_SSHD_H
 #define PICO_SSHD_H 1
 
+/* Copied into SOS from https://github.com/tjko/pico-sshd at commit
+   697e33c65a3a36231e91b0d2d121611110978454 (see THIRD_PARTY.md).
+   Modified for SOS: session_id field, ssh_server_read()/ssh_server_write(). */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -65,6 +69,7 @@ typedef struct ssh_server_t {
 	ssh_ringbuffer_t rb_out;           /* Unencrypted output buffer */
 	char login[MAX_LOGIN_LENGTH + 1];  /* Currently logged in user */
 	uint8_t auth_tries;                /* Count of failed authentication attempts */
+	uint32_t session_id;               /* SOS: incremented on every successful login */
 
 	/* Configuration options... set before calling ssg_server_start() */
 	uint16_t port;             /* Listen port (default tcp/22) */
@@ -105,6 +110,13 @@ err_t ssh_server_disconnect_client(ssh_server_t *st);
 const char *ssh_server_get_pubkey_hash(const void *pkey, uint32_t pkey_len, char *str_buf, uint32_t str_buf_len);
 void ssh_server_log_level(int priority);
 int ssh_server_add_priv_key(ssh_server_t *st, int type, const uint8_t *key, uint32_t key_len);
+
+/* SOS: direct I/O on the connected session, for use instead of the stdio driver
+   (ssh_server_start(st, false)). Both are non-blocking and return -1 when no client is
+   connected. Read returns the number of bytes copied (0 if none are waiting); write returns
+   the number of bytes queued, dropping what does not fit in the output buffer. */
+int ssh_server_read(ssh_server_t *st, char *buf, int length);
+int ssh_server_write(ssh_server_t *st, const char *buf, int length);
 
 
 #ifdef __cplusplus

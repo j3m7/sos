@@ -127,8 +127,9 @@ ssh <user>@<device-ip>
 - Only public-key login for the single user/key in `local.cmake` is accepted (Ed25519).
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
   flash sector; it survives reflashing. The private key never leaves the device.
-- One client at a time. The shell is the same one as on the USB console; `help` lists
-  commands, `logout` or Ctrl-D ends the session.
+- One client at a time. Each SSH session gets its own shell, separate from the USB console:
+  input and output are not shared, and server log messages (connections, failed logins) go to
+  the console only. `help` lists commands; `logout` or Ctrl-D ends the session.
 
 ## Memory layout
 
