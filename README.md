@@ -388,6 +388,7 @@ with SOS and on the network:
 
 ```sh
 tools/test/ssh-hw-test.sh -u <user> <device-ip>     # -q for a quick run, -h for options
+tools/test/sftp-hw-test.sh -u <user> <device-ip>    # needs a formatted SD card
 ```
 
 It covers login and logout, authentication (only public key; unknown key, wrong user and
@@ -395,6 +396,14 @@ password refused), concurrent sessions kept separate, the "too many connections"
 reuse, a large input burst, clients that disappear, back-to-back logins, and heap use before and
 after. It exits with the number of failed checks. It uses every session slot for a few seconds,
 so run it while nobody else is using the board; it warns if the device rebooted mid-run.
+
+`tools/test/sftp-hw-test.sh` checks SFTP on the SD card. It puts and gets a 2 MB random file
+and a small one, overwrites a file with a smaller one, resumes both ways (`reget`, `reput`), and
+checks that a failed rename or rmdir is reported. During a download it checks that unmounting
+the card and removing the file are refused, then kills the client and checks that the file is
+released. It ends by comparing heap use before and after. It works in `/sftp-hw-test` (removed
+at the end), unmounts the card, and exits with the number of failed checks. Run it while
+nobody else is using the board.
 
 ## Memory layout
 
