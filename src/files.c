@@ -62,8 +62,8 @@ static bool may_write(shell_t *sh, const char *cmd, const char *path) {
 
 // --- helpers ---------------------------------------------------------------------------------
 
-static const char *errstr(FRESULT fr) {
-    switch (fr) {
+const char *files_error(int fr) {
+    switch ((FRESULT)fr) {
     case FR_NO_FILE:      return "no such file";
     case FR_NO_PATH:      return "no such directory";
     case FR_EXIST:        return "already exists";
@@ -144,7 +144,7 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
         FRESULT fr = f_readdir(&j->dir, &fi);
         if (fr != FR_OK || !fi.fname[0]) {
             if (fr != FR_OK)
-                shell_printf(sh, "ls: %s\n", errstr(fr));
+                shell_printf(sh, "ls: %s\n", files_error(fr));
             shell_printf(sh, "%u files, %u directories, %llu bytes\n", j->files, j->dirs,
                          (unsigned long long)j->bytes);
             finished = true;
@@ -176,7 +176,7 @@ static void cmd_ls(shell_t *sh, const char *arg) {
         FILINFO fi;
         FRESULT fr = f_stat(path, &fi);
         if (fr != FR_OK)
-            shell_printf(sh, "ls: %s: %s\n", arg, errstr(fr));
+            shell_printf(sh, "ls: %s: %s\n", arg, files_error(fr));
         else
             shell_printf(sh, "%12llu  %s\n", (unsigned long long)fi.fsize, fi.fname);
         return;
@@ -188,7 +188,7 @@ static void cmd_ls(shell_t *sh, const char *arg) {
     }
     FRESULT fr = f_opendir(&j->dir, path);
     if (fr != FR_OK) {
-        shell_printf(sh, "ls: %s\n", errstr(fr));
+        shell_printf(sh, "ls: %s\n", files_error(fr));
         free(j);
         return;
     }
@@ -223,7 +223,7 @@ static void cmd_mkdir(shell_t *sh, const char *arg) {
         return;
     FRESULT fr = f_mkdir(path);
     if (fr != FR_OK)
-        shell_printf(sh, "mkdir: %s: %s\n", arg, errstr(fr));
+        shell_printf(sh, "mkdir: %s: %s\n", arg, files_error(fr));
 }
 
 static void cmd_rm(shell_t *sh, const char *arg) {
@@ -244,7 +244,7 @@ static void cmd_rm(shell_t *sh, const char *arg) {
         return;
     FRESULT fr = f_unlink(path);
     if (fr != FR_OK)
-        shell_printf(sh, "rm: %s: %s\n", arg, errstr(fr));
+        shell_printf(sh, "rm: %s: %s\n", arg, files_error(fr));
 }
 
 static void cmd_mv(shell_t *sh, char *args) {
@@ -256,7 +256,7 @@ static void cmd_mv(shell_t *sh, char *args) {
         return;
     FRESULT fr = f_rename(src, dst);
     if (fr != FR_OK)
-        shell_printf(sh, "mv: %s\n", errstr(fr));
+        shell_printf(sh, "mv: %s\n", files_error(fr));
 }
 
 // echo <text> [> file | >> file]
@@ -297,7 +297,7 @@ static void cmd_echo(shell_t *sh, char *args) {
             fr = cr;
     }
     if (fr != FR_OK)
-        shell_printf(sh, "echo: %s: %s\n", name, errstr(fr));
+        shell_printf(sh, "echo: %s: %s\n", name, files_error(fr));
 }
 
 // --- cat ---------------------------------------------------------------------------------------
@@ -319,7 +319,7 @@ static bool cat_step(shell_t *sh, void *arg, bool cancel) {
         UINT br;
         FRESULT fr = f_read(&j->f, j->buf, n, &br);
         if (fr != FR_OK)
-            shell_printf(sh, "\ncat: %s\n", errstr(fr));
+            shell_printf(sh, "\ncat: %s\n", files_error(fr));
         if (fr != FR_OK || br == 0)
             finished = true;                        // error or end of file
         else
@@ -346,7 +346,7 @@ static void cmd_cat(shell_t *sh, const char *arg) {
     }
     FRESULT fr = f_open(&j->f, path, FA_READ);
     if (fr != FR_OK) {
-        shell_printf(sh, "cat: %s: %s\n", arg, errstr(fr));
+        shell_printf(sh, "cat: %s: %s\n", arg, files_error(fr));
         free(j);
         return;
     }
@@ -393,7 +393,7 @@ static bool cp_step(shell_t *sh, void *arg, bool cancel) {
     if (cancel || fr != FR_OK) {
         f_unlink(j->dst_path);                      // don't leave a partial copy
         if (!cancel)
-            shell_printf(sh, "cp: %s\n", errstr(fr));
+            shell_printf(sh, "cp: %s\n", files_error(fr));
         shell_printf(sh, "cp: stopped after %llu of %llu bytes; partial copy removed\n",
                      (unsigned long long)j->done, (unsigned long long)j->size);
     } else {
@@ -424,12 +424,12 @@ static void cmd_cp(shell_t *sh, char *args) {
     }
     FRESULT fr = f_open(&j->src, src, FA_READ);
     if (fr != FR_OK) {
-        shell_printf(sh, "cp: %s: %s\n", a, errstr(fr));
+        shell_printf(sh, "cp: %s: %s\n", a, files_error(fr));
         goto fail;
     }
     fr = f_open(&j->dst, j->dst_path, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK) {
-        shell_printf(sh, "cp: %s: %s\n", b, errstr(fr));
+        shell_printf(sh, "cp: %s: %s\n", b, files_error(fr));
         f_close(&j->src);
         goto fail;
     }

@@ -56,6 +56,27 @@ if (NOT EXISTS "${SDCARD_ROOT}/src/CMakeLists.txt")
 endif()
 add_subdirectory(${SDCARD_ROOT}/src ${CMAKE_CURRENT_BINARY_DIR}/sdcard)
 
+# Lua 5.4 (lib/lua by default), run on core 1 by src/lua_core1.c.
+if (NOT DEFINED LUA_ROOT)
+    set(LUA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/lib/lua" CACHE PATH "Lua source")
+endif()
+if (NOT EXISTS "${LUA_ROOT}/lua.h")
+    message(FATAL_ERROR "LUA_ROOT (${LUA_ROOT}) is empty or missing. "
+        "Run 'git submodule update --init', or point LUA_ROOT at a checkout in local.cmake.")
+endif()
+# The core and the safe libraries only: no io, os, package (loadlib) or debug, and no linit.c
+# (src/lua_core1.c opens the libraries itself).
+set(LUA_SOURCES)
+foreach(f lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser
+          lstate lstring ltable ltm lundump lvm lzio
+          lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib)
+    list(APPEND LUA_SOURCES ${LUA_ROOT}/${f}.c)
+endforeach()
+# Lua formats numbers with snprintf("%.14g"); the SDK's lightweight printf (which SOS's own code
+# uses) prints doubles with ~10 digits and trailing zeros, so Lua uses the C library's.
+set_source_files_properties(${LUA_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/lua_port.h;-Dsnprintf=__real_snprintf")
+
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
 
@@ -95,15 +116,19 @@ set(SOS_SOURCES
     src/files.c
     src/path.c
     src/sftp_fs.c
+    src/lua_core1.c
+    src/lua_host.c
 )
 add_executable(sos ${SOS_SOURCES}
     src/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
+    ${LUA_SOURCES}
 )
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
 
 target_include_directories(sos PRIVATE
+    ${LUA_ROOT}
     ${CMAKE_CURRENT_SOURCE_DIR}/config          # lwipopts.h, user_settings.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated       # sos_config.h
 )
@@ -151,6 +176,7 @@ target_link_libraries(sos
     hardware_watchdog
     sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
+    pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)
 )
 
 pico_set_program_name(sos "SOS")

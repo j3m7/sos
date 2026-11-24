@@ -553,6 +553,21 @@ TEST(piped_commands_run_in_order) {
     CHECK(!strcmp(executed[1], "ls") && !strcmp(executed[2], "job") && !strcmp(executed[3], "pwd"));
 }
 
+TEST(busy_while_job_or_type_ahead) {
+    start(&io_plain);
+    CHECK(!shell_busy(&sh));
+    job_steps = 2;
+    job_partial = false;
+    feed("job\rls\r");
+    CHECK(shell_busy(&sh));                     // job running, "ls" waiting
+    feed("");
+    feed("");                                   // job done; "ls" still to run
+    CHECK(!shell_job_running(&sh));
+    CHECK(shell_busy(&sh));
+    feed("");                                   // "ls" runs
+    CHECK(!shell_busy(&sh));
+}
+
 TEST(full_type_ahead_leaves_input_unread) {
     static char lots[SHELL_LINE_MAX + 100];
     start(&io_plain);
@@ -665,6 +680,7 @@ TEST_MAIN(
     RUN(input_during_job_runs_afterwards);
     RUN(ctrl_c_cancels_job);
     RUN(piped_commands_run_in_order);
+    RUN(busy_while_job_or_type_ahead);
     RUN(full_type_ahead_leaves_input_unread);
     RUN(shell_end_cancels_job);
     RUN(init_resets_job_and_cwd);

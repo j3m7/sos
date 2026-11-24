@@ -174,6 +174,10 @@ bool shell_job_running(const shell_t *sh) {
     return sh->job != NULL;
 }
 
+bool shell_busy(const shell_t *sh) {
+    return sh->job != NULL || sh->ahead_len > 0;
+}
+
 int shell_write_space(shell_t *sh) {
     if (!sh->io->write_space)
         return 1024;
