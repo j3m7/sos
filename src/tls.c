@@ -153,6 +153,7 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
     (void)pcb;
     tls_conn_t *c = arg;
     if (!p || err != ERR_OK) {
+        log_msg(SOS_LOG_DEBUG, "tls: tcp recv %s, err %d", p ? "data" : "FIN", (int)err);
         if (p)
             pbuf_free(p);
         c->peer_closed = true;
@@ -170,6 +171,7 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
 
 static void tcp_err_cb(void *arg, err_t err) {
     tls_conn_t *c = arg;
+    log_msg(SOS_LOG_DEBUG, "tls: tcp error %d", (int)err);
     c->pcb = NULL;                              // lwIP has freed it
     c->tcp_err = err;
     c->tcp_failed = true;
@@ -185,6 +187,9 @@ static int io_recv(WOLFSSL *ssl, char *buf, int sz, void *ctx) {
     if (n == 0) {
         bool closed = c->peer_closed || c->tcp_failed;
         cyw43_arch_lwip_end();
+        if (closed)
+            log_msg(SOS_LOG_DEBUG, "tls: recv: closed (peer_closed %d, tcp_failed %d)",
+                    c->peer_closed, c->tcp_failed);
         return closed ? WOLFSSL_CBIO_ERR_CONN_CLOSE : WOLFSSL_CBIO_ERR_WANT_READ;
     }
     if (n > (size_t)sz)
@@ -291,6 +296,18 @@ static void start_handshake(tls_conn_t *c) {
     }
     wolfSSL_SetIOReadCtx(c->ssl, c);
     wolfSSL_SetIOWriteCtx(c->ssl, c);
+    // Keep the handshake secrets until close: the keying-material exporter (NTS) needs them.
+    wolfSSL_KeepArrays(c->ssl);
+    // Key exchange: only groups with fast code here (X25519, P-256: ~0.1 s), and an X25519
+    // share up front so there's no HelloRetryRequest. Offering everything let servers pick
+    // P-521, which takes ~1.4 s per operation on generic math: time.cloudflare.com closed the
+    // connection before such a handshake finished.
+    int groups[] = {WOLFSSL_ECC_X25519, WOLFSSL_ECC_SECP256R1};
+    if (wolfSSL_set_groups(c->ssl, groups, 2) != WOLFSSL_SUCCESS ||
+        wolfSSL_UseKeyShare(c->ssl, WOLFSSL_ECC_X25519) != WOLFSSL_SUCCESS) {
+        fail(c, "setting the key exchange groups failed");
+        return;
+    }
     if (wolfSSL_UseSNI(c->ssl, WOLFSSL_SNI_HOST_NAME, c->host, (word16)strlen(c->host)) !=
             WOLFSSL_SUCCESS ||
         wolfSSL_check_domain_name(c->ssl, c->host) != WOLFSSL_SUCCESS ||
@@ -321,6 +338,9 @@ static void handshake_step(tls_conn_t *c) {
             }
         }
         c->stats.handshake_us = time_us_64() - c->connected_us;
+        const char *group = wolfSSL_get_curve_name(c->ssl);
+        log_msg(SOS_LOG_DEBUG, "tls: handshake done, key exchange group %s",
+                group ? group : "?");
         c->state = TLS_READY;
         return;
     }

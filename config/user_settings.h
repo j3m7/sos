@@ -114,7 +114,7 @@ extern time_t ssh_server_my_time(time_t *);
 /* ------------------------------------------------------------------------- */
 /* Wolf Single Precision Math */
 #if 1
-#define SP_INT_BITS 384  /* P-384: TLS certificate chains (e.g. SSL.com ECC root) */
+/* SP_INT_BITS: wolfSSL picks it (521 with SP_MATH_ALL). 384 was too small for TLS: handshake failed with WC_KEY_SIZE_E. */
 //#define WOLFSSL_HAVE_SP_RSA
 //#define WOLFSSL_HAVE_SP_DH
 #define WOLFSSL_HAVE_SP_ECC

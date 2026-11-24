@@ -31,7 +31,7 @@ static struct {
     uint8_t *response;              // NTS_KE_RESPONSE_MAX bytes while running
     size_t response_len;
     tls_stats_t stats;              // copied from the TLS connection when it ends
-    char error[96];
+    char error[160];
 } ke;
 
 // The outcome of the last successful exchange (kept for the NTS NTP client).
@@ -51,7 +51,8 @@ static void finish(bool ok) {
 }
 
 static void fail(const char *why) {
-    snprintf(ke.error, sizeof(ke.error), "%s", why);
+    snprintf(ke.error, sizeof(ke.error), "%s (sent %u/%u, received %u bytes)", why,
+             (unsigned)ke.request_sent, (unsigned)ke.request_len, (unsigned)ke.response_len);
     finish(false);
     log_msg(SOS_LOG_WARNING, "nts: key exchange with %s failed: %s", ke.host, ke.error);
 }
@@ -75,13 +76,15 @@ static void succeed(void) {
     unsigned total = 0;
     for (unsigned i = 0; i < result.cookie_count; i++)
         total += result.cookie_len[i];
-    log_msg(SOS_LOG_NOTICE,
-            "nts: key exchange with %s done: %u cookies (%u bytes), NTP at %s:%u, "
-            "handshake %lu ms, longest step %lu ms, wolfSSL heap peak %u bytes%s",
+    // Two lines: the log truncates at LOG_LINE_MAX (160).
+    log_msg(SOS_LOG_NOTICE, "nts: key exchange with %s done: %u cookies (%u bytes), NTP at %s:%u",
             ke.host, result.cookie_count, total, result.server[0] ? result.server : ke.host,
-            result.port ? result.port : 123, (unsigned long)(ke.stats.handshake_us / 1000),
-            (unsigned long)(ke.stats.longest_step_us / 1000), (unsigned)ke.stats.heap_peak,
-            ke.stats.dates_unchecked ? "; certificate dates not checked (clock not set)" : "");
+            result.port ? result.port : 123);
+    log_msg(SOS_LOG_INFO, "nts: handshake %lu ms, longest step %lu ms, wolfSSL heap peak %u bytes",
+            (unsigned long)(ke.stats.handshake_us / 1000),
+            (unsigned long)(ke.stats.longest_step_us / 1000), (unsigned)ke.stats.heap_peak);
+    if (ke.stats.dates_unchecked)
+        log_msg(SOS_LOG_WARNING, "nts: certificate dates not checked (clock not set)");
 }
 
 bool nts_ke_start(const char *host) {
