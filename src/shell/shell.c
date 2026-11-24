@@ -68,6 +68,8 @@ static void cmd_help(shell_t *sh) {
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
+        shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
+        shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
         shell_printf(sh, "key del <n>       stop trusting key n\n");
         shell_printf(sh, "hostname <name>   set the hostname\n");
@@ -122,6 +124,10 @@ static void cmd_net(shell_t *sh) {
     shell_printf(sh, "ip:    %s\n", ip);
     shell_printf(sh, "gw:    %s\n", gw);
     shell_printf(sh, "host:  %s\n", host ? host : "");
+    unsigned arp_in, arp_out;
+    wifi_arp_counts(&arp_in, &arp_out);
+    shell_printf(sh, "arp:   %u received, %u sent; keepalive %s\n", arp_in, arp_out,
+                 wifi_keepalive() ? "on" : "off (testing)");
 }
 
 // --- log -----------------------------------------------------------------------------------------
@@ -240,6 +246,7 @@ static void wifi_show(shell_t *sh) {
     shell_printf(sh, "network:  %s\n", c->wifi_ssid[0] ? c->wifi_ssid : "(not configured)");
     shell_printf(sh, "password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
     shell_printf(sh, "state:    %s\n", wifi_state());
+    shell_printf(sh, "power:    saving %s\n", c->wifi_powersave ? "on" : "off");
 }
 
 static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
@@ -282,8 +289,23 @@ static void cmd_wifi(shell_t *sh, char *args) {
     } else if (!strcmp(args, "connect")) {
         if (require_admin(sh))
             wifi_reconnect();
+    } else if (!strcmp(args, "keepalive on") || !strcmp(args, "keepalive off")) {
+        // For testing only, so not saved: it's back on after a reboot.
+        if (!require_admin(sh))
+            return;
+        wifi_set_keepalive(!strcmp(args, "keepalive on"));
+        log_msg(SOS_LOG_NOTICE, "wifi: keepalive %s (until reboot)", wifi_keepalive() ? "on" : "off");
+    } else if (!strcmp(args, "power")) {
+        shell_printf(sh, "power saving: %s\n", settings()->wifi_powersave ? "on" : "off");
+    } else if (!strcmp(args, "power on") || !strcmp(args, "power off")) {
+        if (!require_admin(sh))
+            return;
+        settings()->wifi_powersave = !strcmp(args, "power on");
+        save(sh);
+        wifi_apply_power();
+        log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
-        shell_printf(sh, "usage: wifi [set|connect]\n");
+        shell_printf(sh, "usage: wifi [set|connect|power [on|off]|keepalive on|off]\n");
     }
 }
 
@@ -318,6 +340,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     if (!settings_reset())
         shell_printf(sh, "error: erasing the configuration failed\n");
     shell_printf(sh, "configuration reset; reconnecting Wi-Fi\n");
+    wifi_apply_power();
     wifi_reconnect();
 }
 

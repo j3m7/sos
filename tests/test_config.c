@@ -73,6 +73,8 @@ static void set_length(unsigned slot, uint16_t length) {
 #define V1_LENGTH 1540
 // ...and by the second (before certs_hash existed).
 #define V2_LENGTH 1606
+// ...and by the third (before wifi_powersave existed).
+#define V3_LENGTH 1638
 
 static void sample(sos_config_t *c, const char *ssid) {
     config_defaults(c);
@@ -288,6 +290,8 @@ TEST(record_length_out_of_range_rejected) {
     CHECK(!config_load(&store, &b, NULL));
     set_length(0, V2_LENGTH + 16);              // would cut certs_hash in half
     CHECK(!config_load(&store, &b, NULL));
+    set_length(0, V3_LENGTH);                   // the third release's length
+    CHECK(config_load(&store, &b, NULL));
     set_length(0, sizeof(sos_config_t));
     CHECK(config_load(&store, &b, NULL));
 }
@@ -315,6 +319,37 @@ TEST(record_from_second_release_loads) {
     CHECK(config_save(&store, &b));
     CHECK(config_load(&store, &a, NULL));
     CHECK_MEM(a.certs_hash, b.certs_hash, sizeof(b.certs_hash));
+}
+
+TEST(record_from_third_release_loads) {
+    // The release with certs_hash wrote V3_LENGTH bytes; Wi-Fi power saving, added after it, must
+    // load as 0 (off), not as what follows in flash.
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, wifi_powersave), V3_LENGTH);
+    blank_flash();
+    sample(&a, "v3");
+    memset(a.certs_hash, 0x5a, sizeof(a.certs_hash));
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + V3_LENGTH, 0xff, CONFIG_SLOT_SIZE - 16 - V3_LENGTH);
+    set_length(0, V3_LENGTH);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_MEM(b.certs_hash, a.certs_hash, sizeof(a.certs_hash));
+    CHECK_EQ(b.wifi_powersave, 0);
+
+    // The setting round-trips in a full-length record.
+    b.wifi_powersave = 1;
+    CHECK(config_save(&store, &b));
+    CHECK(config_load(&store, &a, NULL));
+    CHECK_EQ(a.wifi_powersave, 1);
+}
+
+TEST(wifi_powersave_out_of_range_rejected) {
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "x");
+    a.wifi_powersave = 2;
+    CHECK(!config_save(&store, &a));            // doesn't read back as valid
+    CHECK(!config_load(&store, &b, NULL));
 }
 
 TEST(sequence_wraps_around) {
@@ -581,6 +616,8 @@ TEST_MAIN(
     RUN(record_from_older_firmware_loads);
     RUN(record_length_out_of_range_rejected);
     RUN(record_from_second_release_loads);
+    RUN(record_from_third_release_loads);
+    RUN(wifi_powersave_out_of_range_rejected);
     RUN(sequence_wraps_around);
     RUN(erase_resets_to_defaults);
     RUN(ssid_rules);

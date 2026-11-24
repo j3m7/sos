@@ -147,6 +147,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 |---|---|
 | `config` | show the configuration |
 | `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
+| `wifi power on` / `wifi power off` | Wi-Fi power saving (default off; see below) |
+| `wifi keepalive on` / `wifi keepalive off` | address announcement (see below); off is for testing and lasts until reboot |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
@@ -159,6 +161,14 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 - Changes apply immediately: a new key works for the next login, `wifi set` reconnects.
 - Wi-Fi connects in the background, retries after failures (wrong password, network not
   found) and reconnects if the link drops; the console is usable throughout.
+- Wi-Fi power saving is off by default. With it on, the radio sleeps between beacons when
+  idle: lower power, but the first packet after a quiet spell can take a little longer. It
+  applies at once.
+- While connected, SOS announces its address once a minute (a gratuitous ARP). Without it, a
+  device that sends nothing stops receiving broadcasts (seen with the Pico 2 W within minutes,
+  power saving on or off), so after the router forgets it (~20 minutes here) clients get
+  "no route to host". `net` shows ARP packets received and sent; `wifi keepalive off` turns
+  the announcement off until the next reboot, for testing.
 - Storage: one record in two alternating flash sectors below the host key, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
   reflashing. The Wi-Fi password and keys are stored unencrypted, like the build-time defaults.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Persistent device configuration: Wi-Fi network, hostname, SSH user and trusted public keys.
+// Persistent device configuration: Wi-Fi network and power saving, hostname, SSH user and
+// trusted public keys, time sync, approved TLS roots.
 //
 // Stored as one record in two alternating flash slots (A/B). Each save goes to the slot not
 // holding the current record, with a higher sequence number; loading picks the valid record with
@@ -47,6 +48,7 @@ typedef struct {
     char ntp_server[CONFIG_NTP_SERVER_MAX + 1]; // NTS-KE server; empty = build default (SOS_NTS_SERVER)
     // SHA-256 of the approved /certs/roots.pem (extra TLS roots on the SD card); all zero = none.
     uint8_t certs_hash[CONFIG_CERTS_HASH_LEN];
+    uint8_t wifi_powersave;                     // 1 = Wi-Fi power saving on; 0 = off (default)
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------
