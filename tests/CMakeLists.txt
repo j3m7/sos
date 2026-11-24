@@ -61,3 +61,9 @@ add_test(NAME nts_ntp COMMAND test_nts_ntp)
 add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_certbundle PRIVATE ${SOS_ROOT}/src)
 add_test(NAME certbundle COMMAND test_certbundle)
+
+# tools/host/mkconfig.c: the provisioning file and the config image written by tools/provision.sh.
+add_executable(test_mkconfig test_mkconfig.c ${SOS_ROOT}/tools/host/mkconfig.c ${SOS_ROOT}/src/core/config.c)
+target_compile_definitions(test_mkconfig PRIVATE MKCONFIG_NO_MAIN)
+target_include_directories(test_mkconfig PRIVATE ${SOS_ROOT}/src ${SOS_ROOT}/tools/host)
+add_test(NAME mkconfig COMMAND test_mkconfig)

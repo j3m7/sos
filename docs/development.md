@@ -3,7 +3,10 @@
 The [README](../README.md) covers the default setup: dependencies as git submodules, the Pico SDK
 from `PICO_SDK_PATH`, and the board on the same machine. This page covers optional variations.
 Machine-specific values (paths, network, VM names) belong in git-ignored files such as
-`local.cmake`, never in the repository.
+`local.cmake`, never in the repository. A board's own configuration (Wi-Fi, trusted keys) is
+never part of the build: it comes from `setup` on the console or from `provision.conf` (see
+[Provisioning](../README.md#provisioning)). With several checkouts or worktrees, point them
+all at one file with `SOS_PROVISION_FILE` in the environment.
 
 ## Dependencies outside the repository
 
