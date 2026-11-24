@@ -402,7 +402,14 @@ coroutine libraries, and `sos`:
 | `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
 
 Failures return `nil` and a message. There's no `io`, `os`, `package` or `debug`: scripts reach
-the system only through `sos`.
+the system only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them;
+use a `<close>` variable).
+
+- **Stopping:** Ctrl-C ends the script even if it catches errors with `pcall` or `xpcall`: from
+  then on, any code it runs outside a `pcall` raises "interrupted" again. The exception is a
+  single long call into C, such as a pattern match that backtracks for minutes, which can't be
+  interrupted until it returns. Core 0, SSH and the watchdog keep running meanwhile, but no
+  other script can start.
 
 - **How it works:** core 1 never touches the card, network or shells. Each `sos` call is a
   request that core 0's main loop answers (one per pass); output goes through a buffer that the

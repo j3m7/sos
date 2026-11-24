@@ -86,10 +86,26 @@ static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     return p;
 }
 
+static lua_State *main_L;               // the running script's state (its main thread)
+
+static void hook(lua_State *L, lua_Debug *ar);
+
+// Stop the script: Ctrl-C, or its shell has gone (lua_job.cancel). The error alone isn't enough,
+// since a script's pcall can catch it and carry on. So from now on the hook runs before every
+// instruction, in this thread and the main one, and raises the error again: the script ends as
+// soon as it runs any code outside a pcall, and its main chunk is never inside one. (Coroutines
+// copy the hook from the thread that creates them, and end the same way.)
+static int interrupt(lua_State *L) {
+    lua_sethook(L, hook, LUA_MASKCOUNT, 1);
+    if (main_L && main_L != L)
+        lua_sethook(main_L, hook, LUA_MASKCOUNT, 1);
+    return luaL_error(L, "interrupted");
+}
+
 static void hook(lua_State *L, lua_Debug *ar) {
     (void)ar;
     if (lua_job.cancel)
-        luaL_error(L, "interrupted");
+        interrupt(L);
 }
 
 static int traceback(lua_State *L) {
@@ -165,7 +181,7 @@ static int l_sleep(lua_State *L) {
     absolute_time_t until = make_timeout_time_ms((uint32_t)(ms > 0 ? ms : 0));
     while (!time_reached(until)) {
         if (lua_job.cancel)
-            return luaL_error(L, "interrupted");
+            return interrupt(L);
         sleep_ms(5);
     }
     return 0;
@@ -265,6 +281,57 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {NULL, NULL},
 };
 
+// setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
+// couldn't be stopped, and lua_close() runs them all when the script ends. A <close> variable
+// does the same job and can be stopped. Lua only takes note of __gc when the metatable is set,
+// so adding it to the metatable afterwards does nothing.
+static int l_setmetatable(lua_State *L) {
+    // The same checks as the base library's, here so errors name setmetatable.
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_argexpected(L, lua_type(L, 2) == LUA_TNIL || lua_type(L, 2) == LUA_TTABLE, 2, "nil or table");
+    if (lua_type(L, 2) == LUA_TTABLE) {
+        lua_pushliteral(L, "__gc");
+        int t = lua_rawget(L, 2);
+        lua_pop(L, 1);
+        if (t != LUA_TNIL)
+            return luaL_error(L, "__gc metamethods aren't supported (use a <close> variable)");
+    }
+    lua_pushvalue(L, lua_upvalueindex(1));      // the base library's setmetatable
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, 1);
+    return 1;
+}
+
+// xpcall() whose message handler is skipped while the script is being stopped. Lua runs the
+// handler for an error raised by the hook with hooks still off, so a handler that looped
+// couldn't be stopped. The error object is returned unchanged instead.
+static int guarded_handler(lua_State *L) {
+    if (lua_job.cancel)
+        return 1;
+    lua_pushvalue(L, lua_upvalueindex(1));      // the script's handler
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, 1);
+    return 1;
+}
+
+static int xpcall_done(lua_State *L, int status, lua_KContext ctx) {
+    (void)status;
+    (void)ctx;
+    return lua_gettop(L);
+}
+
+static int l_xpcall(lua_State *L) {
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    lua_pushcclosure(L, guarded_handler, 1);
+    lua_replace(L, 2);
+    lua_pushvalue(L, lua_upvalueindex(1));      // the base library's xpcall
+    lua_insert(L, 1);
+    // With a continuation, so a coroutine can still yield inside xpcall.
+    lua_callk(L, lua_gettop(L) - 1, LUA_MULTRET, 0, xpcall_done);
+    return xpcall_done(L, LUA_OK, 0);
+}
+
 static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
     return 1;
@@ -282,6 +349,12 @@ static void open_libs(lua_State *L) {
         lua_pop(L, 1);
     }
     lua_register(L, "print", l_print);
+    lua_getglobal(L, "setmetatable");
+    lua_pushcclosure(L, l_setmetatable, 1);
+    lua_setglobal(L, "setmetatable");
+    lua_getglobal(L, "xpcall");
+    lua_pushcclosure(L, l_xpcall, 1);
+    lua_setglobal(L, "xpcall");
     // These read files with C stdio, which isn't the SD card: use sos.read() + load().
     lua_pushnil(L);
     lua_setglobal(L, "dofile");
@@ -350,6 +423,7 @@ static void run_job(void) {
     if (!L) {
         snprintf(lua_job.error, sizeof(lua_job.error), "not enough memory to start");
     } else {
+        main_L = L;
         open_libs(L);
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         lua_pushcfunction(L, traceback);            // stack index 1: message handler
@@ -370,6 +444,7 @@ static void run_job(void) {
                      msg ? msg : "error (not a string)");
         }
         lua_close(L);
+        main_L = NULL;
     }
     lua_job.mem_peak = mem_peak;
     lua_job.run_ms = (uint32_t)((time_us_64() - t0) / 1000);
