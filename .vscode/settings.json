@@ -1,0 +1,18 @@
+{
+    // clangd provides IntelliSense, using the compile database CMake writes to build/.
+    // --query-driver lets clangd ask arm-none-eabi-gcc for its built-in newlib include paths.
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build",
+        "--query-driver=/usr/bin/arm-none-eabi-*",
+        "--background-index",
+        "--header-insertion=never"
+    ],
+
+    // Microsoft's C/C++ IntelliSense doesn't read the compile database here and would report
+    // bogus include errors alongside clangd. Keep the extension (debugger) but turn this off.
+    "C_Cpp.intelliSenseEngine": "disabled",
+
+    // CMake Tools: configure/build with CMakePresets.json (writes build/compile_commands.json).
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": true
+}
