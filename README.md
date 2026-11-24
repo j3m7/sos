@@ -35,6 +35,10 @@ This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTS
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
 plugging it in first.
 
+Developing inside a libvirt VM? Install the host-side udev hotplug forwarding in
+[`tools/host/`](tools/host/README.md) so the Pico follows its reboots into and out of BOOTSEL
+without manual USB redirection.
+
 ## Console
 
 The console runs over USB CDC (`/dev/ttyACM0` on Linux) and is mirrored on UART0 (GP0 TX / GP1 RX):
