@@ -26,3 +26,8 @@ add_test(NAME ringbuffer COMMAND test_ringbuffer)
 add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell_core.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
+
+# src/config.c: persistent configuration (A/B flash records, key parsing, validation).
+add_executable(test_config test_config.c ${SOS_ROOT}/src/config.c)
+target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)
+add_test(NAME config COMMAND test_config)
