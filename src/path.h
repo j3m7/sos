@@ -20,4 +20,14 @@ const char *path_basename(const char *path);
 // Append "/<name>" to the directory `dir` (absolute, normalized) in `out`; false if too long.
 bool path_join(const char *dir, const char *name, char *out, size_t n);
 
+// The protected directory: TLS trust anchors (root certificates). Only the console may change
+// it; see files_write_allowed().
+#define PATH_PROTECTED_DIR "certs"
+
+// True if `path` (absolute) is the protected directory or inside it, as FatFs would resolve it:
+// '\' separates like '/', "." and ".." are followed, names match case-insensitively, and
+// trailing spaces and dots are ignored ("/CERTS.", "/x/../Certs\\a" are protected). Also true
+// (refuse) for paths too long to check and for any ':' (a FatFs drive prefix).
+bool path_is_protected(const char *path);
+
 #endif

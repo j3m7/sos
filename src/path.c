@@ -46,6 +46,41 @@ const char *path_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
+// FatFs (ff.c create_name) splits on '/' and '\', recognises "." and ".." only exactly, strips
+// trailing spaces and dots from each name, and compares names case-insensitively. Its case
+// table only folds ASCII letters to ASCII, so no non-ASCII name can match "certs".
+bool path_is_protected(const char *path) {
+    char raw[512], norm[512];
+    size_t len = strlen(path);
+    if (len >= sizeof(raw))
+        return true;                            // too long to check: refuse
+    for (size_t i = 0; i <= len; i++) {
+        char c = path[i];
+        if (c == ':')
+            return true;                        // drive prefix ("0:/certs"); invalid in names
+        raw[i] = c == '\\' ? '/' : c;
+    }
+    if (!path_resolve("/", raw, norm, sizeof(norm)))
+        return true;
+
+    // First component, without trailing spaces and dots.
+    const char *c = norm + 1;
+    size_t n = strcspn(c, "/");
+    while (n > 0 && (c[n - 1] == ' ' || c[n - 1] == '.'))
+        n--;
+    const char *dir = PATH_PROTECTED_DIR;
+    if (n != strlen(dir))
+        return false;
+    for (size_t i = 0; i < n; i++) {
+        char a = c[i], b = dir[i];
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a - 'A' + 'a');
+        if (a != b)
+            return false;
+    }
+    return true;
+}
+
 bool path_join(const char *dir, const char *name, char *out, size_t n) {
     size_t dlen = strcmp(dir, "/") ? strlen(dir) : 0;
     size_t nlen = strlen(name);

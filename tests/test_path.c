@@ -69,10 +69,57 @@ TEST(join) {
     CHECK(path_join("/", "abc", small, sizeof(small)) && !strcmp(small, "/abc"));
 }
 
+TEST(protected_dir) {
+    CHECK(path_is_protected("/certs"));
+    CHECK(path_is_protected("/certs/roots.pem"));
+    CHECK(path_is_protected("/certs/sub/dir/x"));
+    CHECK(!path_is_protected("/"));
+    CHECK(!path_is_protected("/docs/certs"));       // only the top-level directory
+    CHECK(!path_is_protected("/certsx"));
+    CHECK(!path_is_protected("/cert"));
+    CHECK(!path_is_protected("/certs-old/x"));
+    CHECK(!path_is_protected("/x.certs"));
+}
+
+TEST(protected_dir_fatfs_aliases) {
+    // Names FatFs resolves to the same directory.
+    CHECK(path_is_protected("/CERTS/x"));           // case-insensitive
+    CHECK(path_is_protected("/Certs"));
+    CHECK(path_is_protected("/certs./x"));          // trailing dots and spaces are stripped
+    CHECK(path_is_protected("/certs ./x"));
+    CHECK(path_is_protected("/certs. . ."));
+    CHECK(path_is_protected("\\certs\\x"));         // '\' is a separator too
+    CHECK(path_is_protected("/certs\\x"));
+    CHECK(path_is_protected("//certs//x"));
+    CHECK(path_is_protected("/./certs/./x"));
+    CHECK(path_is_protected("/docs/../certs/x"));   // ".." is followed
+    CHECK(path_is_protected("/docs\\..\\certs"));
+    CHECK(path_is_protected("/a/b/../../certs"));
+    // Names FatFs treats as different, so not protected.
+    CHECK(!path_is_protected("/ certs/x"));         // leading spaces are kept
+    CHECK(!path_is_protected("/certs/../x"));       // leaves the directory
+    CHECK(!path_is_protected("/.. /certs"));        // ".. " is a (bad) name, not the parent...
+    CHECK(path_is_protected("/../certs"));          // ...but ".." is, clamped at the root
+    CHECK(!path_is_protected("/cert\xc5\xbf"));     // U+017F isn't case-folded to 's' by FatFs
+}
+
+TEST(protected_dir_fails_closed) {
+    CHECK(path_is_protected("0:/certs"));           // drive prefix
+    CHECK(path_is_protected("/0:/docs"));           // any ':' at all
+    char lng[600];
+    memset(lng, 'a', sizeof(lng) - 1);
+    lng[0] = '/';
+    lng[sizeof(lng) - 1] = '\0';
+    CHECK(path_is_protected(lng));                  // too long to check
+}
+
 TEST_MAIN(
     RUN(relative_and_absolute);
     RUN(dots_and_slashes);
     RUN(too_long_is_refused);
     RUN(basename);
     RUN(join);
+    RUN(protected_dir);
+    RUN(protected_dir_fatfs_aliases);
+    RUN(protected_dir_fails_closed);
 )
