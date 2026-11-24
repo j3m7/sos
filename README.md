@@ -48,11 +48,8 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 - `picotool` for flashing, `openocd` (Raspberry Pi fork) for SWD debugging
 - [wolfSSL](https://github.com/wolfSSL/wolfssl) 5.9.4 and [wolfSSH](https://github.com/wolfSSL/wolfssh) 1.6.0
   for cryptography and the SSH protocol
-- [pico-sshd](https://github.com/tjko/pico-sshd), the lwIP glue that runs wolfSSH as a server
-  on the Pico W / Pico 2 W
-
-wolfSSL, wolfSSH and pico-sshd are GPL-3.0 (wolfSSL/wolfSSH are also available commercially),
-so SOS firmware that links them is distributed under GPL-3.0.
+- SSH server glue in `src/ssh/`, derived from [pico-sshd](https://github.com/tjko/pico-sshd)
+  (see [`THIRD_PARTY.md`](THIRD_PARTY.md))
 
 Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README.md).
 
@@ -65,12 +62,11 @@ cd ~/slop
 git clone --depth 1 -b 2.3.1 --recurse-submodules --shallow-submodules https://github.com/raspberrypi/pico-sdk.git
 git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git
 git clone --depth 1 -b v1.6.0-stable https://github.com/wolfSSL/wolfssh.git
-git clone https://github.com/tjko/pico-sshd.git
 ```
 
-`PICO_SDK_PATH` is taken from the environment, falling back to `~/slop/pico-sdk`. The other
-three are looked up in `SOS_DEPS_DIR` (default `~/slop`); override with
-`-DSOS_DEPS_DIR=...` or the individual `WOLFSSL_ROOT`, `WOLFSSH_ROOT`, `PICO_SSHD_ROOT`.
+`PICO_SDK_PATH` is taken from the environment, falling back to `~/slop/pico-sdk`. wolfSSL and
+wolfSSH are looked up in `SOS_DEPS_DIR` (default `~/slop`); override with
+`-DSOS_DEPS_DIR=...` or the individual `WOLFSSL_ROOT` and `WOLFSSH_ROOT`.
 
 Per-machine settings (Wi-Fi network, hostname, SSH user and authorized key) go in
 `local.cmake`, which is git-ignored:
@@ -147,3 +143,9 @@ The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `co
 Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command
 reports the stack high-water mark; an SSH login peaks at about 3.2 KB.
 
+## License
+
+SOS is licensed under the GNU General Public License v3.0 or later; see [`LICENSE`](LICENSE).
+Code copied from other projects, the libraries linked into the firmware and their licenses are
+listed in [`THIRD_PARTY.md`](THIRD_PARTY.md), including an open question about the Wi-Fi
+driver's license that matters before distributing firmware images.

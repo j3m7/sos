@@ -35,29 +35,26 @@ endforeach()
 configure_file(config/sos_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_config.h @ONLY)
 
 # --- External libraries (kept outside the repo, under ~/slop by default) ----
-set(SOS_DEPS_DIR "$ENV{HOME}/slop" CACHE PATH "Directory holding wolfssl, wolfssh and pico-sshd checkouts")
+set(SOS_DEPS_DIR "$ENV{HOME}/slop" CACHE PATH "Directory holding wolfssl and wolfssh checkouts")
 set(WOLFSSL_ROOT   "${SOS_DEPS_DIR}/wolfssl"   CACHE PATH "wolfSSL source")
 set(WOLFSSH_ROOT   "${SOS_DEPS_DIR}/wolfssh"   CACHE PATH "wolfSSH source")
-set(PICO_SSHD_ROOT "${SOS_DEPS_DIR}/pico-sshd" CACHE PATH "pico-sshd source")
-foreach(dir WOLFSSL_ROOT WOLFSSH_ROOT PICO_SSHD_ROOT)
+foreach(dir WOLFSSL_ROOT WOLFSSH_ROOT)
     if (NOT EXISTS "${${dir}}")
         message(FATAL_ERROR "${dir} not found at ${${dir}}")
     endif()
 endforeach()
 
-include(${PICO_SSHD_ROOT}/cmake/wolfssl_pico.cmake)
-include(${PICO_SSHD_ROOT}/cmake/wolfssh_pico.cmake)
+include(cmake/wolfssl_pico.cmake)
+include(cmake/wolfssh_pico.cmake)
 
-# pico-sshd's own CMakeLists adds its sources to the wrong target (pico-telnetd-lib),
-# so define the library here instead of using add_subdirectory().
-add_library(pico-sshd-lib INTERFACE)
-target_include_directories(pico-sshd-lib INTERFACE ${PICO_SSHD_ROOT}/include)
-target_sources(pico-sshd-lib INTERFACE
-    ${PICO_SSHD_ROOT}/src/server.c
-    ${PICO_SSHD_ROOT}/src/ringbuffer.c
-    ${PICO_SSHD_ROOT}/src/sha512crypt.c
+# --- SSH server (src/ssh: copied from pico-sshd, see THIRD_PARTY.md) ---------
+add_library(sos-ssh INTERFACE)
+target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/include)
+target_sources(sos-ssh INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/server.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/ringbuffer.c
 )
-target_link_libraries(pico-sshd-lib INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
 
 # --- SOS firmware ------------------------------------------------------------
 set(SOS_SOURCES
@@ -96,7 +93,7 @@ target_link_libraries(sos
     pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
     hardware_flash
-    pico-sshd-lib
+    sos-ssh
 )
 
 pico_set_program_name(sos "SOS")

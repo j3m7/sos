@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Julio Martinez
+
 #include <stdio.h>
 
 #include "pico/cyw43_arch.h"
