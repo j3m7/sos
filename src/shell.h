@@ -11,7 +11,7 @@
 // (the USB/UART console, an SSH session, ...) through a shell_io_t, so sessions don't share
 // input or output.
 
-#define SHELL_LINE_MAX 80
+#define SHELL_LINE_MAX 256     // fits a pasted authorized_keys line (ECDSA P-256 is ~200)
 
 typedef struct {
     const char *name;                                   // channel name, e.g. "console", "ssh"
@@ -19,16 +19,28 @@ typedef struct {
     void (*write)(void *ctx, const char *buf, int len);
     void (*logout)(void *ctx);                          // end the session; NULL if not possible
     bool crlf;                                          // translate "\n" to "\r\n" on output
+    bool admin;                                         // may change the configuration
 } shell_io_t;
 
-typedef struct {
+typedef struct shell shell_t;
+
+// Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the
+// question was cancelled with Ctrl-C.
+typedef void (*shell_answer_fn)(shell_t *sh, char *answer, void *arg);
+
+struct shell {
     const shell_io_t *io;
     void *ctx;
     char line[SHELL_LINE_MAX + 1];
     size_t line_len;
     bool last_was_cr;
     unsigned char esc;          // escape sequence state (arrow keys etc.), see shell_core.c
-} shell_t;
+    // Pending question (shell_ask): the next line goes to `answer` instead of a command.
+    shell_answer_fn answer;
+    void *answer_arg;
+    const char *ask_prompt;
+    bool secret;                // don't echo the answer (passwords)
+};
 
 // Bind a shell to a channel and print the greeting and first prompt.
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx);
@@ -45,5 +57,15 @@ void shell_logout(shell_t *sh);
 // Run one command line (spaces trimmed, never empty). Implemented by the command module
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
+
+// Ask a question: `prompt` replaces "sos> " and the next line typed is passed to `answer`
+// instead of being run as a command. With `secret`, the answer isn't echoed. Never blocks: call
+// it from a command (or from an answer callback, to chain questions) and return.
+void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
+
+// For output that isn't the shell's own (log messages): clear the line being typed, and
+// afterwards redraw the prompt and the typed text (except a secret answer).
+void shell_hide_input(shell_t *sh);
+void shell_show_input(shell_t *sh);
 
 #endif

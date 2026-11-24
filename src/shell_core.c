@@ -45,7 +45,39 @@ void shell_printf(shell_t *sh, const char *fmt, ...) {
 }
 
 static void prompt(shell_t *sh) {
-    shell_printf(sh, "sos> ");
+    shell_printf(sh, "%s", sh->answer ? sh->ask_prompt : "sos> ");
+}
+
+void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn answer, void *arg) {
+    sh->ask_prompt = ask_prompt;
+    sh->secret = secret;
+    sh->answer = answer;
+    sh->answer_arg = arg;
+}
+
+// Take the pending question, if any, and hand it the answer (NULL = cancelled).
+static bool answer_question(shell_t *sh, char *answer) {
+    shell_answer_fn fn = sh->answer;
+    if (!fn)
+        return false;
+    void *arg = sh->answer_arg;
+    sh->answer = NULL;                  // cleared first: the callback may ask the next question
+    sh->secret = false;
+    fn(sh, answer, arg);
+    return true;
+}
+
+void shell_hide_input(shell_t *sh) {
+    if (sh->io)
+        sh->io->write(sh->ctx, "\r\x1b[K", 4);    // to column 0, erase the line
+}
+
+void shell_show_input(shell_t *sh) {
+    if (!sh->io)
+        return;
+    prompt(sh);
+    if (!sh->secret && sh->line_len)
+        sh->io->write(sh->ctx, sh->line, (int)sh->line_len);
 }
 
 void shell_logout(shell_t *sh) {
@@ -108,6 +140,8 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->line_len = 0;
     sh->last_was_cr = false;
     sh->esc = ESC_NONE;
+    sh->answer = NULL;
+    sh->secret = false;
     shell_printf(sh, "\nType 'help' for commands.\n");
     prompt(sh);
 }
@@ -129,17 +163,20 @@ void shell_poll(shell_t *sh) {
             if (c == '\r' || c == '\n') {
                 shell_printf(sh, "\n");
                 sh->line[sh->line_len] = '\0';
-                run_line(sh, sh->line);
                 sh->line_len = 0;
+                if (!answer_question(sh, sh->line))
+                    run_line(sh, sh->line);
                 prompt(sh);
             } else if (c == 0x7f || c == '\b') {
                 if (sh->line_len > 0) {
                     sh->line_len--;
-                    shell_printf(sh, "\b \b");
+                    if (!sh->secret)
+                        shell_printf(sh, "\b \b");
                 }
-            } else if (c == 0x03) {                  // Ctrl-C: discard line
+            } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
                 shell_printf(sh, "^C\n");
                 sh->line_len = 0;
+                answer_question(sh, NULL);
                 prompt(sh);
             } else if (c == 0x04) {                  // Ctrl-D on an empty line: logout
                 if (sh->line_len == 0) {
@@ -149,7 +186,8 @@ void shell_poll(shell_t *sh) {
                 }
             } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {
                 sh->line[sh->line_len++] = c;
-                write_out(sh, &c, 1);
+                if (!sh->secret)
+                    write_out(sh, &c, 1);
             }
         }
     }

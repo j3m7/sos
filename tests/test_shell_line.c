@@ -300,6 +300,116 @@ TEST(state_is_reset_by_init) {
     CHECK(!strcmp(executed[0], "Ab"));
 }
 
+// --- questions (shell_ask) and input redraw ---------------------------------------------------
+
+static char answers[4][SHELL_LINE_MAX + 1];
+static int n_answers, n_cancelled;
+
+static void on_answer(shell_t *s, char *answer, void *arg) {
+    (void)arg;
+    if (!answer) {
+        n_cancelled++;
+        shell_printf(s, "cancelled\n");
+        return;
+    }
+    strcpy(answers[n_answers++ % 4], answer);
+}
+
+static void on_first(shell_t *s, char *answer, void *arg) {   // chains a second, secret question
+    on_answer(s, answer, arg);
+    if (answer)
+        shell_ask(s, "Password: ", true, on_answer, NULL);
+}
+
+static void start_ask(const shell_io_t *io) {
+    start(io);
+    n_answers = n_cancelled = 0;
+}
+
+TEST(answer_goes_to_callback_not_command) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Name: ", false, on_answer, NULL);
+    shell_show_input(&sh);                      // the question's prompt
+    type("  bob  \r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_EQ(n_answers, 1);
+    CHECK(!strcmp(answers[0], "  bob  "));     // answers are not trimmed
+    CHECK_OUT("Name:   bob  \nsos> ");          // back to the normal prompt
+    type("x\r");
+    CHECK_EQ(n_executed, 1);                    // next line is a command again
+}
+
+TEST(secret_answer_is_not_echoed) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    type("hunter2x\x7f\r");                    // backspace works, silently
+    CHECK(!strcmp(answers[0], "hunter2"));
+    CHECK(strstr(fake.out, "hunter") == NULL);
+    CHECK_OUT("\nsos> ");
+}
+
+TEST(empty_answer_is_passed) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Q: ", false, on_answer, NULL);
+    type("\r");
+    CHECK_EQ(n_answers, 1);
+    CHECK_EQ(answers[0][0], 0);
+}
+
+TEST(ctrl_c_cancels_question) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Q: ", true, on_answer, NULL);
+    type("abc\x03");
+    CHECK_EQ(n_cancelled, 1);
+    CHECK_EQ(n_answers, 0);
+    CHECK_OUT("^C\ncancelled\nsos> ");
+    type("d\r");                               // echo is back on, and it's a command again
+    CHECK(!strcmp(executed[0], "d"));
+}
+
+TEST(questions_chain) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "User: ", false, on_first, NULL);
+    type("alice\r");
+    CHECK_OUT("alice\nPassword: ");             // second question's prompt follows
+    type("s3cret\r");
+    CHECK_EQ(n_answers, 2);
+    CHECK(!strcmp(answers[0], "alice") && !strcmp(answers[1], "s3cret"));
+    CHECK(strstr(fake.out, "s3cret") == NULL);
+}
+
+TEST(init_clears_pending_question) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Q: ", true, on_answer, NULL);
+    start_ask(&io_plain);                       // new session on the same shell
+    type("cmd\r");
+    CHECK_EQ(n_answers, 0);
+    CHECK_EQ(n_executed, 1);
+    CHECK(strstr(fake.out, "cmd") != NULL);     // echoed: not secret anymore
+}
+
+TEST(hide_and_redraw_input) {
+    start(&io_plain);
+    type("hel");
+    fake.out_len = 0;
+    shell_hide_input(&sh);
+    CHECK_OUT("\r\x1b[K");
+    fake.out_len = 0;
+    shell_show_input(&sh);
+    CHECK_OUT("sos> hel");
+    type("p\r");                               // the typed text survived the redraw
+    CHECK(!strcmp(executed[0], "help"));
+}
+
+TEST(redraw_hides_secret_text) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    type("abc");
+    fake.out_len = 0;
+    shell_show_input(&sh);
+    CHECK_OUT("Password: ");
+}
+
 TEST(crlf_channel_translates_newlines) {
     start(&io_crlf);
     type("hi\r");
@@ -349,6 +459,14 @@ TEST_MAIN(
     RUN(escape_sequence_split_across_reads);
     RUN(control_character_cancels_escape);
     RUN(state_is_reset_by_init);
+    RUN(answer_goes_to_callback_not_command);
+    RUN(secret_answer_is_not_echoed);
+    RUN(empty_answer_is_passed);
+    RUN(ctrl_c_cancels_question);
+    RUN(questions_chain);
+    RUN(init_clears_pending_question);
+    RUN(hide_and_redraw_input);
+    RUN(redraw_hides_secret_text);
     RUN(crlf_channel_translates_newlines);
     RUN(plain_channel_leaves_newlines);
     RUN(printf_truncates_long_output);

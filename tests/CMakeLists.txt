@@ -31,3 +31,8 @@ add_test(NAME shell_line COMMAND test_shell_line)
 add_executable(test_config test_config.c ${SOS_ROOT}/src/config.c)
 target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)
 add_test(NAME config COMMAND test_config)
+
+# src/log.c: log levels, console output with input-line redraw, RAM history.
+add_executable(test_log test_log.c ${SOS_ROOT}/src/log.c)
+target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
+add_test(NAME log COMMAND test_log)
