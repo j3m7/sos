@@ -50,7 +50,10 @@ static char failed_why[128];
 
 // Last accepted sync (NTS or SNTP).
 static uint64_t synced_us;              // boot timer (0 = never)
-static uint64_t periodic_us;            // boot timer, start of the current periodic interval
+// Boot timer, start of the current periodic interval: the last accepted sync, or 0 (boot) if
+// none since. Starting at boot means a restart doesn't sync when the RTC had the time: it has
+// kept it, and its drift is what the interval is for.
+static uint64_t periodic_us;
 static int64_t step_ms;
 static bool step_was_unset;             // ...which set a clock that had no time
 static int64_t synced_delay_us;         // round trip of the NTS sample used
@@ -300,10 +303,11 @@ void timesync_network_up(void) {
         start_nts(WHY_UNSET);
         return;
     }
-    // Periodic sync: the first one soon after boot (or after it's turned on), then every
-    // interval after the last accepted sync.
+    // Periodic sync: one interval after the last accepted sync, or after boot if there was none
+    // (the clock then came from the RTC). Not at boot: restarts would each ask the server for a
+    // time the RTC already has.
     uint64_t interval = periodic_interval_us();
-    if (interval && (!periodic_us || time_us_64() - periodic_us >= interval))
+    if (interval && time_us_64() - periodic_us >= interval)
         start_nts(WHY_PERIODIC);
 }
 
@@ -411,7 +415,7 @@ void timesync_status(shell_t *sh) {
         shell_printf(sh, "auto:   off\n");
     } else {
         shell_printf(sh, "auto:   every %u h", (unsigned)settings()->ntp_sync_hours);
-        if (!nts_running && periodic_us) {
+        if (!nts_running) {
             uint64_t elapsed = now - periodic_us;
             shell_printf(sh, ", next in ");
             print_duration(sh, elapsed < interval ? interval - elapsed : 0);
