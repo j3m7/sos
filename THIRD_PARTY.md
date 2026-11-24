@@ -15,13 +15,13 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics; output batched into few packets (`ssh_session_send_output()`, `ssh_session_write_space()`); Nagle disabled; SFTP subsystem served (`ssh_session_sftp()`), default path `/` |
-| `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics; `ssh_session_send_output()`, `ssh_session_write_space()`; `sftp` session flag |
-| `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
-| `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
+| `src/ssh/pico-sshd/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics; output batched into few packets (`ssh_session_send_output()`, `ssh_session_write_space()`); Nagle disabled; SFTP subsystem served (`ssh_session_sftp()`), default path `/` |
+| `src/ssh/pico-sshd/ringbuffer.c` | `src/ringbuffer.c` | none |
+| `src/ssh/pico-sshd/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics; `ssh_session_send_output()`, `ssh_session_write_space()`; `sftp` session flag |
+| `src/ssh/pico-sshd/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
+| `src/ssh/pico-sshd/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |
-| `cmake/wolfssh_pico.cmake` | `cmake/wolfssh_pico.cmake` | `src/wolfsftp.c` left out of the glob (SOS compiles it through `src/sftp_wolf.c`) |
+| `cmake/wolfssh_pico.cmake` | `cmake/wolfssh_pico.cmake` | `src/wolfsftp.c` left out of the glob (SOS compiles it through `src/ssh/sftp_wolf.c`) |
 | `config/user_settings.h` | `wolfssl/user_settings.h` (a wolfSSL example, Copyright wolfSSL Inc., GPL-2.0-or-later) | See the header comment in the file |
 
 ### Raspberry Pi Pico SDK / pico-examples
@@ -42,7 +42,7 @@ Each modified file carries a comment describing the SOS changes. To compare with
 ```sh
 git clone https://github.com/tjko/pico-sshd.git /tmp/pico-sshd
 git -C /tmp/pico-sshd diff 697e33c65a3a36231e91b0d2d121611110978454 HEAD   # upstream changes since the copy
-diff -u /tmp/pico-sshd/src/server.c src/ssh/server.c                       # SOS changes
+diff -u /tmp/pico-sshd/src/server.c src/ssh/pico-sshd/server.c                       # SOS changes
 ```
 
 ### Fixes to offer upstream
@@ -92,7 +92,7 @@ and stall the session (SOS's copy has the same code path; it uses 4096, which av
 ### wolfSSH: issues found adding SFTP (FatFs)
 
 Found with wolfSSH 1.6.0 (`WOLFSSH_SFTP` + `WOLFSSH_FATFS`); SOS works around them in
-`src/sftp_wolf.c` / `src/sftp_fs.c` without patching wolfSSH. Not reported yet.
+`src/ssh/sftp_wolf.c` / `src/ssh/sftp_fs.c` without patching wolfSSH. Not reported yet.
 
 1. `wolfssh/port.h`, FatFs port: `WPREAD`/`WPWRITE` drop the offset argument
    (`ff_pread(fd,b,s)`), so reads and writes happen wherever the file position is: resumed or

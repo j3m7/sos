@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/shell_core.c: shell line editing and output.
+// Unit tests for src/shell/shell_core.c: shell line editing and output.
 
 #include <stdint.h>
 
-#include "shell.h"
+#include "shell/shell.h"
 #include "test.h"
 
 // --- fake channel ----------------------------------------------------------------------------

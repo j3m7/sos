@@ -11,18 +11,18 @@
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssh/ssh.h>
 
-#include "hostkey.h"
-#include "log.h"
-#include "lua_host.h"
-#include "settings.h"
-#include "shell.h"
-#include "stackmon.h"
-#include "sshd.h"
-#include "timesync.h"
-#include "tls.h"
-#include "nts.h"
-#include "wdog.h"
-#include "wifi.h"
+#include "core/log.h"
+#include "core/settings.h"
+#include "core/stackmon.h"
+#include "core/wdog.h"
+#include "lua/lua_host.h"
+#include "net/wifi.h"
+#include "shell/shell.h"
+#include "ssh/hostkey.h"
+#include "ssh/sshd.h"
+#include "time/nts.h"
+#include "time/timesync.h"
+#include "tls/tls.h"
 
 // --- console -------------------------------------------------------------------------------------
 

@@ -57,7 +57,10 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 
 wolfSSL, wolfSSH, the SD card library and Lua are git submodules in `lib/`.
 
-Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README.md).
+The source code is grouped by subsystem under `src/`; [`src/README.md`](src/README.md) gives
+the overview (main loop, interrupt context, core 1) and each directory's README explains how
+its subsystem works. Reference documentation (datasheets, SDK manuals) lives in
+[`docs/`](docs/README.md).
 
 ## Setup
 
@@ -231,7 +234,7 @@ check out under the server's key. Each sync sends 4 queries and uses the one wit
 round trip, which keeps Wi-Fi power-saving delays out of the result. The server is set on the
 console with `time server <name>`; the default is the build-time `SOS_NTS_SERVER`
 (`time.cloudflare.com`). The server's certificate chain must end at a trusted root: built in
-(`src/tls_roots.c`: SSL.com Root Certification Authority ECC for Cloudflare, ISRG Root X1 for
+(`src/tls/tls_roots.c`: SSL.com Root Certification Authority ECC for Cloudflare, ISRG Root X1 for
 Let's Encrypt, which most other NTS servers use) or approved from the SD card (see
 [Trusted root certificates](#trusted-root-certificates)).
 
@@ -317,7 +320,7 @@ sftp> get notes.txt
 - Each session uses up to ~100 KB of heap while transferring. A transfer's open files count as in
   use, like a running `cp` (see above); a client that disconnects mid-transfer releases them.
 - Every change to the card, from SFTP or the file commands, passes one check,
-  `files_write_allowed()` in `src/files.c`. Everything is allowed except changing `/certs`, which
+  `files_write_allowed()` in `src/files/files.c`. Everything is allowed except changing `/certs`, which
   only the console may do (below).
 
 ### Trusted root certificates
@@ -387,13 +390,13 @@ under AddressSanitizer and UndefinedBehaviorSanitizer:
 cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests
 ```
 
-They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized comparison
-against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
-with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
-fail or lose power mid-write), the log (`src/log.c`), the date and RTC register conversions
-(`src/timeconv.c`, compared against the host C library), path handling for the file commands
-(`src/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/nts_ke.c`,
-`src/nts_ntp.c`) and the root certificate bundle parser (`src/certbundle.c`). `tests/test.h` is
+They cover the SSH I/O ring buffer (`src/ssh/pico-sshd/ringbuffer.c`, including a randomized comparison
+against a reference model), the shell's line editing, questions and output (`src/shell/shell_core.c`,
+with the commands faked), the configuration store (`src/core/config.c`, with a fake flash that can
+fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC register conversions
+(`src/time/timeconv.c`, compared against the host C library), path handling for the file commands
+(`src/files/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
+`src/time/nts_ntp.c`) and the root certificate bundle parser (`src/tls/certbundle.c`). `tests/test.h` is
 a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 

@@ -1,0 +1,56 @@
+# ssh: SSH server, shell sessions and SFTP
+
+```
+lwIP (interrupt context)        main loop (thread context)
+  TCP callbacks ──► ring buffers ──► ssh_server_service(): wolfSSH ──► session channel
+                                       sshd_poll(): one shell_t per session, or SFTP
+```
+
+## `pico-sshd/`: the SSH server
+
+This is adapted from [pico-sshd](https://github.com/tjko/pico-sshd). [`THIRD_PARTY.md`](../../THIRD_PARTY.md)
+lists every change. It runs wolfSSH over lwIP's raw TCP API.
+
+- **lwIP callbacks only buffer.** TCP callbacks run in interrupt context, so they just copy
+  input into per-session ring buffers (`ringbuffer.c`) and flag work. If a buffer is full they
+  return `ERR_MEM`, so lwIP delivers the data again later.
+- **All wolfSSH work is in thread context.** `ssh_server_service()` runs the key exchange,
+  authentication and channel I/O there, and so does connection teardown.
+- **Sessions:** up to `SOS_SSH_MAX_SESSIONS` (3) run at once, each an `ssh_session_t`. Its
+  buffers are allocated when a connection is set up and freed when it closes, so an idle slot
+  costs no heap. When every slot is busy, the client gets an SSH disconnect message saying so
+  (no bare reset).
+- **Disconnect:** queued output is sent, then the exit status and channel close, then the
+  server waits briefly for the client to close the TCP connection.
+- **Authentication:** public key only (password support was removed).
+
+## `sshd.c`: SOS's side
+
+- **`sshd_start()`** creates the server once Wi-Fi is up and at least one key is trusted. Login
+  needs the configured user and one of the trusted keys from the settings.
+- **`sshd_poll()`** calls `ssh_server_service()` and serves each session. A new login gets a
+  fresh `shell_t` whose `shell_io_t` reads and writes the session channel (`admin` is false).
+  An SFTP session gets no shell: wolfSSH serves it directly.
+- **Output** is batched into few packets (`ssh_session_send_output()`). `write_space()` lets
+  long jobs such as `cat` slow down for a slow client instead of losing output.
+- **`ssh` command:** `sshd_status()` prints the host key fingerprint, statistics (including the
+  longest single wolfSSH step, the guide to watchdog margin) and the active sessions.
+
+## Host key (`hostkey.c`)
+
+The Ed25519 host key lives in the last 4 KB flash sector. It's generated on the device at first
+boot (`hostkey_get()`, before Wi-Fi starts) and survives reflashing; the private key never
+leaves the device. The flash write goes through `flash_safe_execute()`.
+
+## SFTP (`sftp_wolf.c`, `sftp_fs.c`)
+
+wolfSSH's SFTP server (`wolfsftp.c`) is compiled through `sftp_wolf.c`, so its file functions
+can be replaced without patching wolfSSH. Its FatFs port ignores the request's file offset,
+can't overwrite a file, and reports failed removes and renames as successes.
+
+- **`sftp_fs.c`** provides the replacements: positioned reads and writes (so resumed transfers
+  work), overwriting, and correct error codes.
+- **Write check:** every change passes `files_write_allowed()` (`files/`), so SFTP can't write
+  `/certs`.
+- **Open files:** files a transfer has open count as in use (`files_hold()`/`files_release()`),
+  like a running `cp`. A client that disconnects mid-transfer releases them.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/ssh/ringbuffer.c.
+// Unit tests for src/ssh/pico-sshd/ringbuffer.c.
 
 #include <stdint.h>
 #include <stdlib.h>

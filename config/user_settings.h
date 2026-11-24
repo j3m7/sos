@@ -45,7 +45,7 @@ extern "C"
 #include <time.h>
 #define TARGET_EMBEDDED
 
-/* TLS client (src/tls.c) over lwIP through custom I/O callbacks: TLS 1.3 only, no server. */
+/* TLS client (src/tls/tls.c) over lwIP through custom I/O callbacks: TLS 1.3 only, no server. */
 #define NO_WOLFSSL_SERVER
 #define WOLFSSL_NO_TLS12
 #define HAVE_SNI
@@ -64,8 +64,8 @@ extern "C"
 /* Accept pty-req so interactive `ssh host` works; there is no POSIX tty to apply modes to. */
 #define WOLFSSH_TERM
 #define NO_TERMIOS
-/* SFTP on the SD card. wolfsftp.c is compiled through src/sftp_wolf.c, which replaces the FatFs
- * port's file functions (open/pread/pwrite/close) with SOS ones (src/sftp_fs.c): the port's
+/* SFTP on the SD card. wolfsftp.c is compiled through src/ssh/sftp_wolf.c, which replaces the FatFs
+ * port's file functions (open/pread/pwrite/close) with SOS ones (src/ssh/sftp_fs.c): the port's
  * drop the file offset and keep a static pool of WOLFSSH_FATFS_MAX_FILES open files. */
 #define WOLFSSH_SFTP
 #define WOLFSSH_FATFS
@@ -314,7 +314,7 @@ extern time_t ssh_server_my_time(time_t *);
 #endif
 #endif
 
-/* Ed448 / Curve448: off. TLS offers only X25519 and P-256 (src/tls.c), no trusted chain is
+/* Ed448 / Curve448: off. TLS offers only X25519 and P-256 (src/tls/tls.c), no trusted chain is
  * signed with Ed448, and wolfSSH would use Ed448 only for ML-DSA composite host keys (no ML-DSA
  * here). Saves about 95 KB of flash. */
 #undef HAVE_CURVE448
@@ -460,7 +460,7 @@ extern time_t ssh_server_my_time(time_t *);
 #endif
 
 /* Memory callbacks */
-#if 1 /* SOS: wolfSSL_SetAllocators() for heap accounting (src/tls.c) */
+#if 1 /* SOS: wolfSSL_SetAllocators() for heap accounting (src/tls/tls.c) */
 #undef USE_WOLFSSL_MEMORY
 #define USE_WOLFSSL_MEMORY
 

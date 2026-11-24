@@ -1,0 +1,38 @@
+# shell: the command shell
+
+Every channel gets its own `shell_t`: the USB/UART console, and one per SSH session. Shells
+share nothing, each with its own line buffer, working directory and running job. The channel is
+a `shell_io_t`, with a non-blocking `read()`, a `write()`, an optional `logout()`, newline
+translation (`crlf`), and `admin` (true for the console only).
+
+## `shell_core.c`: line editing and control (pure C, host tested)
+
+- **`shell_poll()`** reads whatever input is waiting and edits the line, handling backspace,
+  arrow keys, Ctrl-C and Ctrl-D. On Enter it calls `shell_execute()`. It never blocks.
+- **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
+  line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
+  passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
+  keeps running while the question waits.
+- **Jobs:** a long command (`cat`, `cp`, `ls`, a Lua script) runs as a job,
+  `shell_run_job(sh, step, arg)`. `step()` is called once per main-loop pass, does a bounded
+  amount of work, and returns false when it has finished. Ctrl-C, or the session ending, calls
+  it with `cancel` so it can clean up. Input typed meanwhile is kept and run afterwards.
+- **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
+  a job slow down for a slow client instead of losing output.
+
+## `shell.c`: the commands
+
+`shell_execute()` dispatches a command line. System commands are implemented here: `help`,
+`config`, `wifi`, `net`, `key`, `user`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`,
+`uptime`, `reboot`, `ssh`, `nts`, `tls`, `logout`/`exit`. Commands that belong to a subsystem are handed to it:
+`files_command()` (`files/`), `sdcard_command()` (`sd`), `certstore_command()`
+(`tls roots`), and the `lua` command (`lua/`).
+
+Commands that change the configuration first call `require_admin()`, which refuses on any
+channel but the console.
+
+## Adding a command
+
+Add it to `shell_execute()` and to `help` in `shell.c`. If it takes more than a few
+milliseconds, make it a job so the watchdog and the other sessions keep running. If it changes
+the configuration or other protected state, call `require_admin()`.

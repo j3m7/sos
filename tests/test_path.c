@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/path.c: resolving and joining the file commands' paths.
+// Unit tests for src/files/path.c: resolving and joining the file commands' paths.
 
-#include "path.h"
+#include "files/path.h"
 #include "test.h"
 
 static char out[64];

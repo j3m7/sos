@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
+// Unit tests for src/time/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
 
 #include <stdint.h>
 
-#include "nts_ke.h"
+#include "time/nts_ke.h"
 #include "test.h"
 
 // --- response builder ----------------------------------------------------------------------------

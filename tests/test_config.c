@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/config.c: A/B record storage, validation, key parsing and the key list.
+// Unit tests for src/core/config.c: A/B record storage, validation, key parsing and the key list.
 
 #include <stdint.h>
 
-#include "config.h"
+#include "core/config.h"
 #include "test.h"
 
 // Public keys generated with ssh-keygen for these tests (no private parts anywhere).

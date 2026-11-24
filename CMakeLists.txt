@@ -56,7 +56,7 @@ if (NOT EXISTS "${SDCARD_ROOT}/src/CMakeLists.txt")
 endif()
 add_subdirectory(${SDCARD_ROOT}/src ${CMAKE_CURRENT_BINARY_DIR}/sdcard)
 
-# Lua 5.4 (lib/lua by default), run on core 1 by src/lua_core1.c.
+# Lua 5.4 (lib/lua by default), run on core 1 by src/lua/lua_core1.c.
 if (NOT DEFINED LUA_ROOT)
     set(LUA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/lib/lua" CACHE PATH "Lua source")
 endif()
@@ -65,7 +65,7 @@ if (NOT EXISTS "${LUA_ROOT}/lua.h")
         "Run 'git submodule update --init', or point LUA_ROOT at a checkout in local.cmake.")
 endif()
 # The core and the safe libraries only: no io, os, package (loadlib) or debug, and no linit.c
-# (src/lua_core1.c opens the libraries itself).
+# (src/lua/lua_core1.c opens the libraries itself).
 set(LUA_SOURCES)
 foreach(f lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser
           lstate lstring ltable ltm lundump lvm lzio
@@ -75,52 +75,53 @@ endforeach()
 # Lua formats numbers with snprintf("%.14g"); the SDK's lightweight printf (which SOS's own code
 # uses) prints doubles with ~10 digits and trailing zeros, so Lua uses the C library's.
 set_source_files_properties(${LUA_SOURCES} PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/lua_port.h;-Dsnprintf=__real_snprintf")
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/lua/lua_port.h;-Dsnprintf=__real_snprintf")
 
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
 
-# --- SSH server (src/ssh: copied from pico-sshd, see THIRD_PARTY.md) ---------
+# --- SSH server (src/ssh/pico-sshd: copied from pico-sshd, see THIRD_PARTY.md) ---
 add_library(sos-ssh INTERFACE)
-target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/include)
+target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/include)
 target_sources(sos-ssh INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/server.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/ringbuffer.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
 )
 target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
 
 # --- SOS firmware ------------------------------------------------------------
+# One directory per subsystem; see src/README.md.
 set(SOS_SOURCES
     src/main.c
-    src/hostkey.c
-    src/sshd.c
-    src/shell.c
-    src/shell_core.c
-    src/stackmon.c
-    src/log.c
-    src/config.c
-    src/settings.c
-    src/wifi.c
-    src/rtc.c
-    src/timeconv.c
-    src/timesync.c
-    src/tls.c
-    src/tls_roots.c
-    src/certbundle.c
-    src/certstore.c
-    src/nts_ke.c
-    src/nts_ntp.c
-    src/nts.c
-    src/wdog.c
-    src/sdcard.c
-    src/files.c
-    src/path.c
-    src/sftp_fs.c
-    src/lua_core1.c
-    src/lua_host.c
+    src/core/log.c
+    src/core/config.c
+    src/core/settings.c
+    src/core/wdog.c
+    src/core/stackmon.c
+    src/shell/shell.c
+    src/shell/shell_core.c
+    src/net/wifi.c
+    src/ssh/sshd.c
+    src/ssh/hostkey.c
+    src/ssh/sftp_fs.c
+    src/files/sdcard.c
+    src/files/files.c
+    src/files/path.c
+    src/time/rtc.c
+    src/time/timeconv.c
+    src/time/timesync.c
+    src/time/nts.c
+    src/time/nts_ke.c
+    src/time/nts_ntp.c
+    src/tls/tls.c
+    src/tls/tls_roots.c
+    src/tls/certstore.c
+    src/tls/certbundle.c
+    src/lua/lua_host.c
+    src/lua/lua_core1.c
 )
 add_executable(sos ${SOS_SOURCES}
-    src/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
+    src/ssh/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
     ${LUA_SOURCES}
 )
 
@@ -128,6 +129,7 @@ add_executable(sos ${SOS_SOURCES}
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
 
 target_include_directories(sos PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src             # "subsystem/header.h"
     ${LUA_ROOT}
     ${CMAKE_CURRENT_SOURCE_DIR}/config          # lwipopts.h, user_settings.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated       # sos_config.h
@@ -145,7 +147,7 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
 # Default NTS server (authenticated time), until one is set on the device with `time server`.
-# Its certificate chain must end at a root in src/tls_roots.c.
+# Its certificate chain must end at a root in src/tls/tls_roots.c.
 set(SOS_NTS_SERVER "time.cloudflare.com" CACHE STRING "NTS-KE server host name")
 # Plain SNTP server, used only on `time sync sntp` (unauthenticated).
 set(SOS_NTP_SERVER "pool.ntp.org" CACHE STRING "SNTP server host name")

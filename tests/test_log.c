@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/log.c: levels, console output with input-line redraw, deferred printing
+// Unit tests for src/core/log.c: levels, console output with input-line redraw, deferred printing
 // from interrupt context, and the RAM history.
 
 #include <stdint.h>
 
-#include "log.h"
+#include "core/log.h"
 #include "test.h"
 
 // --- fake platform -------------------------------------------------------------------------------

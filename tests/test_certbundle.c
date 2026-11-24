@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/certbundle.c: PEM bundles and DER certificates -> DER.
+// Unit tests for src/tls/certbundle.c: PEM bundles and DER certificates -> DER.
 
 #include <stdint.h>
 
-#include "certbundle.h"
+#include "tls/certbundle.h"
 #include "test.h"
 
 // Synthetic "certificates": DER SEQUENCEs (the parser checks the framing; wolfSSL checks the
