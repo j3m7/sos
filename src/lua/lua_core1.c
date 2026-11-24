@@ -314,8 +314,33 @@ static int load_script(lua_State *L) {
     return r;
 }
 
+// --- core 1's stack ----------------------------------------------------------------------------
+
+#define STACK_PATTERN 0x5a5aa5a5u
+
+static uint32_t *stack;                 // LUA_CORE1_STACK bytes from the heap; grows down to here
+
+// Fill the unused part of the stack with a pattern, so lua_core1_stack_peak() can see how deep
+// the script goes. Leaves a margin below the current frame for this function and interrupts.
+static void __attribute__((noinline)) stack_paint(void) {
+    uint32_t here;
+    uint32_t *limit = (uint32_t *)(((uintptr_t)&here - 256) & ~3u);
+    for (uint32_t *p = stack; p < limit; p++)
+        *p = STACK_PATTERN;
+}
+
+size_t lua_core1_stack_peak(void) {
+    if (!stack)
+        return 0;
+    const uint32_t *p = stack, *top = stack + LUA_CORE1_STACK / 4;
+    while (p < top && *p == STACK_PATTERN)
+        p++;
+    return (size_t)((uintptr_t)top - (uintptr_t)p);
+}
+
 static void run_job(void) {
     uint64_t t0 = time_us_64();
+    stack_paint();
     mem_used = mem_peak = 0;
     mem_limit = lua_job.mem_limit;
     lua_job.ok = false;
@@ -333,6 +358,12 @@ static void run_job(void) {
             r = lua_pcall(L, 0, 0, 1);
         if (r == LUA_OK) {
             lua_job.ok = true;
+        } else if (r == LUA_ERRERR) {
+            // The message handler (traceback) failed. It's simple, so in practice this means
+            // the error came within a few levels of the C nesting limit (LUAI_MAXCCALLS) and
+            // the handler's own calls went over it.
+            snprintf(lua_job.error, sizeof(lua_job.error),
+                     "C stack overflow (pcall, callbacks, metamethods or coroutines nested too deep)");
         } else {
             const char *msg = lua_tostring(L, -1);
             snprintf(lua_job.error, sizeof(lua_job.error), "%s",
@@ -359,7 +390,6 @@ static void core1_main(void) {
 }
 
 bool lua_core1_start(void) {
-    static uint32_t *stack;
     if (stack)
         return true;
     stack = malloc(LUA_CORE1_STACK);

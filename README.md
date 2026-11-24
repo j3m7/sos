@@ -376,6 +376,10 @@ the system only through `sos`.
   shell drains as its channel takes it. The heap is shared (malloc is mutex-protected), and each
   script may allocate up to 128 KB ("not enough memory" beyond). Core 1 gets a 32 KB stack from
   the heap when the first script runs, and pauses while core 0 writes flash.
+- **Nesting:** plain Lua recursion is limited only by memory, but nesting through `pcall`,
+  callbacks from C (`string.gsub`, `table.sort`), metamethods and coroutines uses core 1's C
+  stack and stops at 20 levels with "C stack overflow". `mem` shows how much of core 1's stack
+  the last script used.
 - **Speed** (debug build): `fib(25)` takes 1.4 s; a million-iteration floating-point loop 2.6 s.
 - **Prototype limits:** no interactive prompt; numbers are formatted with newlib's `snprintf`
   on core 1 (its float conversion has state that isn't safe to share between cores, and core 0
@@ -433,7 +437,8 @@ nobody else is using the board.
 
 The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
 Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command
-reports the stack high-water mark; an SSH login peaks at about 3.2 KB.
+reports the stack high-water mark; an SSH login peaks at about 3.2 KB. It also shows how deep the
+last Lua script went into core 1's stack.
 
 ## License
 
