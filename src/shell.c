@@ -46,7 +46,8 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTP\n");
     shell_printf(sh, "time auto|server  periodic NTP sync / NTP server settings\n");
-    shell_printf(sh, "nts [ke [host]]   NTS key exchange status / run one (development)\n");
+    shell_printf(sh, "nts [ke [host]]   NTS status / key exchange (development)\n");
+    shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
@@ -544,14 +545,23 @@ static void cmd_time(shell_t *sh, char *args) {
         shell_printf(sh, "usage: time [sync | auto [off | <hours>] | server [<name> | default]]\n");
 }
 
-// `nts` / `nts ke [host]`: NTS key exchange (development: the NTS NTP client isn't written yet).
+// `nts` / `nts ke [host]` / `nts query`: NTS key exchange and authenticated time queries
+// (development: queries report the offset but don't set the clock yet).
 static void cmd_nts(shell_t *sh, char *args) {
     if (!args) {
         nts_status(sh);
         return;
     }
+    if (!strcmp(args, "query")) {
+        const char *err = nts_query_start();
+        if (err)
+            shell_printf(sh, "nts: %s\n", err);
+        else
+            shell_printf(sh, "nts: query started; 'nts' shows the result\n");
+        return;
+    }
     if (strncmp(args, "ke", 2) || (args[2] != ' ' && args[2])) {
-        shell_printf(sh, "usage: nts [ke [<host>]]\n");
+        shell_printf(sh, "usage: nts [ke [<host>] | query]\n");
         return;
     }
     const char *host = args + 2;
@@ -563,7 +573,7 @@ static void cmd_nts(shell_t *sh, char *args) {
     }
     shell_printf(sh, nts_ke_start(*host ? host : NULL)
                  ? "nts: key exchange started; 'nts' shows the result\n"
-                 : "nts: a key exchange is already running\n");
+                 : "nts: a key exchange or query is already running\n");
 }
 
 // --- dispatch ------------------------------------------------------------------------------------
