@@ -77,15 +77,18 @@ Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README
    export PICO_SDK_PATH=$PWD/pico-sdk
    ```
 
-4. **Per-machine settings** (Wi-Fi network, hostname, SSH user and authorized key) go in
-   `local.cmake`, which is git-ignored:
+4. **Optional build-time defaults:** the device is configured over the serial console (see
+   [Configuration](#configuration)). For development, `local.cmake` (git-ignored) can provide
+   first-boot defaults for the Wi-Fi network, hostname, SSH user and one trusted key, so a
+   freshly flashed board comes up configured:
 
    ```sh
    cp local.cmake.example local.cmake
    $EDITOR local.cmake   # SOS_SSH_AUTHORIZED_KEY is the full line from ~/.ssh/id_ed25519.pub
    ```
 
-   These values are compiled into the firmware image, so treat `build/` outputs as secret.
+   Defaults that are set are compiled into the firmware image, so treat `build/` outputs as
+   secret. Without `local.cmake` the image contains no Wi-Fi password or keys.
 
 To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over SWD, see
 [`docs/development.md`](docs/development.md).
@@ -118,10 +121,52 @@ The console runs over USB CDC (`/dev/ttyACM0` on Linux) and is mirrored on UART0
 picocom -b 115200 /dev/ttyACM0
 ```
 
+## Configuration
+
+The Wi-Fi network, hostname, SSH user and trusted public keys are set on the serial console
+(USB or UART) and saved in flash. On a new board, connect to the console and run `setup`:
+
+```
+sos> setup
+Wi-Fi network (SSID): my-network
+Wi-Fi password (empty for an open network):        (not echoed)
+SSH user name [admin]: julio
+Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pub)
+```
+
+| Command | |
+|---|---|
+| `config` | show the configuration |
+| `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
+| `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
+| `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
+| `config reset` | erase everything (back to the build-time defaults, if any) |
+
+- **Changes only on the console.** SSH sessions can view the configuration but not change it,
+  so a remote session can't lock itself out; physical access to the console is the trust
+  boundary (it already allows reflashing).
+- Changes apply immediately: a new key works for the next login, `wifi set` reconnects.
+- Wi-Fi connects in the background, retries after failures (wrong password, network not
+  found) and reconnects if the link drops; the console is usable throughout.
+- Storage: one record in two alternating flash sectors below the host key, with a sequence
+  number and CRC, so a power cut while saving keeps the previous version. It survives
+  reflashing. The Wi-Fi password and keys are stored unencrypted, like the build-time defaults.
+
+## Logging
+
+Boot, Wi-Fi, configuration and SSH server messages go to the system log:
+
+- The serial console prints them as they happen. A message arriving while you type clears your
+  input line, prints, and redraws the prompt and what you typed (a hidden password isn't
+  redrawn).
+- `dmesg` shows the last 4 KB of messages in any shell, SSH sessions included.
+- `log console <level>` sets what the console prints (default `notice`); `log history <level>`
+  what's kept for `dmesg` (default `info`). Levels: err, warning, notice, info, debug.
+
 ## Remote access (SSH)
 
-On boot SOS joins the Wi-Fi network from `local.cmake` and starts an SSH server on port 22.
-The boot log on the console shows the IP address and the host key fingerprint:
+Once the device has a Wi-Fi network and at least one trusted key, it starts an SSH server on
+port 22. The log shows the IP address and the host key fingerprint:
 
 ```
 wifi: connected, ip 192.168.1.89
@@ -135,13 +180,13 @@ client prints on first connection, then log in:
 ssh <user>@<device-ip>
 ```
 
-- Only public-key login for the single user/key in `local.cmake` is accepted (Ed25519).
+- Only public-key login is accepted: the configured user with one of the trusted keys.
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
   flash sector; it survives reflashing. The private key never leaves the device.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
-  ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets its own shell, separate from the others and from the USB
-  console; server log messages (connections, failed logins) go to the console only.
+  ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets
+  its own shell, separate from the others and from the USB console.
 - `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
   Ctrl-D ends the session.
 
@@ -149,8 +194,9 @@ ssh <user>@<device-ip>
 
 SOS enables the RP2350 hardware watchdog right after the boot banner. Everything runs from the
 main loop, which feeds it on every pass; if the loop stops coming round for `SOS_WATCHDOG_MS`
-(default 8000 ms), the chip resets. A hang during boot therefore resets and retries too; the
-Wi-Fi connect, where one attempt can take 30 s, feeds it while it waits.
+(default 8000 ms), the chip resets. A hang during boot therefore resets and retries too.
+Nothing blocks the loop for long: Wi-Fi connects in the background and console questions
+(`setup`, passwords) wait for input without stopping it.
 
 - After a watchdog reset the boot log shows `last reset: watchdog timeout` and `uptime`
   appends `(last reset: watchdog)`. Power-on and the `reboot` command don't count.
@@ -169,9 +215,10 @@ under AddressSanitizer and UndefinedBehaviorSanitizer:
 cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests
 ```
 
-They currently cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized
-comparison against a reference model) and the shell's line editing and output
-(`src/shell_core.c`, with the commands faked). `tests/test.h` is a minimal harness; add a suite as
+They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized comparison
+against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
+with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
+fail or lose power mid-write) and the log (`src/log.c`). `tests/test.h` is a minimal harness; add a suite as
 `tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
 
 **Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed
@@ -195,6 +242,7 @@ so run it while nobody else is using the board; it warns if the device rebooted 
 | SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default |
 | SCRATCH_Y (4 KB) | free |
 | Flash, last 4 KB sector | SSH host key |
+| Flash, 2 sectors below it | configuration (A/B records) |
 
 The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
 Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command

@@ -11,9 +11,18 @@
 
 // Start the SSH server on port 22 with the given host key (DER), accepting up to
 // SOS_SSH_MAX_SESSIONS concurrent sessions. Each session gets its own shell instance; sessions
-// are not part of the global stdio console. Server log messages
-// go to the console. Only public-key login for the user/key in local.cmake is accepted.
+// are not part of the global stdio console. Server messages go to the system log. Only
+// public-key login for the configured user with a trusted key (settings) is accepted.
+// Does nothing if already running.
 bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len);
+
+bool sshd_running(void);
+
+// The host key's fingerprint ("SHA256:..."), once started.
+const char *sshd_host_fingerprint(void);
+
+// "SHA256:<base64>" fingerprint of an SSH wire-format public key, as ssh-keygen -l shows it.
+void sshd_fingerprint(const uint8_t *blob, uint32_t len, char *out, size_t out_len);
 
 // Serve the SSH session's shell: starts a fresh shell for each new login and processes its
 // input. Never blocks; call regularly from the main loop.

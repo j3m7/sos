@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 
 #include "hostkey.h"
+#include "log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -59,7 +60,7 @@ static void do_write(void *param) {
 static bool flash_write(const hostkey_record_t *r) {
     extern char __flash_binary_end;
     if ((uintptr_t)&__flash_binary_end > XIP_BASE + HOSTKEY_OFFSET) {
-        printf("hostkey: firmware image overlaps host key sector\n");
+        log_msg(SOS_LOG_ERR, "hostkey: firmware image overlaps host key sector");
         return false;
     }
     return flash_safe_execute(do_write, (void *)r, 1000) == PICO_OK;
@@ -69,11 +70,11 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     const hostkey_record_t *fr = flash_record();
 
     if (!record_valid(fr)) {
-        printf("hostkey: no valid host key in flash, generating Ed25519 key...\n");
+        log_msg(SOS_LOG_NOTICE, "hostkey: no valid host key in flash, generating Ed25519 key...");
         memset(&ram_copy, 0xff, sizeof(ram_copy));
         int n = wolfSSH_MakeEd25519Key(ram_copy.der, sizeof(ram_copy.der), WOLFSSH_ED25519KEY);
         if (n <= 0) {
-            printf("hostkey: key generation failed (%d)\n", n);
+            log_msg(SOS_LOG_ERR, "hostkey: key generation failed (%d)", n);
             return false;
         }
         ram_copy.magic = HOSTKEY_MAGIC;
@@ -82,10 +83,10 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         ram_copy.check = fnv1a(ram_copy.der, ram_copy.len);
 
         if (!flash_write(&ram_copy) || !record_valid(fr)) {
-            printf("hostkey: failed to store host key in flash\n");
+            log_msg(SOS_LOG_ERR, "hostkey: failed to store host key in flash");
             return false;
         }
-        printf("hostkey: stored new host key (%lu bytes)\n", (unsigned long)ram_copy.len);
+        log_msg(SOS_LOG_NOTICE, "hostkey: stored new host key (%lu bytes)", (unsigned long)ram_copy.len);
         memset(&ram_copy, 0, sizeof(ram_copy));
     }
 

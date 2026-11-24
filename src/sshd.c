@@ -19,10 +19,11 @@
 #include "pico-sshd.h"
 #include "pico-sshd/log.h"
 
-#include "sos_config.h"
+#include "config.h"
+#include "log.h"
+#include "settings.h"
 
-#define SSH_KEY_TYPE        "ssh-ed25519"
-#define SSH_KEY_BLOB_MAX    128     // wire-format Ed25519 public key is 51 bytes
+#define SSH_KEY_TYPE        "ssh-ed25519"     // the host key's type
 
 #ifndef SOS_SSH_MAX_SESSIONS
 #define SOS_SSH_MAX_SESSIONS 3
@@ -37,8 +38,6 @@ static uint32_t session_shell_ids[SOS_SSH_MAX_SESSIONS];   // session_id each sh
 // burst of piped commands can't hold up the USB console and the other sessions for seconds.
 #define SESSION_POLL_OUTPUT_BUDGET 2048
 static uint32_t session_poll_output[SOS_SSH_MAX_SESSIONS];
-static uint8_t authorized_key[SSH_KEY_BLOB_MAX];
-static uint32_t authorized_key_len;
 static char hostkey_fingerprint[64];
 
 static const char banner[] = "\r\nSOS - Small/Secure OS\r\n\r\n";
@@ -50,7 +49,7 @@ static void put_u32be(uint8_t *p, uint32_t v) {
 }
 
 // "SHA256:<base64 without padding>", as printed by ssh-keygen -l.
-static void fingerprint(const uint8_t *blob, uint32_t len, char *out, size_t out_len) {
+void sshd_fingerprint(const uint8_t *blob, uint32_t len, char *out, size_t out_len) {
     uint8_t digest[WC_SHA256_DIGEST_SIZE];
     uint8_t b64[64];
     word32 b64_len = sizeof(b64);
@@ -63,32 +62,6 @@ static void fingerprint(const uint8_t *blob, uint32_t len, char *out, size_t out
     while (b64_len > 0 && (b64[b64_len - 1] == '=' || b64[b64_len - 1] == '\0'))
         b64_len--;
     snprintf(out, out_len, "SHA256:%.*s", (int)b64_len, b64);
-}
-
-// Parse "ssh-ed25519 <base64> [comment]" into the SSH wire-format public key blob,
-// which is what wolfSSH hands to the auth callback.
-static bool parse_authorized_key(const char *line) {
-    size_t type_len = strlen(SSH_KEY_TYPE);
-    if (strncmp(line, SSH_KEY_TYPE " ", type_len + 1) != 0) {
-        printf("sshd: authorized key must be of type " SSH_KEY_TYPE "\n");
-        return false;
-    }
-    const char *b64 = line + type_len + 1;
-    size_t b64_len = strcspn(b64, " \t\r\n");
-
-    word32 out_len = sizeof(authorized_key);
-    if (Base64_Decode((const byte *)b64, (word32)b64_len, authorized_key, &out_len) != 0) {
-        printf("sshd: authorized key is not valid base64\n");
-        return false;
-    }
-    // Blob must start with the length-prefixed key type string.
-    if (out_len < 4 + type_len || authorized_key[3] != type_len ||
-        memcmp(authorized_key + 4, SSH_KEY_TYPE, type_len) != 0) {
-        printf("sshd: authorized key blob is malformed\n");
-        return false;
-    }
-    authorized_key_len = out_len;
-    return true;
 }
 
 // Derive the host public key from the private DER and compute its fingerprint, so it can be
@@ -110,36 +83,38 @@ static void compute_host_fingerprint(const uint8_t *der, uint32_t der_len) {
         memcpy(blob + 4, SSH_KEY_TYPE, type_len);
         put_u32be(blob + 4 + type_len, pub_len);
         memcpy(blob + 8 + type_len, pub, pub_len);
-        fingerprint(blob, 8 + type_len + pub_len, hostkey_fingerprint, sizeof(hostkey_fingerprint));
+        sshd_fingerprint(blob, 8 + type_len + pub_len, hostkey_fingerprint, sizeof(hostkey_fingerprint));
     }
     wc_ed25519_free(&key);
 }
 
 // --- pico-sshd callbacks -----------------------------------------------------
 
+// Server messages go to the system log (may be called in interrupt context; the log defers
+// printing). pico-sshd's levels are syslog's, like the log module's.
 static void log_cb(int priority, const char *format, ...) {
-    if (priority > LOG_NOTICE)
-        return;
+    char msg[LOG_LINE_MAX];
     va_list ap;
     va_start(ap, format);
-    printf("sshd: ");
-    vprintf(format, ap);
-    printf("\n");
+    vsnprintf(msg, sizeof(msg), format, ap);
     va_end(ap);
+    log_msg(priority, "sshd: %s", msg);
 }
 
-// Public key only: the user name and key blob must both match exactly.
-// wolfSSH verifies the client's signature itself once this returns success.
+// Public key only: the user name must match the configured one and the key must be in the
+// configured trusted list (checked at each login, so changes apply immediately). wolfSSH
+// verifies the client's signature itself once this returns success.
 static int auth_cb(void *ctx, const byte *login, word32 login_len,
                    const byte *auth, word32 auth_len, int auth_type) {
     (void)ctx;
+    const sos_config_t *cfg = settings();
     if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY)
         return WOLFSSH_USERAUTH_FAILURE;
     if (!login || !auth)
         return WOLFSSH_USERAUTH_FAILURE;
-    if (login_len != strlen(SOS_SSH_USER) || memcmp(login, SOS_SSH_USER, login_len) != 0)
+    if (login_len != strlen(cfg->ssh_user) || memcmp(login, cfg->ssh_user, login_len) != 0)
         return WOLFSSH_USERAUTH_INVALID_USER;
-    if (auth_len != authorized_key_len || memcmp(auth, authorized_key, auth_len) != 0)
+    if (!config_key_find(cfg, auth, auth_len))
         return WOLFSSH_USERAUTH_INVALID_PUBLICKEY;
     return WOLFSSH_USERAUTH_SUCCESS;
 }
@@ -147,12 +122,12 @@ static int auth_cb(void *ctx, const byte *login, word32 login_len,
 // --- public API --------------------------------------------------------------
 
 bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
-    if (!parse_authorized_key(SOS_SSH_AUTHORIZED_KEY))
-        return false;
+    if (server)
+        return true;
     compute_host_fingerprint(hostkey, hostkey_len);
 
     if (!(server = ssh_server_new(SOS_SSH_MAX_SESSIONS, 4096, 8192))) {
-        printf("sshd: out of memory\n");
+        log_msg(SOS_LOG_ERR, "sshd: out of memory");
         return false;
     }
     server->auth_enabled = true;
@@ -165,16 +140,28 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
     server->max_auth_tries = 6;
 
     if (ssh_server_add_priv_key(server, WOLFSSH_FORMAT_ASN1, hostkey, hostkey_len) != 0) {
-        printf("sshd: failed to load host key\n");
+        log_msg(SOS_LOG_ERR, "sshd: failed to load host key");
+        ssh_server_destroy(server);
+        server = NULL;
         return false;
     }
     if (!ssh_server_start(server)) {
-        printf("sshd: failed to start\n");
+        log_msg(SOS_LOG_ERR, "sshd: failed to start");
+        ssh_server_destroy(server);
+        server = NULL;
         return false;
     }
-    printf("sshd: listening on port %u (up to %u sessions), host key %s %s\n",
-           server->port, server->max_sessions, SSH_KEY_TYPE, hostkey_fingerprint);
+    log_msg(SOS_LOG_NOTICE, "sshd: listening on port %u (up to %u sessions), host key %s %s",
+            server->port, server->max_sessions, SSH_KEY_TYPE, hostkey_fingerprint);
     return true;
+}
+
+bool sshd_running(void) {
+    return server != NULL;
+}
+
+const char *sshd_host_fingerprint(void) {
+    return hostkey_fingerprint;
 }
 
 // --- per-session shells ---------------------------------------------------------
@@ -203,6 +190,7 @@ static const shell_io_t session_io = {
     .write = session_write,
     .logout = session_logout,
     .crlf = true,               // raw channel: no stdio CRLF translation
+    .admin = false,             // configuration changes only on the console
 };
 
 void sshd_poll(void) {

@@ -19,17 +19,12 @@ endif()
 
 pico_sdk_init()
 
-# --- Per-machine settings (Wi-Fi, SSH user/key, optional dependency paths) ----
-include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL RESULT_VARIABLE SOS_LOCAL_CMAKE)
-if (NOT SOS_LOCAL_CMAKE)
-    message(FATAL_ERROR "local.cmake not found: copy local.cmake.example to local.cmake and fill it in")
-endif()
-foreach(var SOS_WIFI_SSID SOS_WIFI_PASSWORD SOS_HOSTNAME SOS_SSH_USER SOS_SSH_AUTHORIZED_KEY)
-    if (NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
-        message(FATAL_ERROR "${var} must be set in local.cmake")
-    endif()
-endforeach()
-configure_file(config/sos_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_config.h @ONLY)
+# --- Per-machine settings (optional) --------------------------------------------
+# The device is configured over the serial console ('setup'); local.cmake can provide
+# first-boot defaults (Wi-Fi, hostname, SSH user/key) and dependency paths. Defaults that are
+# set end up in the firmware image.
+include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL)
+configure_file(config/sos_defaults.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_defaults.h)
 
 # --- wolfSSL / wolfSSH ---------------------------------------------------------
 # Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
@@ -71,6 +66,10 @@ set(SOS_SOURCES
     src/shell.c
     src/shell_core.c
     src/stackmon.c
+    src/log.c
+    src/config.c
+    src/settings.c
+    src/wifi.c
     src/wdog.c
 )
 add_executable(sos ${SOS_SOURCES})
