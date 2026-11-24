@@ -96,7 +96,7 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # Hardware watchdog: the main loop must come round within this time or the chip resets.
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
-# SNTP server, used only when the RTC has no valid time or on `time sync`.
+# Default SNTP server, until one is set on the device with `time server`.
 set(SOS_NTP_SERVER "pool.ntp.org" CACHE STRING "SNTP server host name")
 # Lower bound for any accepted time (SNTP is unauthenticated). Taken at configure time;
 # SOURCE_DATE_EPOCH overrides it for reproducible builds.

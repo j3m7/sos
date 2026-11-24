@@ -32,6 +32,10 @@ rtc_status_t rtc_read(int64_t *t);
 // or if the time doesn't read back (e.g. the oscillator isn't running, so OS stays set).
 bool rtc_write(int64_t t);
 
+// After rtc_init(): true if SDA and SCL had pull-ups (the Adalogger is attached), whether or not
+// the chip answered. Tells "board missing" from "chip not answering".
+bool rtc_bus_pulled_up(void);
+
 // True if the chip reports its backup cell below ~2.5 V. False if it's fine or the chip is absent.
 bool rtc_battery_low(void);
 

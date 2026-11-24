@@ -8,10 +8,30 @@
 #define CONFIG_MAGIC          0x43534f53u   // "SOSC"
 #define CONFIG_FORMAT_VERSION 1
 
+// Payload lengths written by each release, oldest first; a record must have one of them, so a
+// field is never cut off partway. When adding fields to sos_config_t, append the new size.
+#define CONFIG_V1_LENGTH offsetof(sos_config_t, ntp_sync_hours)    // up to the end of keys[]
+_Static_assert(CONFIG_V1_LENGTH == 1540, "fields before ntp_sync_hours must not move");
+static const uint16_t record_lengths[] = {
+    CONFIG_V1_LENGTH,
+    sizeof(sos_config_t),   // + ntp_sync_hours, ntp_server
+};
+
+static bool known_length(uint16_t length) {
+    for (size_t i = 0; i < sizeof(record_lengths) / sizeof(record_lengths[0]); i++)
+        if (length == record_lengths[i])
+            return true;
+    return false;
+}
+
+// True if a record of `length` bytes contains all of `field`.
+#define HAS_FIELD(length, field) \
+    ((length) >= offsetof(sos_config_t, field) + sizeof(((sos_config_t *)0)->field))
+
 typedef struct {
     uint32_t magic;
     uint16_t version;
-    uint16_t length;        // payload bytes (sizeof(sos_config_t))
+    uint16_t length;        // payload bytes: one of record_lengths
     uint32_t seq;           // higher = newer (compared with wrap-around)
     uint32_t crc;           // CRC-32 over magic..seq and the payload
 } record_header_t;
@@ -40,9 +60,10 @@ uint32_t config_crc32(const void *data, size_t len) {
     return crc32_update(0, data, len);
 }
 
+// Covers the stored payload length; call only with a length already checked to be in range.
 static uint32_t record_crc(const record_t *r) {
     uint32_t crc = crc32_update(0, &r->hdr, offsetof(record_header_t, crc));
-    return crc32_update(crc, &r->cfg, sizeof(r->cfg));
+    return crc32_update(crc, &r->cfg, r->hdr.length);
 }
 
 // --- records ------------------------------------------------------------------------------------
@@ -54,9 +75,16 @@ static bool terminated(const char *s, size_t size) {
 // A record is valid if its header and CRC check out and its contents are within bounds.
 static bool record_valid(const record_t *r) {
     if (r->hdr.magic != CONFIG_MAGIC || r->hdr.version != CONFIG_FORMAT_VERSION ||
-        r->hdr.length != sizeof(sos_config_t) || r->hdr.crc != record_crc(r))
+        !known_length(r->hdr.length) || r->hdr.crc != record_crc(r))
         return false;
     const sos_config_t *c = &r->cfg;
+    // Later fields: only check those the record contains (the rest load as 0).
+    if (HAS_FIELD(r->hdr.length, ntp_sync_hours) && c->ntp_sync_hours > CONFIG_NTP_SYNC_HOURS_MAX)
+        return false;
+    if (HAS_FIELD(r->hdr.length, ntp_server) &&
+        (!terminated(c->ntp_server, sizeof(c->ntp_server)) ||
+         (c->ntp_server[0] && config_check_ntp_server(c->ntp_server))))
+        return false;
     if (!terminated(c->wifi_ssid, sizeof(c->wifi_ssid)) ||
         !terminated(c->wifi_password, sizeof(c->wifi_password)) ||
         !terminated(c->hostname, sizeof(c->hostname)) ||
@@ -101,7 +129,7 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     config_defaults(cfg);
     if (newest_slot(store, &r) < 0)
         return false;
-    memcpy(cfg, &r->cfg, sizeof(*cfg));
+    memcpy(cfg, &r->cfg, r->hdr.length);       // fields a shorter record lacks stay 0
     if (seq)
         *seq = r->hdr.seq;
     return true;
@@ -166,6 +194,21 @@ const char *config_check_hostname(const char *hostname) {
         char c = *p;
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'))
             return "hostname may only contain letters, digits and '-'";
+    }
+    return NULL;
+}
+
+const char *config_check_ntp_server(const char *server) {
+    size_t n = strlen(server);
+    if (n == 0 || n > CONFIG_NTP_SERVER_MAX)
+        return "server must be 1 to 63 characters";
+    if (server[0] == '.' || server[n - 1] == '.' || strstr(server, ".."))
+        return "server name has an empty part ('..' or a '.' at either end)";
+    for (const char *p = server; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '-' || c == '.'))
+            return "server may only contain letters, digits, '-' and '.'";
     }
     return NULL;
 }

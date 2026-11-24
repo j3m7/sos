@@ -7,6 +7,7 @@
 
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "pico/time.h"
 
 #include "timeconv.h"
 
@@ -46,7 +47,33 @@ static bool reg_write(uint8_t reg, const uint8_t *buf, size_t len) {
            (int)(len + 1);
 }
 
+static bool bus_pulled_up;
+
+// The Adalogger pulls SDA and SCL up with 10k; against the RP2350's weak internal pull-downs
+// both lines read high if it's there and low if not. (Erratum RP2350-E9 can hold a pad with a
+// pull-down high after it was driven high, but pads are reset at boot, so this runs first.)
+static bool check_pull_ups(void) {
+    const unsigned pins[] = {RTC_SDA_PIN, RTC_SCL_PIN};
+    bool high = true;
+    for (unsigned i = 0; i < 2; i++) {
+        gpio_init(pins[i]);
+        gpio_set_dir(pins[i], GPIO_IN);
+        gpio_pull_down(pins[i]);
+    }
+    busy_wait_us(100);
+    for (unsigned i = 0; i < 2; i++) {
+        high = high && gpio_get(pins[i]);
+        gpio_disable_pulls(pins[i]);
+    }
+    return high;
+}
+
+bool rtc_bus_pulled_up(void) {
+    return bus_pulled_up;
+}
+
 bool rtc_init(void) {
+    bus_pulled_up = check_pull_ups();
     i2c_init(RTC_I2C, RTC_BAUD);
     gpio_set_function(RTC_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(RTC_SCL_PIN, GPIO_FUNC_I2C);

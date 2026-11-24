@@ -140,6 +140,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
+| `time auto <hours>` / `time auto off` | periodic NTP sync (default off; see [Timekeeping](#timekeeping)) |
+| `time server <name>` / `time server default` | NTP server: host name or IPv4 address / back to `SOS_NTP_SERVER` |
 | `config reset` | erase everything (back to the build-time defaults, if any) |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
@@ -151,6 +153,9 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 - Storage: one record in two alternating flash sectors below the host key, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
   reflashing. The Wi-Fi password and keys are stored unencrypted, like the build-time defaults.
+  The record format only grows at the end: a record saved by older firmware still loads, with
+  newer settings at their defaults. Firmware older than a saved record ignores it and starts
+  from the build-time defaults.
 
 ## Logging
 
@@ -213,15 +218,27 @@ is the source of truth for wall-clock time. At boot SOS sets the system clock (`
 `gettimeofday()`) from it and turns on the chip's battery switch-over, which is off by default.
 All times are UTC.
 
-NTP is a fallback. SOS asks `SOS_NTP_SERVER` (default `pool.ntp.org`) only when the RTC has no
-valid time: no chip, a first power-up, or a coin cell that ran out while the board was unpowered.
-A successful reply sets the system clock and the RTC, then the NTP client stops. NTP isn't
-authenticated, so a reply earlier than the firmware's configure time is rejected.
+SOS asks an NTP server for the time in three cases. The server is set on the console with
+`time server <name>`. Until then SOS uses the build-time `SOS_NTP_SERVER`, which defaults to
+`pool.ntp.org`. A new server is used from the next sync.
 
-- `time` shows the date and time, where it came from, the RTC's reading and backup-battery state,
-  and the last NTP sync.
-- `time sync` sets the clock and the RTC from NTP now. Nothing corrects RTC drift (up to about
-  10 s a week) automatically, so run it now and then.
+- **The RTC has no valid time:** no chip, a first power-up, or a coin cell that ran out while
+  the board was unpowered.
+- **`time sync`**, typed in any shell, SSH included.
+- **Periodically, if turned on** with `time auto <hours>` on the console (1 to 720; default off).
+  It syncs once the network is up (unless NTP already set the clock since boot), then one
+  interval after the last successful sync, whatever started it. This corrects RTC drift, which is
+  up to about 10 s a week. Without it, run `time sync` now and then.
+
+A successful reply sets the system clock and the RTC, then the NTP client stops. NTP isn't
+authenticated, so a reply earlier than the firmware's configure time is always rejected. A
+periodic sync also refuses to move the clock by more than 5 minutes, so a forged reply can't
+quietly shift a clock that's already set. If that happens, the log says so and `time sync`
+accepts the new time.
+
+- `time` shows the date and time and where it came from, the RTC's reading and backup-battery
+  state, the last NTP sync, and the periodic setting with the time until the next sync.
+- `time auto` and `time server` (without a value) show those settings; `config` lists both.
 
 ## Testing
 
