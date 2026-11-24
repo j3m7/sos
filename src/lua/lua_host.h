@@ -9,7 +9,8 @@
 
 #include "shell/shell.h"
 
-// `lua <file>` or `lua -e <code>`: run a script on core 1 as a job of this shell.
+// `lua <file>` or `lua -e <code>`: run a script on core 1 as a job of this shell. `lua` alone:
+// an interactive prompt.
 void lua_command(shell_t *sh, char *args);
 
 // Answer the running script's requests; call from the main loop.

@@ -12,7 +12,8 @@ translation (`crlf`), and `admin` (true for the console only).
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
-  keeps running while the question waits.
+  keeps running while the question waits. `shell_ask_eof()` is the same for a stream of lines
+  (the Lua prompt): there, Ctrl-D on an empty line answers `SHELL_EOF` instead of logging out.
 - **Jobs:** a long command (`cat`, `cp`, `ls`, a Lua script) runs as a job,
   `shell_run_job(sh, step, arg)`. `step()` is called once per main-loop pass, does a bounded
   amount of work, and returns false when it has finished. Ctrl-C, or the session ending, calls
