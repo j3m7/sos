@@ -1,8 +1,8 @@
 # Optional per-machine settings. Copy to local.cmake (git-ignored) and fill in what you need.
 #
 # The device is normally configured over the serial console ('setup'). The values below are only
-# first-boot defaults: used when the board has no saved configuration (new board, or after
-# 'config reset'). Any that are set are compiled into the firmware image, so treat build outputs
+# first-boot defaults: used when the board has no saved configuration (a new board). 'config reset'
+# goes back to them too, except the trusted key. Any that are set are compiled into the firmware image, so treat build outputs
 # as secret. Leave them out for an image without credentials.
 
 # Wi-Fi network to join (2.4 GHz, WPA2/WPA3 personal).

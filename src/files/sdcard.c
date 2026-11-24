@@ -416,6 +416,12 @@ void sdcard_command(shell_t *sh, char *args) {
     else if (!strcmp(sub, "unmount")) {
         if (files_in_use(sh))
             return;
+        // It's for taking the card out, which needs someone at the device anyway; a session
+        // could otherwise unmount it under everyone else.
+        if (!sh->io->admin) {
+            shell_printf(sh, "the card can only be unmounted on the serial console\n");
+            return;
+        }
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh

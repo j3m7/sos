@@ -39,7 +39,7 @@ Changes are saved in flash immediately and survive reflashing (see
 | Command | Where | What it does |
 |---|---|---|
 | `config` | any | Show the configuration: hostname, SSH user, Wi-Fi, number of trusted keys, NTS server and periodic sync |
-| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device goes back to the build-time defaults from `local.cmake`, which can include a Wi-Fi network and an SSH key, then reconnects Wi-Fi |
+| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device goes back to the build-time defaults from `local.cmake` for the Wi-Fi network, hostname and SSH user, then reconnects Wi-Fi. No keys are trusted afterwards (not the build-time one either): add one with `key add` |
 | `setup` | console only | Guided setup: Wi-Fi network and password, SSH user, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |
 | `user [<name>]` | console only to change | Show or set the SSH user name |
@@ -98,7 +98,7 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `sd` / `sd info` | any | Card and volume information, and the SPI clock |
 | `sd speed` | any | Show the SPI clock, set and actual |
 | `sd speed <MHz>` | console only | Set the SPI clock (1 to 75 MHz) and reinitialize the card. Not saved |
-| `sd unmount` | any | Unmount the card before removing it. Refused while a file is open |
+| `sd unmount` | console only | Unmount the card before removing it. Refused while a file is open |
 | `sd test [<KB> [keep]]` | console only | Write and read benchmark: 4 to 65536 KB, default 256. Everything else waits until it finishes. `keep` leaves `/sos-test.txt` on the card |
 | `sd format [exfat\|fat32]` | console only | Erase the whole card (all partitions) and format it with one partition, exFAT by default, after you type `yes`. SSH sessions pause until it finishes |
 
