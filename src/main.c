@@ -18,6 +18,8 @@
 #include "stackmon.h"
 #include "sshd.h"
 #include "timesync.h"
+#include "tls.h"
+#include "nts.h"
 #include "wdog.h"
 #include "wifi.h"
 
@@ -84,6 +86,7 @@ int main(void) {
     // System clock from the RTC, before anything that might want the time.
     timesync_boot();
 
+    tls_init();                         // wolfSSL heap accounting, before any allocation
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
         log_msg(SOS_LOG_ERR, "crypto init failed");
         return 1;
@@ -117,6 +120,7 @@ int main(void) {
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
         timesync_poll();
+        nts_poll();
         shell_poll(&console_shell);
         sshd_poll();
         log_flush();                    // messages logged in interrupt context

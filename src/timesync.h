@@ -28,6 +28,9 @@ void timesync_network_up(void);
 // Returns false if a non-periodic one is already running.
 bool timesync_request_ntp(void);
 
+// True once the system clock holds a real time (from the RTC or NTP), so dates can be checked.
+bool timesync_clock_set(void);
+
 // Apply an SNTP result, if one arrived; stop a periodic sync that was turned off. Call from the
 // main loop.
 void timesync_poll(void);

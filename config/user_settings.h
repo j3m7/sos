@@ -24,7 +24,9 @@
  * HAVE_ED25519_MAKE_KEY (on-device host key generation), debug logging only with
  * SOS_WOLF_DEBUG rather than in every non-NDEBUG build, WOLFSSH_TERM + NO_TERMIOS so
  * interactive sessions with a pty request are accepted, WOLFSSL_MLKEM_DYNAMIC_KEYS to keep
- * ML-KEM key buffers on the heap rather than the stack.
+ * ML-KEM key buffers on the heap rather than the stack. TLS: a TLS 1.3 client (no
+ * WOLFCRYPT_ONLY, NO_WOLFSSL_SERVER, WOLFSSL_NO_TLS12) with SNI, ALPN and the keying-material
+ * exporter, P-384 for certificate chains, and AES-SIV (with CMAC/CTR/direct AES) for NTS.
  *
  * Example wolfSSL user settings with #if 0/1 gates to enable/disable algorithms and features.
  * This file is included with wolfssl/wolfcrypt/settings.h when WOLFSSL_USER_SETTINGS is defined.
@@ -43,7 +45,15 @@ extern "C"
 #include <time.h>
 #define TARGET_EMBEDDED
 
-#define WOLFCRYPT_ONLY
+/* TLS client (src/tls.c) over lwIP through custom I/O callbacks: TLS 1.3 only, no server. */
+#define NO_WOLFSSL_SERVER
+#define WOLFSSL_NO_TLS12
+#define HAVE_SNI
+#define HAVE_ALPN
+#define HAVE_KEYING_MATERIAL    /* TLS exporter: NTS-KE derives its keys with it */
+#define WOLFSSL_AES_SIV         /* NTS AEAD (AEAD_AES_SIV_CMAC_256); needs CMAC, CTR, direct */
+#define WOLFSSL_AES_COUNTER
+#define WOLFSSL_AES_DIRECT
 #define WOLFSSL_NO_SOCK
 //#define WOLFSSL_SP_NO_DYNSTACK
 
@@ -104,12 +114,12 @@ extern time_t ssh_server_my_time(time_t *);
 /* ------------------------------------------------------------------------- */
 /* Wolf Single Precision Math */
 #if 1
-#define SP_INT_BITS 256
+/* SP_INT_BITS: wolfSSL picks it (521 with SP_MATH_ALL). 384 was too small for TLS: handshake failed with WC_KEY_SIZE_E. */
 //#define WOLFSSL_HAVE_SP_RSA
 //#define WOLFSSL_HAVE_SP_DH
 #define WOLFSSL_HAVE_SP_ECC
 // #define WOLFSSL_SP_4096 /* Enable RSA/RH 4096-bit support */
-// #define WOLFSSL_SP_384 /* Enable ECC 384-bit SECP384R1 support */
+#define WOLFSSL_SP_384 /* ECC 384-bit SECP384R1 support (TLS certificate chains) */
 
 // #define WOLFSSL_SP_CACHE_RESISTANT
 //#define WOLFSSL_SP_MATH     /* only SP math - disables integer.c/tfm.c */
@@ -369,7 +379,7 @@ extern time_t ssh_server_my_time(time_t *);
 
 /* CMAC */
 #undef WOLFSSL_CMAC
-#if 0
+#if 1 /* AES-SIV for NTS */
 #define WOLFSSL_CMAC
 #endif
 
@@ -437,7 +447,7 @@ extern time_t ssh_server_my_time(time_t *);
 #endif
 
 /* Memory callbacks */
-#if 0
+#if 1 /* SOS: wolfSSL_SetAllocators() for heap accounting (src/tls.c) */
 #undef USE_WOLFSSL_MEMORY
 #define USE_WOLFSSL_MEMORY
 
