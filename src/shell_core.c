@@ -68,11 +68,46 @@ static void run_line(shell_t *sh, char *cmd) {
 
 // --- input ---------------------------------------------------------------------
 
+// Terminals send special keys as escape sequences, which must not end up in the line:
+// CSI "ESC [ params final" (arrows, Delete, Ctrl+arrow, bracketed paste), SS3 "ESC O x"
+// (application-mode arrows, F1-F4) and "ESC x" (Alt+key). They may be split across reads,
+// so the state lives in shell_t. A control character cancels a sequence and is handled
+// normally, so a stray ESC can't swallow Enter or Ctrl-C.
+enum { ESC_NONE, ESC_START, ESC_CSI, ESC_SS3 };
+
+// Returns true if c was consumed as part of an escape sequence.
+static bool escape_sequence(shell_t *sh, unsigned char c) {
+    if (c == 0x1b) {
+        sh->esc = ESC_START;
+        return true;
+    }
+    if (sh->esc == ESC_NONE)
+        return false;
+    if (c < 0x20) {                         // control character: abandon the sequence
+        sh->esc = ESC_NONE;
+        return false;
+    }
+    switch (sh->esc) {
+    case ESC_START:
+        sh->esc = c == '[' ? ESC_CSI : c == 'O' ? ESC_SS3 : ESC_NONE;
+        break;
+    case ESC_CSI:                           // parameter/intermediate bytes until a final byte
+        if (c >= 0x40 && c <= 0x7e)
+            sh->esc = ESC_NONE;
+        break;
+    default:                                // SS3: one byte
+        sh->esc = ESC_NONE;
+        break;
+    }
+    return true;
+}
+
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->io = io;
     sh->ctx = ctx;
     sh->line_len = 0;
     sh->last_was_cr = false;
+    sh->esc = ESC_NONE;
     shell_printf(sh, "\nType 'help' for commands.\n");
     prompt(sh);
 }
@@ -89,6 +124,8 @@ void shell_poll(shell_t *sh) {
             }
             sh->last_was_cr = (c == '\r');
 
+            if (escape_sequence(sh, (unsigned char)c))
+                continue;
             if (c == '\r' || c == '\n') {
                 shell_printf(sh, "\n");
                 sh->line[sh->line_len] = '\0';

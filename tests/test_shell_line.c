@@ -219,7 +219,7 @@ TEST(line_length_is_limited) {
 }
 
 TEST(control_and_high_bytes_are_ignored) {
-    static const char in[] = "a\x01" "b\0c\x1b" "d\x80" "e\xff" "f\x7f\x7f" "g\t\r";
+    static const char in[] = "a\x01" "b\0c\x02" "d\x80" "e\xff" "f\x7f\x7f" "g\t\r";
     start(&io_plain);
     type_n(in, sizeof(in) - 1);
     CHECK_EQ(n_executed, 1);
@@ -227,7 +227,7 @@ TEST(control_and_high_bytes_are_ignored) {
 }
 
 TEST(byte_at_a_time_matches_bulk) {
-    static const char in[] = "  he\x7flp \r\nfoo\x03" "bar\r\n\r";
+    static const char in[] = "  he\x7flp \x1b[A\r\nfoo\x03" "b\x1bOPar\x1b[1;5C\r\n\r";
     char bulk[sizeof(fake.out)];
     start(&io_plain);
     type(in);
@@ -238,6 +238,66 @@ TEST(byte_at_a_time_matches_bulk) {
     type(in);
     CHECK_EQ(n_executed, bulk_n);
     CHECK(!strcmp(fake.out, bulk));
+}
+
+// --- escape sequences (arrow keys etc.) -------------------------------------------------------
+
+TEST(arrow_keys_are_ignored) {
+    start(&io_plain);
+    type("up\x1b[A\x1b[B\x1b[C\x1b[Dx\r");          // Up, Down, Right, Left
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "upx"));
+    CHECK_OUT("upx\n<upx>\nsos> ");                  // nothing echoed for the keys
+}
+
+TEST(csi_sequences_with_parameters_are_ignored) {
+    start(&io_plain);
+    type("a\x1b[3~b\x1b[1;5Cc\x1b[200~d\r");        // Delete, Ctrl+Right, paste start
+    CHECK(!strcmp(executed[0], "abcd"));
+}
+
+TEST(ss3_sequences_are_ignored) {
+    start(&io_plain);
+    type("a\x1bOAb\x1bOPc\r");                      // application-mode Up, F1
+    CHECK(!strcmp(executed[0], "abc"));
+}
+
+TEST(alt_key_is_ignored) {
+    start(&io_plain);
+    type("a\x1bxb\r");                                // Alt+x
+    CHECK(!strcmp(executed[0], "ab"));
+}
+
+TEST(escape_sequence_split_across_reads) {
+    start(&io_plain);
+    type("a\x1b");
+    type("[");
+    type("1;5");
+    type("Cb\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "ab"));
+}
+
+TEST(control_character_cancels_escape) {
+    start(&io_plain);
+    type("ab\x1b\r");                                 // stray ESC doesn't swallow Enter
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "ab"));
+    type("cd\x1b[\x03");                              // nor Ctrl-C inside a sequence
+    CHECK_EQ(n_executed, 1);
+    static const char tail[] = "cd^C\nsos> ";
+    CHECK(!strcmp(fake.out + strlen(fake.out) - (sizeof(tail) - 1), tail));
+    type("ef\x1b[1\r");                               // nor Enter inside a sequence
+    CHECK_EQ(n_executed, 2);
+    CHECK(!strcmp(executed[1], "ef"));
+}
+
+TEST(state_is_reset_by_init) {
+    start(&io_plain);
+    type("\x1b[");                                     // session ends mid-sequence
+    start(&io_plain);
+    type("Ab\r");                                      // new session: plain text
+    CHECK(!strcmp(executed[0], "Ab"));
 }
 
 TEST(crlf_channel_translates_newlines) {
@@ -282,6 +342,13 @@ TEST_MAIN(
     RUN(line_length_is_limited);
     RUN(control_and_high_bytes_are_ignored);
     RUN(byte_at_a_time_matches_bulk);
+    RUN(arrow_keys_are_ignored);
+    RUN(csi_sequences_with_parameters_are_ignored);
+    RUN(ss3_sequences_are_ignored);
+    RUN(alt_key_is_ignored);
+    RUN(escape_sequence_split_across_reads);
+    RUN(control_character_cancels_escape);
+    RUN(state_is_reset_by_init);
     RUN(crlf_channel_translates_newlines);
     RUN(plain_channel_leaves_newlines);
     RUN(printf_truncates_long_output);

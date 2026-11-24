@@ -27,6 +27,7 @@ typedef struct {
     char line[SHELL_LINE_MAX + 1];
     size_t line_len;
     bool last_was_cr;
+    unsigned char esc;          // escape sequence state (arrow keys etc.), see shell_core.c
 } shell_t;
 
 // Bind a shell to a channel and print the greeting and first prompt.
