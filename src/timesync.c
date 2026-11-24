@@ -12,6 +12,7 @@
 #include "lwip/apps/sntp.h"
 
 #include "log.h"
+#include "nts.h"
 #include "rtc.h"
 #include "settings.h"
 #include "timeconv.h"
@@ -21,30 +22,42 @@
 #error "SOS_BUILD_EPOCH must be defined"
 #endif
 
-// A periodic sync only corrects drift (up to ~10 s a week): a reply that would move a set clock
-// further than this is refused, so a forged reply can't silently move it. `time sync` accepts
-// any plausible time.
-#define PERIODIC_MAX_STEP_S 300
+// NTS time is authenticated, so a periodic sync may step a set clock any distance; steps larger
+// than this (RTC drift is ~10 s a week) are logged as warnings.
+#define LARGE_STEP_S        300
+// Retry delays after a failed automatic NTS sync: doubling from the first to the last.
+#define RETRY_FIRST_MS      30000
+#define RETRY_MAX_MS        (30 * 60 * 1000)
+#define SNTP_TIMEOUT_MS     30000
 
-typedef enum { SRC_NONE, SRC_RTC, SRC_NTP } time_source_t;
-
-// Why SNTP is running; decides which replies are accepted.
-typedef enum {
-    NTP_UNSET,          // the clock has no time: accept any plausible reply
-    NTP_MANUAL,         // `time sync`: likewise
-    NTP_PERIODIC,       // ntp_sync_hours: accept small corrections only
-} ntp_reason_t;
+typedef enum { SRC_NONE, SRC_RTC, SRC_NTS, SRC_SNTP } time_source_t;
+typedef enum { WHY_UNSET, WHY_MANUAL, WHY_PERIODIC } sync_reason_t;
 
 static time_source_t source;
 static rtc_status_t rtc_boot_status;
-static bool ntp_running;
-static ntp_reason_t ntp_reason;
-static uint64_t ntp_started_us;         // boot timer, when SNTP was started
-static uint64_t ntp_synced_us;          // boot timer, last accepted reply (0 = never)
-static uint64_t ntp_periodic_us;        // boot timer, when the last periodic sync ended (0 = none)
-static int64_t ntp_step_ms;             // clock change made by the last accepted reply
-static bool ntp_was_unset;              // ...which set a clock that had no time
-static uint32_t ntp_rejected;           // replies refused
+
+// NTS sync.
+static bool nts_running;
+static sync_reason_t nts_reason;
+static bool nts_cancelled;              // periodic sync turned off while running: ignore result
+static uint64_t nts_started_us;
+static char nts_server_used[CONFIG_NTP_SERVER_MAX + 1];
+static uint64_t retry_at_us;            // boot timer; 0 = no retry delay pending
+static uint32_t retry_delay_ms;
+static uint64_t failed_us;              // boot timer, last failed sync (0 = none since success)
+static char failed_why[128];
+
+// Last accepted sync (NTS or SNTP).
+static uint64_t synced_us;              // boot timer (0 = never)
+static uint64_t periodic_us;            // boot timer, start of the current periodic interval
+static int64_t step_ms;
+static bool step_was_unset;             // ...which set a clock that had no time
+static int64_t synced_delay_us;         // round trip of the NTS sample used
+
+// SNTP, only on `time sync sntp`.
+static bool sntp_running;
+static uint64_t sntp_started_us;
+static char sntp_server[CONFIG_NTP_SERVER_MAX + 1];
 
 // Written from lwIP's context (an interrupt with pico_cyw43_arch_lwip_threadsafe_background),
 // consumed by timesync_poll() with interrupts off.
@@ -52,7 +65,7 @@ static volatile struct {
     bool ready;
     uint32_t sec, us;
     uint64_t at_us;                     // boot timer when the reply was processed
-} ntp_reply;
+} sntp_reply;
 
 static int64_t now_us(void) {
     struct timeval tv;
@@ -69,26 +82,112 @@ static bool plausible(int64_t t) {
     return t >= SOS_BUILD_EPOCH && t <= 4102444799LL;      // up to 2099-12-31, the RTC's limit
 }
 
-// "clock set" or "clock stepped +23 ms", for the last accepted reply.
-static void format_step(char *buf, size_t len) {
-    if (ntp_was_unset)
-        snprintf(buf, len, "clock set");
-    else
-        snprintf(buf, len, "clock stepped %+lld ms", (long long)ntp_step_ms);
-}
-
 static uint64_t periodic_interval_us(void) {
     return (uint64_t)settings()->ntp_sync_hours * 3600 * 1000000;
 }
 
-// --- lwIP SNTP hooks (lwipopts.h); lwIP context ----------------------------------------------
+static const char *configured_server(void) {
+    return settings()->ntp_server[0] ? settings()->ntp_server : NTS_DEFAULT_SERVER;
+}
 
+// "clock set" or "clock stepped +23 ms", for the last accepted sync.
+static void format_step(char *buf, size_t len) {
+    if (step_was_unset)
+        snprintf(buf, len, "clock set");
+    else
+        snprintf(buf, len, "clock stepped %+lld ms", (long long)step_ms);
+}
+
+// Set the system clock and the RTC to t_us (microseconds since 1970).
+static void apply_time(int64_t t_us, time_source_t src) {
+    step_was_unset = source == SRC_NONE;        // a step from 1970 means nothing
+    step_ms = step_was_unset ? 0 : (t_us - now_us()) / 1000;
+    set_clock_us(t_us);
+    source = src;
+    synced_us = periodic_us = time_us_64();     // any accepted sync restarts the interval
+    failed_us = 0;
+
+    // Write the RTC on a second boundary so it keeps the sub-second phase (the PCF8523 restarts
+    // its divider when the seconds register is written). Waiting is < 1 s.
+    int64_t next = (t_us / 1000000 + 1) * 1000000;
+    busy_wait_us((uint64_t)(next - t_us));
+    bool rtc_ok = rtc_write(next / 1000000);
+
+    char buf[24], step[40];
+    timeconv_format(next / 1000000, buf, sizeof(buf));
+    format_step(step, sizeof(step));
+    log_msg(rtc_ok ? SOS_LOG_NOTICE : SOS_LOG_WARNING, "%s: %s UTC, %s, rtc %s",
+            src == SRC_NTS ? "nts" : "sntp", buf, step, rtc_ok ? "updated" : "not updated");
+}
+
+// --- NTS -----------------------------------------------------------------------------------------
+
+static bool start_nts(sync_reason_t reason) {
+    snprintf(nts_server_used, sizeof(nts_server_used), "%s", configured_server());
+    if (!nts_sync_start(nts_server_used))
+        return false;                           // busy (e.g. an `nts ke` in progress)
+    nts_running = true;
+    nts_cancelled = false;
+    nts_reason = reason;
+    nts_started_us = time_us_64();
+    log_msg(reason == WHY_PERIODIC ? SOS_LOG_INFO : SOS_LOG_NOTICE, "nts: getting the time from %s%s",
+            nts_server_used, reason == WHY_PERIODIC ? " (periodic sync)" : "");
+    return true;
+}
+
+static void nts_done(void) {
+    int64_t offset_us = 0, delay_us = 0;
+    const char *err = NULL;
+    nts_sync_state_t st = nts_sync_result(&offset_us, &delay_us, &err);
+    if (st == NTS_SYNC_RUNNING || st == NTS_SYNC_IDLE)
+        return;
+    nts_running = false;
+    if (nts_cancelled)
+        return;
+
+    if (st == NTS_SYNC_OK) {
+        int64_t t_us = now_us() + offset_us;
+        if (!plausible(t_us / 1000000)) {
+            st = NTS_SYNC_FAILED;
+            err = "server time earlier than this firmware's build";
+        } else {
+            if (source != SRC_NONE && (offset_us > LARGE_STEP_S * 1000000LL ||
+                                       offset_us < -LARGE_STEP_S * 1000000LL))
+                log_msg(SOS_LOG_WARNING, "nts: large correction (%+lld s); the RTC was off",
+                        (long long)(offset_us / 1000000));
+            synced_delay_us = delay_us;
+            retry_at_us = 0;
+            retry_delay_ms = 0;
+            apply_time(t_us, SRC_NTS);
+            return;
+        }
+    }
+
+    // Failed. Retry automatically while the clock has no time, or for a periodic sync; a manual
+    // `time sync` on a set clock just reports.
+    failed_us = time_us_64();
+    snprintf(failed_why, sizeof(failed_why), "%s", err ? err : "?");
+    if (source == SRC_NONE || nts_reason == WHY_PERIODIC) {
+        retry_delay_ms = retry_delay_ms ? retry_delay_ms * 2 : RETRY_FIRST_MS;
+        if (retry_delay_ms > RETRY_MAX_MS)
+            retry_delay_ms = RETRY_MAX_MS;
+        retry_at_us = time_us_64() + (uint64_t)retry_delay_ms * 1000;
+        log_msg(SOS_LOG_WARNING, "nts: sync with %s failed: %s; retrying in %lu s",
+                nts_server_used, failed_why, (unsigned long)(retry_delay_ms / 1000));
+    } else {
+        log_msg(SOS_LOG_WARNING, "nts: sync with %s failed: %s", nts_server_used, failed_why);
+    }
+}
+
+// --- SNTP (only on request) ----------------------------------------------------------------------
+
+// lwIP SNTP hooks (lwipopts.h); lwIP context.
 void sos_sntp_set_time(unsigned int sec, unsigned int us) {
-    ntp_reply.sec = sec;
-    ntp_reply.us = us;
-    ntp_reply.at_us = time_us_64();
+    sntp_reply.sec = sec;
+    sntp_reply.us = us;
+    sntp_reply.at_us = time_us_64();
     __dmb();
-    ntp_reply.ready = true;
+    sntp_reply.ready = true;
 }
 
 // The local clock, used for the request's transmit timestamp (which the reply must echo) and
@@ -100,52 +199,64 @@ void sos_sntp_get_time(unsigned int *sec, unsigned int *us) {
     *us = (unsigned int)tv.tv_usec;
 }
 
-// --- SNTP control ------------------------------------------------------------------------------
-
-// The server for the current (or last) sync. lwIP keeps the pointer, so it's copied here rather
-// than pointing into the settings, which may change mid-sync.
-static char ntp_server[CONFIG_NTP_SERVER_MAX + 1];
-
-static const char *configured_server(void) {
-    return settings()->ntp_server[0] ? settings()->ntp_server : SOS_NTP_SERVER;
-}
-
-static void ntp_start(ntp_reason_t reason) {
+static void sntp_begin(void) {
+    // lwIP keeps the pointer: copied here so it stays valid for the whole sync.
+    snprintf(sntp_server, sizeof(sntp_server), "%s", SOS_NTP_SERVER);
     cyw43_arch_lwip_begin();
     if (!sntp_enabled()) {
-        snprintf(ntp_server, sizeof(ntp_server), "%s", configured_server());
         sntp_setoperatingmode(SNTP_OPMODE_POLL);
-        sntp_setservername(0, ntp_server);
+        sntp_setservername(0, sntp_server);
         sntp_init();
     }
     cyw43_arch_lwip_end();
-    ntp_running = true;
-    ntp_reason = reason;
-    ntp_started_us = time_us_64();
-    ntp_reply.ready = false;            // a reply left over from an earlier run doesn't count
-    log_msg(reason == NTP_PERIODIC ? SOS_LOG_INFO : SOS_LOG_NOTICE,
-            "ntp: requesting time from %s%s", ntp_server,
-            reason == NTP_PERIODIC ? " (periodic sync)" : "");
+    sntp_running = true;
+    sntp_started_us = time_us_64();
+    sntp_reply.ready = false;               // a reply left over from an earlier run doesn't count
+    log_msg(SOS_LOG_NOTICE, "sntp: requesting time from %s (unauthenticated)", sntp_server);
 }
 
-static void ntp_stop(void) {
+static void sntp_end(void) {
     cyw43_arch_lwip_begin();
     sntp_stop();
     cyw43_arch_lwip_end();
-    if (ntp_reason == NTP_PERIODIC)
-        ntp_periodic_us = time_us_64();
-    ntp_running = false;
+    sntp_running = false;
 }
 
-// --- public ------------------------------------------------------------------------------------
+static void sntp_done(void) {
+    if (time_us_64() - sntp_started_us > (uint64_t)SNTP_TIMEOUT_MS * 1000) {
+        sntp_end();
+        log_msg(SOS_LOG_WARNING, "sntp: no reply from %s within %d s", sntp_server,
+                SNTP_TIMEOUT_MS / 1000);
+        return;
+    }
+    if (!sntp_reply.ready)
+        return;
+    uint32_t irq = save_and_disable_interrupts();
+    int64_t reply_us = (int64_t)sntp_reply.sec * 1000000 + sntp_reply.us;
+    uint64_t at_us = sntp_reply.at_us;
+    sntp_reply.ready = false;
+    restore_interrupts(irq);
+
+    int64_t t_us = reply_us + (int64_t)(time_us_64() - at_us);
+    if (!plausible(t_us / 1000000)) {
+        char buf[24];
+        timeconv_format(t_us / 1000000, buf, sizeof(buf));
+        log_msg(SOS_LOG_WARNING, "sntp: rejected implausible time %s UTC", buf);
+        return;                                 // lwIP asks again after SNTP_UPDATE_DELAY
+    }
+    sntp_end();
+    apply_time(t_us, SRC_SNTP);
+}
+
+// --- public --------------------------------------------------------------------------------------
 
 void timesync_boot(void) {
     if (!rtc_init()) {
         rtc_boot_status = RTC_ABSENT;
         log_msg(SOS_LOG_WARNING, rtc_bus_pulled_up()
-                ? "rtc: no answer on I2C (GP4/GP5, 0x68); the time will come from NTP"
+                ? "rtc: no answer on I2C (GP4/GP5, 0x68); the time will come from NTS"
                 : "rtc: not found (no I2C pull-ups on GP4/GP5: Adalogger not attached?); "
-                  "the time will come from NTP");
+                  "the time will come from NTS");
         return;
     }
     int64_t t;
@@ -153,7 +264,7 @@ void timesync_boot(void) {
     if (rtc_boot_status == RTC_OK && !plausible(t))
         rtc_boot_status = RTC_INVALID;
     if (rtc_boot_status != RTC_OK) {
-        log_msg(SOS_LOG_WARNING, "rtc: %s; the time will come from NTP",
+        log_msg(SOS_LOG_WARNING, "rtc: %s; the time will come from NTS",
                 rtc_status_str(rtc_boot_status));
         return;
     }
@@ -171,91 +282,51 @@ bool timesync_clock_set(void) {
 }
 
 void timesync_network_up(void) {
-    if (ntp_running)
+    if (nts_running || sntp_running)
+        return;
+    if (retry_at_us && time_us_64() < retry_at_us)
         return;
     if (source == SRC_NONE) {
-        ntp_start(NTP_UNSET);
+        start_nts(WHY_UNSET);
         return;
     }
     // Periodic sync: the first one soon after boot (or after it's turned on), then every
-    // interval after the previous one ended.
+    // interval after the last accepted sync.
     uint64_t interval = periodic_interval_us();
-    if (interval && (!ntp_periodic_us || time_us_64() - ntp_periodic_us >= interval))
-        ntp_start(NTP_PERIODIC);
+    if (interval && (!periodic_us || time_us_64() - periodic_us >= interval))
+        start_nts(WHY_PERIODIC);
 }
 
-bool timesync_request_ntp(void) {
-    if (ntp_running) {
-        if (ntp_reason != NTP_PERIODIC)
+bool timesync_request_nts(void) {
+    if (sntp_running)
+        return false;
+    if (nts_running) {
+        if (nts_reason != WHY_PERIODIC)
             return false;
-        ntp_reason = NTP_MANUAL;        // take over a periodic sync in progress
+        nts_reason = WHY_MANUAL;                // take over a periodic sync in progress
+        nts_cancelled = false;
         return true;
     }
-    ntp_start(NTP_MANUAL);
+    retry_at_us = 0;                            // a manual request skips any retry delay
+    return start_nts(WHY_MANUAL);
+}
+
+bool timesync_request_sntp(void) {
+    if (nts_running || sntp_running)
+        return false;
+    sntp_begin();
     return true;
 }
 
-static void reject(const char *why, int64_t t) {
-    ntp_rejected++;
-    char buf[24];
-    timeconv_format(t, buf, sizeof(buf));
-    log_msg(SOS_LOG_WARNING, "ntp: rejected %s (%s UTC)%s", why, buf,
-            ntp_reason == NTP_PERIODIC ? "; 'time sync' accepts it" : "");
-    // Clock unset or `time sync`: keep SNTP running, lwIP asks again after SNTP_UPDATE_DELAY.
-    // Periodic: give up until the next interval.
-    if (ntp_reason == NTP_PERIODIC)
-        ntp_stop();
-}
-
 void timesync_poll(void) {
-    // Periodic sync turned off while one is running.
-    if (ntp_running && ntp_reason == NTP_PERIODIC && !settings()->ntp_sync_hours) {
-        ntp_stop();
-        ntp_periodic_us = 0;
+    if (nts_running) {
+        // Periodic sync turned off while it runs: let it finish, but don't use the result.
+        if (nts_reason == WHY_PERIODIC && !settings()->ntp_sync_hours)
+            nts_cancelled = true;
+        nts_done();
     }
-
-    if (!ntp_reply.ready)
-        return;
-    uint32_t irq = save_and_disable_interrupts();
-    int64_t reply_us = (int64_t)ntp_reply.sec * 1000000 + ntp_reply.us;
-    uint64_t at_us = ntp_reply.at_us;
-    ntp_reply.ready = false;
-    restore_interrupts(irq);
-    if (!ntp_running)
-        return;
-
-    int64_t t_us = reply_us + (int64_t)(time_us_64() - at_us);
-    int64_t step_us = t_us - now_us();
-    if (!plausible(t_us / 1000000)) {
-        reject("implausible time", t_us / 1000000);
-        return;
-    }
-    if (ntp_reason == NTP_PERIODIC &&
-        (step_us > PERIODIC_MAX_STEP_S * 1000000LL || step_us < -PERIODIC_MAX_STEP_S * 1000000LL)) {
-        reject("a step of more than 5 minutes", t_us / 1000000);
-        return;
-    }
-    ntp_stop();
-
-    // A step from an unset clock (counting from 1970) means nothing; report it as "set".
-    ntp_was_unset = source == SRC_NONE;
-    ntp_step_ms = ntp_was_unset ? 0 : step_us / 1000;
-    set_clock_us(t_us);
-    source = SRC_NTP;
-    ntp_synced_us = time_us_64();
-    ntp_periodic_us = ntp_synced_us;    // any accepted sync restarts the periodic interval
-
-    // Write the RTC on a second boundary so it keeps the sub-second phase (the PCF8523 restarts
-    // its divider when the seconds register is written). Waiting is < 1 s.
-    int64_t next = (t_us / 1000000 + 1) * 1000000;
-    busy_wait_us((uint64_t)(next - t_us));
-    bool rtc_ok = rtc_write(next / 1000000);
-
-    char buf[24], step[40];
-    timeconv_format(next / 1000000, buf, sizeof(buf));
-    format_step(step, sizeof(step));
-    log_msg(rtc_ok ? SOS_LOG_NOTICE : SOS_LOG_WARNING, "ntp: %s UTC, %s, rtc %s", buf, step,
-            rtc_ok ? "updated" : "not updated");
+    if (sntp_running)
+        sntp_done();
 }
 
 static void print_duration(shell_t *sh, uint64_t us) {
@@ -272,7 +343,8 @@ static void print_duration(shell_t *sh, uint64_t us) {
 
 void timesync_status(shell_t *sh) {
     char buf[24];
-    static const char *const names[] = {"not set", "from rtc", "from ntp"};
+    static const char *const names[] = {"not set", "from rtc", "from nts, authenticated",
+                                         "from sntp, unauthenticated"};
     if (source == SRC_NONE) {
         shell_printf(sh, "time:   not set\n");
     } else {
@@ -290,33 +362,47 @@ void timesync_status(shell_t *sh) {
     }
 
     uint64_t now = time_us_64();
-    shell_printf(sh, "ntp:    ");
-    if (ntp_running) {
-        shell_printf(sh, "waiting for %s (", ntp_server);
-        print_duration(sh, now - ntp_started_us);
+    shell_printf(sh, "sync:   ");
+    if (nts_running) {
+        shell_printf(sh, "running with %s (", nts_server_used);
+        print_duration(sh, now - nts_started_us);
         shell_printf(sh, ")");
-    } else if (ntp_synced_us) {
-        shell_printf(sh, "synced ");
-        print_duration(sh, now - ntp_synced_us);
+    } else if (sntp_running) {
+        shell_printf(sh, "sntp running with %s (", sntp_server);
+        print_duration(sh, now - sntp_started_us);
+        shell_printf(sh, ")");
+    } else if (synced_us) {
+        shell_printf(sh, "%s ", source == SRC_SNTP ? "sntp" : "nts");
+        print_duration(sh, now - synced_us);
         char step[40];
         format_step(step, sizeof(step));
         shell_printf(sh, " ago, %s", step);
+        if (source == SRC_NTS)
+            shell_printf(sh, ", delay %lld ms", (long long)(synced_delay_us / 1000));
     } else {
         shell_printf(sh, "not synced since boot");
     }
-    if (ntp_rejected)
-        shell_printf(sh, ", %lu rejected", (unsigned long)ntp_rejected);
     shell_printf(sh, "\n");
-    shell_printf(sh, "server: %s%s\n", configured_server(),
-                 settings()->ntp_server[0] ? "" : " (build default)");
+    if (failed_us) {
+        shell_printf(sh, "failed: ");
+        print_duration(sh, now - failed_us);
+        shell_printf(sh, " ago: %s", failed_why);
+        if (retry_at_us && retry_at_us > now) {
+            shell_printf(sh, "; retry in ");
+            print_duration(sh, retry_at_us - now);
+        }
+        shell_printf(sh, "\n");
+    }
+    shell_printf(sh, "server: %s (NTS)%s\n", configured_server(),
+                 settings()->ntp_server[0] ? "" : ", build default");
 
     uint64_t interval = periodic_interval_us();
     if (!interval) {
         shell_printf(sh, "auto:   off\n");
     } else {
         shell_printf(sh, "auto:   every %u h", (unsigned)settings()->ntp_sync_hours);
-        if (!ntp_running && ntp_periodic_us) {
-            uint64_t elapsed = now - ntp_periodic_us;
+        if (!nts_running && periodic_us) {
+            uint64_t elapsed = now - periodic_us;
             shell_printf(sh, ", next in ");
             print_duration(sh, elapsed < interval ? interval - elapsed : 0);
         }
