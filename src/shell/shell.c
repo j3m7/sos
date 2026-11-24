@@ -67,6 +67,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
+    shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");

@@ -48,6 +48,7 @@ struct shell {
     void *answer_arg;
     const char *ask_prompt;
     bool secret;                // don't echo the answer (passwords)
+    bool ask_eof;               // Ctrl-D on an empty line answers SHELL_EOF (see shell_ask_eof)
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
@@ -82,6 +83,13 @@ void shell_execute(shell_t *sh, char *cmd);
 // kept, not copied (it's redrawn around log lines), so it must stay valid until answered: use a
 // string literal or a static buffer.
 void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
+
+// Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
+// prompt: Ctrl-D on an empty line answers SHELL_EOF ("end of input") instead of logging out.
+// Compare the answer's pointer with SHELL_EOF; it reads as "".
+void shell_ask_eof(shell_t *sh, const char *prompt, shell_answer_fn answer, void *arg);
+extern char shell_eof[];
+#define SHELL_EOF shell_eof
 
 // For output that isn't the shell's own (log messages): clear the line being typed, and
 // afterwards redraw the prompt and the typed text (except a secret answer).

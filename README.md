@@ -386,7 +386,15 @@ console, SSH or the watchdog on core 0. Scripts live on the SD card:
 ```sh
 lua -e 'print(1 + 1)'            # a one-liner
 lua /scripts/report.lua          # a file (relative paths start at the working directory)
+lua                              # an interactive prompt
 ```
+
+At the prompt (`>`), each line runs as you enter it, in one Lua state for the whole session, so
+variables and loaded modules stay. An expression's value is printed (`> 2^10` prints `1024.0`),
+and a statement that isn't finished continues on the next line (`>>`). Ctrl-C interrupts the
+running line, or drops an unfinished statement; Ctrl-D on an empty line, or `exit`, leaves. Lines
+typed or piped in while one runs wait their turn, so `printf 'lua\nprint(1)\nexit\n' | ssh sos`
+works too.
 
 The script's output goes to the shell that started it; Ctrl-C stops it, as does ending the SSH
 session. One script runs at a time. Available: the base, string, table, math, utf8 and
@@ -439,7 +447,7 @@ print(greet.hello("pico"))
   stack and stops at 20 levels with "C stack overflow". `mem` shows how much of core 1's stack
   the last script used.
 - **Speed** (debug build): `fib(25)` takes 1.4 s; a million-iteration floating-point loop 2.6 s.
-- **Prototype limits:** no interactive prompt; numbers are formatted with newlib's `snprintf`
+- **Prototype limits:** numbers are formatted with newlib's `snprintf`
   on core 1 (its float conversion has state that isn't safe to share between cores, and core 0
   doesn't use it today).
 

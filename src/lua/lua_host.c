@@ -18,6 +18,7 @@
 #include "pico/stdlib.h"
 
 #include "ff.h"
+#include "lua.h"
 
 #include "core/log.h"
 #include "files/files.h"
@@ -186,11 +187,15 @@ static void serve(void) {
 
 // --- the running script ----------------------------------------------------------------------
 
+static bool repl;                       // the owner is at the Lua prompt (`lua` alone)
+static void repl_answer(shell_t *sh, char *answer, void *arg);
+
 static void finish(void) {
     free(owner_code);
     owner_code = NULL;
     lua_job.code = NULL;
     owner = NULL;
+    repl = false;
     __dmb();
     lua_job.state = LJ_IDLE;
 }
@@ -198,6 +203,15 @@ static void finish(void) {
 void lua_host_poll(void) {
     if (lua_req.pending && !lua_req.done)
         serve();
+    // At the prompt, the owner's shell is always either answering our question or running one of
+    // our jobs. If it's doing neither, its session ended (shell_end() or shell_init() dropped the
+    // question): close the prompt.
+    if (repl && owner && lua_job.state != LJ_IDLE && !owner->job && owner->answer != repl_answer) {
+        owner = NULL;
+        lua_job.repl_quit = true;
+        lua_job.cancel = true;
+        __sev();
+    }
     if (!owner && lua_job.state != LJ_IDLE) {
         lua_out.tail = lua_out.head;            // nobody to show it to
         __sev();
@@ -206,16 +220,8 @@ void lua_host_poll(void) {
     }
 }
 
-// Shell job: show the script's output; when it's done, say how it ended.
-static bool lua_step(shell_t *sh, void *arg, bool cancel) {
-    (void)arg;
-    if (cancel) {                               // Ctrl-C, or the session ended
-        lua_job.cancel = true;
-        __sev();
-        owner = NULL;                           // lua_host_poll() finishes up
-        return false;
-    }
-    lua_host_poll();                            // answer a request without waiting a pass
+// Copy the script's output to the shell, as much as its channel takes now.
+static void drain(shell_t *sh) {
     for (;;) {
         __dmb();
         uint32_t avail = lua_out.head - lua_out.tail;
@@ -233,6 +239,19 @@ static bool lua_step(shell_t *sh, void *arg, bool cancel) {
         lua_out.tail += n;
         __sev();                                // core 1 may be waiting for room
     }
+}
+
+// Shell job: show the script's output; when it's done, say how it ended.
+static bool lua_step(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    if (cancel) {                               // Ctrl-C, or the session ended
+        lua_job.cancel = true;
+        __sev();
+        owner = NULL;                           // lua_host_poll() finishes up
+        return false;
+    }
+    lua_host_poll();                            // answer a request without waiting a pass
+    drain(sh);
     if (lua_job.state != LJ_DONE || lua_out.head != lua_out.tail)
         return true;
     if (!lua_job.ok)
@@ -241,11 +260,122 @@ static bool lua_step(shell_t *sh, void *arg, bool cancel) {
     return false;
 }
 
-void lua_command(shell_t *sh, char *args) {
-    if (!args) {
-        shell_printf(sh, "usage: lua <file> | lua -e <code>\n");
+
+// --- the interactive prompt (`lua` alone) ------------------------------------------------------
+//
+// The prompt is a question (shell_ask_eof) whose answers are lines of Lua. Each line runs as a
+// short shell job (repl_step) that hands it to core 1 and shows its output; then the prompt is
+// asked again, "> " or ">> " if the statement continues. Ctrl-C while a line runs interrupts it
+// (and drops an unfinished statement); Ctrl-C at the prompt drops the unfinished statement.
+// Ctrl-D on an empty line, or "exit", leaves.
+
+_Static_assert(LUA_LINE_MAX >= SHELL_LINE_MAX, "a shell line must fit in lua_job.repl_line");
+
+static char repl_pending[LUA_LINE_MAX + 1];    // the line to hand over
+static bool repl_sent;                          // ...handed over to core 1
+static bool repl_reset_next;                    // drop the unfinished statement with the next line
+static bool repl_more;                          // the statement continues: ">> "
+
+static void repl_ask(shell_t *sh) {
+    shell_ask_eof(sh, repl_more ? ">> " : "> ", repl_answer, NULL);
+}
+
+// Core 1 has ended the session (it couldn't start, or after exit): report and finish.
+static bool repl_ended(shell_t *sh) {
+    drain(sh);
+    if (lua_out.head != lua_out.tail)
+        return true;
+    if (!lua_job.ok)
+        shell_printf(sh, "lua: %s\n", lua_job.error);
+    finish();
+    return false;
+}
+
+// Shell job: run one line on core 1 and show its output.
+static bool repl_step(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    if (cancel) {           // Ctrl-C (or the session ended: then lua_host_poll() closes the prompt)
+        lua_job.cancel = true;
+        __sev();
+        repl_reset_next = true;
+        repl_more = false;
+        repl_ask(sh);
+        return false;
+    }
+    lua_host_poll();
+    if (lua_job.state == LJ_DONE)
+        return repl_ended(sh);
+    if (!repl_sent) {
+        if (lua_job.repl_cmd)
+            return true;                        // still stopping a line interrupted with Ctrl-C
+        lua_out.tail = lua_out.head;            // what that line printed after Ctrl-C
+        lua_job.cancel = false;
+        memcpy(lua_job.repl_line, repl_pending, sizeof(lua_job.repl_line));
+        lua_job.repl_reset = repl_reset_next;
+        repl_reset_next = false;
+        __dmb();
+        lua_job.repl_cmd = true;
+        __sev();
+        repl_sent = true;
+        return true;
+    }
+    drain(sh);
+    __dmb();
+    if (lua_job.repl_cmd || lua_out.head != lua_out.tail)
+        return true;
+    repl_more = lua_job.repl_incomplete;
+    repl_ask(sh);
+    return false;
+}
+
+// Shell job: wait for core 1 to close the session.
+static bool repl_quit_step(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    if (cancel) {
+        owner = NULL;                           // lua_host_poll() finishes up
+        return false;
+    }
+    lua_host_poll();
+    if (lua_job.state != LJ_DONE) {
+        drain(sh);
+        return true;
+    }
+    return repl_ended(sh);
+}
+
+static bool is_exit(const char *s) {
+    while (*s == ' ')
+        s++;
+    if (strncmp(s, "exit", 4))
+        return false;
+    for (s += 4; *s == ' '; s++)
+        ;
+    return !*s;
+}
+
+static void repl_answer(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (answer == SHELL_EOF || (answer && !repl_more && is_exit(answer))) {
+        lua_job.repl_quit = true;
+        lua_job.cancel = true;                  // in case a line is still stopping
+        __sev();
+        shell_run_job(sh, repl_quit_step, NULL);
         return;
     }
+    if (!answer) {                              // Ctrl-C at the prompt
+        repl_reset_next = true;
+        repl_more = false;
+        repl_ask(sh);
+        return;
+    }
+    snprintf(repl_pending, sizeof(repl_pending), "%s", answer);
+    repl_sent = false;
+    shell_run_job(sh, repl_step, NULL);
+}
+
+// --- the lua command ---------------------------------------------------------------------------
+
+void lua_command(shell_t *sh, char *args) {
     if (lua_job.state != LJ_IDLE) {
         shell_printf(sh, "lua: a script is already running (one at a time)\n");
         return;
@@ -255,7 +385,9 @@ void lua_command(shell_t *sh, char *args) {
         return;
     }
     memset(&lua_job, 0, sizeof(lua_job));
-    if (!strncmp(args, "-e ", 3)) {
+    if (!args) {
+        lua_job.repl = true;
+    } else if (!strncmp(args, "-e ", 3)) {
         owner_code = strdup(args + 3);
         if (!owner_code) {
             shell_printf(sh, "lua: out of memory\n");
@@ -275,5 +407,12 @@ void lua_command(shell_t *sh, char *args) {
     __dmb();
     lua_job.state = LJ_START;
     __sev();
+    if (lua_job.repl) {
+        repl = true;
+        repl_more = repl_reset_next = false;
+        shell_printf(sh, "%s on core 1. Ctrl-C interrupts; Ctrl-D or 'exit' leaves.\n", LUA_RELEASE);
+        repl_ask(sh);
+        return;
+    }
     shell_run_job(sh, lua_step, NULL);
 }
