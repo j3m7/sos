@@ -41,3 +41,8 @@ add_test(NAME log COMMAND test_log)
 add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/timeconv.c)
 target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)
 add_test(NAME timeconv COMMAND test_timeconv)
+
+# src/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
+add_executable(test_nts_ke test_nts_ke.c ${SOS_ROOT}/src/nts_ke.c)
+target_include_directories(test_nts_ke PRIVATE ${SOS_ROOT}/src)
+add_test(NAME nts_ke COMMAND test_nts_ke)
