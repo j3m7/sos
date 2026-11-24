@@ -130,6 +130,9 @@ The console runs over USB CDC (`/dev/ttyACM0` on Linux) and is mirrored on UART0
 picocom -b 115200 /dev/ttyACM0
 ```
 
+`help` lists the commands. [docs/commands.md](docs/commands.md) is the full reference, and marks
+which commands work only on the console.
+
 ## Configuration
 
 The Wi-Fi network, hostname, SSH user and trusted public keys are set on the serial console

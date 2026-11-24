@@ -33,6 +33,6 @@ channel but the console.
 
 ## Adding a command
 
-Add it to `shell_execute()` and to `help` in `shell.c`. If it takes more than a few
-milliseconds, make it a job so the watchdog and the other sessions keep running. If it changes
-the configuration or other protected state, call `require_admin()`.
+Add it to `shell_execute()` and to `help` in `shell.c`, and to `docs/commands.md`. If it takes
+more than a few milliseconds, make it a job so the watchdog and the other sessions keep running.
+If it changes the configuration or other protected state, call `require_admin()`.
