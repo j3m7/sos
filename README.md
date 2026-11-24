@@ -16,7 +16,7 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 - **File transfer**: upload files to and download files from the device's storage (microSD
   card on the Adalogger).
 - **Timekeeping**: keep accurate wall-clock time across power loss using the Adalogger's
-  battery-backed RTC, synchronised over the network (NTP).
+  battery-backed RTC, synchronised over the network with authenticated NTP (NTS).
 
 ### Design principles
 
@@ -47,9 +47,15 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 - `arm-none-eabi-gcc` toolchain, CMake (3.13+), Ninja
 - `picotool` for flashing, `openocd` (Raspberry Pi fork) for SWD debugging
 - [wolfSSL](https://github.com/wolfSSL/wolfssl) 5.9.4 and [wolfSSH](https://github.com/wolfSSL/wolfssh) 1.6.0
-  for cryptography and the SSH protocol (git submodules in `lib/`)
+  for cryptography, TLS and the SSH protocol
+- [no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
+  for the SD card driver and FatFs
+- [Lua](https://www.lua.org) 5.4 for scripts
+- lwIP and the CYW43 Wi-Fi driver, from the Pico SDK
 - SSH server glue in `src/ssh/`, derived from [pico-sshd](https://github.com/tjko/pico-sshd)
   (see [`THIRD_PARTY.md`](THIRD_PARTY.md))
+
+wolfSSL, wolfSSH, the SD card library and Lua are git submodules in `lib/`.
 
 Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README.md).
 
@@ -60,7 +66,7 @@ Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README
    [Getting started with Raspberry Pi Pico](docs/sdk/getting-started-with-pico.pdf) for
    per-OS instructions.
 
-2. **Source,** including the wolfSSL and wolfSSH submodules:
+2. **Source,** including the submodules (wolfSSL, wolfSSH, the SD card library and Lua):
 
    ```sh
    git clone --recurse-submodules <repository-url> sos
@@ -175,7 +181,7 @@ port 22. The log shows the IP address and the host key fingerprint:
 
 ```
 wifi: connected, ip 192.168.1.89
-sshd: listening on port 22, host key ssh-ed25519 SHA256:...
+sshd: listening on port 22 (up to 3 sessions), host key ssh-ed25519 SHA256:...
 ```
 
 Check that fingerprint (also shown by the `ssh` shell command over USB) against the one your
@@ -244,6 +250,11 @@ A successful sync sets the system clock and the RTC. NTS time is authenticated, 
 move the clock any distance; a correction of more than 5 minutes is logged as a warning. Any
 time earlier than the firmware's configure time is rejected.
 
+While the clock isn't set, certificate dates can't be checked, so that first key exchange
+accepts certificates whatever their dates (signatures and the host name are still checked) and
+logs `certificate dates not checked (clock not set)`. Once the clock is set, dates are checked
+as usual.
+
 There is no automatic fallback to plain, unauthenticated NTP: if the NTS server can't be
 reached (for example because the network blocks port 4460) and the RTC has no time, the clock
 stays unset until NTS works. `time sync sntp` does one plain SNTP sync on request, from the
@@ -281,7 +292,8 @@ working directory:
   at about 130 KB/s (encryption-bound); copying on the card at about 580 KB/s.
 - **Open files are protected:** a file that a running command has open can't be deleted or
   renamed, and the card can't be formatted or unmounted meanwhile.
-- File names with spaces aren't supported by the commands yet. Files are dated from the RTC.
+- File names with spaces aren't supported by the commands yet. Files are dated with the system
+  clock (UTC), which comes from the RTC or NTS.
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
@@ -378,23 +390,24 @@ cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir b
 They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized comparison
 against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
 with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
-fail or lose power mid-write), the log (`src/log.c`) and the date and RTC register conversions
-(`src/timeconv.c`, compared against the host C library) and path handling for the file
-commands (`src/path.c`). `tests/test.h` is a minimal harness; add a suite as
-`tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
+fail or lose power mid-write), the log (`src/log.c`), the date and RTC register conversions
+(`src/timeconv.c`, compared against the host C library), path handling for the file commands
+(`src/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/nts_ke.c`,
+`src/nts_ntp.c`) and the root certificate bundle parser (`src/certbundle.c`). `tests/test.h` is
+a minimal harness; add a suite as `tests/test_<name>.c` and register it in
+`tests/CMakeLists.txt`.
 
-**Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed
-with SOS and on the network:
+**Hardware tests** run against a board that is flashed with SOS and on the network:
 
 ```sh
 tools/test/ssh-hw-test.sh -u <user> <device-ip>     # -q for a quick run, -h for options
 tools/test/sftp-hw-test.sh -u <user> <device-ip>    # needs a formatted SD card
 ```
 
-It covers login and logout, authentication (only public key; unknown key, wrong user and
-password refused), concurrent sessions kept separate, the "too many connections" message, slot
-reuse, a large input burst, clients that disappear, back-to-back logins, and heap use before and
-after. It exits with the number of failed checks. It uses every session slot for a few seconds,
+`tools/test/ssh-hw-test.sh` checks the SSH server. It covers login and logout, authentication
+(only public key; unknown key, wrong user and password refused), concurrent sessions kept
+separate, the "too many connections" message, slot reuse, a large input burst, clients that
+disappear, back-to-back logins, and heap use before and after. It exits with the number of failed checks. It uses every session slot for a few seconds,
 so run it while nobody else is using the board; it warns if the device rebooted mid-run.
 
 `tools/test/sftp-hw-test.sh` checks SFTP on the SD card. It puts and gets a 2 MB random file
