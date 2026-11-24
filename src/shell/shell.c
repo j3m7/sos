@@ -20,6 +20,7 @@
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/sdcard.h"
+#include "lua/lua_core1.h"
 #include "lua/lua_host.h"
 #include "net/wifi.h"
 #include "ssh/sshd.h"
@@ -98,6 +99,9 @@ static void cmd_mem(shell_t *sh) {
                  (unsigned)mi.uordblks, (unsigned)mi.arena, (unsigned)heap_total);
     shell_printf(sh, "stack: %u peak of %u bytes\n",
                  (unsigned)stackmon_peak(), (unsigned)stackmon_size());
+    if (lua_core1_stack_peak())
+        shell_printf(sh, "lua:   %u peak of %u bytes of core 1 stack (last script)\n",
+                     (unsigned)lua_core1_stack_peak(), (unsigned)LUA_CORE1_STACK);
 }
 
 static void cmd_net(shell_t *sh) {

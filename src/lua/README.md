@@ -31,7 +31,8 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
 - **Memory:** the heap is shared with core 0 (malloc is mutex-protected). A custom allocator
   caps a script at 128 KB.
 - **Core 1's stack:** 32 KB, allocated from the heap when the first script runs (the 4 KB
-  SCRATCH_X stack is too small for Lua).
+  SCRATCH_X stack is too small for Lua). Each script paints the unused part first, so
+  `lua_core1_stack_peak()` (shown by `mem`) reports how deep that script went.
 - **Flash writes:** `flash_safe_execute_core_init()` lets core 0 pause core 1 while it writes
   flash.
 
@@ -54,7 +55,14 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   (`sos_lua_write()`), since stdio isn't usable on core 1.
 - **Errors:** scripts get errors back as return values, so Lua's own error printing is
   dropped.
-- **C stack:** it limits nested C calls (`LUAI_MAXCCALLS` 120) to fit core 1's stack.
+- **C stack:** it limits nested C calls (`LUAI_MAXCCALLS` 20) to fit core 1's stack. Only
+  nesting through C counts (pcall, callbacks such as `string.gsub`'s, metamethods, coroutines,
+  parser nesting); Lua-to-Lua calls don't. Measured per level: `string.gsub` callback 1168
+  bytes (the worst), `__tostring` via `string.format` 968, pcall 520, coroutine 456. The worst
+  case ends at about 24 KB of the 32 KB. The earlier limit of 120 overflowed the stack, and
+  the stack guard fault reset the board. An error close to the limit can leave the traceback
+  handler no room (Lua: "error in error handling"); `lua_core1.c` reports that as a C stack
+  overflow too.
 
 The same CMake rule makes Lua use the C library's `snprintf` (`-Dsnprintf=__real_snprintf`).
 The SDK's lightweight `snprintf` prints doubles with only about 10 digits.
