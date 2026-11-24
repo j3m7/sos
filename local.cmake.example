@@ -1,20 +1,7 @@
-# Optional per-machine settings. Copy to local.cmake (git-ignored) and fill in what you need.
+# Optional per-machine build settings. Copy to local.cmake (git-ignored) and fill in what you need.
 #
-# The device is normally configured over the serial console ('setup'). The values below are only
-# first-boot defaults: used when the board has no saved configuration (a new board). 'config reset'
-# goes back to them too, except the trusted key. Any that are set are compiled into the firmware image, so treat build outputs
-# as secret. Leave them out for an image without credentials.
-
-# Wi-Fi network to join (2.4 GHz, WPA2/WPA3 personal).
-set(SOS_WIFI_SSID     "my-network")
-set(SOS_WIFI_PASSWORD "my-password")
-
-# Device hostname advertised over DHCP.
-set(SOS_HOSTNAME      "sos")
-
-# SSH login: user name and one authorized public key (the full line from id_ed25519.pub).
-set(SOS_SSH_USER           "admin")
-set(SOS_SSH_AUTHORIZED_KEY "ssh-ed25519 AAAA... user@host")
+# This file holds no device configuration (Wi-Fi, keys): nothing of that kind is compiled into
+# the firmware. See provision.conf.example for setting up a board from this machine.
 
 # Optional: use existing wolfSSL / wolfSSH checkouts instead of the lib/ submodules
 # (they must be at the versions pinned by the submodules).

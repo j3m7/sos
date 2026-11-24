@@ -10,7 +10,6 @@
 #include "pico/stdlib.h"
 
 #include "core/log.h"
-#include "sos_defaults.h"
 
 // Slot A and B: the two sectors below the host key (the last sector, see hostkey.c).
 #define SLOT_OFFSET(slot) (PICO_FLASH_SIZE_BYTES - (3 - (slot)) * FLASH_SECTOR_SIZE)
@@ -55,43 +54,6 @@ static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t 
 
 static const config_store_t store = { flash_slot_read, flash_slot_write, NULL };
 
-// --- build-time defaults -------------------------------------------------------------------------
-
-// With `with_key`, the build-time trusted key too: only on first boot. A reset doesn't bring it
-// back, so a key that was removed (or all of them, by the reset) stays untrusted until someone
-// at the console adds it again.
-static void seed_defaults(sos_config_t *c, bool with_key) {
-    config_defaults(c);
-#ifdef SOS_WIFI_SSID
-    if (!config_check_ssid(SOS_WIFI_SSID))
-        strcpy(c->wifi_ssid, SOS_WIFI_SSID);
-#endif
-#ifdef SOS_WIFI_PASSWORD
-    if (!config_check_password(SOS_WIFI_PASSWORD))
-        strcpy(c->wifi_password, SOS_WIFI_PASSWORD);
-#endif
-#ifdef SOS_HOSTNAME
-    if (!config_check_hostname(SOS_HOSTNAME))
-        strcpy(c->hostname, SOS_HOSTNAME);
-#endif
-#ifdef SOS_SSH_USER
-    if (!config_check_user(SOS_SSH_USER))
-        strcpy(c->ssh_user, SOS_SSH_USER);
-#endif
-#ifdef SOS_SSH_AUTHORIZED_KEY
-    if (!with_key)
-        return;
-    config_key_t key;
-    const char *err = config_key_parse(SOS_SSH_AUTHORIZED_KEY, &key);
-    if (err)
-        log_msg(SOS_LOG_WARNING, "config: build-time SOS_SSH_AUTHORIZED_KEY ignored: %s", err);
-    else
-        config_key_add(c, &key);
-#else
-    (void)with_key;
-#endif
-}
-
 // --- public API ----------------------------------------------------------------------------------
 
 void settings_init(void) {
@@ -99,7 +61,7 @@ void settings_init(void) {
     persistent = (uintptr_t)&__flash_binary_end <= XIP_BASE + SLOT_OFFSET(0);
     if (!persistent) {
         log_msg(SOS_LOG_ERR, "config: firmware overlaps the config area; settings won't be saved");
-        seed_defaults(&live, true);
+        config_defaults(&live);
         return;
     }
 
@@ -108,11 +70,11 @@ void settings_init(void) {
         log_msg(SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
         return;
     }
-    seed_defaults(&live, true);
-    log_msg(SOS_LOG_NOTICE, "config: none saved yet; using %s",
-            live.wifi_ssid[0] || live.key_count ? "build-time defaults" : "empty defaults");
-    if (live.wifi_ssid[0] || live.key_count)
-        settings_save();
+    // Nothing saved (a new board, after `config reset`, or records this firmware can't read):
+    // no network and no trusted keys until someone sets it up. The firmware carries no
+    // configuration of its own.
+    config_defaults(&live);
+    log_msg(SOS_LOG_NOTICE, "config: none saved; run 'setup' on the console (or provision the board)");
 }
 
 sos_config_t *settings(void) {
@@ -130,12 +92,8 @@ bool settings_save(void) {
 
 bool settings_reset(void) {
     bool ok = persistent && config_erase(&store);
-    seed_defaults(&live, false);
-    // Always save, even an empty configuration: with nothing saved, the next boot would count
-    // as a first boot and trust the build-time key again.
-    if (ok)
-        ok = settings_save();
-    log_msg(SOS_LOG_NOTICE, "config: reset to %s", ok ? "defaults" : "defaults (not saved)");
+    config_defaults(&live);
+    log_msg(SOS_LOG_NOTICE, "config: reset%s", ok ? "" : " (erasing the saved one failed)");
     return ok;
 }
 

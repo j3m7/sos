@@ -86,18 +86,16 @@ its subsystem works. Reference documentation (datasheets, SDK manuals) lives in
    export PICO_SDK_PATH=$PWD/pico-sdk
    ```
 
-4. **Optional build-time defaults:** the device is configured over the serial console (see
-   [Configuration](#configuration)). For development, `local.cmake` (git-ignored) can provide
-   first-boot defaults for the Wi-Fi network, hostname, SSH user and one trusted key, so a
-   freshly flashed board comes up configured:
+4. **Optional, for development: a provisioning file.** The firmware image holds no
+   configuration (no Wi-Fi password, no keys): a board is set up on its serial console (see
+   [Configuration](#configuration)). To set one up without typing, describe it in
+   `provision.conf` (git-ignored) and write that to the board after flashing (see
+   [Provisioning](#provisioning)):
 
    ```sh
-   cp local.cmake.example local.cmake
-   $EDITOR local.cmake   # SOS_SSH_AUTHORIZED_KEY is the full line from ~/.ssh/id_ed25519.pub
+   cp provision.conf.example provision.conf
+   $EDITOR provision.conf   # ssh_key is the full line from ~/.ssh/id_ed25519.pub
    ```
-
-   Defaults that are set are compiled into the firmware image, so treat `build/` outputs as
-   secret. Without `local.cmake` the image contains no Wi-Fi password or keys.
 
 To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over SWD, see
 [`docs/development.md`](docs/development.md).
@@ -117,7 +115,9 @@ cmake --build --preset debug --target flash
 
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
-plugging it in first.
+plugging it in first. Flashing leaves the board's saved configuration and SSH host key alone;
+a new board has neither a network nor a trusted key until it's set up (`setup` on the
+console, or [provisioning](#provisioning)).
 
 Developing inside a VM? See [`docs/development.md`](docs/development.md) for forwarding the
 Pico's USB connection so flashing works unattended.
@@ -156,7 +156,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
-| `config reset` | erase everything: back to the build-time defaults, if any, for Wi-Fi, hostname and user; no trusted keys |
+| `config reset` | erase everything: no Wi-Fi network, no trusted keys, hostname and user back to `sos` and `admin` |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
   so a remote session can't lock itself out; physical access to the console is the trust
@@ -174,12 +174,37 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
   the announcement off until the next reboot, for testing.
 - Storage: one record in two alternating flash sectors below the host key, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
-  reflashing. The Wi-Fi password and keys are stored unencrypted, like the build-time defaults.
+  reflashing. The Wi-Fi password and keys are stored unencrypted.
   The record format only grows at the end: a record saved by older firmware still loads, with
   newer settings at their defaults. Firmware older than a saved record ignores it and starts
-  from the build-time defaults.
-- The build-time trusted key is only used on first boot (nothing saved yet). `config reset`
-  leaves no trusted keys, so SSH logins need a `key add` on the console again.
+  empty.
+- The firmware has no configuration of its own. With nothing saved (a new board, or after
+  `config reset`) there is no network and no trusted key, so no SSH, until `setup` on the
+  console or provisioning.
+
+### Provisioning
+
+For development and automated tests, a board's whole configuration can be written from this
+machine instead of typed:
+
+```sh
+ninja -C build provision          # from provision.conf, or the file named by $SOS_PROVISION_FILE
+tools/provision.sh other.conf     # the same, from another file; -n only builds and checks it
+```
+
+`provision.conf` (git-ignored; see `provision.conf.example`) lists the Wi-Fi network, hostname,
+SSH user, trusted keys and the optional settings. The script builds the saved record on this
+machine, with the same code the device uses, and loads it into the two configuration sectors
+over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
+everything saved on the board; the firmware and the SSH host key stay as they are.
+
+- `ninja flash` doesn't touch the configuration, so provisioning is needed once per board, and
+  again after `config reset`, a full flash erase, or to put a board into a known state for a
+  test.
+- Provision from the source tree the board's firmware was built from: firmware older than the
+  record's format ignores it and starts empty.
+- Like the console, this needs physical access, which already allows reflashing. Nothing on
+  the network can provision a board.
 
 ## Logging
 
@@ -466,9 +491,9 @@ with the commands faked), the configuration store (`src/core/config.c`, with a f
 fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC register conversions
 (`src/time/timeconv.c`, compared against the host C library), path handling for the file commands
 (`src/files/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
-`src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`) and the HTTPS
+`src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`), the HTTPS
 client's URLs, requests and response parser (`src/net/http_msg.c`, including corrupted responses fed
-in random pieces). `tests/test.h` is
+in random pieces) and the provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
 a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 

@@ -40,10 +40,12 @@ Two layers:
   then call `settings_save()`.
   - **Where it lives:** the two slots are the flash sectors just below the SSH host key:
     `… firmware … | slot A | slot B | host key |` (end of flash).
-  - **First boot:** with nothing saved, the configuration is seeded from the build-time
-    defaults in `local.cmake` (the generated `sos_defaults.h`) and saved.
-  - **Reset:** `config reset` goes back to those defaults except the trusted key: it saves a
-    configuration without keys, so a key that was removed doesn't come back.
+  - **Nothing saved** (a new board, after `config reset`, or records this firmware can't
+    read): the configuration is `config_defaults()`, with no network and no trusted keys. The
+    firmware carries no configuration of its own.
+  - **Provisioning:** `tools/provision.sh` (`ninja provision`) builds a record on the host
+    with `config.c` itself (`tools/host/mkconfig.c`) and loads it into slot A with `picotool`,
+    erasing slot B. The device validates it like any saved record when it boots.
   - **Flash writes** go through `flash_safe_execute()`, which pauses core 1 (Lua) while
     flash is busy.
 

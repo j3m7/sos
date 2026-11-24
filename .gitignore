@@ -3,4 +3,5 @@ build-*/
 compile_commands.json
 .cache/
 local.cmake
+provision.conf
 CMakeUserPresets.json

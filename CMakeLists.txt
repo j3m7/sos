@@ -20,11 +20,10 @@ endif()
 pico_sdk_init()
 
 # --- Per-machine settings (optional) --------------------------------------------
-# The device is configured over the serial console ('setup'); local.cmake can provide
-# first-boot defaults (Wi-Fi, hostname, SSH user/key) and dependency paths. Defaults that are
-# set end up in the firmware image.
+# local.cmake: dependency paths and build options for this machine. The firmware image holds no
+# device configuration: a board is set up on its console ('setup') or with the `provision`
+# target below.
 include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL)
-configure_file(config/sos_defaults.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_defaults.h)
 
 # --- wolfSSL / wolfSSH ---------------------------------------------------------
 # Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
@@ -196,6 +195,22 @@ pico_enable_stdio_usb(sos 1)
 pico_enable_stdio_uart(sos 1)
 
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map
+
+# `ninja -C build provision` : write the board's configuration from provision.conf (or
+# $SOS_PROVISION_FILE) with tools/provision.sh. `flash` leaves the saved configuration alone.
+set(SOS_FLASH_BYTES 4194304)
+if (EXISTS "${PICO_SDK_PATH}/src/boards/include/boards/${PICO_BOARD}.h")
+    file(STRINGS "${PICO_SDK_PATH}/src/boards/include/boards/${PICO_BOARD}.h" flash_line
+         REGEX "define PICO_FLASH_SIZE_BYTES \\(([0-9]+) \\* 1024 \\* 1024\\)")
+    if (flash_line MATCHES "\\(([0-9]+) \\* 1024 \\* 1024\\)")
+        math(EXPR SOS_FLASH_BYTES "${CMAKE_MATCH_1} * 1024 * 1024")
+    endif()
+endif()
+add_custom_target(provision
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/provision.sh -f ${SOS_FLASH_BYTES}
+    USES_TERMINAL
+    COMMENT "Writing the board's configuration (tools/provision.sh)"
+)
 
 # `ninja -C build flash` : reboot into BOOTSEL if needed, load, verify, run.
 find_program(PICOTOOL_EXE picotool)
