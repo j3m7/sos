@@ -59,6 +59,10 @@
    - Channel input is drained on every pass, not only on WS_CHAN_RXD. Client EOF ends the
      session cleanly once its input is consumed; stderr-type extended data is discarded
      instead of ending the session.
+   - Output is batched: ssh_session_write() only queues (sending early only when rb_out is
+     full) and ssh_session_send_output() sends it once the shell has run, so a burst of small
+     writes becomes a few large packets. ssh_session_write_space() reports the free room.
+   - Nagle's algorithm is disabled on client connections (like TCP_NODELAY elsewhere).
 */
 
 #include <stdio.h>
@@ -72,6 +76,7 @@
 #include <wolfssl/wolfcrypt/hash.h>
 #include <wolfssl/wolfcrypt/coding.h>
 #include <wolfssh/ssh.h>
+#include <wolfssh/wolfsftp.h>
 
 #include "pico-sshd.h"
 #include "pico-sshd/log.h"
@@ -602,6 +607,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 
 	ss->setup_pending = true;
 	ss->eof_received = false;
+	ss->sftp = false;
 	ss->exit_sent = false;
 	ss->output_stalled = false;
 	ss->client = pcb;
@@ -618,6 +624,10 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	tcp_recv(pcb, ssh_server_recv);
 	tcp_poll(pcb, ssh_server_poll, SSH_CLIENT_POLL_TIME);
 	tcp_err(pcb, ssh_server_err);
+	/* Like TCP_NODELAY in other SSH servers. With Nagle, a packet smaller than the MSS waits
+	   for the previous one to be ACKed, and clients delay ACKs (~40 ms): output written in
+	   small pieces (a shell job printing a file) then crawled at ~1 KB per round trip. */
+	tcp_nagle_disable(pcb);
 
 	return ERR_OK;
 }
@@ -780,10 +790,16 @@ static int channel_req_subsys_cb(WOLFSSH_CHANNEL *channel, void *ctx)
 {
 	ssh_session_t *ss = ctx;
 	ssh_server_t *st = ss ? ss->server : NULL;
+	const char *cmd = wolfSSH_ChannelGetSessionCommand(channel);
 
-	LOG_MSG(LOG_INFO, "SSH subsystem not implemented: %s",
-		wolfSSH_ChannelGetSessionCommand(channel));
-
+	/* "sftp" exactly (length too: no embedded NUL), and on the session's first channel:
+	   wolfSSH_SFTP_accept() works on the head of the channel list. */
+	if (ss && cmd && wolfSSH_ChannelGetSessionCommandSz(channel) == 4 && !strcmp(cmd, "sftp") &&
+	    channel == wolfSSH_ChannelNext(ss->ssh, NULL)) {
+		ss->sftp = true;
+		return WS_SUCCESS;
+	}
+	LOG_MSG(LOG_INFO, "SSH subsystem not available: %s", cmd ? cmd : "(none)");
 	return WS_ERROR;
 }
 
@@ -969,6 +985,59 @@ static void ssh_session_finish(ssh_session_t *ss)
 }
 
 
+/* SFTP session (version exchange already done by wolfSSH_accept()): handle one request per call (reading
+   and sending at most WOLFSSH_MAX_SFTP_RW bytes of file data). wolfSSH reads the channel data
+   itself, so ssh_session_process_input() (the shell's path) must not run for these sessions. */
+static void ssh_session_sftp(ssh_session_t *ss)
+{
+	ssh_server_t *st = ss->server;
+	int res, err;
+
+	/* Like wolfSSH's example server (which waits with select()), call into SFTP only with
+	   input waiting or a reply still to send; otherwise let the worker take in what has
+	   arrived, and come back when there's more. */
+	if (!wolfSSH_SFTP_PendingSend(ss->ssh) && wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) <= 0) {
+		res = SSH_TIMED(st, wolfSSH_worker(ss->ssh, NULL));
+		err = wolfSSH_get_error(ss->ssh);
+		if (res < 0 && res != WS_CHAN_RXD && err != WS_WANT_READ && err != WS_WANT_WRITE &&
+		    err != WS_CHAN_RXD && err != WS_REKEYING && err != WS_WINDOW_FULL) {
+			if (err == WS_EOF || err == WS_CHANNEL_CLOSED || res == WS_EOF ||
+			    res == WS_CHANNEL_CLOSED) {
+				ssh_session_disconnect(ss);	/* client done */
+			} else {
+				LOG_MSG(LOG_INFO, "SSH session %u: sftp: worker %d (error %d)",
+					ss->index + 1, res, err);
+				ssh_close_session(ss);
+			}
+			return;
+		}
+		if (wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) <= 0) {
+			if (ssh_ringbuffer_used(&ss->rb_tcp_in) > 0)
+				ss->work_pending = true;	/* more on the wire to decrypt */
+			return;
+		}
+	}
+
+	res = SSH_TIMED(st, wolfSSH_SFTP_read(ss->ssh));
+	err = wolfSSH_get_error(ss->ssh);
+	if (res < 0 && err != WS_WANT_READ && err != WS_WANT_WRITE && err != WS_CHAN_RXD &&
+	    err != WS_REKEYING && err != WS_WINDOW_FULL) {
+		if (err == WS_EOF || err == WS_CHANNEL_CLOSED) {
+			ssh_session_disconnect(ss);	/* client done: exit status, close */
+		} else {
+			LOG_MSG(LOG_INFO, "SSH session %u: sftp error %d (error %d)",
+				ss->index + 1, res, err);
+			ssh_close_session(ss);
+		}
+		return;
+	}
+	/* A reply that didn't fit is resumed on the next pass, as is input wolfSSH holds. */
+	if (wolfSSH_SFTP_PendingSend(ss->ssh) || wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) > 0 ||
+	    ssh_ringbuffer_used(&ss->rb_tcp_in) > 0)
+		ss->work_pending = true;
+}
+
+
 /* Create the wolfSSH session for a newly accepted connection (deferred from ssh_server_accept,
    which runs in interrupt context). Also frees the session left behind by a reclaimed slot. */
 static bool ssh_session_setup(ssh_session_t *ss)
@@ -1021,6 +1090,8 @@ static bool ssh_session_setup(ssh_session_t *ss)
 		LOG_MSG(LOG_ERR, "ssh_session_setup: failed to create SSH session");
 		return false;
 	}
+	/* SFTP starts at the card's root; otherwise wolfSSH derives "/0:" from FatFs's cwd. */
+	wolfSSH_SFTP_SetDefaultPath(ssh, "/");
 	wolfSSH_SetUserAuthCtx(ssh, ss);
 	wolfSSH_SetUserAuthResultCtx(ssh, ss);
 	wolfSSH_SetIOReadCtx(ssh, ss);
@@ -1109,7 +1180,8 @@ static void ssh_session_service(ssh_session_t *ss)
 	ss->work_pending = false;
 
 	if (ss->cstate == CS_ACCEPT) {
-		if ((res = SSH_TIMED(st, wolfSSH_accept(ss->ssh))) == WS_SUCCESS) {
+		res = SSH_TIMED(st, wolfSSH_accept(ss->ssh));
+		if (res == WS_SUCCESS || res == WS_SFTP_COMPLETE) {	/* shell, or sftp subsystem */
 			LOG_MSG(LOG_DEBUG, "wolfSSH_accept(): ok");
 			ss->cstate = CS_CONNECT;
 			ss->session_id = ++st->logins;
@@ -1117,7 +1189,13 @@ static void ssh_session_service(ssh_session_t *ss)
 			st->last_handshake_us = ss->handshake_us;
 			strncpy(ss->login, wolfSSH_GetUsername(ss->ssh), sizeof(ss->login) - 1);
 			ss->login[sizeof(ss->login) - 1] = 0;
-			ssh_ringbuffer_add(&ss->rb_out, connected_text, strlen(connected_text), true);
+			if (ss->sftp) {
+				/* wolfSSH_accept() returns WS_SFTP_COMPLETE once it has also done the
+				   SFTP version exchange (it calls wolfSSH_SFTP_accept() itself). */
+				LOG_MSG(LOG_INFO, "SSH session %u: sftp", ss->index + 1);
+			} else {	/* SFTP is a binary protocol: no greeting there */
+				ssh_ringbuffer_add(&ss->rb_out, connected_text, strlen(connected_text), true);
+			}
 		} else {
 			err = wolfSSH_get_error(ss->ssh);
 			if (err == WS_WANT_READ || err == WS_WANT_WRITE)
@@ -1135,7 +1213,9 @@ static void ssh_session_service(ssh_session_t *ss)
 			return;
 		}
 	}
-	if (ss->cstate == CS_CONNECT) {
+	if (ss->cstate == CS_CONNECT && ss->sftp) {
+		ssh_session_sftp(ss);
+	} else if (ss->cstate == CS_CONNECT) {
 		ssh_session_process_input(ss);
 		if (ss->cstate == CS_CONNECT)
 			ssh_session_flush(ss);
@@ -1307,6 +1387,13 @@ int ssh_server_add_priv_key(ssh_server_t *st, int type, const uint8_t *key, uint
 
 /* --- session API (thread context) ------------------------------------------------------ */
 
+int ssh_session_write_space(ssh_session_t *ss)
+{
+	if (!ss || ss->cstate != CS_CONNECT || ss->output_stalled || ss->peer_closed)
+		return 0;
+	return (int)ssh_ringbuffer_free(&ss->rb_out);
+}
+
 int ssh_session_write(ssh_session_t *ss, const char *buf, int length)
 {
 	ssh_server_t *st = ss ? ss->server : NULL;
@@ -1346,10 +1433,16 @@ int ssh_session_write(ssh_session_t *ss, const char *buf, int length)
 			len = length - written;
 		ssh_ringbuffer_add(&ss->rb_out, buf + written, len, false);
 		written += len;
-		ssh_session_flush(ss);
 	}
-
+	/* Sent by ssh_session_send_output() after the shell has run (or above when rb_out fills):
+	   one write per piece of output would cost one encrypted packet each. */
 	return written;
+}
+
+void ssh_session_send_output(ssh_session_t *ss)
+{
+	if (ss && ss->cstate == CS_CONNECT && ssh_ringbuffer_used(&ss->rb_out) > 0)
+		ssh_session_flush(ss);
 }
 
 

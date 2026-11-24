@@ -15,13 +15,13 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics |
+| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; refused connections get an SSH disconnect message ("too many connections") instead of a reset; session buffers allocated per connection instead of at startup; timing statistics; output batched into few packets (`ssh_session_send_output()`, `ssh_session_write_space()`); Nagle disabled; SFTP subsystem served (`ssh_session_sftp()`), default path `/` |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics |
+| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics; `ssh_session_send_output()`, `ssh_session_write_space()`; `sftp` session flag |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
 | `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |
-| `cmake/wolfssh_pico.cmake` | `cmake/wolfssh_pico.cmake` | none |
+| `cmake/wolfssh_pico.cmake` | `cmake/wolfssh_pico.cmake` | `src/wolfsftp.c` left out of the glob (SOS compiles it through `src/sftp_wolf.c`) |
 | `config/user_settings.h` | `wolfssl/user_settings.h` (a wolfSSL example, Copyright wolfSSL Inc., GPL-2.0-or-later) | See the header comment in the file |
 
 ### Raspberry Pi Pico SDK / pico-examples
@@ -82,6 +82,34 @@ and stall the session (SOS's copy has the same code path; it uses 4096, which av
    free space) instead of `ssh_ringbuffer_destroy()`, so the buffers are never released.
 10. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
    built with `WOLFSSH_TERM` (plus `NO_TERMIOS` on the Pico); the bundled settings omit it.
+11. `src/server.c`: every write to the session (the stdio driver's `write`) flushes at once,
+   so output written in small pieces (`printf` per line, a newline translated separately)
+   becomes one encrypted SSH packet and one TCP segment per piece. On SOS, printing a text
+   file ran at about 33 KB/s; queuing the output and sending once per pass gave about
+   130 KB/s (aes128-gcm, debug build). Nagle is also left enabled, which delays sub-MSS
+   segments behind delayed ACKs.
+
+### wolfSSH: issues found adding SFTP (FatFs)
+
+Found with wolfSSH 1.6.0 (`WOLFSSH_SFTP` + `WOLFSSH_FATFS`); SOS works around them in
+`src/sftp_wolf.c` / `src/sftp_fs.c` without patching wolfSSH. Not reported yet.
+
+1. `wolfssh/port.h`, FatFs port: `WPREAD`/`WPWRITE` drop the offset argument
+   (`ff_pread(fd,b,s)`), so reads and writes happen wherever the file position is: resumed or
+   out-of-order transfers read or write the wrong place.
+2. Same port: `WOLFSSH_O_CREAT` includes `FA_CREATE_NEW`, so `f_open()` fails with `FR_EXIST`
+   when an upload overwrites an existing file.
+3. Same port: `WREMOVE`/`WRENAME` return FatFs codes (> 0 on failure), but `wolfsftp.c` tests
+   them for `< 0`, so a failed remove or rename is reported to the client as success.
+4. Same port: `fd_pool[WOLFSSH_FATFS_MAX_FILES]` (32 `FIL`s, ~19 KB) is static, and `ff_open()`
+   traces with `PRINTF`.
+5. `wolfSSH_SFTP_RecvRead()`: a READ for more than `WOLFSSH_MAX_SFTP_RW` is a fatal error
+   (`WS_BUFFER_E` ends the session) instead of a shorter reply, so lowering the limit breaks
+   OpenSSH's `sftp`, which asks for 32 KB.
+6. `wolfSSH_accept()` returns `WS_SFTP_COMPLETE` after it has run the SFTP version exchange
+   itself; calling `wolfSSH_SFTP_accept()` again then returns `WS_FATAL_ERROR` with a stale
+   `ssh->error` (here `WS_CHAN_RXD`), which a caller retrying on notices loops on forever. Not a
+   bug as such, but the API docs don't say which of the two to use.
 
 ## Linked into the firmware (not copied)
 
@@ -89,6 +117,7 @@ and stall the session (SOS's copy has the same code path; it uses 4096, which av
 |---|---|---|
 | wolfSSL / wolfCrypt 5.9.4 | `lib/wolfssl` (submodule) | GPL-3.0 (commercial license also available) |
 | wolfSSH 1.6.0 | `lib/wolfssh` (submodule) | GPL-3.0 (commercial license also available) |
+| no-OS-FatFS-SD-SDIO-SPI-RPi-Pico 3.6.2 (SD card driver, includes FatFs R0.15) | `lib/sdcard` (submodule) | Apache-2.0; FatFs: BSD-1-Clause style |
 | Raspberry Pi Pico SDK 2.3.1 | `PICO_SDK_PATH` | BSD-3-Clause |
 | lwIP (via Pico SDK) | `pico-sdk/lib/lwip` | BSD-3-Clause |
 | TinyUSB (via Pico SDK) | `pico-sdk/lib/tinyusb` | MIT |

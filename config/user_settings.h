@@ -64,6 +64,15 @@ extern "C"
 /* Accept pty-req so interactive `ssh host` works; there is no POSIX tty to apply modes to. */
 #define WOLFSSH_TERM
 #define NO_TERMIOS
+/* SFTP on the SD card. wolfsftp.c is compiled through src/sftp_wolf.c, which replaces the FatFs
+ * port's file functions (open/pread/pwrite/close) with SOS ones (src/sftp_fs.c): the port's
+ * drop the file offset and keep a static pool of WOLFSSH_FATFS_MAX_FILES open files. */
+#define WOLFSSH_SFTP
+#define WOLFSSH_FATFS
+#define WOLFSSH_FATFS_MAX_FILES 1
+/* WOLFSSH_MAX_SFTP_RW stays at wolfSSH's default, 32 KB: wolfSSH refuses (fatally) a READ for
+ * more than it, and OpenSSH's sftp asks for 32 KB. Each request is handled in one main-loop pass,
+ * so a 32 KB reply holds the loop while it's encrypted (see README: Files). */
 
 #if __GNUC__ >= 15
 #define WOLFSSL_HAVE_MLKEM
