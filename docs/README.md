@@ -1,0 +1,47 @@
+# Reference Documentation
+
+Datasheets and manuals for the SOS hardware (Raspberry Pi Pico 2 W + Adafruit PiCowbell Adalogger).
+Downloaded 2026-11-23.
+
+## rp2350/ — the microcontroller
+| File | Description | Source |
+|---|---|---|
+| rp2350-datasheet.pdf | Full RP2350 datasheet: memory map, bootrom, Cortex-M33 and Hazard3 RISC-V cores, security (TrustZone, OTP, secure boot), all peripherals and registers | https://datasheets.raspberrypi.com/rp2350/rp2350-datasheet.pdf |
+| rp2350-product-brief.pdf | Short overview of the RP2350 | https://datasheets.raspberrypi.com/rp2350/rp2350-product-brief.pdf |
+| hardware-design-with-rp2350.pdf | Guide to designing boards with the RP2350 | https://datasheets.raspberrypi.com/rp2350/hardware-design-with-rp2350.pdf |
+
+## pico2w/ — the board
+| File | Description | Source |
+|---|---|---|
+| pico-2-w-datasheet.pdf | Pico 2 W board datasheet: power, GPIO, wireless (the CYW43439 chip, connected over SPI) | https://datasheets.raspberrypi.com/picow/pico-2-w-datasheet.pdf |
+| pico-2-w-schematic.pdf | Board schematic | https://datasheets.raspberrypi.com/picow/pico-2-w-schematic.pdf |
+| pico-2-w-pinout.pdf | Pinout diagram | https://datasheets.raspberrypi.com/picow/pico-2-w-pinout.pdf |
+| connecting-to-the-internet-with-pico-w.pdf | Wi-Fi and Bluetooth with the CYW43 driver, lwIP and BTstack | https://datasheets.raspberrypi.com/picow/connecting-to-the-internet-with-pico-w.pdf |
+
+## sdk/ — software
+| File | Description | Source |
+|---|---|---|
+| getting-started-with-pico.pdf | Toolchain setup, building, flashing, debugging (SWD/OpenOCD) | https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf |
+| raspberry-pi-pico-c-sdk.pdf | Pico C/C++ SDK reference | https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf |
+| raspberry-pi-pico-python-sdk.pdf | MicroPython on Pico | https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-python-sdk.pdf |
+
+## cpu/ — Arm Cortex-M33 core
+| File | Description | Source |
+|---|---|---|
+| cortex-m33-trm.pdf | Cortex-M33 Technical Reference Manual (100230, issue 08) | https://documentation-service.arm.com/static/66be1ce8882fec713ef49954 |
+| cortex-m33-devices-generic-user-guide.pdf | Programmer's model, instruction set, NVIC, MPU, SysTick, SAU (100235) | https://documentation-service.arm.com/static/641b2ec1de84571cc27f3ca3 |
+
+The Hazard3 RISC-V core is documented in the RP2350 datasheet (Processor subsystem chapter).
+
+## peripherals/
+| File | Description | Source |
+|---|---|---|
+| adafruit-picowbell-adalogger-for-pico.pdf | Adafruit learn guide for the PiCowbell Adalogger: pinout and usage of the PCF8523 RTC and microSD slot | https://learn.adafruit.com/adafruit-picowbell-adalogger-for-pico |
+| PCF8523-datasheet.pdf | NXP PCF8523 real-time clock (I2C) | Adafruit-hosted copy |
+| adalogger-pcb/Adafruit PiCowbell Adalogger.sch | Eagle schematic | https://github.com/adafruit/Adafruit-PiCowbell-Adalogger-PCB |
+| CYW43439-datasheet.pdf | Infineon/Cypress CYW43439 Wi-Fi/Bluetooth chip (002-30348 Rev *B; newer revisions may exist) | https://www.farnell.com/datasheets/3758304.pdf |
+
+## Not included (registration or click-through required)
+- Armv8-M Architecture Reference Manual (Arm DDI0553): https://developer.arm.com/documentation/ddi0553/latest
+- SD Physical Layer Simplified Specification (SPI mode): https://www.sdcard.org/downloads/pls/
+- Pico SDK API docs (HTML): https://www.raspberrypi.com/documentation/pico-sdk/
