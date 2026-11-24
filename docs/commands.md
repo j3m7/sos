@@ -111,4 +111,5 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `lua -e <code>` | any | Run the given code |
 
 One script runs at a time, and its output goes to the shell that started it. Scripts use
-the `sos` library to reach the system; see [Lua scripts](../README.md#lua-scripts-prototype).
+the `sos` library to reach the system, and `require` loads modules from the card (`/lib` and the
+working directory); see [Lua scripts](../README.md#lua-scripts-prototype).

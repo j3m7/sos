@@ -24,10 +24,16 @@ void sos_lua_write(const char *s, size_t len);     // src/lua/lua_core1.c: the s
 // __index function 200, parser 128. A script starts at ~1.8 KB, and the traceback built at the
 // deepest point takes ~1.6 KB more. 20 levels of the worst path, plus the 10% Lua allows while
 // handling the overflow (20 / 10 * 11 = 22: keep it a multiple of 10, or integer division
-// leaves no room and the traceback fails with "error in error handling"), stay under ~29 KB. The earlier 120 (Lua's default is 200) faulted the
-// stack guard and reset the board instead of raising "C stack overflow". An error within a few
-// levels of the limit can leave the traceback handler no room: Lua then reports "error in error
-// handling", which src/lua/lua_core1.c reports as a C stack overflow.
+// leaves no room and the traceback fails with "error in error handling"), stay under ~29 KB.
+// The earlier 120 (Lua's default is 200) faulted the stack guard and reset the board instead of
+// raising "C stack overflow". An error within a few levels of the limit can leave the traceback
+// handler no room: Lua then reports "error in error handling", which src/lua/lua_core1.c reports
+// as a C stack overflow.
 #define LUAI_MAXCCALLS                  20
+
+// require: modules come from the SD card (see src/lua/lua_core1.c, which replaces the file
+// searchers). "./" is the shell's working directory, as for other script paths. No C modules.
+#define LUA_PATH_DEFAULT                "/lib/?.lua;/lib/?/init.lua;./?.lua;./?/init.lua"
+#define LUA_CPATH_DEFAULT               ""
 
 #endif
