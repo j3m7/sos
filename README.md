@@ -483,8 +483,9 @@ with the commands faked), the configuration store (`src/core/config.c`, with a f
 fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC register conversions
 (`src/time/timeconv.c`, compared against the host C library), path handling for the file commands
 (`src/files/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
-`src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`) and the
-provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
+`src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`), the HTTPS
+client's URLs, requests and response parser (`src/net/http_msg.c`, including corrupted responses fed
+in random pieces) and the provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
 a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 

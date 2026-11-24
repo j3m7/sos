@@ -1,4 +1,4 @@
-# net: Wi-Fi
+# net: Wi-Fi and HTTPS
 
 `wifi.c` keeps the station connection up, without ever blocking the main loop. lwIP and the
 CYW43 driver come from the Pico SDK (`pico_cyw43_arch_lwip_threadsafe_background`: network
@@ -53,3 +53,41 @@ announcement every minute, broadcasts kept arriving and the device stayed reacha
 issue #9455) look like the same problem.
 
 `wifi keepalive off` (console, until reboot) turns the announcement off to test this.
+
+## HTTPS client
+
+`http.c` makes one HTTPS request per connection (HTTP/1.1, `Connection: close`) over `tls/`.
+It's the base for talking to web services (issue #17): notifications, JSON APIs, and later
+Lua's networking.
+
+```
+http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING → HTTP_WAITING
+             → HTTP_BODY (http_read()) → HTTP_DONE           any step can end in HTTP_FAILED
+```
+
+- **Non-blocking:** `http_poll()` advances the request from the main loop. Once the headers
+  are in, `http_read()` hands over the body as it arrives.
+- **Pull, not push:** the body is read from TLS only when the caller asks for it. A slow
+  consumer (an SSH client reading the output, say) leaves data in lwIP, whose receive window
+  then closes, so the server slows down rather than memory filling up. Each request holds
+  about 6 KB besides its TLS connection.
+- **Requests:** the options are copied (body up to 16 KB). The client always sends `Host`,
+  `User-Agent: sos`, `Accept-Encoding: identity` (it can't decompress) and `Connection: close`.
+  Extra headers can't override those or the framing headers, and can't contain control
+  characters, so a header value can't inject a line.
+- **Responses** are parsed by `http_msg.c` (pure C, host tested). It's incremental: any split
+  of the input gives the same result. It hands the body back as slices of the input without
+  copying, whether sized by `Content-Length`, chunked, or running to the close. Header lines,
+  chunk-size lines and trailers are size-limited, `1xx` responses are skipped, and framing
+  that could be read two ways (both `Content-Length` and chunked, conflicting lengths, other
+  transfer codings) is refused.
+- **End of the body:** a body without a length is trusted only if the server ends TLS with
+  `close_notify`. Otherwise the request fails, since an attacker could cut it short by closing
+  the TCP connection.
+- **Timeout:** `timeout_ms` (default 30 s) runs until the headers arrive, then between pieces
+  of the body.
+- **Not done yet:** redirects (the caller sees the `3xx` and `Location`), keep-alive,
+  compression, proxies.
+
+`http get|head|post` (console only, `docs/commands.md`) runs a request as a shell job, for
+testing.

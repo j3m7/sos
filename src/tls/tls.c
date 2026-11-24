@@ -64,14 +64,23 @@ static tls_conn_t *verifying;
 
 // --- heap accounting (all wolfSSL/wolfSSH allocations) ---------------------------------------
 
-static int64_t heap_now, heap_peak;
+static int64_t heap_now;
+
+// Raise each open connection's peak to what's in use now, counted from its tls_open(). Each
+// connection keeps its own, so two at once (NTS and HTTPS) don't reset each other's.
+static void note_peak(void) {
+    for (unsigned i = 0; i < TLS_MAX_CONNS; i++) {
+        tls_conn_t *c = conns[i];
+        if (c && heap_now - c->heap_base > (int64_t)c->stats.heap_peak)
+            c->stats.heap_peak = (size_t)(heap_now - c->heap_base);
+    }
+}
 
 static void *count_malloc(size_t n) {
     void *p = malloc(n);
     if (p) {
         heap_now += (int64_t)malloc_usable_size(p);
-        if (heap_now > heap_peak)
-            heap_peak = heap_now;
+        note_peak();
     }
     return p;
 }
@@ -87,8 +96,7 @@ static void *count_realloc(void *p, size_t n) {
     void *q = realloc(p, n);
     if (q || n == 0) {
         heap_now += (int64_t)(q ? malloc_usable_size(q) : 0) - (int64_t)old;
-        if (heap_now > heap_peak)
-            heap_peak = heap_now;
+        note_peak();
     }
     return q;
 }
@@ -108,12 +116,6 @@ static void fail(tls_conn_t *c, const char *fmt, ...) {
     vsnprintf(c->error, sizeof(c->error), fmt, ap);
     va_end(ap);
     c->state = TLS_FAILED;
-}
-
-static void update_heap_stats(tls_conn_t *c) {
-    int64_t used = heap_peak - c->heap_base;
-    if (used > 0 && (size_t)used > c->stats.heap_peak)
-        c->stats.heap_peak = (size_t)used;
 }
 
 static void wolf_error(tls_conn_t *c, const char *what, int err) {
@@ -368,7 +370,6 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     c->port = port;
     c->deadline_us = time_us_64() + (uint64_t)timeout_ms * 1000;
     c->heap_base = heap_now;
-    heap_peak = heap_now;
     c->state = TLS_RESOLVING;
     if (strlen(host) > TLS_HOST_MAX || (alpn && strlen(alpn) > TLS_ALPN_MAX)) {
         fail(c, "host name or ALPN too long");
@@ -424,7 +425,6 @@ tls_state_t tls_poll(tls_conn_t *c) {
         static const char *const what[] = {"DNS lookup", "TCP connect", "TLS handshake"};
         fail(c, "%s timed out", what[c->state]);
     }
-    update_heap_stats(c);
     return c->state;
 }
 
@@ -432,7 +432,6 @@ int tls_read(tls_conn_t *c, void *buf, size_t len) {
     if (c->state != TLS_READY)
         return -1;
     int r = wolfSSL_read(c->ssl, buf, (int)len);
-    update_heap_stats(c);
     if (r > 0)
         return r;
     int err = wolfSSL_get_error(c->ssl, r);
@@ -449,7 +448,6 @@ int tls_write(tls_conn_t *c, const void *buf, size_t len) {
     if (c->state != TLS_READY)
         return -1;
     int r = wolfSSL_write(c->ssl, buf, (int)len);
-    update_heap_stats(c);
     if (r > 0)
         return r;
     int err = wolfSSL_get_error(c->ssl, r);
