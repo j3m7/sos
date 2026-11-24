@@ -25,7 +25,14 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
 ## `lua_core1.c`: the interpreter
 
 - **Each script gets a fresh Lua state** with the safe standard libraries (base, string, table,
-  math, utf8, coroutine) plus `sos`. There's no `io`, `os`, `package` or `debug`.
+  math, utf8, coroutine, package) plus `sos`. There's no `io`, `os` or `debug`.
+- **`require`:** the standard package library, with `package.searchers` replaced by
+  `{preload, sd}`. The sd searcher tries each `package.path` template (default
+  `/lib/?.lua;/lib/?/init.lua;./?.lua;./?/init.lua`, set in `lua_port.h`) by reading the file
+  through core 0, like `sos.read`. Only "no such file" (`LUA_REQ_NOT_FOUND`) moves on to the next
+  template; any other failure, such as no SD card, is raised. `package.searchpath` is replaced to
+  search the card too. Chunks load as text only, and there are no C modules (`package.loadlib`
+  is removed, `cpath` is empty). Each nested `require` is one C nesting level.
 - **Stopping:** a hook runs every 1000 instructions and checks the cancel flag. A request
   always gets an answer, so waiting for one never hangs.
   - **`pcall` can't keep a script going.** Once the flag is set, `interrupt()` makes the hook
