@@ -409,6 +409,47 @@ TEST(ctrl_c_cancels_question) {
     CHECK(!strcmp(executed[0], "d"));
 }
 
+// Ctrl-D: with shell_ask_eof it answers SHELL_EOF and nothing is logged out; with a plain
+// question it still logs out (and the question stays pending).
+static int n_eof;
+static void on_eof_answer(shell_t *s, char *answer, void *arg) {
+    (void)arg;
+    if (answer == SHELL_EOF) {
+        n_eof++;
+        return;
+    }
+    on_answer(s, answer, arg);
+    shell_ask_eof(s, "> ", on_eof_answer, NULL);      // keep asking, like an interactive prompt
+}
+
+TEST(ctrl_d_ends_input_for_eof_question) {
+    start_ask(&io_plain);
+    n_eof = 0;
+    shell_ask_eof(&sh, "> ", on_eof_answer, NULL);
+    type("1+1\r");
+    CHECK_EQ(n_answers, 1);
+    CHECK(!strcmp(answers[0], "1+1"));
+    CHECK_OUT("1+1\n> ");
+    clear_out();
+    type("x\x04");                              // not on an empty line: ignored
+    CHECK_EQ(n_eof, 0);
+    type("\b\x04");                            // empty line now: end of input
+    CHECK_EQ(n_eof, 1);
+    CHECK_EQ(fake.logouts, 0);
+    type("ls\r");                               // the question is gone: a command again
+    CHECK(!strcmp(executed[0], "ls"));
+}
+
+TEST(ctrl_d_on_plain_question_still_logs_out) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Q: ", false, on_answer, NULL);
+    type("\x04");
+    CHECK_EQ(fake.logouts, 1);
+    CHECK_EQ(n_answers, 0);
+    type("a\r");                                // still waiting for the answer
+    CHECK_EQ(n_answers, 1);
+}
+
 TEST(questions_chain) {
     start_ask(&io_plain);
     shell_ask(&sh, "User: ", false, on_first, NULL);
@@ -668,6 +709,8 @@ TEST_MAIN(
     RUN(secret_answer_is_not_echoed);
     RUN(empty_answer_is_passed);
     RUN(ctrl_c_cancels_question);
+    RUN(ctrl_d_ends_input_for_eof_question);
+    RUN(ctrl_d_on_plain_question_still_logs_out);
     RUN(questions_chain);
     RUN(init_clears_pending_question);
     RUN(hide_and_redraw_input);

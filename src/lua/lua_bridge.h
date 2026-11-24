@@ -19,6 +19,7 @@
 #define LUA_PATH_MAX   256
 #define LUA_REQ_DATA   4096         // payload per request (file data, directory entries)
 #define LUA_OUT_SIZE   2048         // output ring buffer
+#define LUA_LINE_MAX   256          // one line at the interactive prompt (SHELL_LINE_MAX)
 
 // --- one script at a time -------------------------------------------------------------------
 
@@ -33,6 +34,14 @@ typedef struct {
     char path[LUA_PATH_MAX];        // script file (absolute)
     char cwd[LUA_PATH_MAX];         // working directory for relative paths in the script
     uint32_t mem_limit;             // bytes the script may allocate
+    bool repl;                      // interactive prompt (`lua` alone) instead of code or path
+    // Interactive prompt, one line at a time: core 0 fills repl_line and repl_reset, then sets
+    // repl_cmd; core 1 runs the line, sets repl_incomplete and clears repl_cmd.
+    volatile bool repl_cmd;
+    volatile bool repl_quit;        // core 0: leave the prompt (core 1 then ends the job)
+    bool repl_reset;                // drop the unfinished statement before this line (Ctrl-C)
+    bool repl_incomplete;           // the statement continues on the next line
+    char repl_line[LUA_LINE_MAX + 1];
     // Set by core 1 before DONE:
     bool ok;
     char error[256];
