@@ -224,8 +224,10 @@ NTP requests that carry a single-use cookie and an AES-SIV tag, and accepts only
 check out under the server's key. Each sync sends 4 queries and uses the one with the shortest
 round trip, which keeps Wi-Fi power-saving delays out of the result. The server is set on the
 console with `time server <name>`; the default is the build-time `SOS_NTS_SERVER`
-(`time.cloudflare.com`). The server's certificate chain must end at a built-in root
-(`src/tls_roots.c`), which today covers Cloudflare's NTS service.
+(`time.cloudflare.com`). The server's certificate chain must end at a trusted root: built in
+(`src/tls_roots.c`: SSL.com Root Certification Authority ECC for Cloudflare, ISRG Root X1 for
+Let's Encrypt, which most other NTS servers use) or approved from the SD card (see
+[Trusted root certificates](#trusted-root-certificates)).
 
 SOS syncs in three cases:
 
@@ -303,7 +305,30 @@ sftp> get notes.txt
 - Each session uses up to ~100 KB of heap while transferring. A transfer's open files count as in
   use, like a running `cp` (see above); a client that disconnects mid-transfer releases them.
 - Every change to the card, from SFTP or the file commands, passes one check,
-  `files_write_allowed()` in `src/files.c` (everything is allowed for now).
+  `files_write_allowed()` in `src/files.c`. Everything is allowed except changing `/certs`, which
+  only the console may do (below).
+
+### Trusted root certificates
+
+TLS (used by NTS) trusts the built-in roots and, optionally, extra ones from the card in
+`/certs/roots.pem`: a PEM bundle (text between the certificates, as in system CA files, is fine)
+or DER certificates, up to 64 KB and 32 certificates. The file is used only while it's exactly the
+file approved on the console:
+
+1. Upload it anywhere with SFTP, e.g. `put roots.pem incoming/roots.pem`.
+2. On the console: `mkdir /certs` (once), then `mv /incoming/roots.pem /certs/roots.pem`.
+3. On the console: `tls roots approve`. It lists each certificate (common name, key type, whether
+   it's a CA, expiry, SHA-256 fingerprint) and checks TLS can use it; type `yes` to trust them.
+   The file's SHA-256 is saved with the configuration.
+
+- **Only the console can change `/certs`.** SSH shells and SFTP can read it but not write,
+  delete or rename anything in it, under any spelling FatFs accepts (`/CERTS.`, `\certs`,
+  `/x/../certs`).
+- **A changed file isn't used** until it's approved again: TLS then logs a warning once and uses
+  the built-in roots alone. The same happens if the file or the card is missing, so NTS keeps
+  working without the card.
+- `tls roots` shows the built-in roots and the file's state; `tls roots forget` (console) stops
+  trusting it. A private key, or any PEM block other than a certificate, makes the file invalid.
 
 ## Testing
 
