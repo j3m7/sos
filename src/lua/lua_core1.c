@@ -523,6 +523,113 @@ size_t lua_core1_stack_peak(void) {
     return (size_t)((uintptr_t)top - (uintptr_t)p);
 }
 
+// --- the interactive prompt (`lua` alone) ------------------------------------------------------
+//
+// One Lua state for the whole session. Each line comes from core 0 (lua_job.repl_line). As in the
+// standard `lua` program: a first line is tried as an expression ("return <line>") so its value
+// is printed; a statement that isn't finished yet (a syntax error at "<eof>") waits for more
+// lines; errors are printed and the session goes on.
+
+// Print what a line returned (the values from `base` + 1 up), like print().
+static void repl_print(lua_State *L, int base) {
+    int n = lua_gettop(L) - base;
+    if (n <= 0)
+        return;
+    lua_pushcfunction(L, l_print);
+    lua_insert(L, base + 1);
+    if (lua_pcall(L, n, 0, 0) != LUA_OK) {          // a __tostring that fails, say
+        const char *msg = lua_tostring(L, -1);
+        sos_lua_write("error printing the result: ", 27);
+        sos_lua_write(msg ? msg : "?", msg ? strlen(msg) : 1);
+        sos_lua_write("\n", 1);
+    }
+}
+
+static void repl_error(lua_State *L) {
+    // While stopping (Ctrl-C), the "interrupted" message and its traceback aren't news.
+    if (!lua_job.cancel) {
+        size_t len;
+        const char *msg = lua_tolstring(L, -1, &len);
+        if (!msg)
+            msg = "(error object is not a string)", len = strlen(msg);
+        sos_lua_write(msg, len);
+        sos_lua_write("\n", 1);
+    }
+    lua_pop(L, 1);
+}
+
+// Run one line. Stack: 1 = traceback handler, 2 = the unfinished statement so far ("" if none).
+// Returns true if the statement continues on the next line.
+static bool repl_line(lua_State *L, const char *line) {
+    size_t plen;
+    lua_tolstring(L, 2, &plen);
+    int status;
+    if (plen == 0) {                                // try it as an expression first
+        const char *ret = lua_pushfstring(L, "return %s;", line);
+        status = luaL_loadbufferx(L, ret, strlen(ret), "=stdin", "t");
+        if (status == LUA_OK) {
+            lua_remove(L, -2);                      // the "return ..." text
+            goto run;
+        }
+        lua_pop(L, 2);
+        lua_pushstring(L, line);
+    } else {
+        lua_pushfstring(L, "%s\n%s", lua_tostring(L, 2), line);
+    }
+    size_t len;
+    const char *src = lua_tolstring(L, 3, &len);
+    status = luaL_loadbufferx(L, src, len, "=stdin", "t");
+    if (status == LUA_ERRSYNTAX) {
+        size_t mlen;
+        const char *msg = lua_tolstring(L, -1, &mlen);
+        if (mlen >= 5 && !strcmp(msg + mlen - 5, "<eof>")) {     // not finished yet
+            lua_pop(L, 1);
+            lua_replace(L, 2);                      // keep the text for the next line
+            return true;
+        }
+    }
+    lua_remove(L, 3);                               // the text
+    lua_pushliteral(L, "");
+    lua_replace(L, 2);                              // nothing unfinished any more
+    if (status != LUA_OK) {
+        repl_error(L);
+        return false;
+    }
+run:
+    {
+        int base = lua_gettop(L) - 1;
+        if (lua_pcall(L, 0, LUA_MULTRET, 1) != LUA_OK)
+            repl_error(L);
+        else
+            repl_print(L, base);
+        lua_settop(L, 2);
+    }
+    return false;
+}
+
+static void run_repl(lua_State *L) {
+    lua_pushliteral(L, "");                         // 2: unfinished statement
+    for (;;) {
+        while (!lua_job.repl_cmd && !lua_job.repl_quit)
+            __wfe();
+        __dmb();
+        if (lua_job.repl_quit)
+            break;
+        // A Ctrl-C during the last line left the hook running every instruction (interrupt()).
+        lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
+        if (lua_job.repl_reset) {
+            lua_pushliteral(L, "");
+            lua_replace(L, 2);
+        }
+        lua_job.repl_incomplete = repl_line(L, lua_job.repl_line);
+        lua_settop(L, 2);
+        __dmb();
+        lua_job.repl_cmd = false;
+        __sev();
+    }
+    lua_job.ok = true;
+}
+
 static void run_job(void) {
     uint64_t t0 = time_us_64();
     stack_paint();
@@ -539,6 +646,12 @@ static void run_job(void) {
         open_libs(L);
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         lua_pushcfunction(L, traceback);            // stack index 1: message handler
+        if (lua_job.repl) {
+            run_repl(L);
+            lua_close(L);
+            main_L = NULL;
+            goto done;
+        }
         int r = load_script(L);
         if (r == LUA_OK)
             r = lua_pcall(L, 0, 0, 1);
@@ -558,6 +671,7 @@ static void run_job(void) {
         lua_close(L);
         main_L = NULL;
     }
+done:
     lua_job.mem_peak = mem_peak;
     lua_job.run_ms = (uint32_t)((time_us_64() - t0) / 1000);
 }

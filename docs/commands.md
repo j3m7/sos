@@ -122,6 +122,7 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 |---|---|---|
 | `lua <file>` | any | Run a Lua script from the card on core 1 (job: Ctrl-C stops) |
 | `lua -e <code>` | any | Run the given code |
+| `lua` | any | Interactive prompt: each line runs as entered, in one Lua state; values of expressions are printed. Ctrl-C interrupts a line, Ctrl-D on an empty line or `exit` leaves |
 
 One script runs at a time, and its output goes to the shell that started it. Scripts use
 the `sos` library to reach the system, and `require` loads modules from the card (`/lib` and the

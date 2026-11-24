@@ -60,8 +60,16 @@ static void prompt(shell_t *sh) {
 void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn answer, void *arg) {
     sh->ask_prompt = ask_prompt;
     sh->secret = secret;
+    sh->ask_eof = false;
     sh->answer = answer;
     sh->answer_arg = arg;
+}
+
+char shell_eof[] = "";
+
+void shell_ask_eof(shell_t *sh, const char *ask_prompt, shell_answer_fn answer, void *arg) {
+    shell_ask(sh, ask_prompt, false, answer, arg);
+    sh->ask_eof = true;
 }
 
 // Take the pending question, if any, and hand it the answer (NULL = cancelled).
@@ -72,6 +80,7 @@ static bool answer_question(shell_t *sh, char *answer) {
     void *arg = sh->answer_arg;
     sh->answer = NULL;                  // cleared first: the callback may ask the next question
     sh->secret = false;
+    sh->ask_eof = false;
     fn(sh, answer, arg);
     return true;
 }
@@ -157,6 +166,7 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->esc = ESC_NONE;
     sh->answer = NULL;
     sh->secret = false;
+    sh->ask_eof = false;
     sh->job = NULL;             // a job of an earlier session was cancelled by shell_end()
     sh->job_arg = NULL;
     sh->ahead_len = 0;
@@ -242,7 +252,15 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         } else if (c == 0x04) {                  // Ctrl-D on an empty line: logout
             if (sh->line_len == 0) {
                 shell_printf(sh, "\n");
-                shell_logout(sh);
+                if (sh->answer && sh->ask_eof) {  // ...or end of input for the question
+                    answer_question(sh, SHELL_EOF);
+                    if (sh->job) {
+                        stash(sh, buf + i + 1, n - (i + 1));
+                        return;
+                    }
+                } else {
+                    shell_logout(sh);
+                }
                 prompt(sh);
             }
         } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {

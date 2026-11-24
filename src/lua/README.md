@@ -58,6 +58,18 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
 
 - **The `lua` command** (`lua -e '…'` or `lua <file>`) runs the script as a shell job: the
   shell drains the output ring buffer as fast as its channel takes it.
+- **The prompt** (`lua` alone) is a question (`shell_ask_eof`) whose answers are lines of Lua.
+  Each line runs as a short shell job (`repl_step`): it hands the line to core 1
+  (`lua_job.repl_line`, then `repl_cmd`), shows the output, and asks again (`>` or `>>`).
+  Ctrl-C while a line runs sets `cancel` and goes back to the prompt at once; the next line waits
+  until core 1 has stopped the old one, and its leftover output is dropped. Ctrl-D (`SHELL_EOF`)
+  or `exit` sets `repl_quit`. If the owner's shell is neither answering the prompt nor running
+  one of its jobs, its session has ended, and `lua_host_poll()` closes the prompt.
+- **Core 1's side of the prompt** (`run_repl` in `lua_core1.c`) keeps one Lua state for the
+  session and waits for each line. A first line is tried as `return <line>` so expressions print
+  their value; a syntax error at `<eof>` means the statement continues, and the text is kept for
+  the next line. After a Ctrl-C it resets the hook that `interrupt()` left running every
+  instruction, and doesn't print the "interrupted" error.
 - **`lua_host_poll()`** answers at most one request per main-loop pass, each a bounded amount
   of work, so the watchdog, SSH and the console keep going whatever the script does.
 - **File rights:** script file changes pass `files_write_allowed()` with no shell, so a script
