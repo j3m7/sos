@@ -415,12 +415,14 @@ static void q_check_reply(void) {
         return;
     }
     q_finish(true, NULL);
+    // Sign printed separately: for |offset| < 1 s the whole-seconds part is 0 and loses it.
+    int64_t a = q.offset_us < 0 ? -q.offset_us : q.offset_us;
     log_msg(SOS_LOG_NOTICE,
-            "nts: authenticated time from %s: offset %+lld.%03lld s, delay %lld ms, stratum %u, "
+            "nts: authenticated time from %s: offset %c%lld.%03lld s, delay %lld ms, stratum %u, "
             "%u cookies",
-            q.server, (long long)(q.offset_us / 1000000),
-            (long long)((q.offset_us < 0 ? -q.offset_us : q.offset_us) % 1000000 / 1000),
-            (long long)(q.delay_us / 1000), q.stratum, result.cookie_count);
+            q.server, q.offset_us < 0 ? '-' : '+', (long long)(a / 1000000),
+            (long long)(a % 1000000 / 1000), (long long)(q.delay_us / 1000), q.stratum,
+            result.cookie_count);
 }
 
 static void q_poll(void) {
