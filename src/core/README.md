@@ -56,6 +56,24 @@ timeout, then starts the hardware watchdog. The main loop calls `wdog_feed()` on
 If a pass takes longer than `SOS_WATCHDOG_MS` (default 8000; `0` disables it), the chip
 resets. After such a reset, `uptime` and the boot log say so.
 
+## Fault record (`fault.c`)
+
+A hard fault or an SDK panic stores a record in the watchdog's scratch registers 0-3 (they
+survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
+`watchdog_reboot()`. `fault_boot()`, early in `main()`, reads and clears it; the boot log and
+`uptime` show it.
+
+- **Hard fault:** the record holds the core, the program counter and link register from the
+  exception frame, and the fault status (CFSR). The handler switches to its own small stack
+  and lifts the stack limit first, so it also works after a stack overflow (when there is no
+  usable frame: the record then has no addresses). It is installed in the RAM vector table by
+  `fault_boot()`, because the SD card library defines `isr_hardfault` itself (its handler stops
+  at a breakpoint, which without a debugger hangs until the watchdog). Both cores share the
+  table, so a fault in Lua on core 1 resets the device too, instead of leaving core 1 dead.
+- **Panic:** `PICO_PANIC_FUNCTION=sos_panic` (CMake). The record holds the caller's address and
+  the address of the message, which the next boot prints if it is the same build.
+- `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
+
 ## Stack monitor (`stackmon.c`)
 
 `stackmon_paint()`, the first call in `main()`, fills the unused part of the core 0 stack with

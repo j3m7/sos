@@ -14,6 +14,7 @@
 #include "lwip/netif.h"
 
 #include "core/config.h"
+#include "core/fault.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
@@ -81,6 +82,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "time server <name>|default  set the NTS server\n");
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
         shell_printf(sh, "config reset      erase the configuration\n");
+        shell_printf(sh, "crash fault|stack|panic|hang  testing: stop the firmware that way\n");
         shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
@@ -93,7 +95,9 @@ static void cmd_uptime(shell_t *sh) {
     uint64_t s = to_us_since_boot(get_absolute_time()) / 1000000;
     shell_printf(sh, "up %llud %02llu:%02llu:%02llu%s\n",
                  s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60,
-                 wdog_caused_reset() ? " (last reset: watchdog)" : "");
+                 fault_last() ? "" : wdog_caused_reset() ? " (last reset: watchdog)" : "");
+    if (fault_last())
+        shell_printf(sh, "last reset: %s\n", fault_last());
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -702,7 +706,14 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))
         shell_logout(sh);
-    else if (!strcmp(cmd, "reboot")) {
+    else if (!strcmp(cmd, "crash")) {
+        // Testing the fault record (core/fault.h): stops the firmware on purpose.
+        if (!require_admin(sh))
+            return;
+        if (args)
+            fault_test(args);
+        shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
+    } else if (!strcmp(cmd, "reboot")) {
         shell_printf(sh, "rebooting...\n");
         sleep_ms(100);
         watchdog_reboot(0, 0, 0);

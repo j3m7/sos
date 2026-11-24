@@ -11,6 +11,7 @@
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssh/ssh.h>
 
+#include "core/fault.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
@@ -80,8 +81,11 @@ int main(void) {
     log_msg(SOS_LOG_NOTICE, "SOS booting");
 
     // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
+    fault_boot();
     wdog_start();
-    if (wdog_caused_reset())
+    if (fault_last())
+        log_msg(SOS_LOG_ERR, "last reset: %s", fault_last());
+    else if (wdog_caused_reset())
         log_msg(SOS_LOG_WARNING, "last reset: watchdog timeout");
 
     // System clock from the RTC, before anything that might want the time.
