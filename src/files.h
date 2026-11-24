@@ -26,4 +26,7 @@ void files_release(void);
 // everything for now; a rule (e.g. a protected /certs) goes here.
 bool files_write_allowed(const shell_t *sh, const char *path);
 
+// A short description of a FatFs result (FRESULT), e.g. "no such file".
+const char *files_error(int fr);
+
 #endif
