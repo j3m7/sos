@@ -15,9 +15,9 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Password authentication removed; only public key advertised; key length checked before comparison; `ssh_server_read()`/`ssh_server_write()` and a per-login `session_id` |
+| `src/ssh/server.c` | `src/server.c` | Password authentication removed; only public key advertised; key length checked before comparison; `ssh_server_read()`/`ssh_server_write()` and a per-login `session_id`; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; timing statistics |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `session_id` field; declarations for `ssh_server_read()`/`ssh_server_write()` |
+| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `session_id`, work/close flags, timing fields, `CS_CLOSING`; declarations for `ssh_server_read()`/`ssh_server_write()`/`ssh_server_service()` |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
 | `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |
@@ -60,7 +60,16 @@ Generic bugs found while integrating pico-sshd that apply to upstream as well. N
 4. `wolfssl/user_settings.h`: defines `WOLFSSH_ALLOW_USERAUTH_NONE`, which (with
    `auth_enabled = false`) allows unauthenticated logins; and lacks `HAVE_ED25519_MAKE_KEY`,
    which `wolfSSH_MakeEd25519Key()` needs. Worth at least a warning in the README.
-5. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
+5. `src/server.c`, `ssh_server_recv()`: when the input ring buffer is full, the remaining
+   pbufs are neither consumed nor refused (no `ERR_MEM`), so their data is lost and the pbufs
+   leak.
+6. `src/server.c`: during the handshake, `wolfSSH_accept()` only runs from the `tcp_poll`
+   callback (every 500 ms), so a login takes ~5 s; and all wolfSSH work runs inside lwIP
+   callbacks (interrupt context with `threadsafe_background`), blocking for up to ~110 ms.
+7. `src/server.c`, `ssh_server_disconnect_client()`: closes TCP immediately without sending
+   exit status or channel close; clients report exit 255, and data still in flight can turn
+   the close into a reset that discards the session's last output.
+8. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
    built with `WOLFSSH_TERM` (plus `NO_TERMIOS` on the Pico); the bundled settings omit it.
 
 ## Linked into the firmware (not copied)

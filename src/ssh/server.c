@@ -28,6 +28,18 @@
    - Default public key check compares key lengths before contents.
    - Direct session I/O (ssh_server_read/ssh_server_write) and a per-login session_id, so a
      session can be served without the global stdio driver.
+   - All wolfSSH processing moved out of lwIP callbacks (interrupt context with the
+     threadsafe_background arch) into ssh_server_service(), called from the main loop. The
+     callbacks only buffer input and flag work; the connection is torn down in thread context.
+     Logins no longer wait for the 500 ms TCP poll between handshake steps.
+   - ssh_server_recv() no longer drops/leaks input when the buffer is full (returns ERR_MEM so
+     lwIP redelivers it).
+   - Timing statistics for wolfSSH calls.
+   - Graceful disconnect: ssh_server_disconnect_client() sends exit status 0 and channel close,
+     then waits (CS_CLOSING, at most SSH_CLOSING_TIMEOUT_US) for the client to close the TCP
+     connection, instead of an immediate tcp_close() that could reset the connection and lose
+     the session's last output. A new connection arriving while the previous one is closing
+     finishes that close instead of being refused.
 */
 
 #include <stdio.h>
@@ -53,6 +65,17 @@
 #define SSH_CLIENT_POLL_TIME 1
 
 #define LOG_MAX_MSG_LEN 256
+#define SSH_CLOSING_TIMEOUT_US (2 * 1000 * 1000)
+
+/* SOS: time a wolfSSH call and accumulate statistics in st. */
+#define SSH_TIMED(st, call) ({ \
+	uint64_t _t0 = time_us_64(); \
+	int _r = (call); \
+	uint32_t _d = (uint32_t)(time_us_64() - _t0); \
+	(st)->work_us_total += _d; \
+	if (_d > (st)->work_us_max) (st)->work_us_max = _d; \
+	(st)->work_calls++; \
+	_r; })
 
 static int global_log_level = LOG_ERR;
 
@@ -167,15 +190,16 @@ ssh_server_t* ssh_server_new(size_t rxbuf_size, size_t txbuf_size)
 }
 
 
-#if 0
 static err_t ssh_server_sent(void *arg, struct tcp_pcb *pcb, u16_t len)
 {
 	ssh_server_t *st = (ssh_server_t*)arg;
 
-	LOG_MSG(LOG_DEBUG, "ssh_server_sent: %u", len);
+	(void)pcb;
+	(void)len;
+	if (st)
+		st->work_pending = true;	/* send buffer space freed: retry pending output */
 	return ERR_OK;
 }
-#endif
 
 
 static err_t close_client_connection(struct tcp_pcb *pcb)
@@ -201,8 +225,11 @@ static err_t ssh_close_client_connection(ssh_server_t *st)
 {
 	err_t err = ERR_OK;
 
+	cyw43_arch_lwip_begin();
 	st->cstate = CS_NONE;
 	st->login[0] = 0;
+	st->work_pending = false;
+	st->peer_closed = false;
 	if (st->client) {
 		err = close_client_connection(st->client);
 		st->client = NULL;
@@ -211,6 +238,8 @@ static err_t ssh_close_client_connection(ssh_server_t *st)
 		wolfSSH_free(st->ssh);
 		st->ssh = NULL;
 	}
+	ssh_ringbuffer_flush(&st->rb_tcp_in);
+	cyw43_arch_lwip_end();
 
 	LOG_MSG(LOG_DEBUG, "ssh_close_client_connection(%p): %d",
 		st, err);
@@ -224,7 +253,7 @@ static err_t ssh_process_input(ssh_server_t *st)
 	word32 channel_id = 0;
 
 
-	res = wolfSSH_worker(st->ssh, &channel_id);
+	res = SSH_TIMED(st, wolfSSH_worker(st->ssh, &channel_id));
 	if (res < 0) {
 		rc = wolfSSH_get_error(st->ssh);
 		if (rc == WS_CHAN_RXD) {
@@ -292,43 +321,32 @@ static err_t ssh_server_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err
 
 
 	if (!p) {
-		/* Connection closed by client */
+		/* Connection closed by client: tear down in ssh_server_service(). */
 		LOG_MSG(LOG_NOTICE, "SSH client closed connection from %s:%u",
 			ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port);
-		ssh_close_client_connection(st);
+		st->peer_closed = true;
 		return ERR_OK;
 	}
 	if (err != ERR_OK) {
 		/* unknown error... */
 		LOG_MSG(LOG_WARNING, "ssh_server_recv: error received: %d", err);
-		if (p)
-			pbuf_free(p);
+		pbuf_free(p);
 		return err;
 	}
 
-	/* Read as much data as we can fit in the ringbuffer... */
-	while (p != NULL && p->len <= ssh_ringbuffer_free(&st->rb_tcp_in)) {
-		buf = p;
-		if (ssh_ringbuffer_add(&st->rb_tcp_in, buf->payload, buf->len, false))
-			break;
-
-		u16_t p_len = buf->len;
-		p = buf->next;
-		if (p)
-			pbuf_ref(p);
-
-		u8_t freed;
-		do {
-			freed = pbuf_free(buf);
-		} while (freed == 0);
-		tcp_recved(pcb, p_len);
+	/* Take the whole pbuf chain or none of it: if it doesn't fit, ERR_MEM makes lwIP keep it
+	   and redeliver once ssh_server_service() has drained the buffer. */
+	len = p->tot_len;
+	if (len > ssh_ringbuffer_free(&st->rb_tcp_in)) {
+		st->work_pending = true;
+		return ERR_MEM;
 	}
+	for (buf = p; buf; buf = buf->next)
+		ssh_ringbuffer_add(&st->rb_tcp_in, buf->payload, buf->len, false);
+	tcp_recved(pcb, len);
+	pbuf_free(p);
 
-	if ((len = ssh_ringbuffer_used(&st->rb_tcp_in)) > 0) {
-		if (st->cstate == CS_CONNECT)
-			ssh_process_input(st);
-	}
-
+	st->work_pending = true;
 	return ERR_OK;
 }
 
@@ -369,35 +387,76 @@ static int ssh_server_flush_buffer(ssh_server_t *st)
 static err_t ssh_server_poll(void *arg, struct tcp_pcb *pcb)
 {
 	ssh_server_t *st = (ssh_server_t*)arg;
+
+	(void)pcb;
+	if (st)
+		st->work_pending = true;	/* periodic retry (e.g. after WS_WANT_WRITE) */
+	return ERR_OK;
+}
+
+
+void ssh_server_service(ssh_server_t *st)
+{
 	int res, err;
 
+	if (!st || st->cstate == CS_NONE)
+		return;
+
+	if (st->peer_closed) {
+		ssh_close_client_connection(st);
+		return;
+	}
+	if (st->cstate == CS_CLOSING) {
+		/* Waiting for the client to close after our channel close: discard its input and
+		   give up after the timeout. */
+		if (time_us_64() > st->closing_deadline_us) {
+			ssh_close_client_connection(st);
+		} else if (st->work_pending) {
+			st->work_pending = false;
+			cyw43_arch_lwip_begin();
+			ssh_ringbuffer_flush(&st->rb_tcp_in);
+			cyw43_arch_lwip_end();
+		}
+		return;
+	}
+	if (!st->work_pending)
+		return;
+	st->work_pending = false;
+
 	if (st->cstate == CS_ACCEPT) {
-		if ((res = wolfSSH_accept(st->ssh)) == WS_SUCCESS) {
+		if ((res = SSH_TIMED(st, wolfSSH_accept(st->ssh))) == WS_SUCCESS) {
 			LOG_MSG(LOG_DEBUG, "wolfSSH_accept(): ok");
 			st->cstate = CS_CONNECT;
 			st->session_id++;
+			st->last_handshake_us = (uint32_t)(time_us_64() - st->accept_start_us);
 			strncpy(st->login, wolfSSH_GetUsername(st->ssh), sizeof(st->login) - 1);
 			st->login[sizeof(st->login) - 1] = 0;
 			ssh_ringbuffer_add(&st->rb_out, connected_text, strlen(connected_text), true);
 		} else {
 			err = wolfSSH_get_error(st->ssh);
 			if (err == WS_WANT_READ || err == WS_WANT_WRITE)
-				return ERR_OK;
+				return;
 			if (err == WS_USER_AUTH_E) {
-				LOG_MSG(LOG_NOTICE, "SSH connection rejected from %s:%u",
-					ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port);
+				ip_addr_t ip;
+				uint16_t port;
+				if (ssh_server_get_client_ip(st, &ip, &port) == ERR_OK)
+					LOG_MSG(LOG_NOTICE, "SSH connection rejected from %s:%u",
+						ip4addr_ntoa(&ip), port);
 			} else {
 				LOG_MSG(LOG_INFO, "wolfSSH_accept(): failed: %d (%d)", err, res);
 			}
 			ssh_close_client_connection(st);
+			return;
 		}
 	}
-	else if (st->cstate == CS_CONNECT) {
+	if (st->cstate == CS_CONNECT) {
 		ssh_process_input(st);
 		ssh_server_flush_buffer(st);
 	}
 
-	return ERR_OK;
+	/* wolfSSH may process only part of the buffered input per call: come back for the rest. */
+	if (st->cstate != CS_NONE && ssh_ringbuffer_used(&st->rb_tcp_in) > 0)
+		st->work_pending = true;
 }
 
 
@@ -405,15 +464,19 @@ static void ssh_server_err(void *arg, err_t err)
 {
 	ssh_server_t *st = (ssh_server_t*)arg;
 
-	if (err == ERR_ABRT)
+	if (!st)
 		return;
+
+	/* lwIP has already freed the pcb. Forget it here and let ssh_server_service() free the
+	   wolfSSH session, which may be in use by thread context right now. */
+	st->client = NULL;
+	st->peer_closed = true;
 
 	if (err == ERR_RST) {
 		LOG_MSG(LOG_ERR,"SSH client disconnected: connection reset");
-	} else {
+	} else if (err != ERR_ABRT) {
 		LOG_MSG(LOG_ERR,"ssh_server_err: client connection error: %d", err);
 	}
-	ssh_close_client_connection(st);
 }
 
 
@@ -438,6 +501,12 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	LOG_MSG(LOG_NOTICE, "SSH accepted connection from %s:%u",
 		ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port);
 
+	/* A session in CS_CLOSING has already sent its exit status and channel close and is
+	   only waiting for its client to hang up; thread context no longer touches it, so it is
+	   safe to finish closing it here and serve the new connection. */
+	if (st->cstate == CS_CLOSING)
+		ssh_close_client_connection(st);
+
 	if (st->cstate != CS_NONE) {
 		LOG_MSG(LOG_ERR, "SSH connection rejected: too many connections");
 		return ERR_MEM;
@@ -457,11 +526,12 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	st->client = pcb;
 	st->auth_tries = 0;
 	st->login[0] = 0;
+	st->accept_start_us = time_us_64();
+	st->peer_closed = false;
+	st->work_pending = true;
 	st->cstate = CS_ACCEPT;
 	tcp_arg(pcb, st);
-#if 0
 	tcp_sent(pcb, ssh_server_sent);
-#endif
 	tcp_recv(pcb, ssh_server_recv);
 	tcp_poll(pcb, ssh_server_poll, SSH_CLIENT_POLL_TIME);
 	tcp_err(pcb, ssh_server_err);
@@ -484,12 +554,16 @@ static int receive_cb(WOLFSSH* ssh, void* buf, word32 buf_len, void *ctx)
 	if (!ctx)
 		return WS_CBIO_ERR_GENERAL;
 
-	if ((size = ssh_ringbuffer_used(&st->rb_tcp_in)) < 1)
-		return WS_WANT_READ;
-
+	/* rb_tcp_in is filled by ssh_server_recv() in interrupt context. */
+	cyw43_arch_lwip_begin();
+	if ((size = ssh_ringbuffer_used(&st->rb_tcp_in)) < 1) {
+		cyw43_arch_lwip_end();
+		return st->peer_closed ? WS_CBIO_ERR_CONN_CLOSE : WS_WANT_READ;
+	}
 	if (size > buf_len)
 		size = buf_len;
 	res = ssh_ringbuffer_read(&st->rb_tcp_in, buf, size);
+	cyw43_arch_lwip_end();
 
 	return (res == 0 ? size : 0);
 }
@@ -507,12 +581,18 @@ static int send_cb(WOLFSSH* ssh, void* buf, word32 buf_len, void *ctx)
 	if (buf_len < 1)
 		return 0;
 
+	/* Called from thread context (ssh_server_service): lwIP needs the lock. */
+	cyw43_arch_lwip_begin();
+	if (!st->client) {
+		cyw43_arch_lwip_end();
+		return WS_CBIO_ERR_CONN_CLOSE;
+	}
 	err = tcp_write(st->client, buf, buf_len, TCP_WRITE_FLAG_COPY);
-	if (err != ERR_OK)
-		return WS_WANT_WRITE;
-	tcp_output(st->client);
+	if (err == ERR_OK)
+		tcp_output(st->client);
+	cyw43_arch_lwip_end();
 
-	return buf_len;
+	return err == ERR_OK ? (int)buf_len : WS_WANT_WRITE;
 }
 
 
@@ -782,7 +862,7 @@ int ssh_server_write(ssh_server_t *st, const char *buf, int length)
 	if (!st || st->cstate != CS_CONNECT)
 		return -1;
 
-	cyw43_arch_lwip_begin();
+	/* rb_out is only used in thread context; send_cb takes the lwIP lock itself. */
 	while (written < length && st->cstate == CS_CONNECT) {
 		size_t len = ssh_ringbuffer_free(&st->rb_out);
 		if (len < 1)
@@ -793,7 +873,6 @@ int ssh_server_write(ssh_server_t *st, const char *buf, int length)
 		written += len;
 		ssh_server_flush_buffer(st);
 	}
-	cyw43_arch_lwip_end();
 
 	return written;
 }
@@ -811,9 +890,8 @@ int ssh_server_read(ssh_server_t *st, char *buf, int length)
 	if (len > (size_t)length)
 		len = length;
 
-	cyw43_arch_lwip_begin();
+	/* rb_in is filled by ssh_process_input(), also in thread context. */
 	ssh_ringbuffer_read(&st->rb_in, (uint8_t*)buf, len);
-	cyw43_arch_lwip_end();
 
 	return len;
 }
@@ -922,17 +1000,20 @@ bool ssh_server_client_connected(ssh_server_t *st)
 
 err_t ssh_server_get_client_ip(const ssh_server_t *st, ip_addr_t *ip, uint16_t *port)
 {
-	if (st->cstate == CS_NONE || !st->client)
-		return ERR_CONN;
+	err_t res = ERR_CONN;
 
+	/* st->client can be cleared by ssh_server_err() in interrupt context: check under lock. */
 	cyw43_arch_lwip_begin();
-	if (ip)
-		ip_addr_set(ip, &st->client->remote_ip);
-	if (port)
-		*port = st->client->remote_port;
+	if (st->cstate != CS_NONE && st->client) {
+		if (ip)
+			ip_addr_set(ip, &st->client->remote_ip);
+		if (port)
+			*port = st->client->remote_port;
+		res = ERR_OK;
+	}
 	cyw43_arch_lwip_end();
 
-	return ERR_OK;
+	return res;
 }
 
 
@@ -945,6 +1026,8 @@ const char* ssh_server_connection_state_name(enum ssh_connection_state state)
 		return "Accepted";
 	case CS_CONNECT:
 		return "Connected";
+	case CS_CLOSING:
+		return "Closing";
 	}
 	return "Unknown";
 }
@@ -952,27 +1035,28 @@ const char* ssh_server_connection_state_name(enum ssh_connection_state state)
 
 err_t ssh_server_disconnect_client(ssh_server_t *st)
 {
-	err_t res = ERR_OK;
 	ip_addr_t ip;
 	uint16_t port;
-	char *login = NULL;
 
-	if (st->client) {
-		ip_addr_set(&ip, &st->client->remote_ip);
-		port = st->client->remote_port;
-		login = strndup(st->login, MAX_LOGIN_LENGTH);
-		cyw43_arch_lwip_begin();
-		res = ssh_close_client_connection(st);
-		cyw43_arch_lwip_end();
-		LOG_MSG(LOG_NOTICE,"SSH user (%s) disconnected from %s:%u",
-			login ? login : "<unknown>", ip4addr_ntoa(&ip), port);
+	if (!st || st->cstate == CS_NONE || st->cstate == CS_CLOSING)
+		return ERR_OK;
+
+	if (ssh_server_get_client_ip(st, &ip, &port) == ERR_OK)
+		LOG_MSG(LOG_NOTICE, "SSH user (%s) disconnected from %s:%u",
+			st->login[0] ? st->login : "<unknown>", ip4addr_ntoa(&ip), port);
+
+	if (st->cstate == CS_CONNECT && st->ssh && !st->peer_closed) {
+		/* Send what the session still has queued, then exit status 0, EOF and channel
+		   close. The client answers by closing; ssh_server_service() finishes the job. */
+		ssh_server_flush_buffer(st);
+		if (wolfSSH_stream_exit(st->ssh, 0) == WS_SUCCESS) {
+			st->closing_deadline_us = time_us_64() + SSH_CLOSING_TIMEOUT_US;
+			st->cstate = CS_CLOSING;
+			return ERR_OK;
+		}
 	}
-	st->cstate = CS_NONE;
 
-	if (login)
-		free(login);
-
-	return res;
+	return ssh_close_client_connection(st);
 }
 
 

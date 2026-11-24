@@ -24,7 +24,8 @@
 
 /* Copied into SOS from https://github.com/tjko/pico-sshd at commit
    697e33c65a3a36231e91b0d2d121611110978454 (see THIRD_PARTY.md).
-   Modified for SOS: session_id field, ssh_server_read()/ssh_server_write(). */
+   Modified for SOS: session_id field, ssh_server_read()/ssh_server_write(),
+   ssh_server_service() (wolfSSH runs in thread context), timing statistics. */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -48,6 +49,7 @@ typedef enum ssh_connection_state {
 	CS_NONE = 0,
 	CS_ACCEPT,
 	CS_CONNECT,
+	CS_CLOSING,     /* SOS: exit status and channel close sent; waiting for the client to close */
 } ssh_connection_state_t;
 
 /* SSH Server Private Key */
@@ -61,7 +63,7 @@ typedef struct ssh_server_pkey_t {
 typedef struct ssh_server_t {
 	struct tcp_pcb *listen;            /* lwIP listenig socket */
 	struct tcp_pcb *client;            /* lwIP client connection socket */
-	ssh_connection_state_t cstate;     /* Current client connection state */
+	volatile ssh_connection_state_t cstate; /* Current client connection state */
 	WOLFSSH_CTX *ssh_ctx;              /* SSH server context */
 	WOLFSSH* ssh;                      /* SSH (client) connection context */
 	ssh_ringbuffer_t rb_tcp_in;        /* TCP (encrypted) input buffer */
@@ -70,6 +72,16 @@ typedef struct ssh_server_t {
 	char login[MAX_LOGIN_LENGTH + 1];  /* Currently logged in user */
 	uint8_t auth_tries;                /* Count of failed authentication attempts */
 	uint32_t session_id;               /* SOS: incremented on every successful login */
+	/* SOS: set by lwIP callbacks (interrupt context), consumed by ssh_server_service(). */
+	volatile bool work_pending;        /* input arrived, data was sent, or poll tick */
+	volatile bool peer_closed;         /* client closed or connection failed */
+	uint64_t closing_deadline_us;      /* SOS: force close in CS_CLOSING after this time */
+	/* SOS: timing statistics for wolfSSH work (accept/worker calls). */
+	uint64_t accept_start_us;          /* when the current connection was accepted */
+	uint32_t last_handshake_us;        /* accept to logged-in, for the last login */
+	uint32_t work_us_max;              /* longest single wolfSSH call */
+	uint64_t work_us_total;            /* sum of all wolfSSH call durations */
+	uint32_t work_calls;               /* number of wolfSSH calls */
 
 	/* Configuration options... set before calling ssg_server_start() */
 	uint16_t port;             /* Listen port (default tcp/22) */
@@ -117,6 +129,12 @@ int ssh_server_add_priv_key(ssh_server_t *st, int type, const uint8_t *key, uint
    the number of bytes queued, dropping what does not fit in the output buffer. */
 int ssh_server_read(ssh_server_t *st, char *buf, int length);
 int ssh_server_write(ssh_server_t *st, const char *buf, int length);
+
+/* SOS: run pending SSH protocol work (handshake, decryption, sending). All wolfSSH calls happen
+   here, in thread context, never in lwIP callbacks. Call regularly from the main loop; returns
+   quickly when there is nothing to do. ssh_server_read/write/disconnect_client must be called
+   from the same context. */
+void ssh_server_service(ssh_server_t *st);
 
 
 #ifdef __cplusplus

@@ -192,6 +192,7 @@ static const shell_io_t session_io = {
 void sshd_poll(void) {
     if (!server)
         return;
+    ssh_server_service(server);     // all wolfSSH work happens here, not in lwIP callbacks
     if (server->cstate != CS_CONNECT) {
         session_shell_id = 0;
         return;
@@ -210,6 +211,13 @@ void sshd_status(shell_t *sh) {
     }
     shell_printf(sh, "host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
     shell_printf(sh, "state:     %s\n", ssh_server_connection_state_name(server->cstate));
+    shell_printf(sh, "logins:    %lu, last handshake %lu ms\n",
+                 (unsigned long)server->session_id,
+                 (unsigned long)(server->last_handshake_us / 1000));
+    shell_printf(sh, "ssh work:  %lu calls, %llu ms total, longest %lu ms\n",
+                 (unsigned long)server->work_calls,
+                 (unsigned long long)(server->work_us_total / 1000),
+                 (unsigned long)(server->work_us_max / 1000));
     if (ssh_server_client_connected(server)) {
         ip_addr_t ip;
         uint16_t port;
