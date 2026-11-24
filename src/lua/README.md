@@ -28,6 +28,17 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   math, utf8, coroutine) plus `sos`. There's no `io`, `os`, `package` or `debug`.
 - **Stopping:** a hook runs every 1000 instructions and checks the cancel flag. A request
   always gets an answer, so waiting for one never hangs.
+  - **`pcall` can't keep a script going.** Once the flag is set, `interrupt()` makes the hook
+    run before every instruction, in the current thread and the main one, and raise
+    "interrupted" each time. A script that catches the error ends at its next instruction
+    outside a `pcall`, and the main chunk is never inside one. Coroutines inherit the hook from
+    the thread that creates them.
+  - **Two places Lua runs code with hooks off** are closed off. `xpcall` is wrapped, so its
+    message handler is skipped while stopping: an error raised by the hook runs the handler with
+    hooks off. `setmetatable` is wrapped to refuse `__gc`, since finalizers also run with hooks
+    off, including all of them at `lua_close()`.
+  - **Not covered:** one long call into C (a pattern match that backtracks for minutes, say)
+    can't be interrupted until it returns.
 - **Memory:** the heap is shared with core 0 (malloc is mutex-protected). A custom allocator
   caps a script at 128 KB.
 - **Core 1's stack:** 32 KB, allocated from the heap when the first script runs (the 4 KB
