@@ -68,6 +68,11 @@ target_compile_definitions(test_mkconfig PRIVATE MKCONFIG_NO_MAIN)
 target_include_directories(test_mkconfig PRIVATE ${SOS_ROOT}/src ${SOS_ROOT}/tools/host)
 add_test(NAME mkconfig COMMAND test_mkconfig)
 
+# src/shell/termtext.c: outside text made safe for the terminal (C0/C1 controls, UTF-8).
+add_executable(test_termtext test_termtext.c ${SOS_ROOT}/src/shell/termtext.c)
+target_include_directories(test_termtext PRIVATE ${SOS_ROOT}/src)
+add_test(NAME termtext COMMAND test_termtext)
+
 # src/net/http_msg.c: HTTPS client messages (URLs, requests, incremental response parsing).
 add_executable(test_http_msg test_http_msg.c ${SOS_ROOT}/src/net/http_msg.c)
 target_include_directories(test_http_msg PRIVATE ${SOS_ROOT}/src)

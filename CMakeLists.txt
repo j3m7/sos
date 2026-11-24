@@ -100,6 +100,7 @@ set(SOS_SOURCES
     src/core/stackmon.c
     src/shell/shell.c
     src/shell/shell_core.c
+    src/shell/termtext.c
     src/net/wifi.c
     src/net/http.c
     src/net/http_msg.c

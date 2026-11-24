@@ -485,7 +485,8 @@ fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC regi
 (`src/files/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
 `src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`), the HTTPS
 client's URLs, requests and response parser (`src/net/http_msg.c`, including corrupted responses fed
-in random pieces) and the provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
+in random pieces), the filter that keeps outside text from sending the terminal escape sequences
+(`src/shell/termtext.c`) and the provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
 a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 

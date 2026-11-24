@@ -20,6 +20,14 @@ translation (`crlf`), and `admin` (true for the console only).
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
 
+## `termtext.c`: outside text on the terminal (pure C, host tested)
+
+Text that comes from outside (an HTTP response, say) goes through `termtext_filter()` before
+it's printed, so it can't send the terminal escape sequences. Printable ASCII, newline, tab
+and valid UTF-8 from U+00A0 up pass; C0 controls, DEL, the C1 controls (raw bytes 0x80–0x9F,
+where 0x9B is CSI on 8-bit terminals, and U+0080–U+009F in UTF-8) and invalid UTF-8 become
+`.`. A UTF-8 character split between two pieces of input is held until it's complete.
+
 ## `shell.c`: the commands
 
 `shell_execute()` dispatches a command line. System commands are implemented here: `help`,
