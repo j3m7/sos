@@ -23,6 +23,7 @@
 #include "files/sdcard.h"
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
+#include "net/http.h"
 #include "net/wifi.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
@@ -71,6 +72,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
+        shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
@@ -702,6 +704,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         sdcard_command(sh, args);
     else if (!strcmp(cmd, "lua"))
         lua_command(sh, args);
+    else if (!strcmp(cmd, "http"))
+        http_command(sh, args);
     else if (!strcmp(cmd, "setup"))
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))

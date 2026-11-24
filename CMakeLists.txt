@@ -102,6 +102,8 @@ set(SOS_SOURCES
     src/shell/shell.c
     src/shell/shell_core.c
     src/net/wifi.c
+    src/net/http.c
+    src/net/http_msg.c
     src/ssh/sshd.c
     src/ssh/hostkey.c
     src/ssh/sftp_fs.c

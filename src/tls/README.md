@@ -1,8 +1,8 @@
 # tls: TLS 1.3 client and trusted roots
 
-A small, non-blocking TLS client over lwIP's raw TCP API, built on wolfSSL. NTS key exchange
-(`time/nts.c`) is its only user so far. The wolfSSL build options are in
-`config/user_settings.h`.
+A small, non-blocking TLS client over lwIP's raw TCP API, built on wolfSSL. Its users are NTS
+key exchange (`time/nts.c`) and the HTTPS client (`net/http.c`); up to two connections can be
+open at once (`TLS_MAX_CONNS`). The wolfSSL build options are in `config/user_settings.h`.
 
 ## `tls.c`: connections
 
@@ -31,9 +31,11 @@ timings and heap use.
   name. While the clock isn't set, `verify_cb()` accepts a chain whose only fault is its
   dates, and roots load without checking their own dates (`tls_load_root()`); the connection
   then logs `certificate dates not checked`.
-- **Heap accounting:** `tls_init()` installs wolfSSL allocators that track current and peak
-  heap use for every wolfSSL user, SSH included. The NTS key-exchange log line shows the
-  peak.
+- **Heap accounting:** `tls_init()` installs wolfSSL allocators that track the heap in use by
+  every wolfSSL user, SSH included. Each open connection records its own peak, counted from
+  its `tls_open()`, so two connections at once don't disturb each other's figure (it still
+  includes whatever other wolfSSL users allocated meanwhile). The NTS key-exchange log line and
+  the `http` command show it.
 
 ## Trusted roots
 
