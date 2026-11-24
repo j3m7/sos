@@ -9,7 +9,7 @@ subsystems is visible at the top of the file.
 |---|---|
 | [`core/`](core/README.md) | System log, configuration (format and flash storage), watchdog, stack monitor |
 | [`shell/`](shell/README.md) | Command shell: line editing, questions, long-running jobs, the commands |
-| [`net/`](net/README.md) | Wi-Fi station connection |
+| [`net/`](net/README.md) | Wi-Fi station connection, HTTPS client |
 | [`ssh/`](ssh/README.md) | SSH server (shell sessions and SFTP), host key; `pico-sshd/` is the adapted upstream server |
 | [`files/`](files/README.md) | SD card, FatFs file commands, path handling and the write check |
 | [`time/`](time/README.md) | RTC, system clock, NTS (authenticated NTP) and SNTP |

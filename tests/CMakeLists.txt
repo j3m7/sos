@@ -61,3 +61,8 @@ add_test(NAME nts_ntp COMMAND test_nts_ntp)
 add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_certbundle PRIVATE ${SOS_ROOT}/src)
 add_test(NAME certbundle COMMAND test_certbundle)
+
+# src/net/http_msg.c: HTTPS client messages (URLs, requests, incremental response parsing).
+add_executable(test_http_msg test_http_msg.c ${SOS_ROOT}/src/net/http_msg.c)
+target_include_directories(test_http_msg PRIVATE ${SOS_ROOT}/src)
+add_test(NAME http_msg COMMAND test_http_msg)

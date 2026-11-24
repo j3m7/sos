@@ -78,6 +78,19 @@ See [Timekeeping](../README.md#timekeeping) and
 | `tls roots approve` | console only | List each certificate in `/certs/roots.pem`, test-load it, and after `yes` trust exactly that file |
 | `tls roots forget` | console only | Stop trusting `/certs/roots.pem`; TLS uses the built-in roots only |
 
+## HTTPS
+
+For testing the HTTPS client (`src/net/README.md`). The server's certificate must chain to a
+built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
+
+| Command | Where | What it does |
+|---|---|---|
+| `http get <url>` | console only | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body show as `.` |
+| `http head <url>` | console only | Print the status line and the response headers |
+| `http post <url> <text>` | console only | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
+
+URLs must start with `https://`, and the path must already be percent-encoded (no spaces).
+
 ## Files and SD card
 
 The file commands work in every shell; each shell has its own working directory. Paths are

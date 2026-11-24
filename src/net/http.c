@@ -1,0 +1,423 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Julio Martinez
+
+#include "net/http.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "pico/time.h"
+
+#include "core/log.h"
+
+#define RX_SIZE 1024            // decrypted bytes waiting for the parser
+
+struct http_req {
+    http_state_t state;
+    char method[16];
+    http_url_t url;
+    uint32_t timeout_ms;
+    tls_conn_t *tls;
+
+    char *out;                  // request headers and body; freed once sent
+    size_t out_len, out_sent;
+
+    http_resp_t resp;
+    uint8_t rx[RX_SIZE];
+    size_t rx_pos, rx_len;
+
+    uint64_t start_us, deadline_us, headers_us, end_us;
+    char error[112];
+};
+
+static void fail(http_req_t *r, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void fail(http_req_t *r, const char *fmt, ...) {
+    if (r->state == HTTP_FAILED || r->state == HTTP_DONE)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(r->error, sizeof(r->error), fmt, ap);
+    va_end(ap);
+    r->state = HTTP_FAILED;
+    r->end_us = time_us_64();
+    log_msg(SOS_LOG_WARNING, "http: %s %s failed: %s", r->method, r->url.host, r->error);
+}
+
+static void finish(http_req_t *r) {
+    r->state = HTTP_DONE;
+    r->end_us = time_us_64();
+    log_msg(SOS_LOG_INFO, "http: %s %s: %d, %llu bytes, %u ms", r->method, r->url.host,
+            r->resp.status, (unsigned long long)r->resp.body_received, (unsigned)http_elapsed_ms(r));
+}
+
+static void refresh_deadline(http_req_t *r) {
+    r->deadline_us = time_us_64() + (uint64_t)r->timeout_ms * 1000;
+}
+
+http_req_t *http_start(const http_opts_t *o, const char **err) {
+    *err = NULL;
+    if (o->body_len > HTTP_BODY_MAX) {
+        *err = "request body too large";
+        return NULL;
+    }
+    if (o->body_len && !o->body) {
+        *err = "no request body";
+        return NULL;
+    }
+    http_req_t *r = calloc(1, sizeof(*r));
+    if (!r) {
+        *err = "out of memory";
+        return NULL;
+    }
+    *err = http_url_parse(o->url, &r->url);
+    if (*err) {
+        free(r);
+        return NULL;
+    }
+    snprintf(r->method, sizeof(r->method), "%s", o->method ? o->method : "");
+    http_request_t req = {o->method, &r->url, o->content_type, o->headers, o->body_len};
+    char head[1536];
+    size_t head_len = http_request_build(&req, head, sizeof(head), err);
+    if (!head_len) {
+        free(r);
+        return NULL;
+    }
+    r->out = malloc(head_len + o->body_len);
+    if (!r->out) {
+        free(r);
+        *err = "out of memory";
+        return NULL;
+    }
+    memcpy(r->out, head, head_len);
+    if (o->body_len)
+        memcpy(r->out + head_len, o->body, o->body_len);
+    r->out_len = head_len + o->body_len;
+
+    http_resp_init(&r->resp, !strcmp(r->method, "HEAD"));
+    r->timeout_ms = o->timeout_ms ? o->timeout_ms : HTTP_DEFAULT_TIMEOUT;
+    r->start_us = time_us_64();
+    refresh_deadline(r);
+    r->state = HTTP_CONNECTING;
+    // No ALPN: HTTP/1.1 is the default without it, and tls/ would refuse a server that
+    // doesn't do ALPN at all.
+    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms);
+    if (!r->tls) {
+        free(r->out);
+        free(r);
+        *err = "out of memory";
+        return NULL;
+    }
+    return r;
+}
+
+// Make decrypted bytes available in rx. Returns 1 if there are some, 0 if none yet, or -1 if
+// the connection has ended (the request is then HTTP_DONE or HTTP_FAILED).
+static int fill(http_req_t *r) {
+    if (r->rx_pos < r->rx_len)
+        return 1;
+    int n = tls_read(r->tls, r->rx, sizeof(r->rx));
+    if (n > 0) {
+        r->rx_pos = 0;
+        r->rx_len = (size_t)n;
+        return 1;
+    }
+    if (n == 0)
+        return 0;
+    if (tls_poll(r->tls) == TLS_CLOSED) {
+        // close_notify: the server ended the connection cleanly.
+        if (http_resp_eof(&r->resp))
+            finish(r);
+        else
+            fail(r, "%s", r->resp.error);
+    } else if (r->resp.state == HTTP_P_BODY_TO_CLOSE) {
+        // A body that runs to the close, and no close_notify: it may have been cut short.
+        fail(r, "connection closed without close_notify: the response may be incomplete");
+    } else {
+        fail(r, "connection ended before the response did (%s)", tls_error(r->tls));
+    }
+    return -1;
+}
+
+static void send_request(http_req_t *r) {
+    for (int i = 0; i < 4 && r->out_sent < r->out_len; i++) {
+        int n = tls_write(r->tls, r->out + r->out_sent, r->out_len - r->out_sent);
+        if (n < 0) {
+            fail(r, "sending the request: %s", tls_error(r->tls));
+            return;
+        }
+        if (n == 0)
+            return;
+        r->out_sent += (size_t)n;
+    }
+    if (r->out_sent == r->out_len) {
+        free(r->out);
+        r->out = NULL;
+        r->state = HTTP_WAITING;
+    }
+}
+
+static void read_headers(http_req_t *r) {
+    for (int i = 0; i < 8 && r->state == HTTP_WAITING; i++) {
+        if (fill(r) <= 0)
+            return;
+        const uint8_t *body;
+        size_t body_len;
+        r->rx_pos += http_resp_feed(&r->resp, r->rx + r->rx_pos, r->rx_len - r->rx_pos, 0,
+                                    &body, &body_len);
+        if (r->resp.state == HTTP_P_ERROR) {
+            fail(r, "bad response: %s", r->resp.error);
+        } else if (http_resp_headers_done(&r->resp)) {
+            r->headers_us = time_us_64();
+            refresh_deadline(r);
+            if (r->resp.state == HTTP_P_DONE)
+                finish(r);
+            else
+                r->state = HTTP_BODY;
+        }
+    }
+}
+
+static void check_timeout(http_req_t *r) {
+    if (r->state < HTTP_DONE && time_us_64() > r->deadline_us) {
+        static const char *const what[] = {"connecting", "sending the request",
+                                           "waiting for the response", "reading the body"};
+        fail(r, "timed out %s", what[r->state]);
+    }
+}
+
+http_state_t http_poll(http_req_t *r) {
+    switch (r->state) {
+    case HTTP_CONNECTING: {
+        tls_state_t s = tls_poll(r->tls);
+        if (s == TLS_FAILED) {
+            fail(r, "%s", tls_error(r->tls));
+            break;
+        }
+        if (s == TLS_CLOSED) {
+            fail(r, "connection closed during the handshake");
+            break;
+        }
+        if (s != TLS_READY)
+            break;
+        r->state = HTTP_SENDING;
+    }
+        // fall through
+    case HTTP_SENDING:
+        send_request(r);
+        if (r->state != HTTP_WAITING)
+            break;
+        // fall through
+    case HTTP_WAITING:
+        read_headers(r);
+        break;
+    default:
+        break;
+    }
+    check_timeout(r);
+    return r->state;
+}
+
+int http_read(http_req_t *r, void *buf, size_t len) {
+    if (r->state == HTTP_DONE || r->state == HTTP_FAILED)
+        return -1;
+    if (r->state != HTTP_BODY) {
+        http_poll(r);
+        return r->state == HTTP_DONE || r->state == HTTP_FAILED ? -1 : 0;
+    }
+    if (len == 0)
+        return 0;
+    for (int i = 0; i < 16; i++) {
+        int f = fill(r);
+        if (f < 0)
+            return -1;
+        if (f == 0)
+            break;
+        const uint8_t *body;
+        size_t body_len;
+        r->rx_pos += http_resp_feed(&r->resp, r->rx + r->rx_pos, r->rx_len - r->rx_pos, len,
+                                    &body, &body_len);
+        if (r->resp.state == HTTP_P_ERROR) {
+            fail(r, "bad response: %s", r->resp.error);
+            return -1;
+        }
+        if (r->resp.state == HTTP_P_DONE)
+            finish(r);
+        if (body_len) {
+            memcpy(buf, body, body_len);
+            refresh_deadline(r);
+            return (int)body_len;
+        }
+        if (r->state == HTTP_DONE)
+            return -1;
+    }
+    check_timeout(r);
+    return r->state == HTTP_FAILED ? -1 : 0;
+}
+
+const http_resp_t *http_response(const http_req_t *r) {
+    return &r->resp;
+}
+
+const char *http_error(const http_req_t *r) {
+    return r->error;
+}
+
+const tls_stats_t *http_tls_stats(const http_req_t *r) {
+    return r->tls ? tls_stats(r->tls) : NULL;
+}
+
+uint32_t http_headers_ms(const http_req_t *r) {
+    return r->headers_us ? (uint32_t)((r->headers_us - r->start_us) / 1000) : 0;
+}
+
+uint32_t http_elapsed_ms(const http_req_t *r) {
+    uint64_t end = r->end_us ? r->end_us : time_us_64();
+    return (uint32_t)((end - r->start_us) / 1000);
+}
+
+void http_close(http_req_t *r) {
+    if (!r)
+        return;
+    tls_close(r->tls);
+    free(r->out);
+    free(r);
+}
+
+// --- the `http` command (console only) -----------------------------------------------------------
+
+#define STEP_US 5000
+
+typedef struct {
+    http_req_t *req;
+    bool head;
+    bool shown;                 // status line printed
+    char last;                  // last body character printed
+    char buf[512];
+    char text[512];
+} http_job_t;
+
+static void print_headers(shell_t *sh, const http_resp_t *p) {
+    const char *s = p->hdr, *end = p->hdr + p->hdr_len;
+    while (s < end) {
+        const char *nl = memchr(s, '\n', (size_t)(end - s));
+        const char *colon = memchr(s, ':', (size_t)(nl - s));
+        shell_printf(sh, "%.*s: %.*s\n", (int)(colon - s), s, (int)(nl - colon - 1), colon + 1);
+        s = nl + 1;
+    }
+}
+
+// Body text for the terminal: no control characters (escape sequences) besides newline and tab.
+static size_t printable(http_job_t *j, size_t n) {
+    size_t out = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)j->buf[i];
+        if (c == '\r')
+            continue;
+        j->text[out++] = (c == '\n' || c == '\t' || (c >= 0x20 && c != 0x7f)) ? (char)c : '.';
+    }
+    if (out)
+        j->last = j->text[out - 1];
+    return out;
+}
+
+static bool http_job_end(shell_t *sh, http_job_t *j) {
+    http_req_t *r = j->req;
+    if (j->shown && j->last && j->last != '\n')
+        shell_printf(sh, "\n");
+    if (r->state == HTTP_FAILED) {
+        shell_printf(sh, "http: %s\n", http_error(r));
+    } else {
+        const tls_stats_t *ts = http_tls_stats(r);
+        shell_printf(sh, "--- %d, %llu bytes, %u ms (headers after %u ms; TLS handshake %u ms, "
+                     "wolfSSL heap peak %u KB)\n",
+                     r->resp.status, (unsigned long long)r->resp.body_received,
+                     (unsigned)http_elapsed_ms(r), (unsigned)http_headers_ms(r),
+                     ts ? (unsigned)(ts->handshake_us / 1000) : 0,
+                     ts ? (unsigned)((ts->heap_peak + 1023) / 1024) : 0);
+    }
+    http_close(r);
+    free(j);
+    return false;
+}
+
+static bool http_step(shell_t *sh, void *arg, bool cancel) {
+    http_job_t *j = arg;
+    if (cancel) {
+        http_close(j->req);
+        free(j);
+        return false;
+    }
+    uint64_t t0 = time_us_64();
+    while (time_us_64() - t0 < STEP_US) {
+        http_state_t s = http_poll(j->req);
+        if (s == HTTP_FAILED)
+            return http_job_end(sh, j);
+        if (s < HTTP_BODY)
+            return true;
+        if (!j->shown) {
+            const http_resp_t *p = http_response(j->req);
+            shell_printf(sh, "HTTP/1.%d %d %s\n", p->minor, p->status, p->reason);
+            if (j->head)
+                print_headers(sh, p);
+            j->shown = true;
+        }
+        int space = shell_write_space(sh) / 2;          // room for "\n" -> "\r\n"
+        if (space < 64)
+            return true;                                // wait for the client to read
+        size_t want = (size_t)space < sizeof(j->buf) ? (size_t)space : sizeof(j->buf);
+        int n = http_read(j->req, j->buf, want);
+        if (n < 0)
+            return http_job_end(sh, j);
+        if (n == 0)
+            return true;
+        size_t t = printable(j, (size_t)n);
+        if (t)
+            shell_write(sh, j->text, t);
+    }
+    return true;
+}
+
+void http_command(shell_t *sh, char *args) {
+    static const char usage[] = "usage: http get|head <url> | http post <url> <text>\n";
+    char *verb = args ? strtok(args, " ") : NULL;
+    char *url = verb ? strtok(NULL, " ") : NULL;
+    char *text = url ? strtok(NULL, "") : NULL;
+    if (!verb || !url) {
+        shell_printf(sh, usage);
+        return;
+    }
+    const char *method = !strcmp(verb, "get") ? "GET" : !strcmp(verb, "head") ? "HEAD"
+                       : !strcmp(verb, "post") ? "POST" : NULL;
+    if (!method || (!strcmp(method, "POST")) != (text != NULL)) {
+        shell_printf(sh, usage);
+        return;
+    }
+    // It makes the device connect to any host, like `nts ke <host>`: console only.
+    if (!sh->io->admin) {
+        shell_printf(sh, "http requests can only be made from the serial console\n");
+        return;
+    }
+    http_job_t *j = calloc(1, sizeof(*j));
+    if (!j) {
+        shell_printf(sh, "http: out of memory\n");
+        return;
+    }
+    http_opts_t o = {
+        .method = method,
+        .url = url,
+        .content_type = text ? "text/plain; charset=utf-8" : NULL,
+        .body = text,
+        .body_len = text ? strlen(text) : 0,
+    };
+    const char *err;
+    j->req = http_start(&o, &err);
+    if (!j->req) {
+        shell_printf(sh, "http: %s\n", err);
+        free(j);
+        return;
+    }
+    j->head = !strcmp(method, "HEAD");
+    shell_run_job(sh, http_step, j);
+}
