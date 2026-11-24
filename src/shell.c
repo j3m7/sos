@@ -21,6 +21,7 @@
 #include "settings.h"
 #include "sshd.h"
 #include "stackmon.h"
+#include "certstore.h"
 #include "nts.h"
 #include "timesync.h"
 #include "wdog.h"
@@ -52,6 +53,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "nts [ke [host]]   NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
+    shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
@@ -72,6 +74,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "user <name>       set the SSH user name\n");
         shell_printf(sh, "time auto <h>|off sync the clock from NTS every h hours (default off)\n");
         shell_printf(sh, "time server <name>|default  set the NTS server\n");
+        shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
         shell_printf(sh, "config reset      erase the configuration\n");
         shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
     }
@@ -561,6 +564,18 @@ static void cmd_time(shell_t *sh, char *args) {
 
 // `nts` / `nts ke [host]` / `nts query`: NTS key exchange and authenticated time queries
 // (development: queries report the offset but don't set the clock yet).
+// `tls roots [approve | forget]`: extra TLS roots from the SD card (src/certstore.c).
+static void cmd_tls(shell_t *sh, char *args) {
+    if (args && !strncmp(args, "roots", 5) && (args[5] == ' ' || !args[5])) {
+        char *rest = args + 5;
+        while (*rest == ' ')
+            rest++;
+        certstore_command(sh, *rest ? rest : NULL);
+    } else {
+        shell_printf(sh, "usage: tls roots [approve | forget]\n");
+    }
+}
+
 static void cmd_nts(shell_t *sh, char *args) {
     if (!args) {
         nts_status(sh);
@@ -609,6 +624,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_uptime(sh);
     else if (!strcmp(cmd, "time"))
         cmd_time(sh, args);
+    else if (!strcmp(cmd, "tls"))
+        cmd_tls(sh, args);
     else if (!strcmp(cmd, "nts"))
         cmd_nts(sh, args);
     else if (!strcmp(cmd, "mem"))

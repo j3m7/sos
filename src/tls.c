@@ -23,6 +23,7 @@
 
 #include "log.h"
 #include "timesync.h"
+#include "certstore.h"
 #include "tls_roots.h"
 
 #define TLS_MAX_CONNS 2         // open at once
@@ -285,6 +286,7 @@ static void start_handshake(tls_conn_t *c) {
             return;
         }
     }
+    certstore_load(c->ctx);                    // approved extra roots from the SD card, if any
     wolfSSL_CTX_set_verify(c->ctx, WOLFSSL_VERIFY_PEER, verify_cb);
     wolfSSL_CTX_SetIORecv(c->ctx, io_recv);
     wolfSSL_CTX_SetIOSend(c->ctx, io_send);

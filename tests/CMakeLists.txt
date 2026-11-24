@@ -56,3 +56,8 @@ add_test(NAME nts_ke COMMAND test_nts_ke)
 add_executable(test_nts_ntp test_nts_ntp.c ${SOS_ROOT}/src/nts_ntp.c)
 target_include_directories(test_nts_ntp PRIVATE ${SOS_ROOT}/src)
 add_test(NAME nts_ntp COMMAND test_nts_ntp)
+
+# src/certbundle.c: PEM bundles and DER certificates for /certs/roots.pem (base64 from config.c).
+add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/certbundle.c ${SOS_ROOT}/src/config.c)
+target_include_directories(test_certbundle PRIVATE ${SOS_ROOT}/src)
+add_test(NAME certbundle COMMAND test_certbundle)
