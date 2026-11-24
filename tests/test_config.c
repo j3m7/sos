@@ -71,6 +71,8 @@ static void set_length(unsigned slot, uint16_t length) {
 
 // Payload length of records saved by the first release (before ntp_sync_hours existed).
 #define V1_LENGTH 1540
+// ...and by the second (before certs_hash existed).
+#define V2_LENGTH 1606
 
 static void sample(sos_config_t *c, const char *ssid) {
     config_defaults(c);
@@ -284,8 +286,35 @@ TEST(record_length_out_of_range_rejected) {
     CHECK(!config_load(&store, &b, NULL));
     set_length(0, V1_LENGTH + 2);               // between releases: would cut ntp_server off
     CHECK(!config_load(&store, &b, NULL));
+    set_length(0, V2_LENGTH + 16);              // would cut certs_hash in half
+    CHECK(!config_load(&store, &b, NULL));
     set_length(0, sizeof(sos_config_t));
     CHECK(config_load(&store, &b, NULL));
+}
+
+TEST(record_from_second_release_loads) {
+    // The release with ntp_sync_hours and ntp_server wrote V2_LENGTH bytes; the trust-anchor hash
+    // added after it must load as all zero ("none approved"), not as what follows in flash.
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, certs_hash), V2_LENGTH);
+    blank_flash();
+    sample(&a, "v2");
+    a.ntp_sync_hours = 6;
+    strcpy(a.ntp_server, "time.example.org");
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + V2_LENGTH, 0xff, CONFIG_SLOT_SIZE - 16 - V2_LENGTH);
+    set_length(0, V2_LENGTH);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.ntp_sync_hours, 6);
+    CHECK(!strcmp(b.ntp_server, "time.example.org"));
+    uint8_t zero[CONFIG_CERTS_HASH_LEN] = {0};
+    CHECK_MEM(b.certs_hash, zero, sizeof(zero));
+
+    // A hash round-trips in a full-length record.
+    memset(b.certs_hash, 0xab, sizeof(b.certs_hash));
+    CHECK(config_save(&store, &b));
+    CHECK(config_load(&store, &a, NULL));
+    CHECK_MEM(a.certs_hash, b.certs_hash, sizeof(b.certs_hash));
 }
 
 TEST(sequence_wraps_around) {
@@ -551,6 +580,7 @@ TEST_MAIN(
     RUN(new_fields_round_trip);
     RUN(record_from_older_firmware_loads);
     RUN(record_length_out_of_range_rejected);
+    RUN(record_from_second_release_loads);
     RUN(sequence_wraps_around);
     RUN(erase_resets_to_defaults);
     RUN(ssid_rules);

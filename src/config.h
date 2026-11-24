@@ -26,6 +26,7 @@
 #define CONFIG_KEY_COMMENT_MAX 40
 #define CONFIG_NTP_SYNC_HOURS_MAX 720       // 30 days
 #define CONFIG_NTP_SERVER_MAX 63
+#define CONFIG_CERTS_HASH_LEN 32    // SHA-256
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -44,6 +45,8 @@ typedef struct {
     // firmware is shorter, and the fields it lacks load as 0, so 0 must mean "default".
     uint16_t ntp_sync_hours;                    // periodic NTS sync interval; 0 = off
     char ntp_server[CONFIG_NTP_SERVER_MAX + 1]; // NTS-KE server; empty = build default (SOS_NTS_SERVER)
+    // SHA-256 of the approved /certs/roots.pem (extra TLS roots on the SD card); all zero = none.
+    uint8_t certs_hash[CONFIG_CERTS_HASH_LEN];
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------

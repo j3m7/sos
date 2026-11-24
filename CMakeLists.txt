@@ -85,6 +85,8 @@ set(SOS_SOURCES
     src/timesync.c
     src/tls.c
     src/tls_roots.c
+    src/certbundle.c
+    src/certstore.c
     src/nts_ke.c
     src/nts_ntp.c
     src/nts.c
