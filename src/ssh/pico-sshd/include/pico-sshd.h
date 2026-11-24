@@ -31,7 +31,9 @@
    - Session API (ssh_session_read/write/disconnect/get_client_ip) replaces the stdio driver.
    - ssh_server_service(): all wolfSSH work runs in thread context.
    - CS_CLOSING state for graceful disconnect; timing statistics.
-   - Refused connections get an SSH disconnect message ("too many connections"). */
+   - Refused connections get an SSH disconnect message ("too many connections").
+   - Limits on connections that don't log in: a shorter grace time when every slot is in use,
+     and a per-address penalty. */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -68,6 +70,14 @@ typedef struct ssh_server_pkey_t {
 
 typedef struct ssh_server_t ssh_server_t;
 
+/* Addresses whose connections keep ending without a login (see SSH_PENALTY_* in server.c). */
+#define SSH_PENALTY_SLOTS 4
+typedef struct ssh_penalty_t {
+	ip_addr_t ip;
+	uint8_t fails;                     /* connections that ended before logging in; 0 = unused */
+	uint64_t start_us;                 /* start of the window they are counted in */
+} ssh_penalty_t;
+
 /* One client connection. Fields marked (irq) are also written by lwIP callbacks in interrupt
    context; everything else is only touched from thread context (ssh_server_service and the
    ssh_session_* functions). */
@@ -94,6 +104,7 @@ typedef struct ssh_session_t {
 	bool output_stalled;               /* client stopped reading: writes drop until rb_out drains */
 	volatile bool exit_sent;           /* CS_CLOSING: exit status and channel close sent (the
 	                                      slot may then be reclaimed by a new connection) */
+	ip_addr_t remote_ip;               /* client address (kept: `client` may be gone at close) */
 	uint64_t accept_start_us;          /* when the connection was accepted */
 	uint64_t closing_deadline_us;      /* force close in CS_CLOSING after this time */
 	uint32_t handshake_us;             /* accept to logged-in */
@@ -112,6 +123,9 @@ struct ssh_server_t {
 	uint32_t logins;                   /* successful logins */
 	uint32_t rejected_busy;            /* connections refused because all slots were in use */
 	uint8_t busy_pending;              /* refused connections still being closed (irq only) */
+	uint32_t rejected_penalty;         /* connections refused from a penalized address */
+	uint32_t dropped_stale;            /* unauthenticated connections dropped to free a slot */
+	ssh_penalty_t penalties[SSH_PENALTY_SLOTS];  /* (irq) changed only under the lwIP lock */
 	uint32_t last_handshake_us;        /* accept to logged-in, for the last login */
 	uint32_t work_us_max;              /* longest single wolfSSH call */
 	uint64_t work_us_total;            /* sum of all wolfSSH call durations */

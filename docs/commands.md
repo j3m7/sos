@@ -21,15 +21,16 @@ this page is the reference.
 | Command | Where | What it does |
 |---|---|---|
 | `help` (or `?`) | any | List the commands this channel may use |
-| `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset |
+| `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset, or a `last reset:` line if a hard fault or panic did |
 | `mem` | any | Heap in use, peak and total, and core 0's peak stack use. After a Lua script has run, also how much of core 1's 32 KB stack the last script used |
 | `net` | any | Wi-Fi link state and signal strength (RSSI), IP address, gateway, hostname, and ARP packet counts with the keepalive state |
-| `ssh` | any | Host key fingerprint; sessions in use and connections refused because all were busy; logins; and each session (user and address, state, shell or SFTP, how long), yours marked `*` |
+| `ssh` | any | Host key fingerprint; sessions in use and connections refused because all were busy; connections refused from a penalized address or dropped before login; logins; and each session (user and address, state, shell or SFTP, how long), yours marked `*` |
 | `dmesg` | any | The system log kept in memory |
 | `log` | any | Show the log levels: `console` (printed on the serial console) and `history` (kept for `dmesg`) |
 | `log console\|history <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug` |
 | `logout` (or `exit`, Ctrl-D) | any | End this session |
 | `reboot` | any | Restart the device |
+| `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |
 
 ## Configuration
 
@@ -123,4 +124,5 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `lua -e <code>` | any | Run the given code |
 
 One script runs at a time, and its output goes to the shell that started it. Scripts use
-the `sos` library to reach the system; see [Lua scripts](../README.md#lua-scripts-prototype).
+the `sos` library to reach the system, and `require` loads modules from the card (`/lib` and the
+working directory); see [Lua scripts](../README.md#lua-scripts-prototype).

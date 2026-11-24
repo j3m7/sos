@@ -116,9 +116,8 @@ static int traceback(lua_State *L) {
 
 // --- the sos library -------------------------------------------------------------------------
 
-// Resolve a script's path argument against the job's working directory (core 0 normalizes).
-static void set_path(lua_State *L, int arg) {
-    const char *p = luaL_checkstring(L, arg);
+// Put `p` into the request, resolved against the job's working directory (core 0 normalizes).
+static void set_req_path(lua_State *L, const char *p) {
     // Absolute: as given. Relative: cwd + "/" + path (cwd "/" needs no extra separator).
     const char *dir = p[0] == '/' ? "" : lua_job.cwd;
     const char *sep = (p[0] == '/' || !strcmp(dir, "/")) ? "" : "/";
@@ -128,6 +127,11 @@ static void set_path(lua_State *L, int arg) {
     memcpy(lua_req.path, dir, strlen(dir));
     memcpy(lua_req.path + strlen(dir), sep, strlen(sep));
     memcpy(lua_req.path + strlen(dir) + strlen(sep), p, strlen(p) + 1);
+}
+
+// The same for a script's path argument.
+static void set_path(lua_State *L, int arg) {
+    set_req_path(L, luaL_checkstring(L, arg));
 }
 
 static int fail(lua_State *L) {
@@ -187,21 +191,32 @@ static int l_sleep(lua_State *L) {
     return 0;
 }
 
-static int l_read(lua_State *L) {
-    set_path(L, 1);
+// Read the whole file at lua_req.path: pushes its contents and returns 0, or pushes nothing and
+// returns the failed request's result (< 0; lua_req.error says why).
+static int read_file(lua_State *L) {
     luaL_Buffer b;
     luaL_buffinit(L, &b);
     for (uint32_t off = 0;; off += lua_req.len) {
         lua_req.type = LR_READ;
         lua_req.offset = off;
         request();
-        if (lua_req.result < 0)
-            return fail(L);
+        if (lua_req.result < 0) {
+            luaL_pushresult(&b);
+            lua_pop(L, 1);
+            return (int)lua_req.result;
+        }
         if (lua_req.len == 0)
             break;
         luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
     }
     luaL_pushresult(&b);
+    return 0;
+}
+
+static int l_read(lua_State *L) {
+    set_path(L, 1);
+    if (read_file(L) < 0)
+        return fail(L);
     return 1;
 }
 
@@ -332,6 +347,101 @@ static int l_xpcall(lua_State *L) {
     return xpcall_done(L, LUA_OK, 0);
 }
 
+// --- require: modules from the SD card --------------------------------------------------------
+//
+// The standard package library, with its file searchers replaced: package.searchers is
+// {preload, sd}. The sd searcher tries each template of package.path in turn ('?' replaced by the
+// module name, '.' in the name by '/'), reading files through core 0 like sos.read. Text only:
+// no precompiled chunks, and no C modules (no package.loadlib, empty cpath).
+
+// Find `name` along `path`. Found: pushes the file's contents and its path, returns true. Not
+// found: pushes "no file 'a'\n\tno file 'b'...", returns false. Other read errors (no SD card,
+// ...) are raised: trying further paths would hide them.
+static bool search(lua_State *L, const char *name, const char *path, const char *sep,
+                   const char *rep) {
+    if (*sep)
+        name = luaL_gsub(L, name, sep, rep);
+    else
+        lua_pushstring(L, name);
+    int tried = 0;
+    for (const char *t = path; *t; ) {
+        const char *end = strchr(t, ';');
+        size_t len = end ? (size_t)(end - t) : strlen(t);
+        if (len) {
+            lua_pushlstring(L, t, len);
+            const char *file = luaL_gsub(L, lua_tostring(L, -1), "?", name);
+            lua_remove(L, -2);                          // the template
+            set_req_path(L, file);
+            int r = read_file(L);
+            if (r == 0) {                               // stack: ..., file, contents
+                lua_insert(L, -2);
+                return true;                            // (the "no file" strings stay below)
+            }
+            if (r != LUA_REQ_NOT_FOUND)
+                luaL_error(L, "cannot read '%s': %s", file, lua_req.error);
+            lua_pushfstring(L, "%sno file '%s'", tried ? "\n\t" : "", file);
+            lua_remove(L, -2);                          // the file name
+            tried++;
+            luaL_checkstack(L, 2, "too many package.path entries");
+        }
+        t += len + (end ? 1 : 0);
+    }
+    lua_concat(L, tried);
+    return false;
+}
+
+// package.searchers[2]: load a Lua module from the SD card.
+static int searcher_sd(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+    lua_getfield(L, lua_upvalueindex(1), "path");
+    const char *path = lua_tostring(L, -1);
+    if (!path)
+        return luaL_error(L, "'package.path' must be a string");
+    if (!search(L, name, path, ".", LUA_DIRSEP))
+        return 1;                                       // the "no file" list
+    size_t len;
+    const char *src = lua_tolstring(L, -2, &len);
+    const char *file = lua_tostring(L, -1);
+    const char *chunk = lua_pushfstring(L, "@%s", file);
+    if (luaL_loadbufferx(L, src, len, chunk, "t") != LUA_OK)
+        return luaL_error(L, "error loading module '%s' from file '%s':\n\t%s", name, file,
+                          lua_tostring(L, -1));
+    lua_pushstring(L, file);                            // passed to the loader, returned by require
+    return 2;
+}
+
+// package.searchpath(name, path [, sep [, rep]]) for the SD card.
+static int l_searchpath(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+    const char *path = luaL_checkstring(L, 2);
+    const char *sep = luaL_optstring(L, 3, ".");
+    const char *rep = luaL_optstring(L, 4, LUA_DIRSEP);
+    if (search(L, name, path, sep, rep)) {
+        lua_remove(L, -2);                              // the contents; the path stays on top
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_insert(L, -2);
+    return 2;
+}
+
+static void setup_package(lua_State *L) {
+    lua_getglobal(L, LUA_LOADLIBNAME);
+    lua_pushnil(L);
+    lua_setfield(L, -2, "loadlib");                     // no C modules
+    lua_pushcfunction(L, l_searchpath);
+    lua_setfield(L, -2, "searchpath");
+    lua_getfield(L, -1, "searchers");
+    lua_createtable(L, 2, 0);
+    lua_rawgeti(L, -2, 1);                              // keep package.preload's searcher
+    lua_rawseti(L, -2, 1);
+    lua_pushvalue(L, -3);
+    lua_pushcclosure(L, searcher_sd, 1);
+    lua_rawseti(L, -2, 2);
+    lua_setfield(L, -3, "searchers");
+    lua_pop(L, 2);                                      // old searchers, package
+}
+
 static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
     return 1;
@@ -342,12 +452,14 @@ static void open_libs(lua_State *L) {
         {LUA_GNAME, luaopen_base},          {LUA_COLIBNAME, luaopen_coroutine},
         {LUA_TABLIBNAME, luaopen_table},    {LUA_STRLIBNAME, luaopen_string},
         {LUA_MATHLIBNAME, luaopen_math},    {LUA_UTF8LIBNAME, luaopen_utf8},
-        {"sos", open_sos},                  {NULL, NULL},
+        {LUA_LOADLIBNAME, luaopen_package}, {"sos", open_sos},
+        {NULL, NULL},
     };
     for (const luaL_Reg *lib = libs; lib->func; lib++) {
         luaL_requiref(L, lib->name, lib->func, 1);
         lua_pop(L, 1);
     }
+    setup_package(L);
     lua_register(L, "print", l_print);
     lua_getglobal(L, "setmetatable");
     lua_pushcclosure(L, l_setmetatable, 1);

@@ -20,6 +20,11 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
   buffers are allocated when a connection is set up and freed when it closes, so an idle slot
   costs no heap. When every slot is busy, the client gets an SSH disconnect message saying so
   (no bare reset).
+- **Connections that don't log in:** the login grace time is 30 s, or 5 s while every slot is
+  in use (`SSH_LOGIN_GRACE_BUSY_US`). Each such connection counts against its address
+  (`ssh_penalty_t`, 4 addresses tracked): at `SSH_PENALTY_FAILS` (30) within
+  `SSH_PENALTY_WINDOW_US` (60 s), new connections from it are reset until it has been quiet
+  for a whole window. The table is only changed under the lwIP lock.
 - **Disconnect:** queued output is sent, then the exit status and channel close, then the
   server waits briefly for the client to close the TCP connection.
 - **Authentication:** public key only (password support was removed).

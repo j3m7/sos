@@ -219,6 +219,12 @@ ssh <user>@<device-ip>
   connections are refused with an SSH disconnect message the client displays
   ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets
   its own shell, separate from the others and from the USB console.
+- Connections that don't log in can't hold the server. A connection has 30 s to log in, but
+  only 5 s while every session is in use. An address whose connections end without a login 30
+  times within a minute is refused (its connections are reset) until it has stayed away for a
+  minute; successful logins don't count. `ssh` shows how often either happened.
+- Keys and nonces come from wolfCrypt's Hash-DRBG, seeded from the RP2350's hardware random
+  number generator through the SDK.
 - `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
   Ctrl-D ends the session.
 
@@ -232,6 +238,12 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
 
 - After a watchdog reset the boot log shows `last reset: watchdog timeout` and `uptime`
   appends `(last reset: watchdog)`. Power-on and the `reboot` command don't count.
+- A hard fault (bad memory access, undefined instruction, stack overflow, on either core) or
+  an SDK panic doesn't wait for the watchdog: it stores what happened and resets at once. The
+  boot log and `uptime` then show it, e.g. `last reset: hard fault on core 0 at 0x1000a3c4,
+  called from 0x10004211 (bad memory access, CFSR 0x00008200)`. Look the addresses up in
+  `build/sos.dis`. The console command `crash fault|stack|panic|hang` stops the firmware in
+  each way, for testing this.
 - `ssh` shows the longest single SSH work step (`longest ... ms`), a guide to how much margin
   the timeout has.
 - Set the timeout when configuring, e.g. `cmake --preset debug -DSOS_WATCHDOG_MS=12000`; the
@@ -378,7 +390,7 @@ lua /scripts/report.lua          # a file (relative paths start at the working d
 
 The script's output goes to the shell that started it; Ctrl-C stops it, as does ending the SSH
 session. One script runs at a time. Available: the base, string, table, math, utf8 and
-coroutine libraries, and `sos`:
+coroutine libraries, `require` (see below), and `sos`:
 
 | Function | |
 |---|---|
@@ -389,9 +401,27 @@ coroutine libraries, and `sos`:
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
 
-Failures return `nil` and a message. There's no `io`, `os`, `package` or `debug`: scripts reach
-the system only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them;
-use a `<close>` variable).
+Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
+only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them; use a
+`<close>` variable).
+
+**Modules:** `require "name"` loads a Lua module from the card, searching `package.path`. The
+default is `/lib/?.lua;/lib/?/init.lua;./?.lua;./?/init.lua`, where `./` is the working
+directory and dots in the name become directories (`require "net.util"` tries
+`/lib/net/util.lua`, ...). A script may change `package.path` before calling `require`.
+Modules are loaded once per script (`package.loaded`), and `package.preload` works as usual.
+Only Lua source is accepted: no precompiled chunks and no C modules.
+
+```lua
+-- /lib/greet.lua
+local M = {}
+function M.hello(who) return "hello, " .. who end
+return M
+
+-- a script
+local greet = require "greet"
+print(greet.hello("pico"))
+```
 
 - **Stopping:** Ctrl-C ends the script even if it catches errors with `pcall` or `xpcall`: from
   then on, any code it runs outside a `pcall` raises "interrupted" again. The exception is a
