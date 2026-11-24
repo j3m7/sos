@@ -1,7 +1,40 @@
 
 # Small/Secure OS
 
-## Features
+## Objective
+
+SOS turns a Raspberry Pi Pico 2 W into a small, headless, low-power general purpose computer
+that you use remotely over Wi-Fi. There is no screen or keyboard: the device sits on the
+network, mostly asleep, and you connect to it to get basic tasks done.
+
+### Core capabilities
+
+- **Remote shell**: log in over the network to a command shell to run commands, inspect the
+  system and manage files.
+- **Email**: check a mailbox (list, read and delete messages) over IMAP, and send short
+  messages over SMTP.
+- **File transfer**: upload files to and download files from the device's storage (microSD
+  card on the Adalogger).
+- **Timekeeping**: keep accurate wall-clock time across power loss using the Adalogger's
+  battery-backed RTC, synchronised over the network (NTP).
+
+### Design principles
+
+- **Secure by default**: every network connection is encrypted and authenticated; no
+  plaintext logins or protocols. Credentials and keys never leave the device unencrypted.
+- **Low power**: idle in low-power sleep, wake on network activity or timers, use Wi-Fi power
+  saving, and do as little work as possible while nobody is connected.
+- **Headless**: fully usable and recoverable without a screen; the USB serial console is for
+  development and recovery only.
+- **Small**: fit comfortably in the RP2350's 520 KB of RAM and 4 MB of flash, with bulk data
+  on the microSD card. Prefer a few well-chosen features over many partial ones.
+
+### Non-goals
+
+- Graphical interfaces, displays or local input devices.
+- Running unmodified Linux/POSIX software.
+- Serving many users or many simultaneous connections.
+
 
 ## Hardware
 
