@@ -12,9 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 
-#include "pico/aon_timer.h"
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
 
@@ -141,23 +139,7 @@ static const char *fs_type(BYTE t) {
     }
 }
 
-// The library dates files from the always-on timer (get_fattime), while SOS keeps the time in
-// gettimeofday() (set from the RTC or NTP). Copy it over before anything is written; without a
-// valid time the files get FatFs's default date.
-static void sync_fat_clock(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    if (tv.tv_sec < 1704067200)             // before 2024: the clock isn't set
-        return;
-    struct timespec ts = { .tv_sec = tv.tv_sec, .tv_nsec = tv.tv_usec * 1000 };
-    if (aon_timer_is_running())
-        aon_timer_set_time(&ts);
-    else
-        aon_timer_start(&ts);
-}
-
 static bool mount(shell_t *sh) {
-    sync_fat_clock();
     if (card.state.mounted)
         return true;
     uint64_t t0 = time_us_64();
@@ -348,7 +330,6 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     const char *drive = sd_get_drive_prefix(&card);
     f_unmount(drive);
     card.state.mounted = false;
-    sync_fat_clock();                       // volume and directory dates
     const char *name = format_type == FM_EXFAT ? "exFAT" : "FAT32";
     log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s", name);
 

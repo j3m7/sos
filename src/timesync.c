@@ -7,6 +7,7 @@
 #include <sys/time.h>
 
 #include "hardware/sync.h"
+#include "pico/aon_timer.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #include "lwip/apps/sntp.h"
@@ -73,9 +74,18 @@ static int64_t now_us(void) {
     return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
+// The SD card library's time() and get_fattime() (no-OS-FatFS my_rtc.c) read the always-on
+// timer, not gettimeofday(), and its time() replaces the C library's: wolfSSL checks certificate
+// dates with it and FatFs dates files with it. So set both clocks together. Both count the
+// crystal, so they stay in step after this.
 static void set_clock_us(int64_t t_us) {
     struct timeval tv = {.tv_sec = (time_t)(t_us / 1000000), .tv_usec = (suseconds_t)(t_us % 1000000)};
     settimeofday(&tv, NULL);
+    struct timespec ts = {.tv_sec = tv.tv_sec, .tv_nsec = (long)tv.tv_usec * 1000};
+    if (aon_timer_is_running())
+        aon_timer_set_time(&ts);
+    else
+        aon_timer_start(&ts);
 }
 
 static bool plausible(int64_t t) {
