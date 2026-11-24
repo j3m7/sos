@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Hot-attach / detach Raspberry Pi USB devices (Pico, RP2350 BOOTSEL, Debug Probe)
+# to a libvirt VM. Invoked by 90-pico-vm-attach.rules on the HOST via systemd-run.
+#
+# Usage: pico-vm-attach add|remove BUSNUM DEVNUM
+#
+# Config (environment, or /etc/default/pico-vm-attach):
+#   PICO_VM_DOMAIN   libvirt domain name        (default: slopbox)
+#   PICO_VM_URI      libvirt connection URI     (default: qemu:///system)
+
+set -euo pipefail
+
+# shellcheck source=/dev/null
+[[ -r /etc/default/pico-vm-attach ]] && . /etc/default/pico-vm-attach
+DOMAIN=${PICO_VM_DOMAIN:-slopbox}
+URI=${PICO_VM_URI:-qemu:///system}
+
+log() { logger -t pico-vm-attach -- "$*"; }
+
+action=${1:-}; busnum=${2:-}; devnum=${3:-}
+if [[ ! $action =~ ^(add|remove)$ || ! $busnum =~ ^[0-9]+$ || ! $devnum =~ ^[0-9]+$ ]]; then
+    echo "usage: $0 add|remove BUSNUM DEVNUM" >&2
+    exit 2
+fi
+
+# udev gives zero-padded values ("003"); libvirt wants plain decimal.
+bus=$((10#$busnum)); dev=$((10#$devnum))
+
+if [[ $(virsh -c "$URI" domstate "$DOMAIN" 2>/dev/null) != running ]]; then
+    log "$action $bus:$dev skipped: domain '$DOMAIN' not running"
+    exit 0
+fi
+
+xml=$(mktemp --tmpdir pico-vm-attach.XXXXXX.xml)
+trap 'rm -f "$xml"' EXIT
+cat >"$xml" <<EOF
+<hostdev mode='subsystem' type='usb' managed='yes'>
+  <source>
+    <address bus='$bus' device='$dev'/>
+  </source>
+</hostdev>
+EOF
+
+case $action in
+add)
+    # The device node may not be ready the instant udev fires; retry briefly.
+    for _ in 1 2 3 4 5; do
+        if out=$(virsh -c "$URI" attach-device "$DOMAIN" "$xml" --live 2>&1); then
+            log "attached $bus:$dev to $DOMAIN"
+            exit 0
+        fi
+        sleep 0.2
+    done
+    log "attach $bus:$dev to $DOMAIN failed: $out"
+    exit 1
+    ;;
+remove)
+    # Drop the stale hostdev entry so they don't pile up across reboots of the Pico.
+    if out=$(virsh -c "$URI" detach-device "$DOMAIN" "$xml" --live 2>&1); then
+        log "detached $bus:$dev from $DOMAIN"
+    else
+        log "detach $bus:$dev from $DOMAIN: $out"
+    fi
+    ;;
+esac

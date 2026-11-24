@@ -1,0 +1,10 @@
+# Install on the HOST: /etc/udev/rules.d/90-pico-vm-attach.rules
+# Hands every Raspberry Pi USB device (vendor 2e8a: Pico app 0009, RP2350 BOOTSEL 000f,
+# Debug Probe 000c, ...) to the libvirt VM as it appears, and removes it when it goes away.
+# systemd-run detaches the work from udev, which kills long-running RUN programs.
+
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{PRODUCT}=="2e8a/*", \
+    RUN+="/usr/bin/systemd-run --no-block --collect --quiet /usr/local/bin/pico-vm-attach add $env{BUSNUM} $env{DEVNUM}"
+
+ACTION=="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{PRODUCT}=="2e8a/*", \
+    RUN+="/usr/bin/systemd-run --no-block --collect --quiet /usr/local/bin/pico-vm-attach remove $env{BUSNUM} $env{DEVNUM}"
