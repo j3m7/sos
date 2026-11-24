@@ -101,7 +101,7 @@ static certs_state_t read_checked(uint8_t **buf, size_t *len, const char **why) 
     if (memcmp(h, settings()->certs_hash, sizeof(h))) {
         free(*buf);
         *buf = NULL;
-        *why = "its SHA-256 differs from the approved one; re-approve it on the console";
+        *why = "SHA-256 differs; re-approve it on the console";
         return ST_CHANGED;
     }
     return ST_OK;
@@ -116,7 +116,7 @@ static void note(certs_state_t st, const char *why, unsigned loaded) {
     if (st == ST_OK)
         log_msg(SOS_LOG_NOTICE, "tls: using %u root certificate(s) from %s", loaded, CERTSTORE_FILE);
     else if (st != ST_NOT_APPROVED)
-        log_msg(SOS_LOG_WARNING, "tls: %s %s (%s); using the built-in roots only", CERTSTORE_FILE,
+        log_msg(SOS_LOG_WARNING, "tls: %s %s (%s); built-in roots only", CERTSTORE_FILE,
                 state_text[st], why ? why : "");
 }
 
