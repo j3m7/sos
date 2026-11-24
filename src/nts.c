@@ -162,7 +162,9 @@ static void succeed(void) {
         log_msg(SOS_LOG_WARNING, "nts: certificate dates not checked (clock not set)");
 }
 
-bool nts_ke_start(const char *host) {
+static bool sync_active(void);
+
+static bool ke_begin(const char *host) {
     if (ke.state == KE_RUNNING || q.state == Q_RESOLVING || q.state == Q_WAITING)
         return false;
     memset(&ke, 0, sizeof(ke));
@@ -179,6 +181,10 @@ bool nts_ke_start(const char *host) {
     }
     log_msg(SOS_LOG_INFO, "nts: key exchange with %s:%u", ke.host, NTS_KE_PORT);
     return true;
+}
+
+bool nts_ke_start(const char *host) {
+    return !sync_active() && ke_begin(host);
 }
 
 static void ke_poll(void) {
@@ -302,7 +308,7 @@ static void q_finish(bool ok, const char *why) {
     }
 }
 
-const char *nts_query_start(void) {
+static const char *q_begin(void) {
     if (ke.state == KE_RUNNING || q.state == Q_RESOLVING || q.state == Q_WAITING)
         return "busy";
     if (!have_keys)
@@ -325,6 +331,10 @@ const char *nts_query_start(void) {
         q.dns_done = true;
     cyw43_arch_lwip_end();
     return NULL;
+}
+
+const char *nts_query_start(void) {
+    return sync_active() ? "busy (a sync is running)" : q_begin();
 }
 
 static void q_send(void) {
@@ -454,9 +464,116 @@ static void q_poll(void) {
         q_check_reply();
 }
 
+// --- sync: key exchange if needed, then several queries ------------------------------------------
+
+static struct {
+    bool active;
+    nts_sync_state_t outcome;       // reported once by nts_sync_result()
+    enum { SY_KE, SY_QUERY } phase;
+    char host[64];
+    bool ke_retried;                // after an NTS NAK
+    unsigned samples, ok;
+    int64_t best_offset_us, best_delay_us;
+    char error[128];
+} sy;
+
+static bool sync_active(void) {
+    return sy.active;
+}
+
+static void sync_finish(bool ok, const char *why) {
+    sy.active = false;
+    sy.outcome = ok ? NTS_SYNC_OK : NTS_SYNC_FAILED;
+    if (!ok)
+        snprintf(sy.error, sizeof(sy.error), "%s", why);
+}
+
+static void sync_query(void) {
+    const char *err = q_begin();
+    if (err)
+        sync_finish(false, err);
+    else
+        sy.phase = SY_QUERY;
+}
+
+static void sync_ke(void) {
+    if (!ke_begin(sy.host))
+        sync_finish(false, "busy");
+    else
+        sy.phase = SY_KE;
+}
+
+bool nts_sync_start(const char *host) {
+    if (sy.active || ke.state == KE_RUNNING || q.state == Q_RESOLVING || q.state == Q_WAITING)
+        return false;
+    memset(&sy, 0, sizeof(sy));
+    sy.active = true;
+    sy.outcome = NTS_SYNC_RUNNING;
+    snprintf(sy.host, sizeof(sy.host), "%s", host ? host : NTS_DEFAULT_SERVER);
+    if (!have_keys || result.cookie_count == 0 || strcmp(ke.host, sy.host))
+        sync_ke();
+    else
+        sync_query();
+    return true;
+}
+
+static void sync_poll(void) {
+    if (!sy.active)
+        return;
+    if (sy.phase == SY_KE) {
+        if (ke.state == KE_RUNNING)
+            return;
+        if (ke.state != KE_DONE) {
+            sync_finish(false, ke.error);
+            return;
+        }
+        sync_query();
+        return;
+    }
+    if (q.state == Q_RESOLVING || q.state == Q_WAITING)
+        return;
+    sy.samples++;
+    if (q.state == Q_DONE) {
+        if (sy.ok == 0 || q.delay_us < sy.best_delay_us) {
+            sy.best_delay_us = q.delay_us;
+            sy.best_offset_us = q.offset_us;
+        }
+        sy.ok++;
+    } else {
+        snprintf(sy.error, sizeof(sy.error), "%s", q.error);
+        if (!have_keys && !sy.ke_retried) {     // NTS NAK: new keys and cookies, once
+            sy.ke_retried = true;
+            sync_ke();
+            return;
+        }
+    }
+    if (sy.samples < NTS_SYNC_SAMPLES && have_keys && result.cookie_count > 0) {
+        sync_query();
+        return;
+    }
+    if (sy.ok)
+        sync_finish(true, NULL);
+    else
+        sync_finish(false, sy.error[0] ? sy.error : "no reply");
+}
+
+nts_sync_state_t nts_sync_result(int64_t *offset_us, int64_t *delay_us, const char **error) {
+    nts_sync_state_t st = sy.active ? NTS_SYNC_RUNNING : sy.outcome;
+    if (st == NTS_SYNC_OK) {
+        *offset_us = sy.best_offset_us;
+        *delay_us = sy.best_delay_us;
+    } else if (st == NTS_SYNC_FAILED) {
+        *error = sy.error;
+    }
+    if (st == NTS_SYNC_OK || st == NTS_SYNC_FAILED)
+        sy.outcome = NTS_SYNC_IDLE;
+    return st;
+}
+
 void nts_poll(void) {
     ke_poll();
     q_poll();
+    sync_poll();
 }
 
 // --- status --------------------------------------------------------------------------------------

@@ -44,8 +44,9 @@ static void save(shell_t *sh) {
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
-    shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTP\n");
-    shell_printf(sh, "time auto|server  periodic NTP sync / NTP server settings\n");
+    shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
+    shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
+    shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "nts [ke [host]]   NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
     shell_printf(sh, "mem               heap and stack usage\n");
@@ -63,8 +64,8 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "key del <n>       stop trusting key n\n");
         shell_printf(sh, "hostname <name>   set the hostname\n");
         shell_printf(sh, "user <name>       set the SSH user name\n");
-        shell_printf(sh, "time auto <h>|off sync the clock from NTP every h hours (default off)\n");
-        shell_printf(sh, "time server <name>|default  set the NTP server\n");
+        shell_printf(sh, "time auto <h>|off sync the clock from NTS every h hours (default off)\n");
+        shell_printf(sh, "time server <name>|default  set the NTS server\n");
         shell_printf(sh, "config reset      erase the configuration\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -326,7 +327,7 @@ static void cmd_config(shell_t *sh, char *args) {
     shell_printf(sh, "ssh user: %s\n", c->ssh_user);
     wifi_show(sh);
     shell_printf(sh, "keys:     %u trusted ('key list')\n", c->key_count);
-    shell_printf(sh, "ntp:      %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTP_SERVER,
+    shell_printf(sh, "nts:      %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
                  c->ntp_server[0] ? "" : " (build default)");
     if (c->ntp_sync_hours)
         shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
@@ -464,7 +465,7 @@ static void show_ntp_sync_hours(shell_t *sh) {
         shell_printf(sh, "ntp sync: off (RTC only; 'time sync' syncs once)\n");
 }
 
-// `time auto [off | <hours>]`: periodic NTP sync (a setting, so console only to change).
+// `time auto [off | <hours>]`: periodic NTS sync (a setting, so console only to change).
 static void cmd_time_auto(shell_t *sh, const char *value) {
     while (*value == ' ')
         value++;
@@ -496,12 +497,13 @@ static void cmd_time_auto(shell_t *sh, const char *value) {
 static void show_ntp_server(shell_t *sh) {
     const char *s = settings()->ntp_server;
     if (*s)
-        shell_printf(sh, "ntp server: %s\n", s);
+        shell_printf(sh, "nts server: %s\n", s);
     else
-        shell_printf(sh, "ntp server: %s (build default)\n", SOS_NTP_SERVER);
+        shell_printf(sh, "nts server: %s (build default)\n", SOS_NTS_SERVER);
 }
 
-// `time server [<name> | default]`: NTP server (a setting, so console only to change).
+// `time server [<name> | default]`: NTS server (a setting, so console only to change). Its
+// certificate chain must end at a built-in root (src/tls_roots.c).
 static void cmd_time_server(shell_t *sh, const char *value) {
     while (*value == ' ')
         value++;
@@ -523,8 +525,8 @@ static void cmd_time_server(shell_t *sh, const char *value) {
         snprintf(c->ntp_server, sizeof(c->ntp_server), "%s", value);
     }
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: ntp server set to '%s'",
-            c->ntp_server[0] ? c->ntp_server : SOS_NTP_SERVER);
+    log_msg(SOS_LOG_NOTICE, "config: nts server set to '%s'",
+            c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER);
     show_ntp_server(sh);
     shell_printf(sh, "used from the next sync ('time sync' to sync now)\n");
 }
@@ -534,15 +536,20 @@ static void cmd_time(shell_t *sh, char *args) {
     if (!args)
         timesync_status(sh);
     else if (!strcmp(args, "sync"))
-        shell_printf(sh, timesync_request_ntp()
-                     ? "ntp: sync started; 'time' shows the result\n"
-                     : "ntp: a sync is already running\n");
+        shell_printf(sh, timesync_request_nts()
+                     ? "nts: sync started; 'time' shows the result\n"
+                     : "nts: a sync is already running\n");
+    else if (!strcmp(args, "sync sntp"))
+        shell_printf(sh, timesync_request_sntp()
+                     ? "sntp: unauthenticated sync from " SOS_NTP_SERVER
+                       " started; 'time' shows the result\n"
+                     : "a sync is already running\n");
     else if (!strncmp(args, "auto", 4) && (args[4] == ' ' || !args[4]))
         cmd_time_auto(sh, args + 4);
     else if (!strncmp(args, "server", 6) && (args[6] == ' ' || !args[6]))
         cmd_time_server(sh, args + 6);
     else
-        shell_printf(sh, "usage: time [sync | auto [off | <hours>] | server [<name> | default]]\n");
+        shell_printf(sh, "usage: time [sync [sntp] | auto [off | <hours>] | server [<name> | default]]\n");
 }
 
 // `nts` / `nts ke [host]` / `nts query`: NTS key exchange and authenticated time queries
