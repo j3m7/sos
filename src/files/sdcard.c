@@ -197,6 +197,11 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
         shell_printf(sh, "usage: sd test [KB [keep]], 4 to 65536 KB; keep leaves /sos-test.txt\n");
         return;
     }
+    // One long call: SSH sessions and the console wait until it's done (up to minutes).
+    if (!sh->io->admin) {
+        shell_printf(sh, "the card test can only be run on the serial console\n");
+        return;
+    }
     const char *name = "/sos-test.txt";
     if (!mount(sh))
         return;

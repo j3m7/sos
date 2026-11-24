@@ -126,6 +126,14 @@ static bool job_done(void *arg) {
     return false;
 }
 
+// Names come from the card: keep control characters (escape sequences) off the terminal.
+static const char *printable(char *name) {
+    for (char *p = name; *p; p++)
+        if ((unsigned char)*p < 0x20 || *p == 0x7f)
+            *p = '?';
+    return name;
+}
+
 // --- ls ----------------------------------------------------------------------------------------
 
 typedef struct {
@@ -154,10 +162,11 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
         snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u", (fi.fdate >> 9) + 1980,
                  (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63);
         if (fi.fattrib & AM_DIR) {
-            shell_printf(sh, "%12s  %s  %s/\n", "<dir>", date, fi.fname);
+            shell_printf(sh, "%12s  %s  %s/\n", "<dir>", date, printable(fi.fname));
             j->dirs++;
         } else {
-            shell_printf(sh, "%12llu  %s  %s\n", (unsigned long long)fi.fsize, date, fi.fname);
+            shell_printf(sh, "%12llu  %s  %s\n", (unsigned long long)fi.fsize, date,
+                         printable(fi.fname));
             j->files++;
             j->bytes += fi.fsize;
         }
@@ -178,7 +187,7 @@ static void cmd_ls(shell_t *sh, const char *arg) {
         if (fr != FR_OK)
             shell_printf(sh, "ls: %s: %s\n", arg, files_error(fr));
         else
-            shell_printf(sh, "%12llu  %s\n", (unsigned long long)fi.fsize, fi.fname);
+            shell_printf(sh, "%12llu  %s\n", (unsigned long long)fi.fsize, printable(fi.fname));
         return;
     }
     ls_job_t *j = calloc(1, sizeof(*j));

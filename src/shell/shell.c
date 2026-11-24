@@ -49,24 +49,26 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
-    shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
-    shell_printf(sh, "nts [ke [host]]   NTS status / key exchange (development)\n");
+    shell_printf(sh, "nts [ke]          NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
     shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
     shell_printf(sh, "dmesg             system log\n");
-    shell_printf(sh, "log [console|history <level>]  show or set log levels\n");
+    shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
-    shell_printf(sh, "sd [info]         SD card status (also: sd test [KB], sd speed, sd unmount)\n");
+    shell_printf(sh, "sd [info]         SD card status (also: sd speed, sd unmount)\n");
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
+        shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
+        shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
         shell_printf(sh, "key del <n>       stop trusting key n\n");
@@ -77,6 +79,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
         shell_printf(sh, "config reset      erase the configuration\n");
         shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
+        shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
     shell_printf(sh, "reboot            restart the device\n");
@@ -148,6 +151,10 @@ static void cmd_log(shell_t *sh, char *args) {
         shell_printf(sh, "usage: log [console|history err|warning|notice|info|debug]\n");
         return;
     }
+    // The log is the record of logins and configuration changes: a session can read it
+    // (dmesg) but not turn it down.
+    if (!require_admin(sh))
+        return;
     if (!strcmp(what, "console"))
         log_set_console_level(l);
     else
@@ -549,12 +556,16 @@ static void cmd_time(shell_t *sh, char *args) {
         shell_printf(sh, timesync_request_nts()
                      ? "nts: sync started; 'time' shows the result\n"
                      : "nts: a sync is already running\n");
-    else if (!strcmp(args, "sync sntp"))
+    else if (!strcmp(args, "sync sntp")) {
+        // Unauthenticated: whoever answers sets the clock, which TLS checks certificate dates
+        // against. So only on the console, like the configuration.
+        if (!require_admin(sh))
+            return;
         shell_printf(sh, timesync_request_sntp()
                      ? "sntp: unauthenticated sync from " SOS_NTP_SERVER
                        " started; 'time' shows the result\n"
                      : "a sync is already running\n");
-    else if (!strncmp(args, "auto", 4) && (args[4] == ' ' || !args[4]))
+    } else if (!strncmp(args, "auto", 4) && (args[4] == ' ' || !args[4]))
         cmd_time_auto(sh, args + 4);
     else if (!strncmp(args, "server", 6) && (args[6] == ' ' || !args[6]))
         cmd_time_server(sh, args + 6);
@@ -596,6 +607,10 @@ static void cmd_nts(shell_t *sh, char *args) {
     const char *host = args + 2;
     while (*host == ' ')
         host++;
+    // Another host makes the device connect out to it: console only. A session may run the
+    // exchange with the configured server.
+    if (*host && !require_admin(sh))
+        return;
     if (*host && config_check_ntp_server(host)) {
         shell_printf(sh, "bad host name: %s\n", config_check_ntp_server(host));
         return;

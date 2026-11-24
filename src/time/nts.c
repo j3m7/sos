@@ -65,6 +65,7 @@ static struct {
     int64_t t1_us;                  // system clock when the request was sent
     uint64_t started_us, finished_us;
     unsigned ignored;               // replies that failed a check (ignored, kept waiting)
+    bool nak;                       // an NTS NAK came (unauthenticated): counts if nothing valid does
     const char *last_reason;
     // Results.
     int64_t offset_us, delay_us;
@@ -392,9 +393,11 @@ static void q_check_reply(void) {
         return;
     }
     if (st == NTS_NTP_NAK) {
+        // A NAK isn't authenticated, so anyone who saw the request can send one. Keep waiting
+        // for an authentic reply (RFC 8915 5.7); q_poll() acts on the NAK at the timeout.
+        q.nak = true;
+        q.got = false;
         free(r);
-        forget_keys();
-        q_finish(false, "server rejected the cookie (NTS NAK); run 'nts ke' again");
         return;
     }
 
@@ -442,6 +445,10 @@ static void q_poll(void) {
         char why[96];
         if (q.state == Q_RESOLVING)
             snprintf(why, sizeof(why), "DNS lookup timed out");
+        else if (q.nak) {
+            forget_keys();
+            snprintf(why, sizeof(why), "server rejected the cookie (NTS NAK); run 'nts ke' again");
+        }
         else if (q.ignored)
             snprintf(why, sizeof(why), "no valid reply (%u ignored, last: %s)", q.ignored,
                      q.last_reason);

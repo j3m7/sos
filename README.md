@@ -175,7 +175,10 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   redrawn).
 - `dmesg` shows the last 4 KB of messages in any shell, SSH sessions included.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`
-  what's kept for `dmesg` (default `info`). Levels: err, warning, notice, info, debug.
+  what's kept for `dmesg` (default `info`). Levels: err, warning, notice, info, debug. Console
+  only to change; `log` shows the levels in any shell.
+- Only printable ASCII is logged: other bytes in quoted text (a user name, a file name) become
+  spaces or `?`.
 
 ## Remote access (SSH)
 
@@ -260,15 +263,17 @@ as usual.
 
 There is no automatic fallback to plain, unauthenticated NTP: if the NTS server can't be
 reached (for example because the network blocks port 4460) and the RTC has no time, the clock
-stays unset until NTS works. `time sync sntp` does one plain SNTP sync on request, from the
-build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the time as unauthenticated.
+stays unset until NTS works. `time sync sntp` (console only) does one plain SNTP sync on request,
+from the build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the time as
+unauthenticated.
 
 - `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading
   and backup-battery state, the last sync with its correction and round trip, a failed attempt
   and when it's retried, and the server and periodic settings.
 - `time auto` and `time server` (without a value) show those settings; `config` lists both.
 - `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
-  `nts query` run the two steps by hand, for diagnosis; they don't set the clock.
+  `nts query` run the two steps by hand, for diagnosis; they don't set the clock. Naming another
+  host is console only.
 
 ## Files (SD card)
 
@@ -286,7 +291,8 @@ working directory:
 | `echo <text> [> file \| >> file]` | print, or write/append a line |
 | `sd` | card and volume information, SPI clock |
 | `sd format [exfat\|fat32]` | console only: erase the card and format it (one partition) |
-| `sd test [KB [keep]]`, `sd speed [MHz]`, `sd unmount` | write/read benchmark; console only: SPI clock; unmount |
+| `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
+| `sd unmount` | unmount the card, to remove it |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped

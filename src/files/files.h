@@ -22,8 +22,8 @@ void files_release(void);
 
 // The single place deciding whether a path on the card may be changed: called with the
 // absolute path before every write, create, delete, rename (both names), mkdir and attribute
-// change, by the shell file commands (`sh`: the session's shell) and SFTP (`sh` NULL). Allows
-// everything for now; a rule (e.g. a protected /certs) goes here.
+// change, by the shell file commands (`sh`: the session's shell) and SFTP (`sh` NULL). /certs
+// (path_is_protected()) may only be changed from an admin shell (the console).
 bool files_write_allowed(const shell_t *sh, const char *path);
 
 // A short description of a FatFs result (FRESULT), e.g. "no such file".
