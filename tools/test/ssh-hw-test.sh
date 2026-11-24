@@ -128,7 +128,7 @@ login_ms=$(( ($(date +%s%N) - start) / 1000000 ))
 echo "2. authentication"
 ssh-keygen -q -t ed25519 -N '' -C ssh-hw-test -f "$work/other_key"
 methods=$(timeout 20 ssh -v -T "${ssh_opts[@]}" -o PubkeyAuthentication=no "nobody-$$@$host" true 2>&1 |
-          sed -n 's/.*Authentications that can continue: //p' | head -1)
+          tr -d '\r' | sed -n 's/.*Authentications that can continue: //p' | head -1)
 check "only publickey offered" '[[ $methods == publickey ]]' "offered: '$methods'"
 out=$(timeout 20 ssh -T "${base_opts[@]}" -o IdentitiesOnly=yes -i "$work/other_key" "$user@$host" true 2>&1)
 check "unknown key refused" 'grep -q "Permission denied" <<<"$out"' "$out"
