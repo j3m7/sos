@@ -87,9 +87,9 @@ and stall the session (SOS's copy has the same code path; it uses 4096, which av
 
 | Component | Source | License |
 |---|---|---|
-| wolfSSL / wolfCrypt 5.9.4 | `~/slop/wolfssl` | GPL-3.0 (commercial license also available) |
-| wolfSSH 1.6.0 | `~/slop/wolfssh` | GPL-3.0 (commercial license also available) |
-| Raspberry Pi Pico SDK 2.3.1 | `~/slop/pico-sdk` | BSD-3-Clause |
+| wolfSSL / wolfCrypt 5.9.4 | `lib/wolfssl` (submodule) | GPL-3.0 (commercial license also available) |
+| wolfSSH 1.6.0 | `lib/wolfssh` (submodule) | GPL-3.0 (commercial license also available) |
+| Raspberry Pi Pico SDK 2.3.1 | `PICO_SDK_PATH` | BSD-3-Clause |
 | lwIP (via Pico SDK) | `pico-sdk/lib/lwip` | BSD-3-Clause |
 | TinyUSB (via Pico SDK) | `pico-sdk/lib/tinyusb` | MIT |
 | cyw43-driver (via Pico SDK) | `pico-sdk/lib/cyw43-driver` | Restricted, see below |

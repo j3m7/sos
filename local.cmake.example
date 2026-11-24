@@ -11,3 +11,8 @@ set(SOS_HOSTNAME      "sos")
 # SSH login: user name and one authorized public key (the full line from id_ed25519.pub).
 set(SOS_SSH_USER           "admin")
 set(SOS_SSH_AUTHORIZED_KEY "ssh-ed25519 AAAA... user@host")
+
+# Optional: use existing wolfSSL / wolfSSH checkouts instead of the lib/ submodules
+# (they must be at the versions pinned by the submodules).
+# set(WOLFSSL_ROOT "/path/to/wolfssl")
+# set(WOLFSSH_ROOT "/path/to/wolfssh")

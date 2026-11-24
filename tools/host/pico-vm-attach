@@ -5,17 +5,22 @@
 # Usage: pico-vm-attach add|remove BUSNUM DEVNUM
 #
 # Config (environment, or /etc/default/pico-vm-attach):
-#   PICO_VM_DOMAIN   libvirt domain name        (default: slopbox)
+#   PICO_VM_DOMAIN   libvirt domain name        (required)
 #   PICO_VM_URI      libvirt connection URI     (default: qemu:///system)
 
 set -euo pipefail
 
 # shellcheck source=/dev/null
 [[ -r /etc/default/pico-vm-attach ]] && . /etc/default/pico-vm-attach
-DOMAIN=${PICO_VM_DOMAIN:-slopbox}
+DOMAIN=${PICO_VM_DOMAIN:-}
 URI=${PICO_VM_URI:-qemu:///system}
 
 log() { logger -t pico-vm-attach -- "$*"; }
+
+if [[ -z $DOMAIN ]]; then
+    log "PICO_VM_DOMAIN is not set: put PICO_VM_DOMAIN=<vm-name> in /etc/default/pico-vm-attach"
+    exit 1
+fi
 
 action=${1:-}; busnum=${2:-}; devnum=${3:-}
 if [[ ! $action =~ ^(add|remove)$ || ! $busnum =~ ^[0-9]+$ || ! $devnum =~ ^[0-9]+$ ]]; then

@@ -4,11 +4,8 @@ cmake_minimum_required(VERSION 3.13)
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
 set(PICO_PLATFORM rp2350-arm-s CACHE STRING "Target platform")
 
-# Fall back to the shared SDK checkout if PICO_SDK_PATH isn't set in the environment.
-if (NOT DEFINED ENV{PICO_SDK_PATH} AND NOT PICO_SDK_PATH)
-    set(PICO_SDK_PATH "$ENV{HOME}/slop/pico-sdk")
-endif()
-
+# The Pico SDK is located by pico_sdk_import.cmake: PICO_SDK_PATH (environment or -D), or
+# PICO_SDK_FETCH_FROM_GIT=ON to download it.
 include(pico_sdk_import.cmake)
 
 project(sos C CXX ASM)
@@ -22,7 +19,7 @@ endif()
 
 pico_sdk_init()
 
-# --- Per-machine settings (Wi-Fi, SSH user/key) -----------------------------
+# --- Per-machine settings (Wi-Fi, SSH user/key, optional dependency paths) ----
 include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL RESULT_VARIABLE SOS_LOCAL_CMAKE)
 if (NOT SOS_LOCAL_CMAKE)
     message(FATAL_ERROR "local.cmake not found: copy local.cmake.example to local.cmake and fill it in")
@@ -34,13 +31,23 @@ foreach(var SOS_WIFI_SSID SOS_WIFI_PASSWORD SOS_HOSTNAME SOS_SSH_USER SOS_SSH_AU
 endforeach()
 configure_file(config/sos_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_config.h @ONLY)
 
-# --- External libraries (kept outside the repo, under ~/slop by default) ----
-set(SOS_DEPS_DIR "$ENV{HOME}/slop" CACHE PATH "Directory holding wolfssl and wolfssh checkouts")
-set(WOLFSSL_ROOT   "${SOS_DEPS_DIR}/wolfssl"   CACHE PATH "wolfSSL source")
-set(WOLFSSH_ROOT   "${SOS_DEPS_DIR}/wolfssh"   CACHE PATH "wolfSSH source")
-foreach(dir WOLFSSL_ROOT WOLFSSH_ROOT)
-    if (NOT EXISTS "${${dir}}")
-        message(FATAL_ERROR "${dir} not found at ${${dir}}")
+# --- wolfSSL / wolfSSH ---------------------------------------------------------
+# Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
+# WOLFSSH_ROOT in local.cmake (or with -D / CMakeUserPresets.json).
+# Only define the cache defaults when not already set: with this cmake_minimum_required
+# (CMP0126 OLD), creating the cache entry would discard a value set in local.cmake.
+if (NOT DEFINED WOLFSSL_ROOT)
+    set(WOLFSSL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/lib/wolfssl" CACHE PATH "wolfSSL source")
+endif()
+if (NOT DEFINED WOLFSSH_ROOT)
+    set(WOLFSSH_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/lib/wolfssh" CACHE PATH "wolfSSH source")
+endif()
+foreach(check "WOLFSSL_ROOT;wolfssl/ssl.h" "WOLFSSH_ROOT;wolfssh/ssh.h")
+    list(GET check 0 dir)
+    list(GET check 1 header)
+    if (NOT EXISTS "${${dir}}/${header}")
+        message(FATAL_ERROR "${dir} (${${dir}}) is empty or missing. "
+            "Run 'git submodule update --init', or point ${dir} at an existing checkout in local.cmake.")
     endif()
 endforeach()
 

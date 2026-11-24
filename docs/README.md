@@ -1,5 +1,8 @@
 # Reference Documentation
 
+For development environment options (dependencies outside the repository, developing in a VM,
+SWD debugging), see [development.md](development.md).
+
 Datasheets and manuals for the SOS hardware (Raspberry Pi Pico 2 W + Adafruit PiCowbell Adalogger).
 Downloaded 2026-11-23.
 

@@ -12,19 +12,16 @@ All of this runs on the **host**, not inside the VM.
 
 ## Install
 
-`~/slop` is shared into the VM over virtiofs, so these paths are the same on the host:
+On the host, from the repository checkout (for example the folder shared into the VM):
 
 ```sh
-sudo install -m 0755 ~/slop/sos/tools/host/pico-vm-attach /usr/local/bin/pico-vm-attach
-sudo install -m 0644 ~/slop/sos/tools/host/90-pico-vm-attach.rules /etc/udev/rules.d/
+sudo install -m 0755 tools/host/pico-vm-attach /usr/local/bin/pico-vm-attach
+sudo install -m 0644 tools/host/90-pico-vm-attach.rules /etc/udev/rules.d/
+echo 'PICO_VM_DOMAIN=<vm-name>' | sudo tee /etc/default/pico-vm-attach   # as listed by `virsh list --all`
 sudo udevadm control --reload
 ```
 
-The VM name defaults to `slopbox`. To change it:
-
-```sh
-echo 'PICO_VM_DOMAIN=othervm' | sudo tee /etc/default/pico-vm-attach
-```
+`/etc/default/pico-vm-attach` can also set `PICO_VM_URI` (default `qemu:///system`).
 
 **Stop using SPICE redirection for the Pico**: start `virt-viewer` without the
 `--spice-usbredir-*` options, otherwise the viewer and libvirt race for the device.
@@ -37,7 +34,7 @@ Replug the Pico (or run the `flash` target in the VM), then on the host:
 journalctl -t pico-vm-attach -f
 ```
 
-You should see `attached 3:N to slopbox` lines. Inside the VM, `lsusb` / `picotool info`
+You should see `attached <bus>:<device> to <vm-name>` lines. Inside the VM, `lsusb` / `picotool info`
 should see the device.
 
 The rule only acts on `add`/`remove` events, so a Pico that is already plugged in when you

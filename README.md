@@ -43,11 +43,11 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 
 ## Software Stack
 
-- [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) 2.3.1 (`~/slop/pico-sdk`)
-- `arm-none-eabi-gcc` toolchain, CMake, Ninja
+- [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) 2.3.1
+- `arm-none-eabi-gcc` toolchain, CMake (3.13+), Ninja
 - `picotool` for flashing, `openocd` (Raspberry Pi fork) for SWD debugging
 - [wolfSSL](https://github.com/wolfSSL/wolfssl) 5.9.4 and [wolfSSH](https://github.com/wolfSSL/wolfssh) 1.6.0
-  for cryptography and the SSH protocol
+  for cryptography and the SSH protocol (git submodules in `lib/`)
 - SSH server glue in `src/ssh/`, derived from [pico-sshd](https://github.com/tjko/pico-sshd)
   (see [`THIRD_PARTY.md`](THIRD_PARTY.md))
 
@@ -55,28 +55,40 @@ Reference documentation (datasheets, SDK manuals) lives in [`docs/`](docs/README
 
 ## Setup
 
-Large dependencies live outside the repository, next to it in `~/slop`:
+1. **Toolchain:** install `arm-none-eabi-gcc` with newlib, CMake, Ninja and
+   [`picotool`](https://github.com/raspberrypi/picotool) (2.x, for RP2350). See
+   [Getting started with Raspberry Pi Pico](docs/sdk/getting-started-with-pico.pdf) for
+   per-OS instructions.
 
-```sh
-cd ~/slop
-git clone --depth 1 -b 2.3.1 --recurse-submodules --shallow-submodules https://github.com/raspberrypi/pico-sdk.git
-git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git
-git clone --depth 1 -b v1.6.0-stable https://github.com/wolfSSL/wolfssh.git
-```
+2. **Source,** including the wolfSSL and wolfSSH submodules:
 
-`PICO_SDK_PATH` is taken from the environment, falling back to `~/slop/pico-sdk`. wolfSSL and
-wolfSSH are looked up in `SOS_DEPS_DIR` (default `~/slop`); override with
-`-DSOS_DEPS_DIR=...` or the individual `WOLFSSL_ROOT` and `WOLFSSH_ROOT`.
+   ```sh
+   git clone --recurse-submodules <repository-url> sos
+   # or, in an existing clone:
+   git submodule update --init
+   ```
 
-Per-machine settings (Wi-Fi network, hostname, SSH user and authorized key) go in
-`local.cmake`, which is git-ignored:
+3. **Pico SDK:** point `PICO_SDK_PATH` at a Pico SDK 2.3.1 checkout (with its submodules), or
+   let the build download it by configuring with
+   `-DPICO_SDK_FETCH_FROM_GIT=ON -DPICO_SDK_FETCH_FROM_GIT_TAG=2.3.1`.
 
-```sh
-cp local.cmake.example local.cmake
-$EDITOR local.cmake   # SOS_SSH_AUTHORIZED_KEY is the full line from ~/.ssh/id_ed25519.pub
-```
+   ```sh
+   git clone -b 2.3.1 --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
+   export PICO_SDK_PATH=$PWD/pico-sdk
+   ```
 
-These values are compiled into the firmware image, so treat `build/` outputs as secret.
+4. **Per-machine settings** (Wi-Fi network, hostname, SSH user and authorized key) go in
+   `local.cmake`, which is git-ignored:
+
+   ```sh
+   cp local.cmake.example local.cmake
+   $EDITOR local.cmake   # SOS_SSH_AUTHORIZED_KEY is the full line from ~/.ssh/id_ed25519.pub
+   ```
+
+   These values are compiled into the firmware image, so treat `build/` outputs as secret.
+
+To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over SWD, see
+[`docs/development.md`](docs/development.md).
 
 ## Building
 
@@ -95,9 +107,8 @@ This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTS
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
 plugging it in first.
 
-Developing inside a libvirt VM? Install the host-side udev hotplug forwarding in
-[`tools/host/`](tools/host/README.md) so the Pico follows its reboots into and out of BOOTSEL
-without manual USB redirection.
+Developing inside a VM? See [`docs/development.md`](docs/development.md) for forwarding the
+Pico's USB connection so flashing works unattended.
 
 ## Console
 

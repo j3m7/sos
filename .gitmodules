@@ -1,0 +1,8 @@
+[submodule "lib/wolfssl"]
+	path = lib/wolfssl
+	url = https://github.com/wolfSSL/wolfssl.git
+	shallow = true
+[submodule "lib/wolfssh"]
+	path = lib/wolfssh
+	url = https://github.com/wolfSSL/wolfssh.git
+	shallow = true
