@@ -30,7 +30,8 @@
      ssh_session_t; the server owns an array of sessions.
    - Session API (ssh_session_read/write/disconnect/get_client_ip) replaces the stdio driver.
    - ssh_server_service(): all wolfSSH work runs in thread context.
-   - CS_CLOSING state for graceful disconnect; timing statistics. */
+   - CS_CLOSING state for graceful disconnect; timing statistics.
+   - Refused connections get an SSH disconnect message ("too many connections"). */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -98,6 +99,7 @@ struct ssh_server_t {
 	/* Statistics */
 	uint32_t logins;                   /* successful logins */
 	uint32_t rejected_busy;            /* connections refused because all slots were in use */
+	uint8_t busy_pending;              /* refused connections still being closed (irq only) */
 	uint32_t last_handshake_us;        /* accept to logged-in, for the last login */
 	uint32_t work_us_max;              /* longest single wolfSSH call */
 	uint64_t work_us_total;            /* sum of all wolfSSH call durations */

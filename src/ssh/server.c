@@ -40,6 +40,8 @@
      waits (CS_CLOSING, at most SSH_CLOSING_TIMEOUT_US) for the client to close the TCP
      connection. A new connection arriving when no slot is free reclaims a closing session.
    - Timing statistics for wolfSSH calls.
+   - When every slot is busy, the client gets an SSH_MSG_DISCONNECT with reason "too many
+     connections" and a readable description instead of a TCP reset.
 */
 
 #include <stdio.h>
@@ -63,6 +65,16 @@
 
 #define LOG_MAX_MSG_LEN 256
 #define SSH_CLOSING_TIMEOUT_US (2 * 1000 * 1000)
+
+#define SSH_PROTO_ID_STR "SSH-2.0-picoSSH wolfSSHv" LIBWOLFSSH_VERSION_STRING "\r\n"
+
+/* Refused ("server busy") connections: at most this many are kept open at once to deliver the
+   disconnect message (beyond that they are reset), each for at most SSH_BUSY_POLL_TIME
+   tcp_poll intervals (500 ms each). */
+#define SSH_BUSY_MAX_PENDING 2
+#define SSH_BUSY_POLL_TIME 4
+#define SSH_MSG_DISCONNECT_ID 1                     /* RFC 4253 section 11.1 */
+#define SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE 4
 
 /* Time a wolfSSH call and accumulate statistics in the server. */
 #define SSH_TIMED(st, call) ({ \
@@ -367,6 +379,115 @@ static ssh_session_t *find_free_session(ssh_server_t *st)
 }
 
 
+/* --- refusing connections when all slots are busy (interrupt context) ------------------ */
+
+static void put_u32be(uint8_t *p, uint32_t v)
+{
+	p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+}
+
+/* Build an unencrypted SSH binary packet (RFC 4253 section 6, before key exchange: no MAC,
+   block size 8) carrying SSH_MSG_DISCONNECT. Returns its length, or 0 if buf is too small. */
+static size_t build_disconnect_packet(uint8_t *buf, size_t size, uint32_t reason,
+				const char *desc)
+{
+	size_t dlen = strlen(desc);
+	size_t payload = 1 + 4 + 4 + dlen + 4;          /* msg, reason, description, language */
+	size_t pad = 8 - ((4 + 1 + payload) % 8);
+	if (pad < 4)
+		pad += 8;
+	size_t plen = 1 + payload + pad;                 /* padding_length byte + payload + pad */
+	uint8_t *p = buf;
+
+	if (4 + plen > size)
+		return 0;
+	put_u32be(p, plen); p += 4;
+	*p++ = pad;
+	*p++ = SSH_MSG_DISCONNECT_ID;
+	put_u32be(p, reason); p += 4;
+	put_u32be(p, dlen); p += 4;
+	memcpy(p, desc, dlen); p += dlen;
+	put_u32be(p, 0); p += 4;                          /* language tag: empty */
+	memset(p, 0, pad); p += pad;
+	return p - buf;
+}
+
+static err_t busy_release(ssh_server_t *st, struct tcp_pcb *pcb)
+{
+	err_t res = ERR_OK;
+
+	tcp_arg(pcb, NULL);
+	tcp_recv(pcb, NULL);
+	tcp_err(pcb, NULL);
+	tcp_poll(pcb, NULL, 0);
+	if (tcp_close(pcb) != ERR_OK) {
+		tcp_abort(pcb);
+		res = ERR_ABRT;
+	}
+	if (st && st->busy_pending)
+		st->busy_pending--;
+	return res;
+}
+
+static err_t busy_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
+{
+	(void)err;
+	if (!p)		/* client hung up after reading the message */
+		return busy_release((ssh_server_t*)arg, pcb);
+	/* Discard the client's version string / KEXINIT; closing while data is still arriving
+	   would make lwIP send a reset, which can destroy the unread message at the client. */
+	tcp_recved(pcb, p->tot_len);
+	pbuf_free(p);
+	return ERR_OK;
+}
+
+static err_t busy_poll(void *arg, struct tcp_pcb *pcb)
+{
+	return busy_release((ssh_server_t*)arg, pcb);	/* client didn't hang up in time */
+}
+
+static void busy_err(void *arg, err_t err)
+{
+	ssh_server_t *st = (ssh_server_t*)arg;
+
+	(void)err;
+	if (st && st->busy_pending)		/* pcb already freed by lwIP */
+		st->busy_pending--;
+}
+
+/* Tell the client all sessions are in use: send our version string and an SSH disconnect
+   message, then close once the client hangs up. Returns ERR_OK if handled; anything else makes
+   lwIP reset the connection. */
+static err_t ssh_server_reject_busy(ssh_server_t *st, struct tcp_pcb *pcb)
+{
+	char desc[96];
+	uint8_t pkt[160];
+	size_t len;
+
+	if (st->busy_pending >= SSH_BUSY_MAX_PENDING)
+		return ERR_MEM;
+
+	snprintf(desc, sizeof(desc),
+		"Too many connections: all %u SSH sessions are in use, try again later",
+		st->max_sessions);
+	if (!(len = build_disconnect_packet(pkt, sizeof(pkt),
+				SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE, desc)))
+		return ERR_MEM;
+
+	if (tcp_write(pcb, SSH_PROTO_ID_STR, strlen(SSH_PROTO_ID_STR), TCP_WRITE_FLAG_COPY) != ERR_OK ||
+	    tcp_write(pcb, pkt, len, TCP_WRITE_FLAG_COPY) != ERR_OK)
+		return ERR_MEM;
+
+	tcp_arg(pcb, st);
+	tcp_recv(pcb, busy_recv);
+	tcp_err(pcb, busy_err);
+	tcp_poll(pcb, busy_poll, SSH_BUSY_POLL_TIME);
+	tcp_output(pcb);
+	st->busy_pending++;
+	return ERR_OK;
+}
+
+
 static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 {
 	ssh_server_t *st = (ssh_server_t*)arg;
@@ -390,7 +511,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 		st->rejected_busy++;
 		LOG_MSG(LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
 			ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port, st->max_sessions);
-		return ERR_MEM;
+		return ssh_server_reject_busy(st, pcb);
 	}
 
 	LOG_MSG(LOG_NOTICE, "SSH accepted connection from %s:%u (session %u)",
@@ -779,8 +900,7 @@ static bool ssh_server_open(ssh_server_t *st) {
 	}
 
 	wolfSSH_CTX_SetBanner(ctx, st->banner);
-	wolfSSH_CTX_SetSshProtoIdStr(ctx, "SSH-2.0-picoSSH wolfSSHv"
-                                    LIBWOLFSSH_VERSION_STRING "\r\n");
+	wolfSSH_CTX_SetSshProtoIdStr(ctx, SSH_PROTO_ID_STR);
 	wolfSSH_SetUserAuth(ctx, user_auth_cb);
 	wolfSSH_SetUserAuthTypes(ctx, user_auth_types_cb);
 	wolfSSH_SetIORecv(ctx, receive_cb);

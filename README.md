@@ -127,8 +127,9 @@ ssh <user>@<device-ip>
 - Only public-key login for the single user/key in `local.cmake` is accepted (Ed25519).
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
   flash sector; it survives reflashing. The private key never leaves the device.
-- Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`); further connections are refused while
-  all are in use. Each session gets its own shell, separate from the others and from the USB
+- Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
+  connections are refused with an SSH disconnect message the client displays
+  ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets its own shell, separate from the others and from the USB
   console; server log messages (connections, failed logins) go to the console only.
 - `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
   Ctrl-D ends the session.
