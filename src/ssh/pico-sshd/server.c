@@ -63,6 +63,9 @@
      full) and ssh_session_send_output() sends it once the shell has run, so a burst of small
      writes becomes a few large packets. ssh_session_write_space() reports the free room.
    - Nagle's algorithm is disabled on client connections (like TCP_NODELAY elsewhere).
+   - Connections that don't log in can't hold the server: when every slot is in use, ones
+     older than SSH_LOGIN_GRACE_BUSY_US are dropped, and an address with SSH_PENALTY_FAILS such
+     connections within SSH_PENALTY_WINDOW_US is refused until it has been quiet that long.
 */
 
 #include <stdio.h>
@@ -102,6 +105,14 @@
 /* Connections that have not logged in within this time are dropped (like sshd LoginGraceTime),
    so idle or stalled clients cannot hold every session slot. */
 #define SSH_LOGIN_GRACE_US (30 * 1000 * 1000)
+/* ...and after this time when every slot is in use, so a client that connects and then says
+   nothing holds a slot others are waiting for only briefly. A login takes well under a second. */
+#define SSH_LOGIN_GRACE_BUSY_US (5 * 1000 * 1000)
+/* An address whose connections end without a login this many times within the window gets no
+   new connections until it has stayed away for a whole window (every refused attempt restarts
+   it). Successful logins don't count. Like OpenSSH's PerSourcePenalties. */
+#define SSH_PENALTY_FAILS 30
+#define SSH_PENALTY_WINDOW_US (60 * 1000 * 1000)
 /* TCP keepalive: probe after this much idle time, give up after COUNT unanswered probes. */
 #define SSH_KEEPALIVE_IDLE_MS  60000
 #define SSH_KEEPALIVE_INTVL_MS 10000
@@ -389,6 +400,60 @@ static err_t close_client_connection(struct tcp_pcb *pcb)
 }
 
 
+/* --- per-address penalty (callers hold the lwIP lock or run in interrupt context) -------- */
+
+static ssh_penalty_t *penalty_find(ssh_server_t *st, const ip_addr_t *ip)
+{
+	uint64_t now = time_us_64();
+
+	for (int i = 0; i < SSH_PENALTY_SLOTS; i++) {
+		ssh_penalty_t *p = &st->penalties[i];
+		if (p->fails && now - p->start_us > SSH_PENALTY_WINDOW_US)
+			p->fails = 0;	/* window over: forgotten */
+		if (p->fails && ip_addr_cmp(&p->ip, ip))
+			return p;
+	}
+	return NULL;
+}
+
+/* A connection from ip ended without logging in. Returns true if that reached the limit. */
+static bool penalty_note_failure(ssh_server_t *st, const ip_addr_t *ip)
+{
+	ssh_penalty_t *p = penalty_find(st, ip);
+
+	if (!p) {
+		/* A free entry, or else the one whose window started first. */
+		p = &st->penalties[0];
+		for (int i = 0; i < SSH_PENALTY_SLOTS; i++) {
+			ssh_penalty_t *q = &st->penalties[i];
+			if (!q->fails) {
+				p = q;
+				break;
+			}
+			if (q->start_us < p->start_us)
+				p = q;
+		}
+		ip_addr_set(&p->ip, ip);
+		p->fails = 0;
+		p->start_us = time_us_64();
+	}
+	if (p->fails < 255)
+		p->fails++;
+	return p->fails == SSH_PENALTY_FAILS;
+}
+
+/* True if new connections from ip are refused for now; an attempt restarts the window. */
+static bool penalty_blocked(ssh_server_t *st, const ip_addr_t *ip)
+{
+	ssh_penalty_t *p = penalty_find(st, ip);
+
+	if (!p || p->fails < SSH_PENALTY_FAILS)
+		return false;
+	p->start_us = time_us_64();
+	return true;
+}
+
+
 /* Tear down a session and free its slot. Thread context only (wolfSSH_free uses the heap);
    takes the lwIP lock (recursive), so callers may already hold it. */
 static err_t ssh_close_session(ssh_session_t *ss)
@@ -397,6 +462,8 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	err_t err = ERR_OK;
 
 	cyw43_arch_lwip_begin();
+	/* Never logged in: counts against its address. */
+	bool penalized = ss->cstate == CS_ACCEPT && penalty_note_failure(st, &ss->remote_ip);
 	ss->cstate = CS_NONE;
 	ss->login[0] = 0;
 	ss->work_pending = false;
@@ -423,6 +490,13 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	ssh_ringbuffer_destroy(&ss->rb_out);
 	cyw43_arch_lwip_end();
 
+	if (penalized) {
+		char ip[IPADDR_STRLEN_MAX];
+		ipaddr_ntoa_r(&ss->remote_ip, ip, sizeof(ip));
+		LOG_MSG(LOG_NOTICE, "SSH: %u connections from %s without a login; refusing it until"
+			" it has been quiet for %u s", SSH_PENALTY_FAILS, ip,
+			(unsigned)(SSH_PENALTY_WINDOW_US / 1000000));
+	}
 	LOG_MSG(LOG_DEBUG, "ssh_close_session(%u): %d", ss->index, err);
 	return err;
 }
@@ -583,6 +657,11 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 		}
 	}
 
+	if (penalty_blocked(st, &pcb->remote_ip)) {
+		st->rejected_penalty++;
+		return ERR_MEM;		/* lwIP resets the connection */
+	}
+
 	if (!(ss = find_free_session(st))) {
 		st->rejected_busy++;
 		LOG_MSG(LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
@@ -612,6 +691,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ss->exit_sent = false;
 	ss->output_stalled = false;
 	ss->client = pcb;
+	ip_addr_set(&ss->remote_ip, &pcb->remote_ip);
 	ss->auth_tries = 0;
 	ss->login[0] = 0;
 	ss->session_id = 0;
@@ -1149,7 +1229,17 @@ static void ssh_session_service(ssh_session_t *ss)
 	cyw43_arch_lwip_end();
 
 	if (ss->cstate == CS_ACCEPT) {
-		if (time_us_64() - ss->accept_start_us > SSH_LOGIN_GRACE_US) {
+		/* With every slot in use, others are waiting for this one: less time to log in. */
+		bool full = true;
+		for (unsigned i = 0; i < st->max_sessions; i++) {
+			const ssh_session_t *o = &st->sessions[i];
+			if (o->cstate == CS_NONE || (o->cstate == CS_CLOSING && o->exit_sent))
+				full = false;	/* free, or reclaimable by a new connection */
+		}
+		uint64_t grace = full ? SSH_LOGIN_GRACE_BUSY_US : SSH_LOGIN_GRACE_US;
+		if (full && time_us_64() - ss->accept_start_us > grace)
+			st->dropped_stale++;
+		if (time_us_64() - ss->accept_start_us > grace) {
 			ip_addr_t ip;
 			uint16_t port;
 			if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)

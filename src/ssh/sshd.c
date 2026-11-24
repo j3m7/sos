@@ -252,6 +252,8 @@ void sshd_status(shell_t *sh) {
     shell_printf(sh, "host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
     shell_printf(sh, "sessions:  %u of %u in use, %lu refused (all busy)\n",
                  in_use, server->max_sessions, (unsigned long)server->rejected_busy);
+    shell_printf(sh, "limits:    %lu refused (address penalized), %lu dropped before login (slots full)\n",
+                 (unsigned long)server->rejected_penalty, (unsigned long)server->dropped_stale);
     shell_printf(sh, "logins:    %lu, last handshake %lu ms\n",
                  (unsigned long)server->logins,
                  (unsigned long)(server->last_handshake_us / 1000));

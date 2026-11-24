@@ -97,6 +97,7 @@ set(SOS_SOURCES
     src/core/config.c
     src/core/settings.c
     src/core/wdog.c
+    src/core/fault.c
     src/core/stackmon.c
     src/shell/shell.c
     src/shell/shell_core.c
@@ -163,6 +164,7 @@ target_compile_definitions(sos PRIVATE
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
     PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
     PICO_USE_STACK_GUARDS=1         # MSPLIM: stack overflow faults instead of corrupting the heap
+    PICO_PANIC_FUNCTION=sos_panic   # src/core/fault.c: record why, reset at once
     PICO_MALLOC_PANIC=0             # a failed malloc returns NULL (the code handles it) instead of
                                     # the SDK default: panic, i.e. halt until the watchdog resets
 )

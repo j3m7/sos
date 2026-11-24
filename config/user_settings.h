@@ -504,25 +504,15 @@ unsigned long get_rand_32(void);
 #define CUSTOM_RAND_GENERATE get_rand_32
 #endif
 
-#if 0
-/* Use built-in P-RNG (SHA256 based) with HW RNG */
-/* P-RNG + HW RNG (P-RNG is ~8K) */
+/* wolfCrypt's Hash-DRBG (SP 800-90A, SHA-256), seeded from the SDK's generator (pico_rand:
+ * the RP2350's hardware TRNG and other sources, mixed into each value). Keys and nonces then
+ * come from a cryptographic generator instead of straight from pico_rand's 128-bit state, so
+ * a weakness in that mixing doesn't show in what goes on the wire. */
+#undef WC_NO_HASHDRBG
+#undef CUSTOM_RAND_GENERATE_BLOCK
 #undef HAVE_HASHDRBG
 #define HAVE_HASHDRBG
-#else
-#undef WC_NO_HASHDRBG
-#define WC_NO_HASHDRBG
-#endif
-
-
-#if 1
-/* Bypass P-RNG and use only HW RNG */
-//extern int my_rng_gen_block(unsigned char *output, unsigned int sz);
-#undef CUSTOM_RAND_GENERATE_BLOCK
-#define CUSTOM_RAND_GENERATE_BLOCK wc_pico_rng_gen_block
-#define WC_NO_HASHDRBG
-#define WC_RESEED_INTERVAL (1000000)
-#endif
+#define CUSTOM_RAND_GENERATE_SEED wc_pico_rng_gen_block
 
 
 /* ------------------------------------------------------------------------- */
