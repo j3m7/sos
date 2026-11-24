@@ -5,7 +5,9 @@
 
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
+#include "lwip/etharp.h"
 #include "lwip/netif.h"
+#include "lwip/stats.h"
 
 #include "core/log.h"
 #include "core/settings.h"
@@ -23,6 +25,11 @@
 // when the retry succeeds ~10 ms later; some access points do this on every join. Giving up on
 // the first sighting made joins fail at random, depending on whether a poll landed in that window.
 #define BADAUTH_GRACE_MS    3000
+// Announce our address this often while connected (see wifi.h). A device that sends nothing
+// stopped receiving broadcasts within a couple of minutes (with power saving on or off), and
+// ~20 minutes later the router's ARP entry expired and nobody could reach it. Sending once a
+// minute kept broadcasts arriving. One broadcast frame each time.
+#define KEEPALIVE_MS        60000
 
 typedef enum { W_OFF, W_CONNECTING, W_UP, W_WAIT } wifi_st_t;
 
@@ -32,6 +39,8 @@ static absolute_time_t next_rejoin;
 static absolute_time_t badauth_until;   // W_CONNECTING: BADAUTH still showing then = wrong password
 static bool badauth_seen;
 static unsigned attempt;
+static bool keepalive = true;
+static absolute_time_t next_keepalive;
 
 static struct netif *sta(void) {
     return &cyw43_state.netif[CYW43_ITF_STA];
@@ -73,8 +82,18 @@ static void retry_later(const char *why) {
     deadline = make_timeout_time_ms(delay_ms);
 }
 
+void wifi_apply_power(void) {
+    // On: the SDK's default (PM2: the radio sleeps between beacons after 200 ms without traffic).
+    // Off: the radio stays awake.
+    bool on = settings()->wifi_powersave;
+    int err = cyw43_wifi_pm(&cyw43_state, on ? CYW43_PERFORMANCE_PM : CYW43_NONE_PM);
+    if (err)
+        log_msg(SOS_LOG_WARNING, "wifi: setting power saving %s failed (%d)", on ? "on" : "off", err);
+}
+
 void wifi_start(void) {
-    cyw43_arch_enable_sta_mode();
+    cyw43_arch_enable_sta_mode();   // sets the SDK's default power mode
+    wifi_apply_power();
     attempt = 0;
     begin_attempt();
     if (state == W_OFF)
@@ -109,6 +128,7 @@ void wifi_poll(void) {
             log_msg(SOS_LOG_NOTICE, "wifi: connected, ip %s", ip);
             state = W_UP;
             attempt = 0;
+            next_keepalive = make_timeout_time_ms(KEEPALIVE_MS);
         } else if (link == CYW43_LINK_BADAUTH && time_reached(badauth_until)) {
             retry_later("wrong password");
         } else if (link == CYW43_LINK_FAIL) {
@@ -128,6 +148,11 @@ void wifi_poll(void) {
             log_msg(SOS_LOG_WARNING, "wifi: link lost (status %d), reconnecting", link);
             cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
             begin_attempt();
+        } else if (keepalive && time_reached(next_keepalive)) {
+            cyw43_arch_lwip_begin();
+            etharp_gratuitous(sta());
+            cyw43_arch_lwip_end();
+            next_keepalive = make_timeout_time_ms(KEEPALIVE_MS);
         }
         break;
     case W_WAIT:
@@ -135,6 +160,22 @@ void wifi_poll(void) {
             begin_attempt();
         break;
     }
+}
+
+void wifi_set_keepalive(bool on) {
+    keepalive = on;
+    next_keepalive = get_absolute_time();       // announce straight away when turned on
+}
+
+bool wifi_keepalive(void) {
+    return keepalive;
+}
+
+void wifi_arp_counts(unsigned *received, unsigned *sent) {
+    cyw43_arch_lwip_begin();
+    *received = lwip_stats.etharp.recv;
+    *sent = lwip_stats.etharp.xmit;
+    cyw43_arch_lwip_end();
 }
 
 bool wifi_up(void) {
