@@ -94,6 +94,8 @@ void shell_show_input(shell_t *sh);
 // cancels the job and drops it.
 void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
+// A job is running or typed-ahead input is waiting to run.
+bool shell_busy(const shell_t *sh);
 
 // Bytes of output the channel takes now without waiting (jobs size their output by it).
 int shell_write_space(shell_t *sh);

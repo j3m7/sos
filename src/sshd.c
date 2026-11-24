@@ -234,6 +234,7 @@ void sshd_poll(void) {
         }
         session_poll_output[i] = 0;
         shell_poll(&session_shells[i]);
+        ss->busy = shell_busy(&session_shells[i]);  // a client's EOF waits for running commands
         ssh_session_send_output(ss);        // everything the shell wrote, in as few packets as fit
     }
 }

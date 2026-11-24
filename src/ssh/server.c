@@ -608,6 +608,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ss->setup_pending = true;
 	ss->eof_received = false;
 	ss->sftp = false;
+	ss->busy = false;
 	ss->exit_sent = false;
 	ss->output_stalled = false;
 	ss->client = pcb;
@@ -1162,9 +1163,10 @@ static void ssh_session_service(ssh_session_t *ss)
 	}
 
 	/* After the client's EOF, end the session once the shell has consumed all input (it reads
-	   rb_in after every service pass), sending any output it produced first. */
-	if (ss->cstate == CS_CONNECT && ss->eof_received && ssh_ringbuffer_used(&ss->rb_in) == 0 &&
-	    wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) <= 0) {
+	   rb_in after every service pass) and finished what it's doing (`busy`: a command still
+	   running, or input it has read but not run yet), sending any output it produced first. */
+	if (ss->cstate == CS_CONNECT && ss->eof_received && !ss->busy &&
+	    ssh_ringbuffer_used(&ss->rb_in) == 0 && wolfSSH_ChannelIdPeek(ss->ssh, 0, NULL, 1) <= 0) {
 		ssh_session_disconnect(ss);
 		return;
 	}
