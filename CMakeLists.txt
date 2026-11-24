@@ -69,7 +69,7 @@ endif()
 set(LUA_SOURCES)
 foreach(f lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser
           lstate lstring ltable ltm lundump lvm lzio
-          lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib)
+          lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib loadlib)
     list(APPEND LUA_SOURCES ${LUA_ROOT}/${f}.c)
 endforeach()
 # Lua formats numbers with snprintf("%.14g"); the SDK's lightweight printf (which SOS's own code

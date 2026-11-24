@@ -76,6 +76,8 @@ static void serve_read(void) {
     }
     if (fr != FR_OK) {
         req_error(files_error(fr));
+        if (fr == FR_NO_FILE || fr == FR_NO_PATH || fr == FR_INVALID_NAME)
+            lua_req.result = LUA_REQ_NOT_FOUND;
         return;
     }
     lua_req.len = n;

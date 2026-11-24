@@ -61,12 +61,16 @@ typedef struct {
     char path[LUA_PATH_MAX];
     uint32_t offset;
     uint32_t len;
-    int64_t result;                 // < 0: failed (error has why)
+    int64_t result;                 // < 0: failed (error has why); LUA_REQ_NOT_FOUND: no such file
     char error[64];
     uint8_t data[LUA_REQ_DATA];
 } lua_req_t;
 
 extern lua_req_t lua_req;
+
+// LR_READ result when the file or a directory on its path doesn't exist (require tries the next
+// path; any other failure, such as no SD card, stops the search).
+#define LUA_REQ_NOT_FOUND (-2)
 
 // LR_LIST packs entries into data as: uint32 size, uint8 is_dir, name, NUL; result = count,
 // len = bytes used. A listing that doesn't fit continues with offset = entries already returned.
