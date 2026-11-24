@@ -70,6 +70,9 @@ set(SOS_SOURCES
     src/config.c
     src/settings.c
     src/wifi.c
+    src/rtc.c
+    src/timeconv.c
+    src/timesync.c
     src/wdog.c
 )
 add_executable(sos ${SOS_SOURCES})
@@ -93,9 +96,16 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # Hardware watchdog: the main loop must come round within this time or the chip resets.
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
+# SNTP server, used only when the RTC has no valid time or on `time sync`.
+set(SOS_NTP_SERVER "pool.ntp.org" CACHE STRING "SNTP server host name")
+# Lower bound for any accepted time (SNTP is unauthenticated). Taken at configure time;
+# SOURCE_DATE_EPOCH overrides it for reproducible builds.
+string(TIMESTAMP SOS_BUILD_EPOCH "%s" UTC)
 target_compile_definitions(sos PRIVATE
     SOS_SSH_MAX_SESSIONS=${SOS_SSH_MAX_SESSIONS}
     SOS_WATCHDOG_MS=${SOS_WATCHDOG_MS}
+    SOS_NTP_SERVER="${SOS_NTP_SERVER}"
+    SOS_BUILD_EPOCH=${SOS_BUILD_EPOCH}LL
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
     PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
     PICO_USE_STACK_GUARDS=1         # MSPLIM: stack overflow faults instead of corrupting the heap
@@ -108,7 +118,9 @@ target_link_libraries(sos
     pico_stdlib
     pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
+    pico_lwip_sntp
     hardware_flash
+    hardware_i2c
     hardware_watchdog
     sos-ssh
 )

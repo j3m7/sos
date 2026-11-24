@@ -206,6 +206,23 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
   RP2350 maximum is 16777 ms and `0` disables the watchdog. It pauses while a debugger halts
   the core.
 
+## Timekeeping
+
+The Adalogger's PCF8523 RTC (I2C0: SDA GP4, SCL GP5), kept running by its CR1220 coin cell,
+is the source of truth for wall-clock time. At boot SOS sets the system clock (`time()`,
+`gettimeofday()`) from it and turns on the chip's battery switch-over, which is off by default.
+All times are UTC.
+
+NTP is a fallback. SOS asks `SOS_NTP_SERVER` (default `pool.ntp.org`) only when the RTC has no
+valid time: no chip, a first power-up, or a coin cell that ran out while the board was unpowered.
+A successful reply sets the system clock and the RTC, then the NTP client stops. NTP isn't
+authenticated, so a reply earlier than the firmware's configure time is rejected.
+
+- `time` shows the date and time, where it came from, the RTC's reading and backup-battery state,
+  and the last NTP sync.
+- `time sync` sets the clock and the RTC from NTP now. Nothing corrects RTC drift (up to about
+  10 s a week) automatically, so run it now and then.
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
@@ -218,7 +235,8 @@ cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir b
 They cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`, including a randomized comparison
 against a reference model), the shell's line editing, questions and output (`src/shell_core.c`,
 with the commands faked), the configuration store (`src/config.c`, with a fake flash that can
-fail or lose power mid-write) and the log (`src/log.c`). `tests/test.h` is a minimal harness; add a suite as
+fail or lose power mid-write), the log (`src/log.c`) and the date and RTC register conversions
+(`src/timeconv.c`, compared against the host C library). `tests/test.h` is a minimal harness; add a suite as
 `tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
 
 **Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed

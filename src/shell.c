@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "sshd.h"
 #include "stackmon.h"
+#include "timesync.h"
 #include "wdog.h"
 #include "wifi.h"
 
@@ -42,6 +43,7 @@ static void save(shell_t *sh) {
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
+    shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTP\n");
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
@@ -442,6 +444,18 @@ static void cmd_setup(shell_t *sh) {
     shell_ask(sh, prompt, false, on_setup_ssid, NULL);
 }
 
+// Clock sync is allowed from SSH too: it can't lock anyone out, and the RTC drifts.
+static void cmd_time(shell_t *sh, char *args) {
+    if (!args)
+        timesync_status(sh);
+    else if (!strcmp(args, "sync"))
+        shell_printf(sh, timesync_request_ntp()
+                     ? "ntp: sync started; 'time' shows the result\n"
+                     : "ntp: a sync is already running\n");
+    else
+        shell_printf(sh, "usage: time [sync]\n");
+}
+
 // --- dispatch ------------------------------------------------------------------------------------
 
 void shell_execute(shell_t *sh, char *cmd) {
@@ -459,6 +473,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_help(sh);
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
+    else if (!strcmp(cmd, "time"))
+        cmd_time(sh, args);
     else if (!strcmp(cmd, "mem"))
         cmd_mem(sh);
     else if (!strcmp(cmd, "net"))
