@@ -147,8 +147,19 @@ ssh <user>@<device-ip>
 
 ## Testing
 
-There are no automated unit tests yet. `tools/test/ssh-hw-test.sh` checks the SSH server on a
-board that is flashed with SOS and on the network:
+**Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
+under AddressSanitizer and UndefinedBehaviorSanitizer:
+
+```sh
+cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests
+```
+
+They currently cover the SSH I/O ring buffer (`src/ssh/ringbuffer.c`), including a randomized
+comparison against a reference model. `tests/test.h` is a minimal harness; add a suite as
+`tests/test_<name>.c` and register it in `tests/CMakeLists.txt`.
+
+**Hardware test:** `tools/test/ssh-hw-test.sh` checks the SSH server on a board that is flashed
+with SOS and on the network:
 
 ```sh
 tools/test/ssh-hw-test.sh -u <user> <device-ip>     # -q for a quick run, -h for options
