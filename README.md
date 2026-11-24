@@ -305,6 +305,42 @@ sftp> get notes.txt
 - Every change to the card, from SFTP or the file commands, passes one check,
   `files_write_allowed()` in `src/files.c` (everything is allowed for now).
 
+## Lua scripts (prototype)
+
+Lua 5.4 runs on the second core (core 1), so a script can compute flat out without slowing the
+console, SSH or the watchdog on core 0. Scripts live on the SD card:
+
+```sh
+lua -e 'print(1 + 1)'            # a one-liner
+lua /scripts/report.lua          # a file (relative paths start at the working directory)
+```
+
+The script's output goes to the shell that started it; Ctrl-C stops it, as does ending the SSH
+session. One script runs at a time. Available: the base, string, table, math, utf8 and
+coroutine libraries, and `sos`:
+
+| Function | |
+|---|---|
+| `sos.read(path)` | file contents as a string |
+| `sos.write(path, s)`, `sos.append(path, s)` | write / append (through `files_write_allowed()`) |
+| `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
+| `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
+| `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
+| `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
+
+Failures return `nil` and a message. There's no `io`, `os`, `package` or `debug`: scripts reach
+the system only through `sos`.
+
+- **How it works:** core 1 never touches the card, network or shells. Each `sos` call is a
+  request that core 0's main loop answers (one per pass); output goes through a buffer that the
+  shell drains as its channel takes it. The heap is shared (malloc is mutex-protected), and each
+  script may allocate up to 128 KB ("not enough memory" beyond). Core 1 gets a 32 KB stack from
+  the heap when the first script runs, and pauses while core 0 writes flash.
+- **Speed** (debug build): `fib(25)` takes 1.4 s; a million-iteration floating-point loop 2.6 s.
+- **Prototype limits:** no interactive prompt; numbers are formatted with newlib's `snprintf`
+  on core 1 (its float conversion has state that isn't safe to share between cores, and core 0
+  doesn't use it today).
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
@@ -340,7 +376,7 @@ so run it while nobody else is using the board; it warns if the device rebooted 
 | Region | Use |
 |---|---|
 | Main RAM (512 KB) | data, heap, and the core 0 stack (top 8 KB, `SOS_CORE0_STACK_SIZE`) |
-| SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default |
+| SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default; while Lua runs, core 1 uses a 32 KB stack from the heap instead |
 | SCRATCH_Y (4 KB) | free |
 | Flash, last 4 KB sector | SSH host key |
 | Flash, 2 sectors below it | configuration (A/B records) |

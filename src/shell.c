@@ -16,6 +16,7 @@
 #include "config.h"
 #include "log.h"
 #include "files.h"
+#include "lua_host.h"
 #include "sdcard.h"
 #include "settings.h"
 #include "sshd.h"
@@ -61,6 +62,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "wifi              Wi-Fi network\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd test [KB], sd speed, sd unmount)\n");
     files_help(sh);
+    shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
@@ -633,6 +635,8 @@ void shell_execute(shell_t *sh, char *cmd) {
                   config_check_user);
     else if (!strcmp(cmd, "sd"))
         sdcard_command(sh, args);
+    else if (!strcmp(cmd, "lua"))
+        lua_command(sh, args);
     else if (!strcmp(cmd, "setup"))
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))

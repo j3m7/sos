@@ -118,6 +118,7 @@ Found with wolfSSH 1.6.0 (`WOLFSSH_SFTP` + `WOLFSSH_FATFS`); SOS works around th
 | wolfSSL / wolfCrypt 5.9.4 | `lib/wolfssl` (submodule) | GPL-3.0 (commercial license also available) |
 | wolfSSH 1.6.0 | `lib/wolfssh` (submodule) | GPL-3.0 (commercial license also available) |
 | no-OS-FatFS-SD-SDIO-SPI-RPi-Pico 3.6.2 (SD card driver, includes FatFs R0.15) | `lib/sdcard` (submodule) | Apache-2.0; FatFs: BSD-1-Clause style |
+| Lua 5.4.9 (core and base/string/table/math/utf8/coroutine libraries) | `lib/lua` (submodule) | MIT |
 | Raspberry Pi Pico SDK 2.3.1 | `PICO_SDK_PATH` | BSD-3-Clause |
 | lwIP (via Pico SDK) | `pico-sdk/lib/lwip` | BSD-3-Clause |
 | TinyUSB (via Pico SDK) | `pico-sdk/lib/tinyusb` | MIT |

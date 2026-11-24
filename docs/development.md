@@ -17,6 +17,7 @@ git clone --depth 1 -b 2.3.1 --recurse-submodules --shallow-submodules https://g
 git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git
 git clone --depth 1 -b v1.6.0-stable https://github.com/wolfSSL/wolfssh.git
 git clone --depth 1 -b v3.6.2 https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico.git
+git clone --depth 1 -b v5.4.9 https://github.com/lua/lua.git
 ```
 
 ```cmake
@@ -24,6 +25,7 @@ git clone --depth 1 -b v3.6.2 https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-
 set(WOLFSSL_ROOT "<deps-dir>/wolfssl")
 set(WOLFSSH_ROOT "<deps-dir>/wolfssh")
 set(SDCARD_ROOT  "<deps-dir>/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico")
+set(LUA_ROOT     "<deps-dir>/lua")
 ```
 
 ```sh
