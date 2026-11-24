@@ -164,8 +164,11 @@ static bool mount(shell_t *sh) {
     FRESULT fr = f_mount(&card.state.fatfs, sd_get_drive_prefix(&card), 1);
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
     if (fr != FR_OK) {
-        shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
-                     (unsigned long)ms);
+        if (sh)
+            shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
+                         (unsigned long)ms);
+        else
+            log_msg(SOS_LOG_WARNING, "sd: mount failed: %s (%d)", FRESULT_str(fr), fr);
         return false;
     }
     card.state.mounted = true;
@@ -276,13 +279,14 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
 static bool files_in_use(shell_t *sh) {
     if (!files_busy())
         return false;
-    shell_printf(sh, "a file command is running (cat, cp, ls); wait for it or stop it with Ctrl-C\n");
+    shell_printf(sh, "files are open (a cat, cp or ls running, or an SFTP transfer); wait for it to end\n");
     return true;
 }
 
 bool sdcard_mount(shell_t *sh) {
     if (!driver_init()) {
-        shell_printf(sh, "sd: driver init failed\n");
+        if (sh)
+            shell_printf(sh, "sd: driver init failed\n");
         return false;
     }
     return mount(sh);

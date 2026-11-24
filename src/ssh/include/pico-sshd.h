@@ -89,6 +89,7 @@ typedef struct ssh_session_t {
 	volatile bool peer_closed;         /* (irq) client closed or connection failed */
 	volatile bool setup_pending;       /* (irq) accepted; wolfSSH session not created yet */
 	bool eof_received;                 /* client sent channel EOF: end once input is consumed */
+	bool sftp;                         /* the client asked for the sftp subsystem (no shell) */
 	bool output_stalled;               /* client stopped reading: writes drop until rb_out drains */
 	volatile bool exit_sent;           /* CS_CLOSING: exit status and channel close sent (the
 	                                      slot may then be reclaimed by a new connection) */

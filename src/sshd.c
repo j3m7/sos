@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "log.h"
+#include "sdcard.h"
 #include "settings.h"
 
 #define SSH_KEY_TYPE        "ssh-ed25519"     // the host key's type
@@ -218,6 +219,13 @@ void sshd_poll(void) {
             session_shell_ids[i] = 0;
             continue;
         }
+        if (ss->sftp) {                     // served by the SSH server itself (no shell)
+            if (session_shell_ids[i] != ss->session_id) {
+                session_shell_ids[i] = ss->session_id;
+                sdcard_mount(NULL);         // SFTP works on the SD card
+            }
+            continue;
+        }
         if (session_shell_ids[i] != ss->session_id) {
             if (session_shell_ids[i])
                 shell_end(&session_shells[i]);
@@ -264,8 +272,9 @@ void sshd_status(shell_t *sh) {
             snprintf(who, sizeof(who), "%s@%s:%u", ss->login[0] ? ss->login : "?", ipstr, port);
         }
         uint64_t secs = (time_us_64() - ss->accept_start_us) / 1000000;
-        shell_printf(sh, "  %c %u  %-36s %-10s %llum%02llus\n",
+        shell_printf(sh, "  %c %u  %-36s %-10s %-5s %llum%02llus\n",
                      sh == &session_shells[i] ? '*' : ' ', i + 1, who,
-                     ssh_server_connection_state_name(ss->cstate), secs / 60, secs % 60);
+                     ssh_server_connection_state_name(ss->cstate), ss->sftp ? "sftp" : "shell",
+                     secs / 60, secs % 60);
     }
 }

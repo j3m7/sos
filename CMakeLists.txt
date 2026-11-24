@@ -91,8 +91,11 @@ set(SOS_SOURCES
     src/sdcard.c
     src/files.c
     src/path.c
+    src/sftp_fs.c
 )
-add_executable(sos ${SOS_SOURCES})
+add_executable(sos ${SOS_SOURCES}
+    src/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
+)
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")

@@ -15,7 +15,15 @@
 bool files_command(shell_t *sh, const char *cmd, char *args);
 void files_help(shell_t *sh);
 
-// A file command is running and holds open files (formatting or unmounting would break it).
+// A file command or an SFTP transfer holds open files (formatting or unmounting would break it).
 bool files_busy(void);
+void files_hold(void);          // one more holder of open files
+void files_release(void);
+
+// The single place deciding whether a path on the card may be changed: called with the
+// absolute path before every write, create, delete, rename (both names), mkdir and attribute
+// change, by the shell file commands (`sh`: the session's shell) and SFTP (`sh` NULL). Allows
+// everything for now; a rule (e.g. a protected /certs) goes here.
+bool files_write_allowed(const shell_t *sh, const char *path);
 
 #endif

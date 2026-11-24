@@ -28,10 +28,33 @@
 #define COPY_CHUNK   4096
 #define LS_LINE_MAX  (PATH_LEN + 48)
 
-static int jobs_running;        // jobs holding open files or directories
+static int holders;             // jobs and SFTP handles with open files or directories
 
 bool files_busy(void) {
-    return jobs_running > 0;
+    return holders > 0;
+}
+
+void files_hold(void) {
+    holders++;
+}
+
+void files_release(void) {
+    if (holders > 0)
+        holders--;
+}
+
+bool files_write_allowed(const shell_t *sh, const char *path) {
+    (void)sh;
+    (void)path;
+    return true;
+}
+
+// For the commands: say so when a write is refused.
+static bool may_write(shell_t *sh, const char *cmd, const char *path) {
+    if (files_write_allowed(sh, path))
+        return true;
+    shell_printf(sh, "%s: %s: not allowed to change this path\n", cmd, path);
+    return false;
 }
 
 // --- helpers ---------------------------------------------------------------------------------
@@ -90,13 +113,13 @@ static bool two_args(shell_t *sh, char *args, char **a, char **b, const char *us
 }
 
 static void job_start(shell_t *sh, shell_job_fn step, void *arg) {
-    jobs_running++;
+    files_hold();
     shell_run_job(sh, step, arg);
 }
 
 static bool job_done(void *arg) {
     free(arg);
-    jobs_running--;
+    files_release();
     return false;
 }
 
@@ -193,7 +216,7 @@ static void cmd_mkdir(shell_t *sh, const char *arg) {
         shell_printf(sh, "usage: mkdir <dir>\n");
         return;
     }
-    if (!resolve(sh, arg, path))
+    if (!resolve(sh, arg, path) || !may_write(sh, "mkdir", path))
         return;
     FRESULT fr = f_mkdir(path);
     if (fr != FR_OK)
@@ -214,6 +237,8 @@ static void cmd_rm(shell_t *sh, const char *arg) {
         shell_printf(sh, "rm: %s: is the current directory or above it\n", arg);
         return;
     }
+    if (!may_write(sh, "rm", path))
+        return;
     FRESULT fr = f_unlink(path);
     if (fr != FR_OK)
         shell_printf(sh, "rm: %s: %s\n", arg, errstr(fr));
@@ -223,7 +248,8 @@ static void cmd_mv(shell_t *sh, char *args) {
     char *a, *b, src[PATH_LEN], dst[PATH_LEN];
     if (!two_args(sh, args, &a, &b, "mv <from> <to>"))
         return;
-    if (!resolve(sh, a, src) || !resolve(sh, b, dst) || !into_dir(sh, src, dst))
+    if (!resolve(sh, a, src) || !resolve(sh, b, dst) || !into_dir(sh, src, dst) ||
+        !may_write(sh, "mv", src) || !may_write(sh, "mv", dst))
         return;
     FRESULT fr = f_rename(src, dst);
     if (fr != FR_OK)
@@ -251,7 +277,7 @@ static void cmd_echo(shell_t *sh, char *args) {
         shell_printf(sh, "usage: echo <text> [> file | >> file]\n");
         return;
     }
-    if (!resolve(sh, name, path))
+    if (!resolve(sh, name, path) || !may_write(sh, "echo", path))
         return;
     FIL f;
     FRESULT fr = f_open(&f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
@@ -386,6 +412,8 @@ static void cmd_cp(shell_t *sh, char *args) {
         return;
     }
     if (!resolve(sh, a, src) || !resolve(sh, b, j->dst_path) || !into_dir(sh, src, j->dst_path))
+        goto fail;
+    if (!may_write(sh, "cp", j->dst_path))
         goto fail;
     if (!strcmp(src, j->dst_path)) {
         shell_printf(sh, "cp: source and destination are the same\n");

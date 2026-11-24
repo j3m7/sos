@@ -270,6 +270,27 @@ working directory:
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
 
+### File transfer (SFTP)
+
+The SSH server also serves SFTP on the card, with the same login:
+
+```sh
+sftp <user>@<device-ip>            # or scp -s, FileZilla, WinSCP ...
+sftp> put photo.jpg
+sftp> get notes.txt
+```
+
+- Upload, download (resumable: `reput`, `reget`), `ls`, `mkdir`, `rmdir`, `rm`, `rename`. The root
+  is the card's root. Changing attributes (`chmod`, times) isn't supported: FAT has no Unix
+  permissions.
+- About 170 KB/s up and 120 KB/s down (2 MB files; encryption-bound). Each request is handled in
+  one pass of the main loop: a 32 KB read reply holds the console and other sessions for up to
+  ~0.1 s.
+- Each session uses up to ~100 KB of heap while transferring. A transfer's open files count as in
+  use, like a running `cp` (see above); a client that disconnects mid-transfer releases them.
+- Every change to the card, from SFTP or the file commands, passes one check,
+  `files_write_allowed()` in `src/files.c` (everything is allowed for now).
+
 ## Testing
 
 **Unit tests** run on the development machine with the host compiler (no board, no Pico SDK),
