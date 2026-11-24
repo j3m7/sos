@@ -24,9 +24,14 @@
 #define SSH_KEY_TYPE        "ssh-ed25519"
 #define SSH_KEY_BLOB_MAX    128     // wire-format Ed25519 public key is 51 bytes
 
+#ifndef SOS_SSH_MAX_SESSIONS
+#define SOS_SSH_MAX_SESSIONS 3
+#endif
+
 static ssh_server_t *server;
-static shell_t session_shell;
-static uint32_t session_shell_id;      // server->session_id the shell was started for; 0 = none
+// One shell per session slot, restarted whenever the slot gets a new login.
+static shell_t session_shells[SOS_SSH_MAX_SESSIONS];
+static uint32_t session_shell_ids[SOS_SSH_MAX_SESSIONS];   // session_id each shell serves; 0 = none
 static uint8_t authorized_key[SSH_KEY_BLOB_MAX];
 static uint32_t authorized_key_len;
 static char hostkey_fingerprint[64];
@@ -141,7 +146,7 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
         return false;
     compute_host_fingerprint(hostkey, hostkey_len);
 
-    if (!(server = ssh_server_new(4096, 8192))) {
+    if (!(server = ssh_server_new(SOS_SSH_MAX_SESSIONS, 4096, 8192))) {
         printf("sshd: out of memory\n");
         return false;
     }
@@ -156,29 +161,28 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
         printf("sshd: failed to load host key\n");
         return false;
     }
-    if (!ssh_server_start(server, false)) {
+    if (!ssh_server_start(server)) {
         printf("sshd: failed to start\n");
         return false;
     }
-    printf("sshd: listening on port %u, host key %s %s\n",
-           server->port, SSH_KEY_TYPE, hostkey_fingerprint);
+    printf("sshd: listening on port %u (up to %u sessions), host key %s %s\n",
+           server->port, server->max_sessions, SSH_KEY_TYPE, hostkey_fingerprint);
     return true;
 }
 
-// --- per-session shell ----------------------------------------------------------
+// --- per-session shells ---------------------------------------------------------
 
 static int session_read(void *ctx, char *buf, int len) {
-    int n = ssh_server_read((ssh_server_t *)ctx, buf, len);
+    int n = ssh_session_read((ssh_session_t *)ctx, buf, len);
     return n > 0 ? n : 0;
 }
 
 static void session_write(void *ctx, const char *buf, int len) {
-    ssh_server_write((ssh_server_t *)ctx, buf, len);
+    ssh_session_write((ssh_session_t *)ctx, buf, len);
 }
 
 static void session_logout(void *ctx) {
-    (void)ctx;
-    sshd_disconnect();
+    ssh_session_disconnect((ssh_session_t *)ctx);
 }
 
 static const shell_io_t session_io = {
@@ -193,15 +197,19 @@ void sshd_poll(void) {
     if (!server)
         return;
     ssh_server_service(server);     // all wolfSSH work happens here, not in lwIP callbacks
-    if (server->cstate != CS_CONNECT) {
-        session_shell_id = 0;
-        return;
+
+    for (unsigned i = 0; i < server->max_sessions; i++) {
+        ssh_session_t *ss = ssh_server_session(server, i);
+        if (ss->cstate != CS_CONNECT) {
+            session_shell_ids[i] = 0;
+            continue;
+        }
+        if (session_shell_ids[i] != ss->session_id) {
+            session_shell_ids[i] = ss->session_id;
+            shell_init(&session_shells[i], &session_io, ss);
+        }
+        shell_poll(&session_shells[i]);
     }
-    if (session_shell_id != server->session_id) {
-        session_shell_id = server->session_id;
-        shell_init(&session_shell, &session_io, server);
-    }
-    shell_poll(&session_shell);
 }
 
 void sshd_status(shell_t *sh) {
@@ -209,27 +217,37 @@ void sshd_status(shell_t *sh) {
         shell_printf(sh, "sshd: not running\n");
         return;
     }
+    unsigned in_use = 0;
+    for (unsigned i = 0; i < server->max_sessions; i++)
+        if (ssh_server_session(server, i)->cstate != CS_NONE)
+            in_use++;
+
     shell_printf(sh, "host key:  %s %s\n", SSH_KEY_TYPE, hostkey_fingerprint);
-    shell_printf(sh, "state:     %s\n", ssh_server_connection_state_name(server->cstate));
+    shell_printf(sh, "sessions:  %u of %u in use, %lu refused (all busy)\n",
+                 in_use, server->max_sessions, (unsigned long)server->rejected_busy);
     shell_printf(sh, "logins:    %lu, last handshake %lu ms\n",
-                 (unsigned long)server->session_id,
+                 (unsigned long)server->logins,
                  (unsigned long)(server->last_handshake_us / 1000));
     shell_printf(sh, "ssh work:  %lu calls, %llu ms total, longest %lu ms\n",
                  (unsigned long)server->work_calls,
                  (unsigned long long)(server->work_us_total / 1000),
                  (unsigned long)(server->work_us_max / 1000));
-    if (ssh_server_client_connected(server)) {
+
+    for (unsigned i = 0; i < server->max_sessions; i++) {
+        ssh_session_t *ss = ssh_server_session(server, i);
+        if (ss->cstate == CS_NONE)
+            continue;
+        char who[64] = "-";
         ip_addr_t ip;
         uint16_t port;
-        char ipstr[IPADDR_STRLEN_MAX];
-        if (ssh_server_get_client_ip(server, &ip, &port) == ERR_OK) {
+        if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK) {
+            char ipstr[IPADDR_STRLEN_MAX];
             ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
-            shell_printf(sh, "client:    %s@%s:%u\n", server->login, ipstr, port);
+            snprintf(who, sizeof(who), "%s@%s:%u", ss->login[0] ? ss->login : "?", ipstr, port);
         }
+        uint64_t secs = (time_us_64() - ss->accept_start_us) / 1000000;
+        shell_printf(sh, "  %c %u  %-36s %-10s %llum%02llus\n",
+                     sh == &session_shells[i] ? '*' : ' ', i + 1, who,
+                     ssh_server_connection_state_name(ss->cstate), secs / 60, secs % 60);
     }
-}
-
-void sshd_disconnect(void) {
-    if (server && ssh_server_client_connected(server))
-        ssh_server_disconnect_client(server);
 }

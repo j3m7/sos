@@ -9,8 +9,9 @@
 
 #include "shell.h"
 
-// Start the SSH server on port 22 with the given host key (DER). Each SSH session gets its
-// own shell instance; sessions are not part of the global stdio console. Server log messages
+// Start the SSH server on port 22 with the given host key (DER), accepting up to
+// SOS_SSH_MAX_SESSIONS concurrent sessions. Each session gets its own shell instance; sessions
+// are not part of the global stdio console. Server log messages
 // go to the console. Only public-key login for the user/key in local.cmake is accepted.
 bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len);
 
@@ -18,10 +19,8 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len);
 // input. Never blocks; call regularly from the main loop.
 void sshd_poll(void);
 
-// Print server state, connected client and host key fingerprint to the given shell.
+// Print host key fingerprint, server statistics and the active sessions to the given shell
+// (the caller's own session is marked with '*').
 void sshd_status(shell_t *sh);
-
-// Disconnect the current SSH client, if any.
-void sshd_disconnect(void);
 
 #endif

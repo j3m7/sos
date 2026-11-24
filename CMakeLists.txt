@@ -79,7 +79,10 @@ target_include_directories(sos PRIVATE
 # stack). Measured peak is ~3.2K during an SSH login (`mem` shows it); the rest is headroom
 # for TLS and future work. Interrupt handlers, including lwIP/cyw43 processing, use this stack.
 set(SOS_CORE0_STACK_SIZE 0x2000 CACHE STRING "Core 0 stack size in bytes")
+# Concurrent SSH sessions. Each slot preallocates 16K of buffers; logins need ~25K transiently.
+set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 target_compile_definitions(sos PRIVATE
+    SOS_SSH_MAX_SESSIONS=${SOS_SSH_MAX_SESSIONS}
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
     PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
     PICO_USE_STACK_GUARDS=1         # MSPLIM: stack overflow faults instead of corrupting the heap

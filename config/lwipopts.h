@@ -12,9 +12,14 @@
 // MEM_LIBC_MALLOC is incompatible with the threadsafe_background arch.
 #define MEM_LIBC_MALLOC             0
 #define MEM_ALIGNMENT               4
-#define MEM_SIZE                    24000
+// Heap for outgoing TCP data (tcp_write copies). Sized for several SSH sessions, each of which
+// may queue up to TCP_SND_BUF.
+#define MEM_SIZE                    32000
 
-#define MEMP_NUM_TCP_SEG            32
+#define MEMP_NUM_TCP_SEG            48
+// Active TCP connections: SSH sessions plus recently closed ones still in TIME_WAIT
+// (lwIP reuses the oldest TIME_WAIT pcb when this runs out).
+#define MEMP_NUM_TCP_PCB            8
 #define MEMP_NUM_ARP_QUEUE          10
 #define PBUF_POOL_SIZE              24
 

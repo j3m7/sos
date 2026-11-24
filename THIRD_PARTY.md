@@ -15,9 +15,9 @@ firmware, with its origin and license.
 
 | SOS path | Upstream path | SOS changes |
 |---|---|---|
-| `src/ssh/server.c` | `src/server.c` | Password authentication removed; only public key advertised; key length checked before comparison; `ssh_server_read()`/`ssh_server_write()` and a per-login `session_id`; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; timing statistics |
+| `src/ssh/server.c` | `src/server.c` | Restructured for multiple concurrent sessions (`ssh_session_t`), stdio driver replaced by a session API; password authentication removed, only public key advertised, key length checked before comparison; all wolfSSH work moved from lwIP callbacks to `ssh_server_service()` (thread context); graceful disconnect (exit status, channel close, `CS_CLOSING`); full-buffer input handled with `ERR_MEM` instead of being dropped; private key array bounds and buffer release fixed; timing statistics |
 | `src/ssh/ringbuffer.c` | `src/ringbuffer.c` | none |
-| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `session_id`, work/close flags, timing fields, `CS_CLOSING`; declarations for `ssh_server_read()`/`ssh_server_write()`/`ssh_server_service()` |
+| `src/ssh/include/pico-sshd.h` | `include/pico-sshd.h` | `ssh_session_t` split out of `ssh_server_t`; session API; `ssh_server_service()`; `CS_CLOSING`; statistics |
 | `src/ssh/include/pico-sshd/ringbuffer.h` | `include/pico-sshd/ringbuffer.h` | none |
 | `src/ssh/include/pico-sshd/log.h` | `include/pico-sshd/log.h` | none |
 | `cmake/wolfssl_pico.cmake` | `cmake/wolfssl_pico.cmake` | SP assembly selection scoped to the `wolfssl` target |
@@ -69,7 +69,11 @@ Generic bugs found while integrating pico-sshd that apply to upstream as well. N
 7. `src/server.c`, `ssh_server_disconnect_client()`: closes TCP immediately without sending
    exit status or channel close; clients report exit 255, and data still in flight can turn
    the close into a reset that discards the session's last output.
-8. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
+8. `src/server.c`, `ssh_server_add_priv_key()`: loops `i <= MAX_SERVER_PKEYS`, writing one
+   entry past `pkeys[]`; `ssh_server_open()` walks `pkeys[]` until a NULL key with no bound.
+9. `src/server.c`, `ssh_server_destroy()`: calls `ssh_ringbuffer_free()` (which returns the
+   free space) instead of `ssh_ringbuffer_destroy()`, so the buffers are never released.
+10. Interactive `ssh` sessions hang after "PTY allocation request failed" unless wolfSSH is
    built with `WOLFSSH_TERM` (plus `NO_TERMIOS` on the Pico); the bundled settings omit it.
 
 ## Linked into the firmware (not copied)
