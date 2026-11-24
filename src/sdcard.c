@@ -14,6 +14,7 @@
 #include <sys/time.h>
 
 #include "pico/aon_timer.h"
+#include "hardware/spi.h"
 #include "pico/stdlib.h"
 
 #include "ff.h"
@@ -31,7 +32,10 @@ static spi_t spi = {
     .sck_gpio = 18,
     .mosi_gpio = 19,
     .miso_gpio = 16,
-    .baud_rate = 12500 * 1000,          // conservative for a first try
+    // 25 MHz: the SD spec's maximum in SPI mode. Measured with a 64 GB SDXC card: about
+    // 2.2 MB/s write, 1.75 MB/s read (12.5 MHz: 1.2 / 1.0). 37.5 MHz also worked on that card
+    // (3.1 / 2.3 MB/s) but is out of spec; 75 MHz fails card init. `sd speed` changes it.
+    .baud_rate = 25000 * 1000,
 };
 
 static sd_spi_if_t spi_if = {
@@ -175,7 +179,8 @@ static void cmd_info(shell_t *sh) {
     DWORD free_clusters;
     FRESULT fr = f_getfree(sd_get_drive_prefix(&card), &free_clusters, &fs);
     uint64_t card_mb = (uint64_t)card.state.sectors * 512 / (1024 * 1024);
-    shell_printf(sh, "card:   %s, %llu MB\n", card_type(), (unsigned long long)card_mb);
+    shell_printf(sh, "card:   %s, %llu MB, SPI clock %lu kHz\n", card_type(),
+                 (unsigned long long)card_mb, (unsigned long)(spi_get_baudrate(spi.hw_inst) / 1000));
     if (fr != FR_OK) {
         shell_printf(sh, "free:   f_getfree failed: %s\n", FRESULT_str(fr));
         return;
@@ -212,9 +217,13 @@ static void cmd_ls(shell_t *sh, const char *path) {
 }
 
 // Write then read back a test file, timing both. Feeds the watchdog between blocks.
-static void cmd_test(shell_t *sh) {
+static void cmd_test(shell_t *sh, const char *size_kb) {
     static uint8_t buf[4096];
-    const int blocks = 64;                  // 256 KB
+    int blocks = size_kb ? atoi(size_kb) / 4 : 64;     // default 256 KB
+    if (blocks < 1 || blocks > 16384) {
+        shell_printf(sh, "usage: sd test [KB], 4 to 65536\n");
+        return;
+    }
     const char *name = "/sos-test.bin";
     if (!mount(sh))
         return;
@@ -261,11 +270,42 @@ static void cmd_test(shell_t *sh) {
         shell_printf(sh, "test file dated %04u-%02u-%02u %02u:%02u (UTC)\n", (fi.fdate >> 9) + 1980,
                      (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63);
     f_unlink(name);
-    unsigned kb = blocks * sizeof(buf) / 1024;
+    unsigned kb = (unsigned)(blocks * sizeof(buf) / 1024);
     shell_printf(sh, "write %u KB: %llu ms (%llu KB/s), slowest 4 KB write %llu ms\n", kb,
                  wus / 1000, kb * 1000000ull / wus, worst / 1000);
     shell_printf(sh, "read  %u KB: %llu ms (%llu KB/s), data %s\n", kb, rus / 1000,
                  kb * 1000000ull / rus, ok ? "verified" : "MISMATCH");
+}
+
+// --- SPI clock -----------------------------------------------------------------------------------
+
+// Set the clock used after card initialization (the driver starts at 400 kHz) and reinitialize the
+// card so it takes effect. The SPI divider gives clk_peri (150 MHz) / even numbers; the actual
+// rate is shown by `sd`.
+static void cmd_speed(shell_t *sh, const char *mhz) {
+    if (!mhz) {
+        shell_printf(sh, "SPI clock: %lu kHz set, %lu kHz actual\n",
+                     (unsigned long)(spi.baud_rate / 1000),
+                     (unsigned long)(spi_get_baudrate(spi.hw_inst) / 1000));
+        return;
+    }
+    float f = strtof(mhz, NULL);
+    if (f < 1 || f > 75) {
+        shell_printf(sh, "usage: sd speed [MHz], 1 to 75\n");
+        return;
+    }
+    if (!sh->io->admin) {
+        shell_printf(sh, "the SPI clock can only be changed on the serial console\n");
+        return;
+    }
+    f_unmount(sd_get_drive_prefix(&card));
+    card.state.mounted = false;
+    card.state.m_Status |= STA_NOINIT;      // next mount initializes the card at the new rate
+    spi.baud_rate = (uint)(f * 1000000);
+    if (mount(sh))
+        shell_printf(sh, "SPI clock: %lu kHz (asked for %lu)\n",
+                     (unsigned long)(spi_get_baudrate(spi.hw_inst) / 1000),
+                     (unsigned long)(spi.baud_rate / 1000));
 }
 
 // --- format --------------------------------------------------------------------------------------
@@ -362,7 +402,9 @@ void sdcard_command(shell_t *sh, char *args) {
     else if (!strcmp(sub, "ls"))
         cmd_ls(sh, arg);
     else if (!strcmp(sub, "test"))
-        cmd_test(sh);
+        cmd_test(sh, arg);
+    else if (!strcmp(sub, "speed"))
+        cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg);
     else if (!strcmp(sub, "unmount")) {
@@ -370,5 +412,5 @@ void sdcard_command(shell_t *sh, char *args) {
         card.state.mounted = false;
         shell_printf(sh, "unmounted\n");
     } else
-        shell_printf(sh, "usage: sd [info|ls [path]|test|format [exfat|fat32]|unmount]\n");
+        shell_printf(sh, "usage: sd [info|ls [path]|test [KB]|speed [MHz]|format [exfat|fat32]|unmount]\n");
 }

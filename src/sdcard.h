@@ -8,7 +8,7 @@
 
 #include "shell.h"
 
-// `sd [info|ls [path]|test|format [exfat|fat32]|unmount]`; format needs an admin channel.
+// `sd [info|ls [path]|test [KB]|speed [MHz]|format [exfat|fat32]|unmount]`; format needs an admin channel.
 void sdcard_command(shell_t *sh, char *args);
 
 #endif
