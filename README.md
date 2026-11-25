@@ -21,7 +21,8 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 ### Design principles
 
 - **Secure by default**: every network connection is encrypted and authenticated; no
-  plaintext logins or protocols. Credentials and keys never leave the device unencrypted.
+  plaintext logins or protocols. Credentials and keys leave the device unencrypted only on the
+  serial console (an encrypted SD card's recovery key, shown once when the card is formatted).
 - **Low power**: idle in low-power sleep, wake on network activity or timers, use Wi-Fi power
   saving, and do as little work as possible while nobody is connected.
 - **Headless**: fully usable and recoverable without a screen; the USB serial console is for
@@ -462,7 +463,9 @@ sftp> get notes.txt
 - Upload, download (resumable: `reput`, `reget`), `ls`, `mkdir`, `rmdir`, `rm`, `rename`. The root
   is the card's root. Changing attributes (`chmod`, times) isn't supported: FAT has no Unix
   permissions.
-- About 170 KB/s up and 120 KB/s down (2 MB files; encryption-bound). Each request is handled in
+- About 250–300 KB/s up and 170–200 KB/s down (2 MB files, over Wi-Fi that loses a few percent of
+  packets). It depends on the network: lost packets and round trips are what it waits for (see
+  `config/lwipopts.h` and the SSH window in `config/user_settings.h`). Each request is handled in
   one pass of the main loop: a 32 KB read reply holds the console and other sessions for up to
   ~0.1 s.
 - Each session uses up to ~100 KB of heap while transferring. A transfer's open files count as in
