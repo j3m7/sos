@@ -15,6 +15,7 @@
 
 #include "chat/chat.h"
 #include "core/fault.h"
+#include "core/glitchdet.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootflash.h"
@@ -136,6 +137,7 @@ static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 
 int main(void) {
     stackmon_paint();
+    glitchdet_boot();                   // why we last reset; a soak-test build arms the detector here
     stdio_init_all();
     console_gate_set(true);             // the console is locked until shell/login.c says otherwise
 
@@ -148,6 +150,7 @@ int main(void) {
     // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
     fault_boot();
     wdog_start();
+    glitchdet_report();
     if (fault_last())
         log_msg(SOS_LOG_ERR, "last reset: %s", fault_last());
     else if (wdog_caused_reset())

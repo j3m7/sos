@@ -20,6 +20,7 @@
 #include "core/chipinfo.h"
 #include "core/config.h"
 #include "core/fault.h"
+#include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/log.h"
 #include "core/rootflash.h"
@@ -89,6 +90,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "dmesg             system log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
+    shell_printf(sh, "glitch            glitch detector state and resets\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
@@ -497,6 +499,35 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     wifi_reconnect();
+}
+
+// --- glitch detector -----------------------------------------------------------------------------
+
+// `glitch`: the detector's state and how often it has reset the board since power-on.
+// `glitch trig` (console, soak-test builds): make a detector fire, to see the reset reported.
+static void cmd_glitch(shell_t *sh, const char *args) {
+    int armed = glitchdet_armed_sensitivity();
+    if (args && !strcmp(args, "trig")) {
+        if (!sh->io->admin)
+            shell_printf(sh, "only on the serial console\n");
+        else if (armed < 0)
+            shell_printf(sh, "the detector isn't armed in this build (SOS_GLITCH_SOAK)\n");
+        else {
+            shell_printf(sh, "simulating a detector trigger: the board resets now\n");
+            sleep_ms(50);
+            glitchdet_simulate();
+        }
+        return;
+    }
+    if (armed < 0)
+        shell_printf(sh, "glitch detector: not armed (a normal build doesn't arm it)\n");
+    else
+        shell_printf(sh, "glitch detector: armed by software, sensitivity %d (soak test build)\n",
+                     armed);
+    shell_printf(sh, "detector resets since power-on: %lu\n", (unsigned long)glitchdet_resets());
+    if (glitchdet_caused_reset())
+        shell_printf(sh, "the last reset was the detector's (detectors 0x%x fired)\n",
+                     (unsigned)glitchdet_last_triggers());
 }
 
 // --- root secret ---------------------------------------------------------------------------------
@@ -1088,6 +1119,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_log(sh, args);
     else if (!strcmp(cmd, "config"))
         cmd_config(sh, args);
+    else if (!strcmp(cmd, "glitch"))
+        cmd_glitch(sh, args);
     else if (!strcmp(cmd, "rootsecret"))
         cmd_rootsecret(sh, args);
     else if (!strcmp(cmd, "key"))
