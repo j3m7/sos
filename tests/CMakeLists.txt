@@ -103,3 +103,36 @@ add_executable(test_chat test_chat.c ${SOS_ROOT}/src/chat/chat.c
     ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)
+
+# src/files/sdcrypt.c: SD card encryption (header, XTS-AES sectors), with wolfCrypt built for the
+# host (tests/wolfcrypt_host/user_settings.h), cross-checked against tools/host/sdcrypt.c, which
+# uses OpenSSL's libcrypto. WOLFSSL_ROOT: as for the firmware (lib/wolfssl, or local.cmake).
+if (NOT DEFINED WOLFSSL_ROOT)
+    include(${SOS_ROOT}/local.cmake OPTIONAL)
+endif()
+if (NOT DEFINED WOLFSSL_ROOT)
+    set(WOLFSSL_ROOT ${SOS_ROOT}/lib/wolfssl)
+endif()
+find_package(OpenSSL COMPONENTS Crypto)
+if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c AND OpenSSL_FOUND)
+    add_library(wolfcrypt_host STATIC
+        ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${WOLFSSL_ROOT}/wolfcrypt/src/memory.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/wc_port.c ${WOLFSSL_ROOT}/wolfcrypt/src/error.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c)
+    target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
+    target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
+        ${WOLFSSL_ROOT})
+    target_compile_options(wolfcrypt_host PRIVATE -w)     # third-party code: its warnings aren't ours
+
+    add_executable(test_sdcrypt test_sdcrypt.c ${SOS_ROOT}/src/files/sdcrypt.c
+        ${SOS_ROOT}/tools/host/sdcrypt.c)
+    target_compile_definitions(test_sdcrypt PRIVATE SDCRYPT_TOOL_NO_MAIN)
+    target_include_directories(test_sdcrypt PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_sdcrypt PRIVATE wolfcrypt_host OpenSSL::Crypto)
+    add_test(NAME sdcrypt COMMAND test_sdcrypt)
+
+    add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
+    target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)
+else()
+    message(WARNING "sdcrypt test skipped: needs wolfSSL (WOLFSSL_ROOT) and OpenSSL's libcrypto")
+endif()
