@@ -98,8 +98,12 @@ extern "C"
 #endif
 
 #define NO_FAILURE_ON_REJECTED
-#define DEFAULT_WINDOW_SZ 4096
-#define DEFAULT_MAX_PACKET_SZ 1024
+/* SSH channel window and largest packet. With a 4 KB window the sender stopped every 4 KB and
+   waited a round trip for the window to reopen; 16 KB / 4 KB about tripled SFTP throughput on
+   Wi-Fi with lost packets, for about 12 KB more heap per active session. 32 KB / 8 KB measured
+   no better. */
+#define DEFAULT_WINDOW_SZ 16384
+#define DEFAULT_MAX_PACKET_SZ 4096
 
 #if 0
 extern time_t ssh_server_my_time(time_t *);
