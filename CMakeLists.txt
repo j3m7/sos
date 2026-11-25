@@ -98,6 +98,7 @@ set(SOS_SOURCES
     src/core/wdog.c
     src/core/fault.c
     src/core/stackmon.c
+    src/core/heap.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -121,6 +122,7 @@ set(SOS_SOURCES
     src/time/nts_ke.c
     src/time/nts_ntp.c
     src/tls/tls.c
+    src/tls/tls_admit.c
     src/tls/tls_roots.c
     src/tls/certstore.c
     src/tls/certbundle.c

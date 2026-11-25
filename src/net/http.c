@@ -106,7 +106,7 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
     r->state = HTTP_CONNECTING;
     // No ALPN: HTTP/1.1 is the default without it, and tls/ would refuse a server that
     // doesn't do ALPN at all.
-    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms);
+    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
     if (!r->tls) {
         free(r->out);
         free(r);

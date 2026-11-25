@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "tls/tls_admit.h"
+
 typedef struct WOLFSSL WOLFSSL;
 
 typedef enum {
@@ -47,9 +49,13 @@ void tls_init(void);
 struct WOLFSSL_CTX;
 int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len);
 
-// Start a connection. alpn may be NULL. Returns NULL if out of memory; otherwise check
-// tls_poll() for progress. timeout_ms covers DNS, connect and handshake together.
-tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms);
+// Start a connection. alpn may be NULL. `use` says whose it is: TLS_USER connections (requests
+// someone started) may hold all but one of the slots, so the system's (NTS) always finds one
+// (tls_admit.h). Returns NULL if out of memory; otherwise check tls_poll() for progress, which
+// may fail at once if the connection isn't admitted. timeout_ms covers DNS, connect and
+// handshake together.
+tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
+                     tls_use_t use);
 
 // Advance the connection; returns its state.
 tls_state_t tls_poll(tls_conn_t *c);

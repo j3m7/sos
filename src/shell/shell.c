@@ -3,7 +3,6 @@
 
 #include "shell/shell.h"
 
-#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +17,7 @@
 #include "chat/chat.h"
 #include "core/config.h"
 #include "core/fault.h"
+#include "core/heap.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
@@ -117,12 +117,9 @@ static void cmd_uptime(shell_t *sh) {
 }
 
 static void cmd_mem(shell_t *sh) {
-    extern char __end__, __HeapLimit;
-    struct mallinfo mi = mallinfo();
-    size_t heap_total = (size_t)(&__HeapLimit - &__end__);
-
+    heap_info_t h = heap_info();
     shell_printf(sh, "heap:  %u in use, %u peak, %u total\n",
-                 (unsigned)mi.uordblks, (unsigned)mi.arena, (unsigned)heap_total);
+                 (unsigned)h.used, (unsigned)h.arena, (unsigned)h.total);
     shell_printf(sh, "stack: %u peak of %u bytes\n",
                  (unsigned)stackmon_peak(), (unsigned)stackmon_size());
     if (lua_core1_stack_peak())

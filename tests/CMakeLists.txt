@@ -83,6 +83,11 @@ add_executable(test_termtext test_termtext.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_termtext PRIVATE ${SOS_ROOT}/src)
 add_test(NAME termtext COMMAND test_termtext)
 
+# src/tls/tls_admit.c: which new TLS connections may open (slots kept for the system, heap).
+add_executable(test_tls_admit test_tls_admit.c ${SOS_ROOT}/src/tls/tls_admit.c)
+target_include_directories(test_tls_admit PRIVATE ${SOS_ROOT}/src)
+add_test(NAME tls_admit COMMAND test_tls_admit)
+
 # src/net/http_msg.c: HTTPS client messages (URLs, requests, incremental response parsing).
 add_executable(test_http_msg test_http_msg.c ${SOS_ROOT}/src/net/http_msg.c)
 target_include_directories(test_http_msg PRIVATE ${SOS_ROOT}/src)

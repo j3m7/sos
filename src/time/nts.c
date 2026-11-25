@@ -175,7 +175,7 @@ static bool ke_begin(const char *host) {
     ke.state = KE_RUNNING;
     ke.request_len = nts_ke_build_request(ke.request, sizeof(ke.request));
     ke.response = malloc(NTS_KE_RESPONSE_MAX);
-    ke.tls = tls_open(ke.host, NTS_KE_PORT, NTS_KE_ALPN, KE_TIMEOUT_MS);
+    ke.tls = tls_open(ke.host, NTS_KE_PORT, NTS_KE_ALPN, KE_TIMEOUT_MS, TLS_SYSTEM);
     if (!ke.response || !ke.tls) {
         fail("out of memory");
         return true;

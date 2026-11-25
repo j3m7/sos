@@ -1,4 +1,4 @@
-# core: log, configuration, watchdog, stack monitor
+# core: log, configuration, watchdog, stack monitor, heap
 
 The services every other subsystem uses.
 
@@ -21,6 +21,15 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
 - **Deferred mode**, turned on once the main loop runs: every message waits for
   `log_flush()`, so log lines never land in the middle of a command's output.
 - **Pure C:** all platform access goes through `log_hooks_t`, so it's unit tested on the host.
+
+## Heap (`heap.c`)
+
+`heap_info()` gives the heap's size, what's allocated and malloc's high-water mark (`mem` shows
+them); `heap_free()` what's left, which TLS checks before opening a connection. The SDK wraps
+malloc, calloc, realloc and free in a mutex so the two cores never allocate at once, but not
+`mallinfo()`, which walks malloc's free lists. So `heap.c` also defines newlib's
+`__malloc_lock()`/`__malloc_unlock()` (no-ops by default) with a recursive mutex: reading the
+figures on core 0 can't race a Lua script allocating on core 1.
 
 ## Configuration
 

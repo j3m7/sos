@@ -120,6 +120,11 @@ aren't followed.
 
 URLs must start with `https://`, and the path must already be percent-encoded (no spaces).
 
+Two HTTPS requests (`http` or `sos.http`, from any shells) can run at once; a third is refused
+with "too many HTTPS requests at once" until one finishes. One more TLS connection is always
+kept free for time sync (NTS). A request is also refused when the heap is too low for a TLS
+handshake (about 64 KB free).
+
 ## Files and SD card
 
 The file commands work in every shell; each shell has its own working directory. Paths are
