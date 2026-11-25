@@ -11,6 +11,7 @@ this page is the reference.
 ## Line editing
 
 - **Enter** runs the line. **Backspace** deletes. Arrow keys are ignored; there's no history.
+  (For files, there's a full-screen [editor](#editor).)
 - **Ctrl-C** discards the line, cancels a question (`setup`, `wifi set`, …), or stops a running
   job (`ls`, `cat`, `cp`, a Lua script).
 - **Ctrl-D** on an empty line logs out, like `logout`.
@@ -114,12 +115,41 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `rm <path>` | any | Delete a file or an empty directory |
 | `mkdir <dir>` | any | Create a directory |
 | `echo <text> [> <file> \| >> <file>]` | any | Print the text, or write or append it as a line |
+| `edit <file>` | any | Full-screen text editor; creates the file on the first save if it doesn't exist. See [Editor](#editor) |
 | `sd` / `sd info` | any | Card and volume information, and the SPI clock |
 | `sd speed` | any | Show the SPI clock, set and actual |
 | `sd speed <MHz>` | console only | Set the SPI clock (1 to 75 MHz) and reinitialize the card. Not saved |
 | `sd unmount` | console only | Unmount the card before removing it. Refused while a file is open |
 | `sd test [<KB> [keep]]` | console only | Write and read benchmark: 4 to 65536 KB, default 256. Everything else waits until it finishes. `keep` leaves `/sos-test.txt` on the card |
 | `sd format [exfat\|fat32]` | console only | Erase the whole card (all partitions) and format it with one partition, exFAT by default, after you type `yes`. SSH sessions pause until it finishes |
+
+## Editor
+
+`edit <file>` opens a file of up to 32 KB in a full-screen editor, on the console or over SSH.
+It needs a VT100/xterm-compatible terminal and uses its alternate screen, so the shell's output
+is back as it was afterwards. The screen size is asked from the terminal when the editor starts
+and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 80×24.
+
+| Key | What it does |
+|---|---|
+| typing, **Enter**, **Tab** | Insert (UTF-8 text is fine) |
+| **Backspace** / **Delete**, **Ctrl-D** | Delete before / at the cursor |
+| arrows, **Home**/**End** (**Ctrl-A**/**Ctrl-E**), **PgUp**/**PgDn** | Move |
+| **Ctrl-S** (or **Ctrl-O**) | Save |
+| **Ctrl-Q** (or **Ctrl-X**) | Quit; with unsaved changes, press it twice |
+| **Ctrl-F** (or **Ctrl-W**) | Find: type the text, **Enter** finds the next match (empty: the last search again), **Ctrl-C** cancels |
+| **Ctrl-L** | Redraw, and ask the terminal for its size again |
+
+- **Saving** writes `<file>.~edit` first, then replaces the file with it, so an interrupted save
+  never leaves half a file. If two people edit the same file, the last save wins.
+- **Files with CRLF line ends** keep them. Control characters, invalid UTF-8 and invisible or
+  bidi characters show as `?` (they're kept as they are). Wide (CJK) characters push the rest
+  of their line one column out. Long lines scroll sideways instead of wrapping.
+- **Ctrl-C** doesn't stop the editor; Ctrl-Q does. If the SSH session drops, unsaved changes
+  are lost.
+- **Log messages** aren't printed on the console while the editor runs there. The status bar
+  counts them, and they appear when you quit (and are in `dmesg`).
+- `/certs` can be opened from SSH but only saved from the console.
 
 ## Lua
 

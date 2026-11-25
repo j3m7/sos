@@ -32,6 +32,11 @@ add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)
 add_test(NAME keys COMMAND test_keys)
 
+# src/edit/editor.c: the full-screen editor's text, keys and screen.
+add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/shell/termtext.c)
+target_include_directories(test_editor PRIVATE ${SOS_ROOT}/src)
+add_test(NAME editor COMMAND test_editor)
+
 # src/files/path.c: path resolution for the file commands.
 add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_path PRIVATE ${SOS_ROOT}/src)

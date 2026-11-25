@@ -10,7 +10,7 @@
 // 0x80-0x9F (0x9B is CSI on 8-bit terminals) and UTF-8-encoded (U+0080-U+009F). So do code
 // points that would make the text on screen differ from its bytes: bidi controls (U+202E and
 // the like), zero-width and other invisible characters, tag characters and the variation
-// selectors supplement (see hidden() in termtext.c). Invalid UTF-8 becomes '.' too. CR is
+// selectors supplement (see termtext_hidden()). Invalid UTF-8 becomes '.' too. CR is
 // dropped, since the shell turns '\n' into CRLF itself.
 //
 // Input can come in pieces: a UTF-8 sequence split between calls is held until it's complete.
@@ -18,6 +18,7 @@
 #ifndef SOS_TERMTEXT_H
 #define SOS_TERMTEXT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -35,5 +36,9 @@ size_t termtext_filter(termtext_t *t, const uint8_t *in, size_t len, char *out);
 // End of the input: an incomplete sequence left over becomes '.'. out must hold 3 bytes.
 // Returns the number written.
 size_t termtext_flush(termtext_t *t, char *out);
+
+// A code point the filter replaces even though it's valid UTF-8 (C1 controls, bidi controls,
+// invisible characters; see termtext.c). For other programs that show text, like the editor.
+bool termtext_hidden(uint32_t cp);
 
 #endif
