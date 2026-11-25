@@ -57,7 +57,8 @@ bool timeconv_to_rtc(int64_t t, uint8_t regs[TIMECONV_RTC_REGS]);
 // Parse a rate in ppm: an optional sign, up to 4 digits, and up to 3 decimals ("92", "-12.5").
 bool timeconv_parse_ppm(const char *s, int32_t *mppm);
 
-// The number of steps nearest to a rate. Returns false if that is out of the register's range.
+// The number of steps nearest to a rate. Returns false if the rate is beyond what the register
+// can do (-277.76 to 273.42 ppm).
 bool timeconv_cal_steps(int32_t mppm, int *steps);
 
 // "2026-11-23 23:30:05" (UTC) into buf (at least 20 bytes).

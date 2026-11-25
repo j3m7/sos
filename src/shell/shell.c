@@ -466,6 +466,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "error: erasing the configuration failed\n");
     shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run 'setup'\n");
     wifi_apply_power();
+    timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     wifi_reconnect();
 }
 
@@ -491,6 +492,9 @@ static void cmd_config(shell_t *sh, char *args) {
         shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
     else
         shell_printf(sh, "periodic sync off\n");
+    char cal[40];
+    timesync_cal_str(cal, sizeof(cal));
+    shell_printf(sh, "rtc cal:  %s\n", cal);
     if (!settings_persistent())
         shell_printf(sh, "warning:  flash storage unavailable; changes aren't saved\n");
 }

@@ -177,8 +177,8 @@ TEST(cal_steps) {
     CHECK(timeconv_cal_steps(63 * 4340, &n));   CHECK_EQ(n, 63);
     CHECK(timeconv_cal_steps(-64 * 4340, &n));  CHECK_EQ(n, -64);
     n = 5;
-    CHECK(!timeconv_cal_steps(63 * 4340 + 2170, &n));
-    CHECK(!timeconv_cal_steps(-64 * 4340 - 2170, &n));
+    CHECK(!timeconv_cal_steps(63 * 4340 + 1, &n));      // not rounded down into range
+    CHECK(!timeconv_cal_steps(-64 * 4340 - 1, &n));
     CHECK(!timeconv_cal_steps(9999999, &n));
     CHECK_EQ(n, 5);
 }

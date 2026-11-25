@@ -127,11 +127,13 @@ bool timeconv_parse_ppm(const char *s, int32_t *mppm) {
 }
 
 bool timeconv_cal_steps(int32_t mppm, int *steps) {
+    // Only rates the register can do, so nothing the user gives is silently cut down.
+    if (mppm < TIMECONV_CAL_STEPS_MIN * TIMECONV_CAL_STEP_MPPM ||
+        mppm > TIMECONV_CAL_STEPS_MAX * TIMECONV_CAL_STEP_MPPM)
+        return false;
     // Rounded to the nearest step, halves away from zero.
     int32_t half = TIMECONV_CAL_STEP_MPPM / 2;
     int32_t n = (mppm >= 0 ? mppm + half : mppm - half) / TIMECONV_CAL_STEP_MPPM;
-    if (n < TIMECONV_CAL_STEPS_MIN || n > TIMECONV_CAL_STEPS_MAX)
-        return false;
     *steps = (int)n;
     return true;
 }

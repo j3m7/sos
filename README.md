@@ -330,7 +330,7 @@ unauthenticated.
   and backup-battery state, the RTC calibration, the last sync with its correction and round
   trip, a failed attempt and when it's retried, and the server and periodic settings.
 - `time auto`, `time server` and `time cal` (without a value) show those settings; `config`
-  lists the first two.
+  lists all three.
 - `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
   `nts query` run the two steps by hand, for diagnosis; they don't set the clock. Naming another
   host is console only.
@@ -352,7 +352,8 @@ developed on ran 92 ppm fast, about 8 s a day. The PCF8523 can correct its own r
    value.
 
 The value isn't added to the one before: after measuring again with a calibration set, give
-the old value plus the new error. `time cal off` removes it. The calibration is a saved
+the rate `time` shows on its `cal:` line (91.1 here, not the 92 that was typed) plus the new
+error. `time cal off` removes it. The calibration is a saved
 setting (`rtc_cal_ppm` when provisioning), written into the RTC at boot if the chip doesn't
 already have it, so it survives a dead coin cell. The RTC applies it as a few short
 corrections every two hours.

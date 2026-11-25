@@ -290,6 +290,9 @@ void timesync_boot(void) {
         log_msg(SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
 }
 
+_Static_assert(CONFIG_RTC_OFFSET_MIN == TIMECONV_CAL_STEPS_MIN &&
+               CONFIG_RTC_OFFSET_MAX == TIMECONV_CAL_STEPS_MAX, "the setting holds register steps");
+
 void timesync_cal_str(char *buf, unsigned len) {
     int steps = settings()->rtc_offset;
     if (!steps) {
