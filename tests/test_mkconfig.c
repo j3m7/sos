@@ -32,6 +32,7 @@ TEST(full_file_loads_like_on_the_device) {
                  "  wifi_ssid = My Network  \r\n"
                  "wifi_password=correct horse\n"
                  "wifi_powersave = on\n"
+                 "wifi_country = US\n"
                  "hostname = bench1\n"
                  "ssh_user = dev\n"
                  "ssh_key = " KEY "\n"
@@ -46,6 +47,7 @@ TEST(full_file_loads_like_on_the_device) {
     CHECK(!strcmp(back.wifi_ssid, "My Network"));       // inner space kept, ends trimmed
     CHECK(!strcmp(back.wifi_password, "correct horse"));
     CHECK_EQ(back.wifi_powersave, 1);
+    CHECK(!strcmp(back.wifi_country, "US"));
     CHECK(!strcmp(back.hostname, "bench1"));
     CHECK(!strcmp(back.ssh_user, "dev"));
     CHECK_EQ(back.key_count, 1);
@@ -82,6 +84,8 @@ TEST(errors_name_the_line) {
     e = parse("ssh_key = " KEY "\nssh_key = " KEY "\n", &cfg);
     CHECK(e && strstr(e, "line 2") && strstr(e, "already"));
     e = parse("wifi_powersave = maybe\n", &cfg);
+    CHECK(e != NULL);
+    e = parse("wifi_country = usa\n", &cfg);
     CHECK(e != NULL);
     e = parse("nts_sync_hours = 9999\n", &cfg);
     CHECK(e != NULL);
