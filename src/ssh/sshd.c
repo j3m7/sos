@@ -48,6 +48,15 @@ static const char banner[] = "\r\nSOS - Small/Secure OS\r\n\r\n";
 
 // --- helpers ---------------------------------------------------------------
 
+// The user name a client gave, for display: any name logs in (the keys decide), so it's the
+// client's text and may hold escape sequences. Only printable ASCII is kept; other bytes
+// become '?'. out has room for strlen(in) + 1.
+static void printable_name(char *out, const char *in) {
+    for (; *in; in++)
+        *out++ = (*in >= 0x20 && *in < 0x7f) ? *in : '?';
+    *out = '\0';
+}
+
 static void put_u32be(uint8_t *p, uint32_t v) {
     p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
 }
@@ -309,7 +318,9 @@ void sshd_status(shell_t *sh) {
         if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK) {
             char ipstr[IPADDR_STRLEN_MAX];
             ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
-            snprintf(who, sizeof(who), "%s@%s:%u", ss->login[0] ? ss->login : "?", ipstr, port);
+            char login[sizeof(ss->login)];
+            printable_name(login, ss->login);
+            snprintf(who, sizeof(who), "%s@%s:%u", login[0] ? login : "?", ipstr, port);
         }
         uint64_t secs = (time_us_64() - ss->accept_start_us) / 1000000;
         shell_printf(sh, "  %c %u  %-36s %-10s %-5s %llum%02llus\n",

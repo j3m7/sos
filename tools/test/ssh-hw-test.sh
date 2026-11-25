@@ -132,8 +132,13 @@ methods=$(timeout 20 ssh -v -T "${ssh_opts[@]}" -o PubkeyAuthentication=no "nobo
 check "only publickey offered" '[[ $methods == publickey ]]' "offered: '$methods'"
 out=$(timeout 20 ssh -T "${base_opts[@]}" -o IdentitiesOnly=yes -i "$work/other_key" "$user@$host" true 2>&1)
 check "unknown key refused" 'grep -q "Permission denied" <<<"$out"' "$out"
-out=$(timeout 20 ssh -T "${ssh_opts[@]}" "nobody-$$@$host" true 2>&1)
-check "wrong user refused" 'grep -q "Permission denied" <<<"$out"' "$out"
+# Any user name logs in with a trusted key. The name is the client's text, so `ssh` shows only
+# its printable ASCII, other bytes as '?'. (OpenSSH won't send control characters in a user
+# name, so a UTF-8 name stands in for them: the same filter turns its two bytes into "??".)
+out=$( { sleep 1.5; printf 'ssh\n'; sleep 1; printf 'logout\n'; sleep 1; } |
+      timeout 20 ssh -T "${ssh_opts[@]}" $'any-\xc3\xa9-user'"@$host" 2>&1 | tr -d '\r')
+check "any user name accepted" 'grep -q "^sessions:" <<<"$out"' "$(tail -3 <<<"$out")"
+check "user name shown as printable ASCII" 'grep -q "any-??-user@" <<<"$out"' "$(grep '@' <<<"$out")"
 out=$(timeout 20 ssh -T "${ssh_opts[@]}" -o PubkeyAuthentication=no -o PreferredAuthentications=password "$user@$host" true 2>&1)
 check "password login refused" 'grep -q "Permission denied" <<<"$out"' "$out"
 

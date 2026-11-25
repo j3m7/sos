@@ -691,7 +691,8 @@ tools/test/sftp-hw-test.sh -u <user> <device-ip>    # needs a formatted SD card
 ```
 
 `tools/test/ssh-hw-test.sh` checks the SSH server. It covers login and logout, authentication
-(only public key; unknown key, wrong user and password refused), concurrent sessions kept
+(only public key; unknown key and password refused; any user name accepted, shown without
+control characters), concurrent sessions kept
 separate, the "too many connections" message, slot reuse, a large input burst, clients that
 disappear, back-to-back logins, and heap use before and after. It exits with the number of failed checks. It uses every session slot for a few seconds,
 so run it while nobody else is using the board; it warns if the device rebooted mid-run.
