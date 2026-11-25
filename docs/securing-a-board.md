@@ -23,25 +23,120 @@ That limits what this buys.
 | Someone who can solder a second flash chip behind a switch | **Not stopped, on any chip revision.** SOS runs from external flash. After the bootrom has checked the signature, the flash the chip reads from can be switched to another one, with no glitching at all. The attacker's code then runs as Secure code and can read the root secret. Raspberry Pi's security white paper warns of this and says secure code should run from RAM; SOS is too large for that. Closing it is the "Later" section of #64 |
 | A lab that can decapsulate the chip | Not stopped (OTP imaging); storing the secret with chaff makes it harder |
 
-E20 and E21 have workarounds that cost features; they are decisions 2 and 3 below. E16 and E24
+E20 and E21 have workarounds that cost features; they are decisions 2 and 3 below (the first deferred, the second taken). E16 and E24
 have none on A2. So a secured A2 raises the bar from "anyone with a cable" to "someone with a
 soldering iron and a second flash chip, or with fault-injection equipment", and no further.
 Moving to an A4 board later removes the four glitch attacks. It does not remove the flash swap.
 
-## Decisions for the owner
+## Decisions (owner, 2026-11-25)
 
-These have to be settled before any firmware for this is written, because they change it.
+| # | Decision | Decided |
+|---|---|---|
+| 1 | **Debug** | **Off for good:** `CRIT1.DEBUG_DISABLE`. No debug key |
+| 2 | **USB bootloader (BOOTSEL) on the secured board** | **Kept, for now.** More fixes and improvements are expected, and they have to be flashable. Consequences accepted: the two glitch attacks that go through BOOTSEL (E20, E21) stay open, and anyone with a cable can erase or roll back the flash, though not read what is sealed. Disabling it later remains possible: it is one more OTP write (`BOOT_FLAGS0.DISABLE_BOOTSEL_USB_PICOBOOT_IFC`, `..._USB_MSD_IFC`, `..._UART_BOOT`), after which the board can never be reflashed over USB |
+| 3 | **Bootrom reboot types** | **`BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` is set** (the other E20 workaround). Cost accepted: the secured board no longer reboots into BOOTSEL on command, which `ninja flash` and `tools/provision.sh` (`picotool load -f`) rely on. Flashing it needs someone to hold the BOOTSEL button while plugging it in. SOS's own fault record uses other scratch registers and should be unaffected (*to confirm*) |
+| 4 | **Signing keys** | **Two:** `BOOTKEY0` in use and `BOOTKEY1` as a spare, generated away from the development machine, each with an offline backup. Slots 2 and 3 are marked invalid. Instructions below |
+| 5 | **Glitch detector** | **Open: the owner asked for more information.** See "The glitch detector" below |
+| 6 | **A rehearsal on the development board** | **Yes:** the root-secret burn is rehearsed on dev-1 in spare OTP pages before the production board, including a read attempt from BOOTSEL and one burn interrupted on purpose. This is the owner's word for those OTP writes on dev-1 and for nothing else in OTP |
+| 7 | **Wrong-password count across reboots** | **Yes, add it.** Known limit: while the USB bootloader is kept (decision 2), someone with a cable can rewrite the flash and reset a counter stored there, so it slows down guessing at the console only for someone who can't or won't do that. It becomes a real limit if the bootloader is disabled later |
+| 8 | **Firmware rollback** | **Not decided; treated as "not now".** With the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`) would prevent it, at the cost of OTP bits per version step |
 
-| # | Decision | Options | What I'd pick, and why |
-|---|---|---|---|
-| 1 | **Debug** | (a) off for good: `CRIT1.DEBUG_DISABLE`. (b) a debug key kept offline, so a board can be debugged again | (a). A debug key is one more secret to keep, and development stays on the open board |
-| 2 | **USB bootloader (BOOTSEL) on the secured board** | (a) keep it: signed firmware can be flashed over USB as now. (b) disable it: `BOOT_FLAGS0.DISABLE_BOOTSEL_USB_PICOBOOT_IFC`, `..._USB_MSD_IFC` and `..._UART_BOOT`, the datasheet's workaround for E20 and E21 | Yours to weigh. With (b) **the board can never be reflashed over USB again**: its firmware is frozen unless SOS first gets its own way to update itself, which doesn't exist. With (a) the two glitch attacks through BOOTSEL stay open, and anyone with a cable can still erase or roll back the flash (not read it) |
-| 3 | **Bootrom reboot types** | (a) leave as is. (b) set `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH`, the other E20 workaround | (b) if 2(a). Cost: the board no longer reboots into BOOTSEL on command, which `ninja flash` and `tools/provision.sh` (`picotool load -f`) both rely on. Every flash of that board then needs someone to hold the BOOTSEL button while plugging it in. SOS's own fault record uses other scratch registers and should be unaffected (*to confirm*) |
-| 4 | **Signing keys** | How many boot keys, and where the private keys live | Two: `BOOTKEY0` for use and `BOOTKEY1` as a spare, both generated on a machine that is not this development machine, each backed up offline. Slots 2 and 3 marked invalid so nobody can add a key later |
-| 5 | **Glitch detector** | `CRIT1.GLITCH_DETECTOR_ENABLE`, and a sensitivity 0 to 3 | Enable at the default sensitivity. Higher sensitivity can reset a healthy board on a noisy supply; that needs a soak test on the open board's settings first (*to confirm* how to test it without burning) |
-| 6 | **A rehearsal on the development board** | (a) none: the first OTP write happens on the production board. (b) rehearse step 3 on dev-1 in a spare OTP page | (b). dev-1 has 58 free pages; using one or two is permanent but harmless, and it is the only way to test the code that writes and locks the root secret before it runs for real. It should include reading the page from BOOTSEL, and one burn interrupted on purpose, to see what a spent page looks like. **It is an OTP write, so it needs the owner's explicit word;** the standing permission to overwrite dev-1 covers its flash and card, not its OTP. Step 4 can't be rehearsed without securing dev-1 for good |
-| 7 | **Wrong-password count across reboots** | Add it or not | Only worth adding with 2(b). While the USB bootloader can rewrite the flash, a counter stored there can be reset |
-| 8 | **Firmware rollback** | (a) not now. (b) rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`), so an older signed image can't be flashed | (a). Without it, with the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Each version step spends OTP bits, and it only matters with 2(a). Listed so that leaving it out is a choice |
+## The glitch detector
+
+**What it is.** Four small circuits spread over the chip that notice when the processor's clock
+or core voltage is disturbed enough for logic to misbehave, which is what a voltage or clock
+glitch attack does on purpose. When one fires, the chip resets itself within one clock cycle,
+instead of carrying on in a state the attacker chose. A flag (`CHIP_RESET.HAD_GLITCH_DETECT`)
+then tells the firmware why it restarted, and `TRIG_STATUS` which detector fired. (Datasheet
+section 10.9.)
+
+**The two settings.**
+
+- `CRIT1.GLITCH_DETECTOR_ENABLE` arms it from the first instant after reset. Once written to OTP
+  it can't be turned off.
+- `CRIT1.GLITCH_DETECTOR_SENS`, 0 to 3, sets how easily it fires. Each step makes the detectors
+  react to a smaller disturbance (the delay they measure against goes from 75% to 120% of the
+  clock period in steps of 15%). The setting can only be raised later, never lowered.
+
+**What it costs.** A detector that is too sensitive for the board resets a healthy board:
+spurious restarts under load, when the Wi-Fi radio transmits, or on a marginal USB supply. A
+reset from the detector also clears the watchdog scratch registers, where SOS keeps its record
+of the last fault, so that record would be lost for such a reset. And it is permanent: a board
+that turns out to reset itself can't have the detector switched off.
+
+**What it buys on this board.** It makes voltage and clock glitching harder. It does not make
+it impossible: Raspberry Pi's own write-ups of the published A2 attacks describe attacks that
+got past it, and a laser or electromagnetic pulse aimed at one spot of the chip need not disturb
+the detectors at all. (I have not re-read those write-ups for this document; *to confirm*.) It
+does nothing against the flash swap or against reading the chip in a lab.
+
+**It can be tried without burning anything.** The detector can also be armed by software, with
+its `ARM` register, and its sensitivity set with the `SENSITIVITY` register. So a test build for
+the development board can arm it at each sensitivity in turn and run the board's normal work
+(Wi-Fi traffic, SSH, SFTP, the card, a Lua script) for hours, counting detector resets. That
+tells us which settings this board design tolerates before any OTP bit is spent.
+
+**What I'd do.** Run that soak test on dev-1 at all four sensitivities. Then burn "enabled" on
+the production board at the highest sensitivity that showed no reset over the soak, leaving at
+least one step of margin if the top one was only just clean. If even the lowest setting resets
+a healthy board, leave it off. Since the sensitivity can be raised later but not lowered,
+starting one step low is the safe direction. The firmware should report a detector reset in the
+log and in `uptime`, as it does for a watchdog reset.
+
+**The decision this needs:** approve the soak test (reversible, development board only), and
+decide after its results whether to enable the detector and at which sensitivity.
+
+## Signing keys: how to make them
+
+The boot key is a secp256k1 key pair. The private half signs firmware; a hash of the public
+half goes into the board's OTP. Whoever holds a private key can make firmware a secured board
+will run, and if both private keys are lost the board keeps its last firmware for ever.
+
+Do this on a machine that is not the development machine, ideally one that is offline, and not
+in a session with an AI assistant: the private keys should never be on a machine where agents
+run.
+
+1. Make the two keys, readable only by you:
+
+   ```sh
+   umask 077
+   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot0.pem    # the key in use
+   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot1.pem    # the spare
+   ```
+
+2. Export the public halves. These are not secret, and are what the procedure needs from you:
+
+   ```sh
+   openssl ec -in sos-boot0.pem -pubout -out sos-boot0.pub.pem
+   openssl ec -in sos-boot1.pem -pubout -out sos-boot1.pub.pem
+   ```
+
+3. Compute each key's OTP hash: the SHA-256 of the public key's 64 raw bytes (X then Y).
+
+   ```sh
+   openssl ec -in sos-boot0.pem -pubout -outform DER | tail -c 64 | sha256sum
+   openssl ec -in sos-boot1.pem -pubout -outform DER | tail -c 64 | sha256sum
+   ```
+
+   Write both hashes down. This is the first of the two independent computations the checklist
+   asks for. The second is `picotool`'s: the `bootkey0` values it writes when asked to sign
+   with that key (that file also carries the bit that enables secure boot, so it is read for
+   the comparison and then deleted, never loaded). I checked with a throwaway key that the two
+   methods give the same 32 bytes.
+
+4. Back up each private key offline, on two separate media kept in different places (a USB
+   stick and a printed copy, for example), and read each backup back once to see that it is
+   complete. Keep the spare key's copies apart from the first key's.
+
+5. Signing a build needs `sos-boot0.pem` on the machine that builds it, as `SOS_SIGN_KEY`
+   (`docs/development.md`, "Signed builds"). Decide where that happens. The simplest safe
+   arrangement: release builds for the secured board are built and signed on the machine that
+   holds the key, and the development machine never has it. `sos-boot1.pem` stays offline
+   until the first key is lost or has to be retired.
+
+6. If a private key leaks: sign new firmware with the other key, and write
+   `BOOT_FLAGS1.KEY_INVALID` for the leaked key's slot on the board. That is permanent, and
+   leaves the board with one key.
 
 ## What has to be built first (reversible, ordinary pull requests)
 
@@ -71,7 +166,7 @@ and merged before anything is burned.
    - the marker row and check, last;
    - the page's locks: bootloader inaccessible, Non-secure inaccessible, Secure read-only
      (which also stops a later bug from rewriting the page). On an A2 the bootloader lock is
-     the one erratum E21 defeats by glitching; its workaround is decision 2(b).
+     the one erratum E21 defeats by glitching; its workaround is disabling the USB bootloader, which decision 2 leaves for later.
 
    **It is not part of everyday firmware.** It is built only into a separate image for step 3
    (a CMake option, off by default), flashed for the burn and replaced afterwards, so boards in
@@ -85,9 +180,14 @@ and merged before anything is burned.
 4. **Checking the boot key on the board.** A command that hashes the public key from the
    running image's own signature block, compares it with the `BOOTKEY0` (and `BOOTKEY1`) rows
    in OTP, and says "match" or "no match". Step 4.7 depends on it.
-5. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build
+5. **A wrong-password count that survives reboots** (decision 7), kept in flash, so the delay
+   after wrong console passwords doesn't start again at every boot.
+6. **A soak-test build for the glitch detector** (decision 5), for the development board only:
+   arms the detector by software at a chosen sensitivity and reports detector resets. No OTP.
+   Also, in everyday firmware, reporting a detector reset in the log and `uptime`.
+7. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build
    deliberately produces no OTP file.
-6. **The OTP settings as files we write by hand,** one per stage below, in the form
+8. **The OTP settings as files we write by hand,** one per stage below, in the form
    `picotool otp load` takes, checked into the repository without any key material and reviewed
    like code. Not the single file `picotool seal` can produce, which enables secure boot in the
    same load as the key hash.
@@ -98,7 +198,7 @@ set up fresh after step 3, never before.
 
 ## Before touching the production board
 
-- [ ] The owner has approved this document, with the decisions above filled in.
+- [ ] The owner has approved this document, with decision 5 settled after the soak test.
 - [ ] All firmware in the previous section is merged, and the build that will be burned is
       tagged.
 - [ ] The rehearsal (decision 6) has been done and written up, if chosen.
@@ -147,9 +247,9 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.1 | The hash of the signing key into `BOOTKEY0_0` to `_15`; the spare key's hash into `BOOTKEY1_0` to `_15` | Read the rows back and compare with the two independently computed hashes | A wrong hash in a slot can be abandoned by marking that slot invalid in 4.3, as long as the other slot is right |
 | 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check: it must say "match" for the image that is on the board now** | A "no match" stops the procedure here, with the board still open |
 | 4.3 | `BOOT_FLAGS1.KEY_INVALID` for slots 2 and 3 | Read back | |
-| 4.4 | `BOOT_FLAGS0`: the boot paths chosen in decisions 2 and 3 | Read back. Reboot. If the USB bootloader is being kept, check it still works; if it is being disabled, **this is the last moment the board can be flashed over USB**: confirm the firmware on it is the one to keep | With the bootloader disabled there is no way back in |
-| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` (and sensitivity) | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) for the agreed soak time with no unexplained resets | A detector that resets a healthy board can't be turned off again |
-| 4.6 | `CRIT1.DEBUG_DISABLE` (or the debug key, decision 1) | A debug probe can no longer attach | |
+| 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
+| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the soak test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
+| 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | A debug probe can no longer attach | |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | The board boots the signed firmware. `version` shows secure boot on. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
@@ -185,7 +285,7 @@ Not possible to try here: the glitch attacks, the flash swap and chip imaging.
 - A forgotten console password on a secured board: erase the configuration over USB (if the
   bootloader was kept) and start again, losing the cards. With the bootloader disabled there
   is no way to erase it from outside, and the board is locked out of its own console for good
-  (SSH with a trusted key still works). That is another cost of decision 2(b).
+  (SSH with a trusted key still works). That is a cost to weigh if the bootloader is ever disabled (decision 2).
 
 ## To confirm before this is final
 
@@ -201,7 +301,8 @@ This list is a gate: the document is not final, and nothing is burned, while any
    bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
 4. Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
    row write and read, used for the chaff rows.
-5. Glitch detector sensitivity: what the Pico 2 W's own supply tolerates.
+5. Glitch detector: the soak test's results on dev-1, and whether the published A2 attacks were
+   carried out with the detector enabled.
 6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
 7. Which free OTP page to use (pages 3 to 60 are free for user data), and that a failed write
    leaves the next page usable.
