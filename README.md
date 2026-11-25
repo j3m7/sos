@@ -186,9 +186,10 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   - **Whatever the console was running is ended** by either lock: a copy (its partial file is
     removed), `sd test`, a Lua script started there, the chat, the editor. **Unsaved text in
     the editor is lost**, so save before leaving the console, and mind a loose cable.
-  - **"Goes away" means the terminal program drops the DTR line** (most do when they exit;
-    `picocom` and `screen` do by default) or the cable is unplugged. A program that closes the
-    port without hanging up leaves the console open until the idle lock.
+  - **"Goes away" means the terminal program drops the DTR line** when it exits (a hang-up on
+    close) or the cable is unplugged. A program that closes the port without hanging up leaves
+    the console open until the idle lock. Check what yours does: log in, quit the program,
+    start it again, and see whether the console asks for the password.
   - On the UART console there is no connection to watch, so only the idle lock applies.
   - Tools that open the port for each command (test scripts) are locked out at every close
     once a password is set: use a board without a console password for those, or log in each
