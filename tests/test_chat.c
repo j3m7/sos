@@ -398,6 +398,36 @@ TEST(unregister_announces_and_frees) {
     chat_deliver(&sh[2]);
 }
 
+static bool raw_done;
+static bool raw_step(shell_t *s, void *arg, bool cancel) {
+    (void)s; (void)arg;
+    return !cancel && !raw_done;
+}
+static void raw_key(shell_t *s, int key, void *arg) {
+    (void)s; (void)arg;
+    if (key == 'q')
+        raw_done = true;
+}
+
+TEST(nothing_delivered_in_raw_mode) {
+    setup();
+    chat_register(&sh[1], 1, "alice", "a");
+    chat_register(&sh[2], 2, "bob", "b");
+    raw_done = false;
+    shell_run_raw(&sh[2], raw_step, raw_key, NULL);
+    CHECK(shell_raw_mode(&sh[2]));
+    clear(2);
+    type(1, "wall in the editor?\r");
+    pass();
+    pass();
+    CHECK(!has(2, "in the editor?"));
+    type(2, "q");
+    pass();
+    pass();
+    CHECK(!shell_raw_mode(&sh[2]));
+    CHECK(has(2, "[wall t1 alice] in the editor?"));
+}
+
 TEST(table_full) {
     setup();
     for (int i = 0; i < N; i++)
@@ -459,6 +489,7 @@ TEST_MAIN(
     RUN(ctrl_c_while_waiting);
     RUN(missed_counts_only_messages_for_the_peer);
     RUN(unregister_announces_and_frees);
+    RUN(nothing_delivered_in_raw_mode);
     RUN(table_full);
     RUN(names_unique_and_clean);
     RUN(who_lists_shells);

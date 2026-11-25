@@ -37,7 +37,9 @@ delivered), time stamp, kind (wall, chat, join, leave) and text.
 `chat_deliver(sh)` walks the ring from the peer's `next`. A wall is for every peer except the
 sender. Chat, join and leave are for peers in the room since before the message. Each message
 is written only if it fits in `shell_write_space()` together with the prompt redraw;
-otherwise delivery stops until a later pass. Output goes between `shell_hide_input()` and
+otherwise delivery stops until a later pass. While the shell is in raw mode (a full-screen
+program such as `edit` owns the screen, `shell_raw_mode()`), nothing is delivered; messages
+wait in the ring as for a slow client. Output goes between `shell_hide_input()` and
 `shell_show_input()`, like a log line: the typed line is cleared and redrawn after it (a secret
 answer stays hidden), and during a job the message gets its own line.
 

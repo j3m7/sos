@@ -90,6 +90,6 @@ add_test(NAME http_msg COMMAND test_http_msg)
 
 # src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
 add_executable(test_chat test_chat.c ${SOS_ROOT}/src/chat/chat.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/termtext.c)
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)
