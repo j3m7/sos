@@ -89,5 +89,5 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
 - **Not done yet:** redirects (the caller sees the `3xx` and `Location`), keep-alive,
   compression, proxies.
 
-`http get|head|post` (console only, `docs/commands.md`) runs a request as a shell job, for
+`http get|head|post` (any shell, `docs/commands.md`) runs a request as a shell job, for
 testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), from any shell.

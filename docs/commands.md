@@ -81,15 +81,16 @@ See [Timekeeping](../README.md#timekeeping) and
 
 ## HTTPS
 
-For testing the HTTPS client (`src/net/README.md`); Lua scripts use it through `sos.http`, from
-any shell. The server's certificate must chain to a
-built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
+For testing the HTTPS client (`src/net/README.md`), from any shell: SSH users are the device's
+trusted owners, and their Lua scripts can make the same requests through `sos.http`. The server's
+certificate must chain to a built-in root or one in the approved `/certs/roots.pem`. Redirects
+aren't followed.
 
 | Command | Where | What it does |
 |---|---|---|
-| `http get <url>` | console only | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body, headers and reason phrase show as `.`, including the C1 range (raw or UTF-8-encoded); other UTF-8 text shows as itself |
-| `http head <url>` | console only | Print the status line and the response headers |
-| `http post <url> <text>` | console only | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
+| `http get <url>` | any | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body, headers and reason phrase show as `.`, including the C1 range (raw or UTF-8-encoded); other UTF-8 text shows as itself |
+| `http head <url>` | any | Print the status line and the response headers |
+| `http post <url> <text>` | any | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
 
 URLs must start with `https://`, and the path must already be percent-encoded (no spaces).
 
@@ -124,7 +125,12 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `lua <file>` | any | Run a Lua script from the card on core 1 (job: Ctrl-C stops) |
 | `lua -e <code>` | any | Run the given code |
 | `lua` | any | Interactive prompt: each line runs as entered, in one Lua state; values of expressions are printed. Ctrl-C interrupts a line, Ctrl-D on an empty line or `exit` leaves |
+| `lua -b <file>` | any | Run a script in the background: no shell, its output goes to the log (`dmesg`), and its end is logged |
+| `lua ps` | any | The running script: what, where (a shell or the background), for how long |
+| `lua stop` | any | Stop the running script, wherever it runs (the prompt is closed) |
 
-One script runs at a time, and its output goes to the shell that started it. Scripts use
+One script runs at a time (foreground, prompt or background). `/autorun.lua`, if the card has
+one, starts in the background a few seconds after boot, except after a crash or watchdog reset.
+Use `lua ./ps` or `lua ./stop` to run files with those names. Scripts use
 the `sos` library to reach the system, and `require` loads modules from the card (`/lib` and the
 working directory); see [Lua scripts](../README.md#lua-scripts-prototype).

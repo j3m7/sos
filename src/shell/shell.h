@@ -91,6 +91,10 @@ void shell_ask_eof(shell_t *sh, const char *prompt, shell_answer_fn answer, void
 extern char shell_eof[];
 #define SHELL_EOF shell_eof
 
+// Drop a pending question without answering it (its owner has gone away); the next line is a
+// command again. For output around it, use shell_hide_input() / shell_show_input().
+void shell_cancel_question(shell_t *sh);
+
 // For output that isn't the shell's own (log messages): clear the line being typed, and
 // afterwards redraw the prompt and the typed text (except a secret answer).
 void shell_hide_input(shell_t *sh);

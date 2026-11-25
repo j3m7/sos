@@ -286,7 +286,7 @@ void http_close(http_req_t *r) {
     free(r);
 }
 
-// --- the `http` command (console only) -----------------------------------------------------------
+// --- the `http` command -----------------------------------------------------------------------------
 
 #define STEP_US 5000
 
@@ -415,11 +415,8 @@ void http_command(shell_t *sh, char *args) {
         shell_printf(sh, usage);
         return;
     }
-    // It makes the device connect to any host, like `nts ke <host>`: console only.
-    if (!sh->io->admin) {
-        shell_printf(sh, "http requests can only be made from the serial console\n");
-        return;
-    }
+    // Any shell, SSH included: SSH users are the device's trusted owners, and Lua scripts they
+    // start can make the same requests (sos.http).
     http_job_t *j = calloc(1, sizeof(*j));
     if (!j) {
         shell_printf(sh, "http: out of memory\n");

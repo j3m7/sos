@@ -440,6 +440,17 @@ TEST(ctrl_d_ends_input_for_eof_question) {
     CHECK(!strcmp(executed[0], "ls"));
 }
 
+TEST(cancelled_question_gives_commands_back) {
+    start_ask(&io_plain);
+    shell_ask_eof(&sh, "> ", on_answer, NULL);
+    shell_cancel_question(&sh);
+    type("ls\r");                               // a command again, not an answer
+    CHECK_EQ(n_answers, 0);
+    CHECK(!strcmp(executed[0], "ls"));
+    type("\x04");                               // and Ctrl-D logs out again
+    CHECK_EQ(fake.logouts, 1);
+}
+
 TEST(ctrl_d_on_plain_question_still_logs_out) {
     start_ask(&io_plain);
     shell_ask(&sh, "Q: ", false, on_answer, NULL);
@@ -711,6 +722,7 @@ TEST_MAIN(
     RUN(ctrl_c_cancels_question);
     RUN(ctrl_d_ends_input_for_eof_question);
     RUN(ctrl_d_on_plain_question_still_logs_out);
+    RUN(cancelled_question_gives_commands_back);
     RUN(questions_chain);
     RUN(init_clears_pending_question);
     RUN(hide_and_redraw_input);

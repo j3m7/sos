@@ -59,6 +59,19 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
 
 - **The `lua` command** (`lua -e '…'` or `lua <file>`) runs the script as a shell job: the
   shell drains the output ring buffer as fast as its channel takes it.
+- **Background scripts** (`lua -b <file>`, and `/autorun.lua` at boot) have no owner shell:
+  `background` is set instead, and `script_alive()` (owner or background) is what lets requests
+  change files. `lua_host_poll()` drains their output into the log a line at a time (control
+  characters as `.`; long lines continue on the next), and logs how they ended. Each pass drains
+  only what core 1 had written when it started: core 1 refills the buffer as it's drained, so
+  "until it's empty" would never end with a script printing in a loop. At most 10 lines a second
+  are logged; the rest are counted and reported. `lua ps` and `lua stop` work on whatever runs;
+  a prompt stopped while its shell waits for a line is closed from `lua_host_poll()`, which hands
+  the shell back (`shell_cancel_question()`).
+- **Autorun:** `autorun_check()` runs once, 3 s after boot, from `lua_host_poll()`. It starts
+  `/autorun.lua` if the card has one, unless the last reset was a fault (`fault_last()`) or the
+  watchdog (`wdog_caused_reset()`): a script that brings the device down then doesn't run again
+  at every boot.
 - **The prompt** (`lua` alone) is a question (`shell_ask_eof`) whose answers are lines of Lua.
   Each line runs as a short shell job (`repl_step`): it hands the line to core 1
   (`lua_job.repl_line`, then `repl_cmd`), shows the output, and asks again (`>` or `>>`).
@@ -66,6 +79,11 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   until core 1 has stopped the old one, and its leftover output is dropped. Ctrl-D (`SHELL_EOF`)
   or `exit` sets `repl_quit`. If the owner's shell is neither answering the prompt nor running
   one of its jobs, its session has ended, and `lua_host_poll()` closes the prompt.
+- **Timers** (`sos.every`, `sos.after`, `sos.cancel`) are kept in a registry table, id ->
+  `{fn, due, every}` (`time_us_64()` microseconds). `run_timers()` runs after the main chunk
+  returns: it waits for the earliest (checking `cancel` every 5 ms), runs it with the traceback
+  handler, and reschedules a repeating one (skipping runs missed meanwhile). The script ends when
+  no timers are left, when stopped, or when a callback raises an error.
 - **Core 1's side of the prompt** (`run_repl` in `lua_core1.c`) keeps one Lua state for the
   session and waits for each line. A first line is tried as `return <line>` so expressions print
   their value; a syntax error at `<eof>` means the statement continues, and the text is kept for
