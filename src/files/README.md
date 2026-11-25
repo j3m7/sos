@@ -33,7 +33,7 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
 - **The card key** (`cardkey.c`) is HMAC-SHA256 of the configuration's owner secret, keyed
   with a base key derived from the board's root secret (`KEYPROV_SD_WRAP_BASE`, derived at
   boot before the key provider locks and held in RAM). It's computed when a card is opened or
-  formatted and wiped afterwards. No owner secret (a board never set up, or after `config
+  formatted and wiped afterwards. No owner secret (nothing saved: a board never set up, or after `config
   reset`) means no card key: encrypted cards stay locked, and an encrypted `sd format` makes
   the owner secret and saves the configuration. A header with wrap id 1 (the device key of
   older firmware) is recognised and refused.

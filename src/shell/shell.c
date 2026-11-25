@@ -481,10 +481,17 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "not reset\n");
         return;
     }
-    if (!settings_reset())
-        shell_printf(sh, "error: erasing the configuration failed\n");
-    sdcard_owner_gone();                // an encrypted card doesn't stay open under the old owner
-    shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run 'setup'\n");
+    bool erased = settings_reset();
+    // The live configuration is gone either way, the owner secret with it: an encrypted card
+    // doesn't stay open under it.
+    sdcard_owner_gone();
+    if (erased)
+        shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run "
+                         "'setup'\n");
+    else
+        shell_printf(sh, "error: erasing the saved configuration failed (see dmesg). It's "
+                         "cleared in memory, but\nthe saved one is still in flash and comes "
+                         "back at the next boot.\n");
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     wifi_reconnect();

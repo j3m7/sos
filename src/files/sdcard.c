@@ -692,7 +692,10 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
                      name);
         shell_printf(sh, "encrypted with a new key that this device keeps. A PC can't read it.\n");
         shell_printf(sh, "The card's key is shown once, when the format finishes: store it\n");
-        shell_printf(sh, "offline for recovery. Files from before stay on the card unencrypted\n");
+        shell_printf(sh, "offline for recovery. It's the only way to read the card after this\n");
+        shell_printf(sh, "board's configuration is erased (`config reset`) or provisioned again:\n");
+        shell_printf(sh, "either locks the cards the board encrypted before.\n");
+        shell_printf(sh, "Files from before stay on the card unencrypted\n");
         shell_printf(sh, "until new data overwrites them: for a card that held private files\n");
         shell_printf(sh, "unencrypted, use a new card instead.\n");
     }
