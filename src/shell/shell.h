@@ -39,7 +39,9 @@ typedef void (*shell_answer_fn)(shell_t *sh, char *answer, void *arg);
 typedef bool (*shell_job_fn)(shell_t *sh, void *arg, bool cancel);
 
 // One key for a job in raw input mode (shell_run_raw): a byte (0x00-0xff, Ctrl-C included) or a
-// KEY_* code from keys.h. Enter is always '\r'.
+// KEY_* code from keys.h. Enter is always '\r'. For KEY_CURSOR_POS, the row and column are in
+// sh->keys.param[0] and [1]. It must not end the job itself (shell_end): let its step return
+// false instead.
 typedef void (*shell_key_fn)(shell_t *sh, int key, void *arg);
 
 struct shell {
@@ -118,8 +120,9 @@ bool shell_job_running(const shell_t *sh);
 // as it arrives, decoded (keys.h), instead of being kept for afterwards. Ctrl-C is a key like
 // any other and doesn't cancel the job, so the program needs its own way out (its step returns
 // false); the session ending still cancels it. `key` is called before `step` in the same pass,
-// at most 256 input bytes a pass. Keys that arrive in the same pass after the program decided to
-// finish still go to `key`: ignore them.
+// for about 256 input bytes a pass at most, and may be called before the first step (keys typed
+// with the command), so the program's state must be ready when shell_run_raw() returns. Keys that
+// arrive in the same pass after the program decided to finish still go to `key`: ignore them.
 void shell_run_raw(shell_t *sh, shell_job_fn step, shell_key_fn key, void *arg);
 // A job is running or typed-ahead input is waiting to run.
 bool shell_busy(const shell_t *sh);

@@ -285,6 +285,8 @@ static void poll_raw(shell_t *sh) {
         raw_keys(sh, buf, (size_t)n);
         total += (size_t)n;
     }
+    if (!sh->job)               // key() must not end the job, but don't call NULL if it did
+        return;
     if (!sh->job(sh, sh->job_arg, false)) {
         sh->job = NULL;
         sh->job_arg = NULL;

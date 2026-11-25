@@ -6,7 +6,7 @@
 
 #include "shell/keys.h"
 
-enum { ST_NONE, ST_ESC, ST_CSI, ST_SS3 };
+enum { ST_NONE, ST_ESC, ST_CSI, ST_SS3, ST_ALT_UTF8 };
 
 #define PARAM_MAX 9999
 
@@ -21,8 +21,8 @@ static int csi_key(const keys_t *k, unsigned char final) {
     case 'D': return KEY_LEFT;
     case 'H': return KEY_HOME;
     case 'F': return KEY_END;
-    case 'R':
-        return k->nparams == 2 ? KEY_CURSOR_POS : KEYS_NONE;
+    case 'R':                       // row and column count from 1
+        return k->nparams == 2 && k->param[0] && k->param[1] ? KEY_CURSOR_POS : KEYS_NONE;
     case '~':                       // "ESC [ n ~" (vt220), possibly with a modifier "; m"
         switch (k->param[0]) {
         case 1: case 7: return KEY_HOME;
@@ -67,10 +67,23 @@ int keys_feed(keys_t *k, unsigned char c) {
             k->nparams = 0;
             k->priv = false;
             k->param[0] = k->param[1] = 0;
+        } else if (c == 'O') {
+            k->state = ST_SS3;
+        } else if (c >= 0xc2 && c <= 0xf4) {    // Alt + a UTF-8 character: drop all of it
+            k->state = ST_ALT_UTF8;
+            k->skip = c >= 0xf0 ? 3 : c >= 0xe0 ? 2 : 1;
         } else {
-            k->state = c == 'O' ? ST_SS3 : ST_NONE;     // anything else: Alt+key, dropped
+            k->state = ST_NONE;                 // anything else: Alt+key, dropped
         }
         return KEYS_NONE;
+    case ST_ALT_UTF8:
+        if (c >= 0x80 && c <= 0xbf) {
+            if (--k->skip == 0)
+                k->state = ST_NONE;
+            return KEYS_NONE;
+        }
+        k->state = ST_NONE;                     // not a continuation byte: an ordinary byte
+        return c;
     case ST_CSI:
         if (c >= '0' && c <= '9') {             // parameter digits
             if (k->nparams == 0)
@@ -85,13 +98,13 @@ int keys_feed(keys_t *k, unsigned char c) {
                 k->nparams = 1;                 // ";5" is an empty first parameter
             if (k->nparams < 255)
                 k->nparams++;
-        } else if (c >= 0x3c && c <= 0x3f) {   // '<' '=' '>' '?'
-            k->priv = true;
+        } else if ((c >= 0x3c && c <= 0x3f) || (c >= 0x20 && c <= 0x2f)) {
+            k->priv = true;                     // private marker or intermediate byte
         } else if (c >= 0x40 && c <= 0x7e) {   // final byte
             k->state = ST_NONE;
             return csi_key(k, c);
         }
-        return KEYS_NONE;                       // ':' and intermediates (0x20-0x2f): skipped
+        return KEYS_NONE;                       // ':' (sub-parameters) and DEL: skipped
     default:                                    // SS3: one byte
         k->state = ST_NONE;
         return ss3_key(c);

@@ -15,7 +15,9 @@
 typedef struct {
     unsigned char state;        // where in a sequence we are (keys.c)
     unsigned char nparams;      // CSI parameters seen so far (separated by ';')
-    bool priv;                  // CSI with a private marker ('<', '=', '>', '?'): never a key
+    bool priv;                  // CSI with a private marker ('<', '=', '>', '?') or an
+                                // intermediate byte (0x20-0x2f): never a key
+    unsigned char skip;         // after ESC: UTF-8 continuation bytes of an Alt+character left
     unsigned short param[2];    // the first two CSI parameters, capped at 9999
 } keys_t;
 
@@ -43,7 +45,9 @@ enum {
 
 // Decode one byte. A control character (below 0x20) in the middle of a sequence abandons the
 // sequence and is returned as itself, so a stray ESC can't swallow Enter or Ctrl-C. Unknown
-// sequences, modifier variants included, give KEYS_NONE (Ctrl+Right is just Right).
+// sequences, modifier variants included, give KEYS_NONE (Ctrl+Right is just Right). Alt+key is
+// dropped whole, a UTF-8 character included. A lone Esc can't be told from the start of a
+// sequence, so it swallows the next key: full-screen programs shouldn't rely on Esc.
 int keys_feed(keys_t *k, unsigned char c);
 
 #endif
