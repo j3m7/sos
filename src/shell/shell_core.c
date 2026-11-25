@@ -132,7 +132,7 @@ static void run_line(shell_t *sh, char *cmd) {
 
 // --- input ---------------------------------------------------------------------
 
-void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
+void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->io = io;
     sh->ctx = ctx;
     sh->line_len = 0;
@@ -146,7 +146,15 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->key = NULL;
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
+}
+
+void shell_greet(shell_t *sh) {
     shell_printf(sh, "\nSOS %s\nType 'help' for commands.\n", sos_version);
+}
+
+void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
+    shell_bind(sh, io, ctx);
+    shell_greet(sh);
     prompt(sh);
 }
 

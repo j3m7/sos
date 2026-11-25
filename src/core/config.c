@@ -22,13 +22,17 @@ _Static_assert(CONFIG_V3_LENGTH == 1638, "fields before wifi_powersave must not 
 _Static_assert(CONFIG_V4_LENGTH == 1640, "fields before wifi_country must not move");
 #define CONFIG_V5_LENGTH offsetof(sos_config_t, owner_secret)      // + wifi_country
 _Static_assert(CONFIG_V5_LENGTH == 1644, "fields before owner_secret must not move");
+#define CONFIG_V6_LENGTH offsetof(sos_config_t, console_iterations) // + owner_secret
+_Static_assert(CONFIG_V6_LENGTH == 1676, "fields before console_iterations must not move");
+_Static_assert(sizeof(sos_config_t) == 1796, "the record's size is part of the format");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
     CONFIG_V3_LENGTH,
     CONFIG_V4_LENGTH,
     CONFIG_V5_LENGTH,
-    sizeof(sos_config_t),   // + owner_secret
+    CONFIG_V6_LENGTH,
+    sizeof(sos_config_t),   // + the console password
 };
 
 static bool known_length(uint16_t length) {
@@ -112,6 +116,14 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
         (!terminated(c->wifi_country, sizeof(c->wifi_country)) ||
          config_check_country(c->wifi_country)))
         return false;
+    if (HAS_FIELD(length, console_iterations) && c->console_iterations != 0 &&
+        (c->console_iterations < CONFIG_CONSOLE_ITERATIONS_MIN ||
+         c->console_iterations > CONFIG_CONSOLE_ITERATIONS_MAX))
+        return false;
+    if (HAS_FIELD(length, console_password) &&
+        (!terminated(c->console_password, sizeof(c->console_password)) ||
+         (c->console_password[0] && config_check_console_password(c->console_password))))
+        return false;
     if (!terminated(c->wifi_ssid, sizeof(c->wifi_ssid)) ||
         !terminated(c->wifi_password, sizeof(c->wifi_password)) ||
         !terminated(c->hostname, sizeof(c->hostname)) ||
@@ -156,11 +168,17 @@ static int slot_read(const config_store_t *store, unsigned slot, record_header_t
     memset(&tmp, 0, sizeof(tmp));
     if (kind == CONFIG_STORED_PLAIN) {
         memcpy(&tmp, record + HEADER_LEN, h.length);
-        // A plain record doesn't carry an owner secret, whatever its bytes say.
+        // A plain record doesn't carry an owner secret or a password verifier, whatever its
+        // bytes say.
         memset(tmp.owner_secret, 0, sizeof(tmp.owner_secret));
+        tmp.console_iterations = 0;
+        memset(tmp.console_salt, 0, sizeof(tmp.console_salt));
+        memset(tmp.console_verifier, 0, sizeof(tmp.console_verifier));
     } else
         ok = store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
                                  stored, (uint8_t *)&tmp);
+    if (ok && kind == CONFIG_STORED_SEALED)     // and a sealed one no password in the clear
+        memset(tmp.console_password, 0, sizeof(tmp.console_password));
     ok = ok && contents_valid(&tmp, h.length);
     if (ok && out)
         memcpy(out, &tmp, sizeof(*out));
@@ -296,16 +314,25 @@ bool config_save(const config_store_t *store, const sos_config_t *cfg) {
     size_t stored = sizeof(sos_config_t);
     memset(rec, 0, sizeof(rec));
     memcpy(rec, &h, HEADER_LEN);
+    static sos_config_t out;            // what is written: cfg less what this kind never holds
+    memcpy(&out, cfg, sizeof(out));
     if (store->sealer) {
-        if (!store->sealer->seal(store->sealer->ctx, rec, HEADER_AAD, (const uint8_t *)cfg,
-                                 sizeof(*cfg), rec + HEADER_LEN))
+        // The password itself is never stored sealed (the verifier is).
+        memset(out.console_password, 0, sizeof(out.console_password));
+        bool sealed = store->sealer->seal(store->sealer->ctx, rec, HEADER_AAD,
+                                          (const uint8_t *)&out, sizeof(out), rec + HEADER_LEN);
+        wipe(&out, sizeof(out));
+        if (!sealed)
             return false;
         stored += SEALER_OVERHEAD;
     } else {
-        memcpy(rec + HEADER_LEN, cfg, sizeof(*cfg));
-        // The owner secret is never written plain.
-        memset(rec + HEADER_LEN + offsetof(sos_config_t, owner_secret), 0,
-               sizeof(cfg->owner_secret));
+        // The owner secret and the password verifier are never written plain.
+        memset(out.owner_secret, 0, sizeof(out.owner_secret));
+        out.console_iterations = 0;
+        memset(out.console_salt, 0, sizeof(out.console_salt));
+        memset(out.console_verifier, 0, sizeof(out.console_verifier));
+        memcpy(rec + HEADER_LEN, &out, sizeof(out));
+        wipe(&out, sizeof(out));
     }
     h.crc = record_crc(rec, stored);
     memcpy(rec, &h, HEADER_LEN);
@@ -371,6 +398,16 @@ const char *config_check_hostname(const char *hostname) {
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'))
             return "hostname may only contain letters, digits and '-'";
     }
+    return NULL;
+}
+
+const char *config_check_console_password(const char *password) {
+    size_t n = strlen(password);
+    if (n < CONFIG_CONSOLE_PW_MIN || n > CONFIG_CONSOLE_PW_MAX)
+        return "the console password must be 8 to 64 characters";
+    for (const char *p = password; *p; p++)
+        if (*p < 0x20 || *p > 0x7e)
+            return "the console password may only contain printable ASCII characters";
     return NULL;
 }
 

@@ -1254,7 +1254,7 @@ static bool flash_has_owner(uint8_t first) {
 // Released layouts: the owner secret is the last field, after everything saved before it.
 TEST(owner_secret_is_appended) {
     CHECK_EQ(offsetof(sos_config_t, owner_secret), 1644);
-    CHECK_EQ(sizeof(sos_config_t), 1644 + CONFIG_OWNER_SECRET_LEN);
+    CHECK_EQ(offsetof(sos_config_t, console_iterations), 1644 + CONFIG_OWNER_SECRET_LEN);
 }
 
 TEST(owner_secret_round_trips_sealed) {
@@ -1335,6 +1335,125 @@ TEST(records_from_before_the_owner_secret_load_with_none) {
     CHECK(!strcmp(b.wifi_country, "US"));
 }
 
+// --- the console password ----------------------------------------------------------------------------
+
+static void set_verifier(sos_config_t *c) {
+    c->console_iterations = 4000;
+    memset(c->console_salt, 0xa1, sizeof(c->console_salt));
+    memset(c->console_verifier, 0xb2, sizeof(c->console_verifier));
+}
+
+static bool has_verifier(const sos_config_t *c) {
+    return c->console_iterations != 0 || c->console_salt[0] != 0 || c->console_verifier[0] != 0;
+}
+
+TEST(console_password_fields_are_appended) {
+    CHECK_EQ(offsetof(sos_config_t, console_iterations), 1676);
+    CHECK_EQ(offsetof(sos_config_t, console_salt), 1680);
+    CHECK_EQ(offsetof(sos_config_t, console_verifier), 1696);
+    CHECK_EQ(offsetof(sos_config_t, console_password), 1728);
+    CHECK_EQ(sizeof(sos_config_t), 1796);
+}
+
+TEST(console_password_checks) {
+    CHECK(config_check_console_password("12345678") == NULL);
+    CHECK(config_check_console_password("correct horse battery staple!") == NULL);
+    CHECK(config_check_console_password("1234567") != NULL);                // too short
+    CHECK(config_check_console_password("") != NULL);
+    char longest[CONFIG_CONSOLE_PW_MAX + 2];
+    memset(longest, 'a', sizeof(longest));
+    longest[CONFIG_CONSOLE_PW_MAX] = '\0';
+    CHECK(config_check_console_password(longest) == NULL);
+    longest[CONFIG_CONSOLE_PW_MAX] = 'a';
+    longest[CONFIG_CONSOLE_PW_MAX + 1] = '\0';
+    CHECK(config_check_console_password(longest) != NULL);
+    CHECK(config_check_console_password("tab\tinside") != NULL);            // not printable
+    CHECK(config_check_console_password("caf\xc3\xa9 au lait") != NULL);    // not ASCII
+}
+
+// The verifier lives only in sealed records; the password to set only in plain ones.
+TEST(verifier_round_trips_sealed_and_the_password_is_not_stored) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    set_verifier(&a);
+    strcpy(a.console_password, "open sesame 123");      // still in memory when saving
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_EQ(b.console_iterations, 4000);
+    CHECK_MEM(b.console_salt, a.console_salt, sizeof(a.console_salt));
+    CHECK_MEM(b.console_verifier, a.console_verifier, sizeof(a.console_verifier));
+    CHECK_EQ(b.console_password[0], '\0');              // never stored sealed
+    // Not there under the seal either: opened by hand, the field is zero.
+    static sos_config_t by_hand;
+    CHECK(fake_open(&fake, flash.slot[0], 12, flash.slot[0] + 16,
+                    sizeof(sos_config_t) + SEALER_OVERHEAD, (uint8_t *)&by_hand));
+    for (unsigned i = 0; i < sizeof(by_hand.console_password); i++)
+        CHECK_EQ(by_hand.console_password[i], 0);
+}
+
+TEST(plain_record_carries_the_password_but_never_a_verifier) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    set_verifier(&a);
+    strcpy(a.console_password, "open sesame 123");
+    CHECK(config_save(&store, &a));                     // the provisioning tool's save
+    CHECK(config_load(&store, &b, NULL));
+    CHECK(!has_verifier(&b));                           // not written
+    CHECK(!strcmp(b.console_password, "open sesame 123"));
+    // Planted verifier bytes in a plain record are dropped on load.
+    uint32_t it = 4000;
+    memcpy(flash.slot[0] + 16 + offsetof(sos_config_t, console_iterations), &it, 4);
+    memset(flash.slot[0] + 16 + offsetof(sos_config_t, console_verifier), 0xb2, 32);
+    fix_crc(0);
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(!has_verifier(&b));
+    CHECK(!strcmp(b.console_password, "open sesame 123"));
+    // Sealing it (after the board has made the verifier) leaves no password in flash.
+    set_verifier(&b);
+    CHECK(config_save(&sealed_store, &b));
+    CHECK(!slot_contains(0, "open sesame") && !slot_contains(1, "open sesame"));
+}
+
+TEST(bad_console_password_fields_are_rejected) {
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "HomeNet");
+    strcpy(a.console_password, "short");                // a plain record with a bad password
+    CHECK(!config_save(&store, &a));
+    CHECK(!config_load(&store, &b, NULL));
+    sealed_start();
+    sample(&a, "HomeNet");
+    set_verifier(&a);
+    a.console_iterations = 5;                           // a count no verifier is made with
+    CHECK(!config_save(&sealed_store, &a));
+    a.console_iterations = CONFIG_CONSOLE_ITERATIONS_MAX + 1;
+    CHECK(!config_save(&sealed_store, &a));
+    a.console_iterations = CONFIG_CONSOLE_ITERATIONS_MIN;
+    CHECK(config_save(&sealed_store, &a));
+}
+
+// Records from before the console password load with none set.
+TEST(records_from_before_the_console_password_load_with_none) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    set_owner(&a, 0x33);
+    uint8_t *r = flash.slot[0];
+    memset(r, 0xff, CONFIG_SLOT_SIZE);
+    static const uint8_t header[12] = { 'S', 'O', 'S', 'C', 2, 0, 0x8c, 0x06, 3, 0, 0, 0 };  // 1676
+    memcpy(r, header, sizeof(header));
+    CHECK(fake_seal(&fake, r, 12, (const uint8_t *)&a, 1676, r + 16));
+    fix_sealed_crc(0);
+    memset(&b, 0x55, sizeof(b));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(!has_verifier(&b));
+    CHECK_EQ(b.console_password[0], '\0');
+    CHECK_MEM(b.owner_secret, a.owner_secret, sizeof(a.owner_secret));
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+}
+
 TEST_MAIN(
     RUN(blank_flash_loads_defaults);
     RUN(save_and_load_round_trip);
@@ -1373,6 +1492,12 @@ TEST_MAIN(
     RUN(remove_keeps_order);
     RUN(key_list_capacity);
     RUN(crc32_known_value);
+    RUN(console_password_fields_are_appended);
+    RUN(console_password_checks);
+    RUN(verifier_round_trips_sealed_and_the_password_is_not_stored);
+    RUN(plain_record_carries_the_password_but_never_a_verifier);
+    RUN(bad_console_password_fields_are_rejected);
+    RUN(records_from_before_the_console_password_load_with_none);
     RUN(owner_secret_is_appended);
     RUN(owner_secret_round_trips_sealed);
     RUN(plain_save_never_writes_the_owner_secret);

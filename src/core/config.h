@@ -34,6 +34,12 @@
 #define CONFIG_RTC_OFFSET_MIN (-64)
 #define CONFIG_RTC_OFFSET_MAX 63
 #define CONFIG_OWNER_SECRET_LEN 32
+#define CONFIG_CONSOLE_PW_MIN 8
+#define CONFIG_CONSOLE_PW_MAX 64
+#define CONFIG_CONSOLE_SALT_LEN 16
+#define CONFIG_CONSOLE_VERIFIER_LEN 32
+#define CONFIG_CONSOLE_ITERATIONS_MIN 1000      // as core/pwverify.h accepts
+#define CONFIG_CONSOLE_ITERATIONS_MAX 1000000
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -71,6 +77,18 @@ typedef struct {
     // configuration that arrives plain gets a new owner. Erasing the configuration destroys it.
     // Never shown, logged or exported.
     uint8_t owner_secret[CONFIG_OWNER_SECRET_LEN];
+    // The console password, as its verifier (core/pwverify.h): the password is asked for
+    // before the console takes any command. console_iterations 0 = no password set. Like the
+    // owner secret these three exist only in a sealed record (zeroed when a plain record
+    // loads, never written plain): the verifier is keyed with a key from the board's root
+    // secret, so nothing outside the board can make one.
+    uint32_t console_iterations;
+    uint8_t console_salt[CONFIG_CONSOLE_SALT_LEN];
+    uint8_t console_verifier[CONFIG_CONSOLE_VERIFIER_LEN];
+    // The other way round: only in a plain record. The provisioning tool puts the console
+    // password to set here; the board turns it into the verifier when it seals the record,
+    // and it is never written sealed (zeroed before sealing). Empty = none given.
+    char console_password[CONFIG_CONSOLE_PW_MAX + 1];
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------
@@ -134,6 +152,8 @@ const char *config_check_ssid(const char *ssid);
 const char *config_check_password(const char *password);
 const char *config_check_hostname(const char *hostname);
 const char *config_check_user(const char *user);
+// 8 to 64 printable ASCII characters (what the console's line editor takes).
+const char *config_check_console_password(const char *password);
 // Empty (worldwide) or two capital letters.
 const char *config_check_country(const char *country);
 // A DNS name or IPv4 address: letters, digits, '-' and '.', no empty labels.
