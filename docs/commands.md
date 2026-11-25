@@ -124,7 +124,12 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `lua <file>` | any | Run a Lua script from the card on core 1 (job: Ctrl-C stops) |
 | `lua -e <code>` | any | Run the given code |
 | `lua` | any | Interactive prompt: each line runs as entered, in one Lua state; values of expressions are printed. Ctrl-C interrupts a line, Ctrl-D on an empty line or `exit` leaves |
+| `lua -b <file>` | any | Run a script in the background: no shell, its output goes to the log (`dmesg`), and its end is logged |
+| `lua ps` | any | The running script: what, where (a shell or the background), for how long |
+| `lua stop` | any | Stop the running script, wherever it runs (the prompt is closed) |
 
-One script runs at a time, and its output goes to the shell that started it. Scripts use
+One script runs at a time (foreground, prompt or background). `/autorun.lua`, if the card has
+one, starts in the background a few seconds after boot, except after a crash or watchdog reset.
+Use `lua ./ps` or `lua ./stop` to run files with those names. Scripts use
 the `sos` library to reach the system, and `require` loads modules from the card (`/lib` and the
 working directory); see [Lua scripts](../README.md#lua-scripts-prototype).

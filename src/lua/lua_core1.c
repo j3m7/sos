@@ -290,10 +290,114 @@ static int simple(lua_State *L, lua_req_type_t type) {
 static int l_remove(lua_State *L) { return simple(L, LR_REMOVE); }
 static int l_mkdir(lua_State *L) { return simple(L, LR_MKDIR); }
 
+// --- timers: sos.every, sos.after, sos.cancel ---------------------------------------------------
+//
+// Timers live in a registry table, id -> {fn = function, due = time_us_64() deadline, every = period
+// in microseconds or 0}. They run once the script's main chunk has returned (run_timers): the script
+// then keeps going until no timers are left, it's stopped, or a callback raises an error.
+
+#define TIMERS_KEY "sos.timers"
+#define TIMER_MIN_US 10000                      // shortest interval: 0.01 s
+
+static lua_Integer next_timer_id;
+
+static int add_timer(lua_State *L, bool repeat) {
+    lua_Number sec = luaL_checknumber(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (lua_job.repl)
+        return luaL_error(L, "timers don't run at the interactive prompt");
+    if (!(sec >= 0) || sec > 31536000)          // also NaN; at most a year
+        return luaL_argerror(L, 1, "seconds out of range");
+    lua_Integer us = (lua_Integer)(sec * 1e6);
+    if (repeat && us < TIMER_MIN_US)
+        return luaL_argerror(L, 1, "interval below 0.01 s");
+    lua_getfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
+    lua_createtable(L, 0, 3);
+    lua_pushvalue(L, 2);
+    lua_setfield(L, -2, "fn");
+    lua_pushinteger(L, (lua_Integer)time_us_64() + us);
+    lua_setfield(L, -2, "due");
+    lua_pushinteger(L, repeat ? us : 0);
+    lua_setfield(L, -2, "every");
+    lua_rawseti(L, -2, ++next_timer_id);
+    lua_pushinteger(L, next_timer_id);
+    return 1;
+}
+
+static int l_every(lua_State *L) { return add_timer(L, true); }
+static int l_after(lua_State *L) { return add_timer(L, false); }
+
+static int l_cancel(lua_State *L) {
+    lua_Integer id = luaL_checkinteger(L, 1);
+    lua_getfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
+    bool found = lua_rawgeti(L, -1, id) != LUA_TNIL;
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_rawseti(L, -2, id);
+    lua_pushboolean(L, found);
+    return 1;
+}
+
+// After the main chunk: run timers until none are left. Returns LUA_OK, or an error status with
+// the message on the stack (a callback failed, or the script was stopped). Stack index 1 is the
+// traceback handler.
+static int run_timers(lua_State *L) {
+    for (;;) {
+        lua_getfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
+        lua_Integer id = 0, due = 0;
+        lua_pushnil(L);
+        while (lua_next(L, -2)) {                       // the earliest one (lowest id on a tie)
+            lua_getfield(L, -1, "due");
+            lua_Integer d = lua_tointeger(L, -1);
+            lua_Integer k = lua_tointeger(L, -3);
+            lua_pop(L, 2);
+            if (!id || d < due || (d == due && k < id)) {
+                id = k;
+                due = d;
+            }
+        }
+        if (!id) {
+            lua_pop(L, 1);
+            return LUA_OK;                              // none left: the script ends normally
+        }
+        for (;;) {                                      // wait for it
+            if (lua_job.cancel) {
+                lua_pop(L, 1);
+                lua_pushliteral(L, "interrupted");
+                return LUA_ERRRUN;
+            }
+            lua_Integer left = due - (lua_Integer)time_us_64();
+            if (left <= 0)
+                break;
+            sleep_us(left < 5000 ? (uint64_t)left : 5000);
+        }
+        lua_rawgeti(L, -1, id);
+        lua_getfield(L, -1, "every");
+        lua_Integer every = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        if (every) {                                    // next time; skip runs missed meanwhile
+            lua_Integer next = due + every, now = (lua_Integer)time_us_64();
+            lua_pushinteger(L, next > now ? next : now + every);
+            lua_setfield(L, -2, "due");
+        } else {
+            lua_pushnil(L);
+            lua_rawseti(L, -3, id);                     // one-shot: gone before it runs
+        }
+        lua_getfield(L, -1, "fn");
+        lua_remove(L, -2);                              // the timer
+        lua_remove(L, -2);                              // the table
+        lua_pushinteger(L, id);                         // the callback gets its id
+        int r = lua_pcall(L, 1, 0, 1);
+        if (r != LUA_OK)
+            return r;
+    }
+}
+
 static const luaL_Reg sos_lib[] = {
     {"log", l_log},       {"time", l_time},     {"uptime", l_uptime}, {"sleep", l_sleep},
     {"read", l_read},     {"write", l_write},   {"append", l_append}, {"list", l_list},
-    {"remove", l_remove}, {"mkdir", l_mkdir},   {NULL, NULL},
+    {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
+    {"cancel", l_cancel}, {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -644,6 +748,9 @@ static void run_job(void) {
     } else {
         main_L = L;
         open_libs(L);
+        lua_newtable(L);
+        lua_setfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
+        next_timer_id = 0;
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         lua_pushcfunction(L, traceback);            // stack index 1: message handler
         if (lua_job.repl) {
@@ -655,6 +762,8 @@ static void run_job(void) {
         int r = load_script(L);
         if (r == LUA_OK)
             r = lua_pcall(L, 0, 0, 1);
+        if (r == LUA_OK)
+            r = run_timers(L);
         if (r == LUA_OK) {
             lua_job.ok = true;
         } else if (r == LUA_ERRERR) {

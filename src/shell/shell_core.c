@@ -72,6 +72,12 @@ void shell_ask_eof(shell_t *sh, const char *ask_prompt, shell_answer_fn answer, 
     sh->ask_eof = true;
 }
 
+void shell_cancel_question(shell_t *sh) {
+    sh->answer = NULL;
+    sh->secret = false;
+    sh->ask_eof = false;
+}
+
 // Take the pending question, if any, and hand it the answer (NULL = cancelled).
 static bool answer_question(shell_t *sh, char *answer) {
     shell_answer_fn fn = sh->answer;
