@@ -28,6 +28,28 @@ translation (`crlf`), and `admin` (true for the console only).
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
 
+## `login.c`: the console's lock (pure C over the shell API, host tested)
+
+The console asks for the console password before it takes any command (issue #64).
+
+- **Locked** means the shell has a pending secret question, "Password: ". A right answer opens
+  the console; a wrong one asks again. Nothing else is printed meanwhile: `main.c` starts the
+  console with `shell_bind()` (no greeting), holds the log (`log_hooks_t.hold`) and skips
+  `chat_deliver()` while `login_locked()`.
+- **The gate:** `shell_execute()` calls `login_gate()` for every console command line, and it
+  refuses while locked. So the lock doesn't depend on the question staying pending.
+- **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
+  root-derived key). It runs as a shell job, a slice per main-loop pass, through
+  `login_hooks_t`; `core/settings.c` holds the verifier and the key.
+- **Delays:** after the nth wrong answer since boot the next check waits 1 s, 2 s, 4 s ... up to
+  30 s. Ctrl-C drops a check or a wait but not the delay. The typed password is wiped from the
+  line buffer and from `login.c`'s copy as soon as its check starts.
+- **No password set:** the console is open and `first_use` starts setting one (`setup` on a
+  board that was never set up).
+- **No usable root secret:** the console stays locked whatever the configuration says, and
+  takes only `rootsecret`, `rootsecret forget` and `reboot`.
+- **`logout`** on the console locks it again (`console_io.logout` in `main.c`).
+
 ## `keys.c`: terminal keys (pure C, host tested)
 
 `keys_feed()` takes input one byte at a time and turns escape sequences into key codes: the

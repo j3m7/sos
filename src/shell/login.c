@@ -34,6 +34,8 @@ static void ask(shell_t *sh);
 static void wrong(shell_t *sh) {
     failures++;
     not_before = hooks->now_ms() + delay_ms(failures);
+    if (hooks->failed)
+        hooks->failed(failures);
     shell_printf(sh, "wrong password\n");
     ask(sh);
 }

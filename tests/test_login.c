@@ -76,9 +76,11 @@ static bool h_rescue(const char *cmd) {
 }
 static void h_opened(shell_t *s) { opens++; shell_greet(s); }
 static void h_first(shell_t *s) { first_uses++; shell_printf(s, "set a password first\n"); }
+static unsigned failed_calls, failed_last;
+static void h_failed(unsigned n) { failed_calls++; failed_last = n; }
 
 static const login_hooks_t hooks = {
-    h_now, h_has, h_begin, h_step, h_abort, h_no_keys, h_rescue, h_opened, h_first,
+    h_now, h_has, h_begin, h_step, h_abort, h_no_keys, h_rescue, h_opened, h_first, h_failed,
 };
 
 // --- fake command module ----------------------------------------------------------------------------
@@ -108,6 +110,7 @@ static void boot(const char *pw) {
     password = pw;
     no_keys_why = NULL;
     begins = steps = aborts = opens = first_uses = n_executed = 0;
+    failed_calls = failed_last = 0;
     steps_needed = 3;
     begin_fails = false;
     shell_bind(&sh, &console_io, NULL);
@@ -175,6 +178,8 @@ TEST(nothing_runs_while_locked) {
     CHECK(!shown("ran "));
     CHECK(!shown("SOS"));
     CHECK_EQ(login_failures(), 3);
+    CHECK_EQ(failed_calls, 3);                  // each was reported for the log
+    CHECK_EQ(failed_last, 3);
 }
 
 // Type an answer and run until it has been checked or `limit_ms` passed; returns how long the

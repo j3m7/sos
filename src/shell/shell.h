@@ -93,6 +93,10 @@ void shell_logout(shell_t *sh);
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
 
+// Start the console (the admin channel) on a shell that was bound with shell_bind(): ask for
+// the console password, or open it if none is set (shell/login.h). Implemented by shell.c.
+void shell_console_start(shell_t *console);
+
 // Ask a question: `prompt` replaces "sos> " and the next line typed is passed to `answer`
 // instead of being run as a command. With `secret`, the answer isn't echoed. Never blocks: call
 // it from a command (or from an answer callback, to chain questions) and return. `prompt` is

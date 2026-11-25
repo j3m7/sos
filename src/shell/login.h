@@ -54,6 +54,9 @@ typedef struct {
     void (*opened)(shell_t *sh);
     // The console is open because no password is set: start setting one.
     void (*first_use)(shell_t *sh);
+    // A wrong answer was given (`failures` since boot, this one included): for the log. May be
+    // NULL.
+    void (*failed)(unsigned failures);
 } login_hooks_t;
 
 // At boot, on the console's shell, bound but with nothing printed yet (shell_bind): lock it

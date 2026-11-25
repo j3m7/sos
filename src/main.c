@@ -23,6 +23,7 @@
 #include "files/cardkey.h"
 #include "lua/lua_host.h"
 #include "net/wifi.h"
+#include "shell/login.h"
 #include "shell/shell.h"
 #include "ssh/hostkey.h"
 #include "ssh/sshd.h"
@@ -48,16 +49,23 @@ static void console_write(void *ctx, const char *buf, int len) {
     fflush(stdout);
 }
 
+static void console_logout(void *ctx);
+
 static const shell_io_t console_io = {
     .name = "console",
     .read = console_read,
     .write = console_write,
-    .logout = NULL,
+    .logout = console_logout,   // locks the console again (shell/login.h)
     .crlf = false,
     .admin = true,              // physical access: may change the configuration
 };
 
-static shell_t console_shell;   // io is NULL until shell_init(): the log won't redraw before that
+static shell_t console_shell;   // io is NULL until shell_bind(): the log won't redraw before that
+
+static void console_logout(void *ctx) {
+    (void)ctx;
+    login_lock(&console_shell);
+}
 
 // --- log hooks -----------------------------------------------------------------------------------
 
@@ -68,7 +76,11 @@ static void log_unlock(uint32_t saved) { restore_interrupts(saved); }
 static void log_write(const char *s, size_t n) { console_write(NULL, s, (int)n); }
 static void log_hide(void) { shell_hide_input(&console_shell); }
 static void log_show(void) { shell_show_input(&console_shell); }
-static bool log_hold(void) { return shell_raw_mode(&console_shell); }   // e.g. the editor
+// Nothing is printed while a full-screen program (the editor) has the console, nor while the
+// console is locked: log lines can name networks, addresses and users. They wait in the history
+// and are printed after a login. The console counts as locked from power-on until the boot code
+// knows whether a password is set (shell/login.h), so boot messages wait too.
+static bool log_hold(void) { return shell_raw_mode(&console_shell) || login_locked(); }
 
 static const log_hooks_t log_hooks = {
     log_now, log_in_irq, log_lock, log_unlock, log_write, log_hide, log_show, log_hold,
@@ -142,7 +154,9 @@ int main(void) {
     // Every key has been derived by now: no more until reset (core/keyprov.h).
     keyprov_lock();
 
-    shell_init(&console_shell, &console_io, NULL);
+    // The console: locked until its password is typed, or open straight away if none is set.
+    shell_bind(&console_shell, &console_io, NULL);
+    shell_console_start(&console_shell);
     chat_init(&chat_hooks);
     chat_register(&console_shell, 0, "console", "console");
     // From here on, log lines are printed by log_flush() in the loop, between commands.
@@ -162,7 +176,8 @@ int main(void) {
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
-        chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
+        if (!login_locked())            // a locked console shows nothing
+            chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
         sshd_poll();
         lua_host_poll(true);            // requests from a Lua script on core 1
         log_flush();                    // messages logged in interrupt context

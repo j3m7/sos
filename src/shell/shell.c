@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 
 #include "shell/shell.h"
+#include "shell/login.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,6 +103,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
+        shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
@@ -568,6 +570,8 @@ static void cmd_config(shell_t *sh, char *args) {
     }
     const sos_config_t *c = settings();
     shell_printf(sh, "hostname:      %s\n", c->hostname);
+    shell_printf(sh, "console:       %s\n", settings_console_has_password()
+                                              ? "password set" : "no password (`passwd` sets one)");
     wifi_show(sh);
     shell_printf(sh, "keys:          %u trusted ('key list')\n", c->key_count);
     shell_printf(sh, "nts:           %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
@@ -581,6 +585,65 @@ static void cmd_config(shell_t *sh, char *args) {
     shell_printf(sh, "rtc cal:       %s\n", cal);
     if (!settings_persistent())
         shell_printf(sh, "warning:       flash storage unavailable; changes aren't saved\n");
+}
+
+// --- the console's lock (shell/login.h) ------------------------------------------------------------
+
+static void cmd_setup(shell_t *sh);
+static void ask_new_password(shell_t *sh, void (*then)(shell_t *sh));
+
+static uint64_t console_now_ms(void) { return to_ms_since_boot(get_absolute_time()); }
+static int console_check_step(void) {
+    int r = settings_console_check_step();
+    return r == 0 ? LOGIN_MORE : r == 1 ? LOGIN_RIGHT : LOGIN_WRONG;
+}
+
+// With no usable root secret nothing sealed can be read, the password included. The console
+// must not be open because of that: it stays locked, with only the commands that deal with it.
+static const char *console_no_keys(void) {
+    return rootflash_state() == ROOTSECRET_OK
+               ? NULL
+               : "this board's root secret can't be used, so nothing it stores can be read.\n"
+                 "`rootsecret` says more, `rootsecret forget` starts over (what was stored is "
+                 "lost), `reboot` restarts.";
+}
+
+static bool console_rescue_allowed(const char *cmd) {
+    return !strcmp(cmd, "rootsecret") || !strcmp(cmd, "rootsecret forget") || !strcmp(cmd, "reboot");
+}
+
+static void console_opened(shell_t *sh) {
+    log_msg(SOS_LOG_NOTICE, "console: logged in");
+    shell_greet(sh);
+}
+
+// No console password is set: a new board, a configuration from before console passwords, or
+// one provisioned without a password. Whoever is at the console sets it now.
+static void console_first_use(shell_t *sh) {
+    shell_greet(sh);
+    if (!settings()->wifi_ssid[0] && !settings()->key_count) {
+        cmd_setup(sh);                  // a board that was never set up: the whole of setup
+        return;
+    }
+    shell_printf(sh, "This board has no console password yet. It's asked for before the console "
+                     "takes any\ncommand. Ctrl-C leaves the console without one.\n");
+    ask_new_password(sh, NULL);
+}
+
+// Not printed on the console while it's locked (the log is held); `dmesg` in an SSH session and
+// the console after the next login show it.
+static void console_failed(unsigned failures) {
+    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since boot)", failures);
+}
+
+static const login_hooks_t console_login = {
+    console_now_ms, settings_console_has_password, settings_console_check_begin,
+    console_check_step, settings_console_check_abort, console_no_keys, console_rescue_allowed,
+    console_opened, console_first_use, console_failed,
+};
+
+void shell_console_start(shell_t *console) {
+    login_start(console, &console_login);
 }
 
 // --- setup: guided configuration (console only) --------------------------------------------------
@@ -667,12 +730,122 @@ static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     shell_ask(sh, "Wi-Fi password (empty for an open network): ", true, on_setup_password, NULL);
 }
 
+// --- the console password ------------------------------------------------------------------------
+
+// Asking for a new password, twice, then what follows (NULL: nothing).
+static char new_password[CONFIG_CONSOLE_PW_MAX + 1];
+static void (*after_password)(shell_t *sh);
+
+static void wipe_text(char *s, size_t size) {
+    volatile char *v = s;
+    while (size--)
+        *v++ = 0;
+}
+
+static void on_new_password(shell_t *sh, char *answer, void *arg);
+
+static void ask_new_password(shell_t *sh, void (*then)(shell_t *sh)) {
+    after_password = then;
+    shell_ask(sh, "New console password (8 to 64 characters): ", true, on_new_password, NULL);
+}
+
+static void on_new_password_again(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    void (*then)(shell_t *sh) = after_password;
+    if (!answer) {
+        wipe_text(new_password, sizeof(new_password));
+        shell_printf(sh, "cancelled; the console password is unchanged\n");
+        return;
+    }
+    bool same = !strcmp(answer, new_password);
+    wipe_text(answer, strlen(answer));
+    if (!same) {
+        wipe_text(new_password, sizeof(new_password));
+        shell_printf(sh, "they differ; try again\n");
+        ask_new_password(sh, then);
+        return;
+    }
+    const char *err = settings_console_set_password(new_password);
+    wipe_text(new_password, sizeof(new_password));
+    if (err) {
+        shell_printf(sh, "not set: %s\n", err);
+        return;
+    }
+    save(sh);
+    log_msg(SOS_LOG_NOTICE, "config: console password set");
+    shell_printf(sh, "console password set; the console asks for it from now on (`logout` locks "
+                     "it)\n");
+    if (then)
+        then(sh);
+}
+
+static void on_new_password(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer) {
+        shell_printf(sh, "cancelled; the console password is unchanged\n");
+        return;
+    }
+    const char *err = config_check_console_password(answer);
+    if (err) {
+        wipe_text(answer, strlen(answer));
+        shell_printf(sh, "%s\n", err);
+        ask_new_password(sh, after_password);
+        return;
+    }
+    strcpy(new_password, answer);
+    wipe_text(answer, strlen(answer));
+    shell_ask(sh, "Again: ", true, on_new_password_again, NULL);
+}
+
+// The current password, checked in one go (a few hundred milliseconds), before changing it: an
+// unlocked console left alone shouldn't be enough to change the password.
+static void on_current_password(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer)
+        return;
+    int r = settings_console_check_begin(answer) ? 0 : -1;
+    wipe_text(answer, strlen(answer));
+    while (r == 0)
+        r = settings_console_check_step();
+    if (r != 1) {
+        shell_printf(sh, "wrong password\n");
+        log_msg(SOS_LOG_WARNING, "console: wrong current password given to `passwd`");
+        return;
+    }
+    ask_new_password(sh, NULL);
+}
+
+static void cmd_passwd(shell_t *sh) {
+    if (!sh->io->admin) {
+        shell_printf(sh, "the console password can only be changed on the serial console\n");
+        return;
+    }
+    if (settings_console_has_password())
+        shell_ask(sh, "Current console password: ", true, on_current_password, NULL);
+    else
+        ask_new_password(sh, NULL);
+}
+
+static void setup_network(shell_t *sh);
+
 static void cmd_setup(shell_t *sh) {
-    static char prompt[CONFIG_SSID_MAX + 40];
     if (!require_admin(sh))
         return;
-    memset(&setup_state, 0, sizeof(setup_state));
     shell_printf(sh, "SOS setup. Press Enter to keep the value in brackets, Ctrl-C to cancel.\n");
+    // The console password comes first: a board isn't left set up with an open console.
+    if (!settings_console_has_password()) {
+        shell_printf(sh, "This board has no console password yet. It's asked for before the "
+                         "console takes any\ncommand. If it's forgotten, the only way back in is "
+                         "to erase the configuration over USB.\n");
+        ask_new_password(sh, setup_network);
+        return;
+    }
+    setup_network(sh);
+}
+
+static void setup_network(shell_t *sh) {
+    static char prompt[CONFIG_SSID_MAX + 40];
+    memset(&setup_state, 0, sizeof(setup_state));
     if (settings()->wifi_ssid[0])
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID) [%s]: ", settings()->wifi_ssid);
     else
@@ -865,6 +1038,9 @@ static void cmd_nts(shell_t *sh, char *args) {
 // --- dispatch ------------------------------------------------------------------------------------
 
 void shell_execute(shell_t *sh, char *cmd) {
+    // The console takes no command while it's locked (shell/login.h).
+    if (sh->io->admin && login_gate(sh, cmd))
+        return;
     // Split "command arguments"; args is NULL without arguments.
     char *args = strchr(cmd, ' ');
     if (args) {
@@ -922,6 +1098,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         edit_command(sh, args);
     else if (!strcmp(cmd, "http"))
         http_command(sh, args);
+    else if (!strcmp(cmd, "passwd"))
+        cmd_passwd(sh);
     else if (!strcmp(cmd, "setup"))
         cmd_setup(sh);
     else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))

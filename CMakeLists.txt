@@ -112,6 +112,7 @@ set(SOS_SOURCES
     src/core/rootflash.c
     src/core/keyprov.c
     src/core/seal.c
+    src/core/pwverify.c
     src/core/random.c
     src/core/wdog.c
     src/core/fault.c
@@ -121,6 +122,7 @@ set(SOS_SOURCES
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
+    src/shell/login.c
     src/shell/termtext.c
     src/shell/charwidth.c
     src/edit/edit.c
