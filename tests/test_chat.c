@@ -11,6 +11,8 @@
 #include "shell/shell.h"
 #include "test.h"
 
+const char sos_version[] = "0123456789ab";   // shell_core.c's greeting; generated at build time
+
 // --- fake channels ---------------------------------------------------------------------------
 
 typedef struct {

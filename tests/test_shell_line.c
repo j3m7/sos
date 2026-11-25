@@ -8,6 +8,8 @@
 #include "shell/shell.h"
 #include "test.h"
 
+const char sos_version[] = "0123456789ab";   // normally generated at build time
+
 // --- fake channel ----------------------------------------------------------------------------
 
 typedef struct {
@@ -176,7 +178,7 @@ static const shell_io_t io_space = {
 TEST(init_prints_greeting_and_prompt) {
     memset(&fake, 0, sizeof(fake));
     shell_init(&sh, &io_plain, &fake);
-    CHECK_OUT("\nType 'help' for commands.\nsos> ");
+    CHECK_OUT("\nSOS 0123456789ab\nType 'help' for commands.\nsos> ");
     CHECK_EQ(sh.line_len, 0);
 }
 

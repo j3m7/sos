@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Shell line editing and output. Depends only on shell.h and the C library, so it builds on the
-// host for unit tests; the commands live in shell.c (shell_execute).
+// Shell line editing and output. Depends only on shell.h, sos_version and the C library, so it
+// builds on the host for unit tests (which define sos_version); the commands live in shell.c
+// (shell_execute).
 
 #include "shell/shell.h"
+#include "core/version.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -144,7 +146,7 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->key = NULL;
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
-    shell_printf(sh, "\nType 'help' for commands.\n");
+    shell_printf(sh, "\nSOS %s\nType 'help' for commands.\n", sos_version);
     prompt(sh);
 }
 
