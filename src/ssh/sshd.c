@@ -105,19 +105,18 @@ static void log_cb(int priority, const char *format, ...) {
     log_msg(priority, "sshd: %s", msg);
 }
 
-// Public key only: the user name must match the configured one and the key must be in the
-// configured trusted list (checked at each login, so changes apply immediately). wolfSSH
+// Public key only: the key must be in the configured trusted list (checked at each login, so
+// changes apply immediately). Any user name is accepted: there's one user, and the keys are what
+// decide who gets in; the name a client gives is only shown (`ssh`, `who`, the log). wolfSSH
 // verifies the client's signature itself once this returns success.
 static int auth_cb(void *ctx, const byte *login, word32 login_len,
                    const byte *auth, word32 auth_len, int auth_type) {
     (void)ctx;
+    (void)login;
+    (void)login_len;
     const sos_config_t *cfg = settings();
-    if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY)
+    if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY || !auth)
         return WOLFSSH_USERAUTH_FAILURE;
-    if (!login || !auth)
-        return WOLFSSH_USERAUTH_FAILURE;
-    if (login_len != strlen(cfg->ssh_user) || memcmp(login, cfg->ssh_user, login_len) != 0)
-        return WOLFSSH_USERAUTH_INVALID_USER;
     if (!config_key_find(cfg, auth, auth_len))
         return WOLFSSH_USERAUTH_INVALID_PUBLICKEY;
     return WOLFSSH_USERAUTH_SUCCESS;
