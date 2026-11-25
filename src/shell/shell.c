@@ -68,6 +68,8 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
+    shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
+    shell_printf(sh, "lua ps | lua stop the running script / stop it\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");

@@ -424,7 +424,26 @@ typed or piped in while one runs wait their turn, so `printf 'lua\nprint(1)\nexi
 works too.
 
 The script's output goes to the shell that started it; Ctrl-C stops it, as does ending the SSH
-session. One script runs at a time. Available: the base, string, table, math, utf8 and
+session. One script runs at a time.
+
+**Background scripts and autorun:** `lua -b <file>` runs a script with no shell: its output goes to
+the log, a line at a time (`dmesg`; INFO, so not on the console), and its end is logged
+(finished, stopped, or failed with the error). `lua ps` shows the running script, and `lua stop`
+stops it, wherever it runs. If the card has `/autorun.lua`, it starts in the background a few
+seconds after boot. After a crash or watchdog reset it's skipped (and that's logged), so a script
+that brings the device down can't do it at every boot; remove or rename the file to turn
+autorun off. Timers (`sos.every`, `sos.after`) are how a background script does periodic work:
+
+```lua
+-- /autorun.lua: log the free space on the card every 10 minutes
+sos.every(600, function()
+  local n = 0
+  for _, e in ipairs(sos.list("/") or {}) do n = n + 1 end
+  sos.log("autorun: " .. n .. " entries in /")
+end)
+```
+
+Background scripts can write files like any other script (not `/certs`). Available: the base, string, table, math, utf8 and
 coroutine libraries, `require` (see below), and `sos`:
 
 | Function | |
@@ -435,6 +454,8 @@ coroutine libraries, `require` (see below), and `sos`:
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
+| `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
+| `sos.cancel(id)` | stop a timer; true if it existed |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
 only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them; use a
