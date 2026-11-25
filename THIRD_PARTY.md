@@ -41,18 +41,26 @@ Each modified file carries a comment describing the SOS changes. To compare with
 
 ```sh
 git clone https://github.com/tjko/pico-sshd.git /tmp/pico-sshd
-git -C /tmp/pico-sshd diff 697e33c65a3a36231e91b0d2d121611110978454 HEAD   # upstream changes since the copy
+git -C /tmp/pico-sshd diff 9c025dc HEAD   # upstream changes since the last check (see below)
 diff -u /tmp/pico-sshd/src/server.c src/ssh/pico-sshd/server.c                       # SOS changes
 ```
 
-### Fixes to offer upstream
+The copy was taken at upstream 697e33c. The only upstream commit since then is 9c025dc
+(2026-11-25), which is SOS's own fixes (below) merged upstream; the copy already has all of them,
+so it's in step with upstream as of that commit.
+
+### Fixes offered upstream
 
 Generic bugs found while integrating pico-sshd that apply to upstream as well.
 
 Reported 2026-11-23: items 1, 2, 3, 5, 8 and 9 as fixes in
-[tjko/pico-sshd#2](https://github.com/tjko/pico-sshd/pull/2) (tested on a Pico 2 W); items 4,
-6, 7 and 10, the ML-KEM stack finding and the multi-session work as notes in
-[tjko/pico-sshd#3](https://github.com/tjko/pico-sshd/issues/3). Also noted there: with an rx
+[tjko/pico-sshd#2](https://github.com/tjko/pico-sshd/pull/2) (tested on a Pico 2 W), together
+with two lwIP error-handling fixes added during its review (return `ERR_ABRT` from callbacks
+that abort their connection; don't close the pcb again in `ssh_server_err()`). **Merged
+upstream on 2026-11-25** as 9c025dc. Items 4, 6, 7 and 10, the ML-KEM stack finding and the
+multi-session work are notes only, in
+[tjko/pico-sshd#3](https://github.com/tjko/pico-sshd/issues/3) (no reply yet); item 11 hasn't
+been reported. Also noted there: with an rx
 buffer smaller than the SSH window (4096), `ssh_process_input()` can leave channel data unread
 and stall the session (SOS's copy has the same code path; it uses 4096, which avoids it).
 
