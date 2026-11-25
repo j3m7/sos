@@ -155,7 +155,8 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 `edit <file>` opens a file of up to 32 KB in a full-screen editor, on the console or over SSH.
 It needs a VT100/xterm-compatible terminal and uses its alternate screen, so the shell's output
 is back as it was afterwards. The screen size is asked from the terminal when the editor starts
-and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 80×24.
+and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 80×24. It uses
+at most 160 columns and 60 rows of a bigger window.
 
 | Key | What it does |
 |---|---|
@@ -173,7 +174,8 @@ and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 
 - **Files with CRLF line ends** keep them. Control characters, invalid UTF-8 and invisible or
   bidi characters show as `?` (they're kept as they are). Wide characters (CJK, most emoji) take
   two columns and accents written as combining marks none, as on the terminal; the cursor moves
-  over a letter and its accents as one. A terminal built on an older Unicode than the editor's
+  over a letter and its accents (up to two) as one. A further accent, or one with no letter before
+  it, shows as `?`. A terminal built on an older Unicode than the editor's
   (16.0) can disagree about recent emoji. Long lines scroll sideways instead of wrapping.
 - **Ctrl-C** doesn't stop the editor; Ctrl-Q does. If the SSH session drops, unsaved changes
   are lost.

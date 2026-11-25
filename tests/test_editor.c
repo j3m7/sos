@@ -645,18 +645,79 @@ TEST(combining_marks_go_with_their_letter) {
     editor_free(&ed);
 }
 
-TEST(combining_mark_at_line_start_stands_alone) {
-    open_text("x\n" ACUTE "ab", 5, 30);
-    key(KEY_DOWN);                          // column 0: the mark takes none, so after it
-    CHECK_EQ(ed.cursor, 2 + 2);
-    key(KEY_HOME);
+TEST(combining_mark_with_nothing_to_join_shows_as_question_mark) {
+    open_text("x\n" ACUTE "ab\n\t" ACUTE "\n\x01" ACUTE, 6, 30);
+    draw();
+    CHECK_LINE(1, "?ab");                   // at the start of a line
+    CHECK_LINE(2, "        ?");             // after a tab
+    CHECK_LINE(3, "??");                    // after a character shown as '?'
+    key(KEY_DOWN);                          // onto the lone mark, a column of its own
     CHECK_EQ(ed.cursor, 2);
-    key(KEY_RIGHT);                         // over the lone mark only
+    key(KEY_RIGHT);
     CHECK_EQ(ed.cursor, 2 + 2);
     key(KEY_LEFT);
-    CHECK_EQ(ed.cursor, 2);                 // not back into the line above
+    CHECK_EQ(ed.cursor, 2);
+    key(KEY_LEFT);                          // back over the newline into the line above
+    CHECK_EQ(ed.cursor, 1);
+    editor_free(&ed);
+}
+
+TEST(marks_beyond_the_limit_show_as_question_marks) {
+    open_text("e" ACUTE ACUTE ACUTE "z", 5, 30);
     draw();
-    CHECK_LINE(1, "ab");                    // nothing to join, so not sent
+    CHECK_LINE(0, "e" ACUTE ACUTE "?z");    // two go with the e, the third stands alone
+    key(KEY_RIGHT);
+    CHECK_EQ(ed.cursor, 5);
+    key(KEY_RIGHT);
+    CHECK_EQ(ed.cursor, 7);
+    draw();
+    CHECK_EQ(t_col, 2);
+    editor_free(&ed);
+}
+
+TEST(a_long_run_of_marks_stays_in_bounds) {
+    // Reported in review: 2000 marks on one letter overflowed the row buffer.
+    static char text[1 + 2000 * 2 + 1];
+    text[0] = 'a';
+    for (int i = 0; i < 2000; i++)
+        memcpy(text + 1 + 2 * i, ACUTE, 2);
+    text[sizeof(text) - 1] = '\0';
+    open_text(text, 24, 80);
+    draw();                                 // (ASan checks the row buffer)
+    const char *row = t_line(0);
+    CHECK(!strncmp(row, "a" ACUTE ACUTE "???", 8));
+    CHECK_EQ(strlen(row), 1 + 4 + 79);      // one column per unit, cut at 80
+    key(KEY_END);
+    draw();
+    CHECK_EQ(t_col, 79);
+    editor_free(&ed);
+}
+
+TEST(worst_case_rows_fit_one_write) {
+    // Four-byte characters with two four-byte marks each (U+1D400 MATHEMATICAL BOLD CAPITAL A,
+    // U+1D167 combining tremolo), a full screen of them at the widest size.
+    static char text[EDITOR_ROWS_MAX * ((EDITOR_COLS_MAX + 5) * 12 + 1) + 1];
+    size_t n = 0;
+    for (int r = 0; r < EDITOR_ROWS_MAX; r++) {
+        for (int c = 0; c < EDITOR_COLS_MAX + 5; c++) {
+            memcpy(text + n, "\xf0\x9d\x90\x80\xf0\x9d\x85\xa7\xf0\x9d\x85\xa7", 12);
+            n += 12;
+        }
+        text[n++] = '\n';
+    }
+    text[n] = '\0';
+    if (n > EDITOR_MAX_TEXT)
+        n = EDITOR_MAX_TEXT;                // the editor's limit: as much as it takes
+    CHECK(editor_init(&ed, "worst", text, n));
+    editor_resize(&ed, EDITOR_ROWS_MAX, EDITOR_COLS_MAX);
+    static char out[2048];                  // what edit.c sends at most
+    int calls = 0;
+    while (!editor_drawn(&ed) && calls < 1000) {
+        size_t got = editor_draw(&ed, out, sizeof(out));
+        CHECK(got > 0);                     // every row fits
+        calls++;
+    }
+    CHECK(editor_drawn(&ed));
     editor_free(&ed);
 }
 
@@ -730,7 +791,10 @@ TEST_MAIN(
     RUN(wide_character_cut_by_the_left_edge);
     RUN(scrolling_back_left_shows_the_line_start);
     RUN(combining_marks_go_with_their_letter);
-    RUN(combining_mark_at_line_start_stands_alone);
+    RUN(combining_mark_with_nothing_to_join_shows_as_question_mark);
+    RUN(marks_beyond_the_limit_show_as_question_marks);
+    RUN(a_long_run_of_marks_stays_in_bounds);
+    RUN(worst_case_rows_fit_one_write);
     RUN(wide_characters_in_the_status_and_search);
     RUN(random_keys_keep_invariants);
 )

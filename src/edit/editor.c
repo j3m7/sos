@@ -7,7 +7,8 @@
 // Text is bytes in a gap buffer. A character takes the columns charwidth() says: two for wide
 // CJK characters and most emoji, none for combining marks (an accent added to the letter before
 // it), one otherwise; a tab goes up to the next multiple of EDITOR_TAB. The cursor moves by
-// character, and a character with the combining marks after it moves and deletes as one.
+// character, and a character with the combining marks after it (up to EDITOR_MAX_MARKS) moves
+// and deletes as one; a mark beyond that, or with no character to go on, shows as '?'.
 // Anything a terminal could act on, or that would hide what the bytes are (controls, invalid
 // UTF-8, bidi and invisible characters: termtext_hidden()), shows as '?' and takes one column.
 // Width is a guess at what the terminal does: one built on an older Unicode can disagree about
@@ -137,26 +138,9 @@ static size_t decode_bytes(const unsigned char *s, size_t avail, uint32_t *cp) {
     return need + 1;
 }
 
-static size_t decode(const editor_t *ed, size_t pos, uint32_t *cp) {
-    unsigned char s[4];
-    size_t avail = editor_len(ed) - pos;
-    if (avail > 4)
-        avail = 4;
-    for (size_t i = 0; i < avail; i++)
-        s[i] = at(ed, pos + i);
-    return decode_bytes(s, avail, cp);
-}
-
 // Shown as itself (else as '?').
 static bool shows(uint32_t cp) {
     return (cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp != BAD_CP && !termtext_hidden(cp));
-}
-
-// Columns a character takes at column `col`.
-static size_t width(uint32_t cp, size_t col) {
-    if (cp == '\t')
-        return EDITOR_TAB - col % EDITOR_TAB;
-    return shows(cp) ? (size_t)charwidth(cp) : 1;
 }
 
 // A combining mark or joiner: it belongs to the character before it.
@@ -164,45 +148,77 @@ static bool joins(uint32_t cp) {
     return shows(cp) && charwidth(cp) == 0;
 }
 
-// The previous character's start (one code point, or one byte of invalid UTF-8).
-static size_t prev_cp(const editor_t *ed, size_t pos) {
+// What the screen shows for one character: its bytes, the combining marks attached to it (at most
+// EDITOR_MAX_MARKS), how many columns it takes, and whether its bytes go out as they are
+// (`glyph`); if not, it shows as '?' in one column, or as spaces for a tab. Everything that lays
+// out a line goes through unit_bytes(), so a line's columns, the cursor and what's drawn agree.
+// A mark that can't be attached (at the start of a line, after a tab or a '?', or beyond the
+// limit) is a unit of its own and shows as '?', so no bytes of the file are hidden.
+typedef struct {
+    size_t len;         // bytes, marks included
+    size_t width;       // columns
+    bool glyph;         // send the bytes (else '?', or spaces for a tab)
+    bool tab;
+} unit_t;
+
+#define UNIT_BYTES_MAX (4 * (1 + EDITOR_MAX_MARKS))
+
+static unit_t unit_bytes(const unsigned char *s, size_t avail, size_t col) {
+    unit_t u = { 0 };
+    uint32_t cp;
+    u.len = decode_bytes(s, avail, &cp);
+    if (cp == '\t') {
+        u.tab = true;
+        u.width = EDITOR_TAB - col % EDITOR_TAB;
+        return u;
+    }
+    int w = shows(cp) ? charwidth(cp) : 0;
+    u.glyph = w > 0;
+    u.width = w > 0 ? (size_t)w : 1;
+    for (int m = 0; u.glyph && m < EDITOR_MAX_MARKS && u.len < avail; m++) {
+        size_t l = decode_bytes(s + u.len, avail - u.len, &cp);
+        if (!joins(cp))
+            break;
+        u.len += l;
+    }
+    return u;
+}
+
+// The unit starting at pos (not a '\n'), at column col.
+static unit_t unit_at(const editor_t *ed, size_t pos, size_t col) {
+    unsigned char s[UNIT_BYTES_MAX];
+    size_t avail = editor_len(ed) - pos;
+    if (avail > sizeof(s))
+        avail = sizeof(s);
+    for (size_t i = 0; i < avail; i++)
+        s[i] = at(ed, pos + i);
+    return unit_bytes(s, avail, col);
+}
+
+// Past the unit at pos (a character and its marks), or past the '\n' there.
+static size_t next_pos(const editor_t *ed, size_t pos) {
+    if (pos >= editor_len(ed))
+        return pos;
+    if (at(ed, pos) == '\n')
+        return pos + 1;
+    return pos + unit_at(ed, pos, 0).len;   // a unit's length doesn't depend on its column
+}
+
+static size_t line_start(const editor_t *ed, size_t pos);
+
+// The start of the unit before pos: the '\n' before a line, or found by walking the line from
+// its start (a mark's unit depends on what's before it).
+static size_t prev_pos(const editor_t *ed, size_t pos) {
     if (pos == 0)
         return 0;
-    size_t p = pos - 1;
-    for (int back = 0; back < 3 && p > 0 && (at(ed, p) & 0xc0) == 0x80; back++)
-        p--;
-    uint32_t cp;
-    return decode(ed, p, &cp) == pos - p ? p : pos - 1;
-}
-
-// Past the character at pos and the combining marks that follow it.
-static size_t next_pos(const editor_t *ed, size_t pos) {
-    size_t len = editor_len(ed);
-    if (pos >= len)
-        return pos;
-    uint32_t cp;
-    pos += decode(ed, pos, &cp);
-    while (pos < len) {
-        size_t l = decode(ed, pos, &cp);
-        if (!joins(cp))
-            break;
-        pos += l;
+    if (at(ed, pos - 1) == '\n')
+        return pos - 1;
+    size_t p = line_start(ed, pos), last = p;
+    while (p < pos) {
+        last = p;
+        p = next_pos(ed, p);
     }
-    return pos;
-}
-
-// Back to the start of the character before pos, with its combining marks; not past the start
-// of the line (a mark at the start of a line stands alone).
-static size_t prev_pos(const editor_t *ed, size_t pos) {
-    size_t p = prev_cp(ed, pos);
-    uint32_t cp;
-    while (p > 0 && at(ed, p - 1) != '\n') {
-        decode(ed, p, &cp);
-        if (!joins(cp))
-            break;
-        p = prev_cp(ed, p);
-    }
-    return p;
+    return last;
 }
 
 static size_t line_start(const editor_t *ed, size_t pos) {
@@ -221,10 +237,9 @@ static size_t line_end(const editor_t *ed, size_t pos) {
 static size_t col_of(const editor_t *ed, size_t pos) {
     size_t col = 0;
     for (size_t p = line_start(ed, pos); p < pos;) {
-        uint32_t cp;
-        size_t l = decode(ed, p, &cp);
-        col += width(cp, col);
-        p += l;
+        unit_t u = unit_at(ed, p, col);
+        col += u.width;
+        p += u.len;
     }
     return col;
 }
@@ -233,13 +248,11 @@ static size_t col_of(const editor_t *ed, size_t pos) {
 static size_t pos_at_col(const editor_t *ed, size_t start, size_t want) {
     size_t len = editor_len(ed), col = 0, p = start;
     while (p < len && at(ed, p) != '\n') {
-        uint32_t cp;
-        size_t l = decode(ed, p, &cp);
-        size_t w = width(cp, col);
-        if (col + w > want)
+        unit_t u = unit_at(ed, p, col);
+        if (col + u.width > want)
             break;
-        col += w;
-        p += l;
+        col += u.width;
+        p += u.len;
     }
     return p;
 }
@@ -526,10 +539,8 @@ static void scroll(editor_t *ed) {
     }
     size_t col = col_of(ed, ed->cursor), w = 1;
     if (ed->cursor < editor_len(ed) && at(ed, ed->cursor) != '\n') {
-        uint32_t cp;
-        decode(ed, ed->cursor, &cp);
-        w = width(cp, col);
-        if (w == 0 || w > (size_t)ed->cols)
+        w = unit_at(ed, ed->cursor, col).width;
+        if (w > (size_t)ed->cols)
             w = 1;
     }
     if (col < ed->col_off)                  // back to the left: the start of the line if it fits
@@ -543,31 +554,26 @@ static size_t put(char *out, size_t n, const char *s, size_t len) {
     return n + len;
 }
 
-// Up to `cols` columns of a C string, filtered like text (a tab shows as '?'). With out NULL, only
-// counts columns.
+// Up to `cols` columns of a C string, laid out like text (a tab shows as '?'). With out NULL,
+// only counts columns.
 static size_t put_text(char *out, size_t n, const char *s, size_t cols, size_t *used) {
     size_t len = strlen(s), col = 0;
-    bool base_shown = false;
     for (size_t p = 0; p < len;) {
-        uint32_t cp;
-        size_t l = decode_bytes((const unsigned char *)s + p, len - p, &cp);
-        size_t w = cp == '\t' ? 1 : width(cp, col);
-        if (col + w > cols || (w == 0 && !base_shown)) {
-            if (w > 0)
-                break;
-            p += l;                         // a mark with nothing before it: dropped
-            continue;
+        unit_t u = unit_bytes((const unsigned char *)s + p, len - p, col);
+        if (u.tab) {
+            u.width = 1;
+            u.glyph = false;
         }
+        if (col + u.width > cols)
+            break;
         if (out) {
-            if (shows(cp))
-                n = put(out, n, s + p, l);
+            if (u.glyph)
+                n = put(out, n, s + p, u.len);
             else
                 out[n++] = '?';
         }
-        if (w > 0)
-            base_shown = shows(cp);
-        col += w;
-        p += l;
+        col += u.width;
+        p += u.len;
     }
     if (used)
         *used = col;
@@ -575,36 +581,26 @@ static size_t put_text(char *out, size_t n, const char *s, size_t cols, size_t *
 }
 
 // One text row: the line starting at `line`, from column col_off. A wide character cut by either
-// edge shows as a space; combining marks go out only after the character they belong to.
+// edge shows as spaces. Each column gets one unit of at most UNIT_BYTES_MAX bytes, so a row is at
+// most cols * UNIT_BYTES_MAX bytes, whatever the line holds (EDITOR_ROW_BYTES).
 static size_t text_row(const editor_t *ed, size_t line, char *out, size_t n) {
     size_t len = editor_len(ed), col = 0, left = ed->col_off, right = left + (size_t)ed->cols;
-    bool base_shown = false;                // the last character with a width went out whole
-    for (size_t p = line; p < len && at(ed, p) != '\n';) {
-        uint32_t cp;
-        size_t l = decode(ed, p, &cp);
-        size_t w = width(cp, col);
-        if (w > 0 && col >= right)
-            break;
-        if (w == 0) {
-            if (base_shown)
-                for (size_t i = 0; i < l; i++)
-                    out[n++] = editor_at(ed, p + i);
-        } else if (col + w > left) {
-            size_t from = col < left ? left : col, to = col + w > right ? right : col + w;
-            base_shown = false;
-            if (cp == '\t' || to - from < w) {     // a tab, or cut by an edge
+    for (size_t p = line; p < len && at(ed, p) != '\n' && col < right;) {
+        unit_t u = unit_at(ed, p, col);
+        if (col + u.width > left) {
+            size_t from = col < left ? left : col, to = col + u.width > right ? right : col + u.width;
+            if (u.tab || to - from < u.width) {     // a tab, or cut by an edge
                 for (size_t i = from; i < to; i++)
                     out[n++] = ' ';
-            } else if (shows(cp)) {
-                for (size_t i = 0; i < l; i++)
+            } else if (u.glyph) {
+                for (size_t i = 0; i < u.len; i++)
                     out[n++] = editor_at(ed, p + i);
-                base_shown = true;
             } else {
                 out[n++] = '?';
             }
         }
-        col += w;
-        p += l;
+        col += u.width;
+        p += u.len;
     }
     return n;
 }
