@@ -408,16 +408,18 @@ unencrypted; `sd` shows which kind is in.
   rewritten from the second.
 - **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
   flash, which can be read out.
-- **Recovery:** an encrypted `sd format` prints the card's data key when it finishes, and only
-  then: no command shows it later, so someone with console access can't read it out afterwards.
-  Store it offline: with it,
-  a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it with the key in a
-  file, and `sdcrypt info` prints the `cryptsetup` line to open the card directly).
+- **Recovery:** an encrypted `sd format` prints the card's id and data key when it finishes,
+  and only then: no command shows it later, so someone with console access can't read it out
+  afterwards. Store it offline: it's the only way to read the card if the device is lost. With
+  it, a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it with the key in
+  a file, and `sdcrypt info` prints the `cryptsetup` line to open the card directly). A card
+  whose key wasn't saved can't have it shown again; formatting it anew shows a new key (and
+  erases the card).
 - **The device key is never replaced on its own.** If its flash record is damaged (or was
   written by newer firmware), encrypted cards stay locked and `sd devkey` says so; `sd devkey
-  forget` clears it, after which only the saved keys read the old cards. Firmware from before
-  encryption erases the whole key sector if it ever has to make a new SSH host key, which would
-  take the device key with it.
+  forget` clears it, after which only the keys shown at format read the old cards. Firmware
+  from before encryption erases the whole key sector if it ever has to make a new SSH host key,
+  which would take the device key with it.
 - **Speed:** the encryption is software AES (the RP2350 has no AES hardware): about 690 KB/s
   write and 650 KB/s read on the card, against 2.0 / 1.7 MB/s unencrypted. Copying on the card
   slows down by about as much; SFTP is limited by SSH's own encryption and barely changes.
