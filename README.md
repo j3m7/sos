@@ -182,9 +182,17 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
 - **It locks itself** when the USB terminal goes away (the cable is unplugged or the terminal
   program closes the port) and after 10 minutes with nothing typed
-  (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off). A command still
-  running then, the editor included, is ended, and unsaved text in the editor is lost. On the
-  UART console there is no connection to watch, so only the idle lock applies.
+  (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off).
+  - **Whatever the console was running is ended** by either lock: a copy (its partial file is
+    removed), `sd test`, a Lua script started there, the chat, the editor. **Unsaved text in
+    the editor is lost**, so save before leaving the console, and mind a loose cable.
+  - **"Goes away" means the terminal program drops the DTR line** (most do when they exit;
+    `picocom` and `screen` do by default) or the cable is unplugged. A program that closes the
+    port without hanging up leaves the console open until the idle lock.
+  - On the UART console there is no connection to watch, so only the idle lock applies.
+  - Tools that open the port for each command (test scripts) are locked out at every close
+    once a password is set: use a board without a console password for those, or log in each
+    time.
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
   of the password, then keyed with a key from the board's root secret. A copy of the flash
   isn't enough to try passwords against.
