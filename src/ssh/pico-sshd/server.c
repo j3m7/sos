@@ -24,9 +24,10 @@
    697e33c65a3a36231e91b0d2d121611110978454 (see THIRD_PARTY.md).
 
    Modified for SOS (Copyright (C) 2026 Julio Martinez, GPL-3.0-or-later):
-   - Password authentication removed (sha512_crypt dependency dropped); the default
-     authentication callback and the advertised methods are public key only.
-   - Default public key check compares key lengths before contents.
+   - Password authentication removed (sha512_crypt dependency dropped); the advertised
+     methods are public key only.
+   - The default authentication callback (a table of user name and key pairs) is removed:
+     the application sets auth_cb, and without one every login fails.
    - Multiple concurrent sessions: per-connection state lives in ssh_session_t; lwIP and
      wolfSSH callbacks get the session as context. The stdio driver is removed in favour of
      ssh_session_read()/ssh_session_write().
@@ -187,43 +188,6 @@ static void ssh_server_log_msg(int priority, const char *format, ...)
 }
 
 
-static int ssh_server_default_auth_cb(void *ctx, const byte *login, word32 login_len,
-				const byte *auth, word32 auth_len, int auth_type)
-{
-	ssh_user_auth_entry_t *users = (ssh_user_auth_entry_t*)ctx;
-	int i = 0;
-	int res = WOLFSSH_USERAUTH_INVALID_USER;
-
-	(void)login_len;
-
-	if (!ctx || !login || !auth)
-		return WOLFSSH_USERAUTH_FAILURE;
-
-	/* Go through list of authentication entries */
-	while (users[i].username) {
-		ssh_user_auth_entry_t *u = &users[i++];
-
-		if (!u->auth || auth_type != u->type)
-			continue;
-		if (strlen(u->username) < 1)
-			continue;
-		if (strcasecmp((const char*)login, u->username))
-			continue;
-
-		if (auth_type == WOLFSSH_USERAUTH_PUBLICKEY) {
-			if (auth_len == u->auth_len && !memcmp(auth, u->auth, auth_len)) {
-				/* public key matches */
-				res = WOLFSSH_USERAUTH_SUCCESS;
-				break;
-			} else {
-				/* public key does not match */
-				res = WOLFSSH_USERAUTH_INVALID_PUBLICKEY;
-			}
-		}
-	}
-
-	return res;
-}
 
 
 ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t txbuf_size)
@@ -242,7 +206,7 @@ ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t tx
 	st->max_sessions = max_sessions;
 	st->log_cb = ssh_server_log_msg;
 	st->auth_enabled = true;
-	st->auth_cb = ssh_server_default_auth_cb;
+	st->auth_cb = NULL;        /* set by the application; without one every login fails */
 	st->port = SSH_DEFAULT_PORT;
 	st->banner = ssh_default_banner;
 	st->allow_connect_cb = NULL;

@@ -12,7 +12,7 @@
 // Start the SSH server on port 22 with the given host key (DER), accepting up to
 // SOS_SSH_MAX_SESSIONS concurrent sessions. Each session gets its own shell instance; sessions
 // are not part of the global stdio console. Server messages go to the system log. Only
-// public-key login for the configured user with a trusted key (settings) is accepted.
+// public-key login with a trusted key (settings) is accepted, under any user name.
 // Does nothing if already running.
 bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len);
 

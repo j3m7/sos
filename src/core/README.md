@@ -36,7 +36,7 @@ figures on core 0 can't race a Lua script allocating on core 1.
 Two layers:
 
 - **`config.c`, the record format (pure C, host tested).** `sos_config_t` holds the Wi-Fi
-  network, hostname, SSH user, up to 8 trusted keys, the NTS settings and the approved
+  network, hostname, up to 8 trusted keys, the NTS settings and the approved
   root-certificate hash. It also has the checks and parsers for each field, such as
   `config_key_parse()` for an `authorized_keys` line.
   - **A/B slots:** a record goes into one of two flash slots, with a sequence number and a CRC.

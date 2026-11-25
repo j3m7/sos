@@ -98,7 +98,6 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
         shell_printf(sh, "key del <n>       stop trusting key n\n");
         shell_printf(sh, "hostname <name>   set the hostname\n");
-        shell_printf(sh, "user <name>       set the SSH user name\n");
         shell_printf(sh, "time auto <h>|off sync the clock from NTS every h hours (default off)\n");
         shell_printf(sh, "time server <name>|default  set the NTS server\n");
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
@@ -489,7 +488,6 @@ static void cmd_config(shell_t *sh, char *args) {
     }
     const sos_config_t *c = settings();
     shell_printf(sh, "hostname:      %s\n", c->hostname);
-    shell_printf(sh, "ssh user:      %s\n", c->ssh_user);
     wifi_show(sh);
     shell_printf(sh, "keys:          %u trusted ('key list')\n", c->key_count);
     shell_printf(sh, "nts:           %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
@@ -510,7 +508,6 @@ static void cmd_config(shell_t *sh, char *args) {
 static struct {
     char ssid[CONFIG_SSID_MAX + 1];
     char password[CONFIG_PASSWORD_MAX + 1];
-    char user[CONFIG_USER_MAX + 1];
     bool wifi_changed;
 } setup_state;
 
@@ -521,7 +518,6 @@ static void setup_finish(shell_t *sh) {
         strcpy(c->wifi_ssid, setup_state.ssid);
         strcpy(c->wifi_password, setup_state.password);
     }
-    strcpy(c->ssh_user, setup_state.user);
     memset(&setup_state, 0, sizeof(setup_state));
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: setup completed");
@@ -546,31 +542,11 @@ static void on_setup_key(shell_t *sh, char *answer, void *arg) {
     setup_finish(sh);
 }
 
-static void on_setup_user(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
-    if (!answer) {
-        shell_printf(sh, "setup cancelled; nothing changed\n");
-        return;
-    }
-    if (*answer) {
-        const char *err = config_check_user(answer);
-        if (err) {
-            shell_printf(sh, "%s\n", err);
-            shell_ask(sh, "SSH user name: ", false, on_setup_user, NULL);
-            return;
-        }
-        strcpy(setup_state.user, answer);
-    }
+static void ask_setup_key(shell_t *sh) {
     shell_printf(sh, "\nTrusted keys: %u. Paste a public key to trust (one line from\n"
                      "~/.ssh/id_ed25519.pub on your computer), or press Enter to skip.\n",
                  settings()->key_count);
     shell_ask(sh, "Public key: ", false, on_setup_key, NULL);
-}
-
-static void ask_setup_user(shell_t *sh) {
-    static char prompt[CONFIG_USER_MAX + 32];
-    snprintf(prompt, sizeof(prompt), "SSH user name [%s]: ", setup_state.user);
-    shell_ask(sh, prompt, false, on_setup_user, NULL);
 }
 
 static void on_setup_password(shell_t *sh, char *answer, void *arg) {
@@ -588,7 +564,7 @@ static void on_setup_password(shell_t *sh, char *answer, void *arg) {
     strcpy(setup_state.password, answer);
     memset(answer, 0, strlen(answer));
     setup_state.wifi_changed = true;
-    ask_setup_user(sh);
+    ask_setup_key(sh);
 }
 
 static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
@@ -598,7 +574,7 @@ static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
         return;
     }
     if (!*answer && settings()->wifi_ssid[0]) {      // keep the current network
-        ask_setup_user(sh);
+        ask_setup_key(sh);
         return;
     }
     const char *err = config_check_ssid(answer);
@@ -616,7 +592,6 @@ static void cmd_setup(shell_t *sh) {
     if (!require_admin(sh))
         return;
     memset(&setup_state, 0, sizeof(setup_state));
-    strcpy(setup_state.user, settings()->ssh_user);
     shell_printf(sh, "SOS setup. Press Enter to keep the value in brackets, Ctrl-C to cancel.\n");
     if (settings()->wifi_ssid[0])
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID) [%s]: ", settings()->wifi_ssid);
@@ -857,9 +832,6 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "hostname"))
         set_field(sh, "hostname", args, settings()->hostname, sizeof(settings()->hostname),
                   config_check_hostname);
-    else if (!strcmp(cmd, "user"))
-        set_field(sh, "ssh user", args, settings()->ssh_user, sizeof(settings()->ssh_user),
-                  config_check_user);
     else if (!strcmp(cmd, "sd"))
         sdcard_command(sh, args);
     else if (!strcmp(cmd, "lua"))

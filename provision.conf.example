@@ -12,9 +12,9 @@ wifi_password = my-password
 # Hostname sent with DHCP requests (default: sos).
 hostname = sos
 
-# SSH login: the user name (default: admin) and the public keys to trust, one authorized_keys
-# line each (ssh-ed25519 or ecdsa-sha2-nistp256), up to 8.
-ssh_user = admin
+# SSH login: the public keys to trust, one authorized_keys line each (ssh-ed25519 or
+# ecdsa-sha2-nistp256), up to 8. Any user name logs in with a trusted key. (An ssh_user line,
+# from older files, is still accepted; only firmware from before this change uses it.)
 ssh_key = ssh-ed25519 AAAA... user@host
 
 # Optional:

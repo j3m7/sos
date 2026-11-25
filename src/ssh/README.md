@@ -32,7 +32,7 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 ## `sshd.c`: SOS's side
 
 - **`sshd_start()`** creates the server once Wi-Fi is up and at least one key is trusted. Login
-  needs the configured user and one of the trusted keys from the settings.
+  needs one of the trusted keys from the settings; any user name is accepted.
 - **`sshd_poll()`** calls `ssh_server_service()` and serves each session. A new login gets a
   fresh `shell_t` whose `shell_io_t` reads and writes the session channel (`admin` is false).
   The shell is registered with `chat/` under the comment of the trusted key the login was

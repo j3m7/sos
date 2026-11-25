@@ -62,11 +62,10 @@ Changes are saved in flash immediately and survive reflashing (see
 
 | Command | Where | What it does |
 |---|---|---|
-| `config` | any | Show the configuration: hostname, SSH user, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
-| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`, user `admin`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
-| `setup` | console only | Guided setup: Wi-Fi network and password, SSH user, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
+| `config` | any | Show the configuration: hostname, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
+| `config reset` | console only | Erase the saved configuration, after you type `yes`. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
+| `setup` | console only | Guided setup: Wi-Fi network and password, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |
-| `user [<name>]` | console only to change | Show or set the SSH user name |
 | `key` / `key list` | any | List the trusted SSH public keys, numbered, with their fingerprints |
 | `key add [<line>]` | console only | Trust a public key: one `authorized_keys` line (ssh-ed25519 or ecdsa-sha2-nistp256; up to 8 keys). Without a line it asks for one |
 | `key del <n>` | console only | Stop trusting key *n* (as numbered by `key list`) |
