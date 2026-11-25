@@ -17,8 +17,12 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
   - It writes the time on a second boundary, so the RTC keeps the sub-second phase.
   - The chip's OS flag means "the time was lost", so the RTC is read as invalid until the next
     sync.
+  - `rtc_read_offset()` and `rtc_write_offset()` handle the offset register (0Eh), which trims
+    the RTC's rate: -64..63 steps of 4.34 ppm, a positive value slowing it. The chip's
+    correction mode stays at its default, every two hours.
 - **`timeconv.c`** (pure C, host tested) converts between Unix time and the calendar, and
-  between the calendar and the RTC's BCD registers.
+  between the calendar and the RTC's BCD registers. It also parses a rate in ppm and turns it
+  into offset-register steps, for `time cal` and the provisioning tool.
 
 ## `timesync.c`: the clock
 
@@ -37,6 +41,10 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
     after boot if there was none. A boot with a valid RTC time doesn't sync.
 - **Applying a sync** sets the clock and then the RTC. A step over 5 minutes is logged as a
   warning.
+- **RTC calibration:** the setting `rtc_offset` holds the offset register's value (`time cal`
+  takes ppm and stores the nearest step). `timesync_apply_cal()` writes it into the RTC after
+  the settings load at boot, and when it changes, if the chip doesn't already hold it. The
+  setting, not the chip, is the reference: the register is lost with the coin cell.
 - **SNTP:** NTS is the only automatic source, with no fallback to plain NTP. `time sync sntp`
   (console only) does one unauthenticated SNTP sync (lwIP's SNTP app), and `time` then shows the time as
   unauthenticated.

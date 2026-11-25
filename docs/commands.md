@@ -62,7 +62,7 @@ Changes are saved in flash immediately and survive reflashing (see
 
 | Command | Where | What it does |
 |---|---|---|
-| `config` | any | Show the configuration: hostname, SSH user, Wi-Fi, number of trusted keys, NTS server and periodic sync |
+| `config` | any | Show the configuration: hostname, SSH user, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
 | `config reset` | console only | Erase the saved configuration, after you type `yes`. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`, user `admin`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
 | `setup` | console only | Guided setup: Wi-Fi network and password, SSH user, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |
@@ -97,6 +97,7 @@ See [Timekeeping](../README.md#timekeeping) and
 | `time sync` | any | Sync the clock and the RTC from NTS now |
 | `time sync sntp` | console only | One unauthenticated SNTP sync. `time` then shows the time as unauthenticated |
 | `time auto [<hours>\|off]` | console only to change | Show, or set, the periodic NTS sync: every 1 to 720 hours after the last sync (or after boot, if the RTC had the time), or off (default) |
+| `time cal [<ppm>\|off]` | console only to change | Show, or set, the RTC calibration. Give how fast the RTC runs in ppm (negative: slow), from -277 to 273; the RTC is slowed or sped up by the nearest step of 4.34 ppm. The value replaces the previous one, so add a newly measured error to the rate `time` shows. See [Timekeeping](../README.md#timekeeping) for how to measure |
 | `time server [<name>\|default]` | console only to change | Show, or set, the NTS server (host name or IPv4 address). `default` goes back to the build-time server. Used from the next sync |
 | `nts` | any | NTS state: the last key exchange (cookies held, NTP server) and the last query |
 | `nts ke` | any | Run a key exchange with the build-time default server, not the one set with `time server` (development; doesn't set the clock) |

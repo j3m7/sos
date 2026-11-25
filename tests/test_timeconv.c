@@ -149,6 +149,40 @@ TEST(format) {
     CHECK(!strcmp(buf, "1970-01-01 00:00:00"));
 }
 
+TEST(parse_ppm) {
+    int32_t v = 1;
+    CHECK(timeconv_parse_ppm("92", &v));        CHECK_EQ(v, 92000);
+    CHECK(timeconv_parse_ppm("+92", &v));       CHECK_EQ(v, 92000);
+    CHECK(timeconv_parse_ppm("-12.5", &v));     CHECK_EQ(v, -12500);
+    CHECK(timeconv_parse_ppm("0", &v));         CHECK_EQ(v, 0);
+    CHECK(timeconv_parse_ppm("0.004", &v));     CHECK_EQ(v, 4);
+    CHECK(timeconv_parse_ppm("9999.999", &v));  CHECK_EQ(v, 9999999);
+    v = 7;
+    const char *bad[] = {"", "+", "-", ".5", "5.", "1.2345", "12345", "9 2", "92ppm", "1e2",
+                         "--1", "0x10"};
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(!timeconv_parse_ppm(bad[i], &v));
+    CHECK_EQ(v, 7);                             // untouched on failure
+}
+
+TEST(cal_steps) {
+    int n = 99;
+    CHECK(timeconv_cal_steps(0, &n));           CHECK_EQ(n, 0);
+    CHECK(timeconv_cal_steps(92000, &n));       CHECK_EQ(n, 21);     // 21 * 4.34 = 91.14
+    CHECK(timeconv_cal_steps(-92000, &n));      CHECK_EQ(n, -21);
+    CHECK(timeconv_cal_steps(2169, &n));        CHECK_EQ(n, 0);      // under half a step
+    CHECK(timeconv_cal_steps(2170, &n));        CHECK_EQ(n, 1);      // half a step rounds away
+    CHECK(timeconv_cal_steps(-2170, &n));       CHECK_EQ(n, -1);
+    // The register's range: -64..63 steps.
+    CHECK(timeconv_cal_steps(63 * 4340, &n));   CHECK_EQ(n, 63);
+    CHECK(timeconv_cal_steps(-64 * 4340, &n));  CHECK_EQ(n, -64);
+    n = 5;
+    CHECK(!timeconv_cal_steps(63 * 4340 + 1, &n));      // not rounded down into range
+    CHECK(!timeconv_cal_steps(-64 * 4340 - 1, &n));
+    CHECK(!timeconv_cal_steps(9999999, &n));
+    CHECK_EQ(n, 5);
+}
+
 TEST_MAIN(
     RUN(known_dates);
     RUN(invalid_calendar);
@@ -157,4 +191,6 @@ TEST_MAIN(
     RUN(rtc_invalid_registers);
     RUN(rtc_round_trip);
     RUN(format);
+    RUN(parse_ppm);
+    RUN(cal_steps);
 )

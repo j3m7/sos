@@ -16,7 +16,7 @@ _Static_assert(CONFIG_V1_LENGTH == 1540, "fields before ntp_sync_hours must not 
 _Static_assert(CONFIG_V2_LENGTH == 1606, "fields before certs_hash must not move");
 #define CONFIG_V3_LENGTH offsetof(sos_config_t, wifi_powersave)    // + certs_hash
 _Static_assert(CONFIG_V3_LENGTH == 1638, "fields before wifi_powersave must not move");
-#define CONFIG_V4_LENGTH offsetof(sos_config_t, wifi_country)      // + wifi_powersave, padding
+#define CONFIG_V4_LENGTH offsetof(sos_config_t, wifi_country)      // + wifi_powersave, rtc_offset
 _Static_assert(CONFIG_V4_LENGTH == 1640, "fields before wifi_country must not move");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
@@ -145,6 +145,10 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     if (newest_slot(store, &r) < 0)
         return false;
     memcpy(cfg, &r->cfg, r->hdr.length);       // fields a shorter record lacks stay 0
+    // This byte was padding before it became rtc_offset. A value out of range can only be left
+    // over from that, so it means "none" instead of making the whole record invalid.
+    if (cfg->rtc_offset < CONFIG_RTC_OFFSET_MIN || cfg->rtc_offset > CONFIG_RTC_OFFSET_MAX)
+        cfg->rtc_offset = 0;
     if (seq)
         *seq = r->hdr.seq;
     return true;

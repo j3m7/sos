@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "time/timeconv.h"
+
 // --- parsing -------------------------------------------------------------------------------------
 
 static char *trim(char *s) {
@@ -52,6 +54,14 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         if (strcmp(value, "on") && strcmp(value, "off"))
             return "must be on or off";
         cfg->wifi_powersave = !strcmp(value, "on");
+        return NULL;
+    }
+    if (!strcmp(name, "rtc_cal_ppm")) {
+        int32_t mppm;
+        int steps;
+        if (!timeconv_parse_ppm(value, &mppm) || !timeconv_cal_steps(mppm, &steps))
+            return "must be how fast the RTC runs in ppm, from -277 to 273";
+        cfg->rtc_offset = (int8_t)steps;
         return NULL;
     }
     if (!strcmp(name, "nts_sync_hours")) {

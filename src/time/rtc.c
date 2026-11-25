@@ -21,12 +21,14 @@
 #define REG_CONTROL_1   0x00
 #define REG_CONTROL_3   0x02
 #define REG_SECONDS     0x03        // 03h..09h: time and date, read/written as one block
+#define REG_OFFSET      0x0e        // MODE (bit 7) and a 7-bit two's complement offset
 
 #define CTL1_STOP       0x20        // time circuits frozen
 #define CTL1_12_24      0x08        // 12-hour mode
 #define CTL3_PM_MASK    0xe0        // PM[2:0]; 000 = switch-over (standard) + battery low detection
 #define CTL3_BLF        0x04        // battery low flag
 #define SECONDS_OS      0x80        // oscillator stopped: clock integrity not guaranteed
+#define OFFSET_MODE     0x80        // 1 = a correction every minute; 0 = every two hours
 
 static bool present;
 
@@ -132,6 +134,22 @@ bool rtc_write(int64_t t) {
 bool rtc_battery_low(void) {
     uint8_t c3;
     return present && reg_read(REG_CONTROL_3, &c3, 1) && (c3 & CTL3_BLF);
+}
+
+bool rtc_read_offset(int *steps) {
+    uint8_t v;
+    if (!present || !reg_read(REG_OFFSET, &v, 1) || (v & OFFSET_MODE))
+        return false;
+    *steps = (v & 0x40) ? (int)v - 128 : (int)v;       // sign-extend 7 bits
+    return true;
+}
+
+bool rtc_write_offset(int steps) {
+    if (!present || steps < TIMECONV_CAL_STEPS_MIN || steps > TIMECONV_CAL_STEPS_MAX)
+        return false;
+    uint8_t v = (uint8_t)steps & 0x7f;                  // MODE = 0
+    int back;
+    return reg_write(REG_OFFSET, &v, 1) && rtc_read_offset(&back) && back == steps;
 }
 
 const char *rtc_status_str(rtc_status_t st) {

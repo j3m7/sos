@@ -102,6 +102,42 @@ bool timeconv_to_rtc(int64_t t, uint8_t regs[TIMECONV_RTC_REGS]) {
     return true;
 }
 
+bool timeconv_parse_ppm(const char *s, int32_t *mppm) {
+    bool negative = *s == '-';
+    if (*s == '-' || *s == '+')
+        s++;
+    int32_t whole = 0, frac = 0;
+    int digits = 0;
+    for (; *s >= '0' && *s <= '9'; s++, digits++)
+        whole = whole * 10 + (*s - '0');
+    if (digits < 1 || digits > 4)
+        return false;
+    if (*s == '.') {
+        int scale = 100;
+        s++;
+        for (digits = 0; *s >= '0' && *s <= '9'; s++, digits++, scale /= 10)
+            frac += (*s - '0') * scale;
+        if (digits < 1 || digits > 3)
+            return false;
+    }
+    if (*s)
+        return false;
+    *mppm = (whole * 1000 + frac) * (negative ? -1 : 1);
+    return true;
+}
+
+bool timeconv_cal_steps(int32_t mppm, int *steps) {
+    // Only rates the register can do, so nothing the user gives is silently cut down.
+    if (mppm < TIMECONV_CAL_STEPS_MIN * TIMECONV_CAL_STEP_MPPM ||
+        mppm > TIMECONV_CAL_STEPS_MAX * TIMECONV_CAL_STEP_MPPM)
+        return false;
+    // Rounded to the nearest step, halves away from zero.
+    int32_t half = TIMECONV_CAL_STEP_MPPM / 2;
+    int32_t n = (mppm >= 0 ? mppm + half : mppm - half) / TIMECONV_CAL_STEP_MPPM;
+    *steps = (int)n;
+    return true;
+}
+
 void timeconv_format(int64_t t, char *buf, unsigned buflen) {
     timeconv_cal_t cal;
     timeconv_to_cal(t, &cal);

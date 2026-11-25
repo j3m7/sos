@@ -28,6 +28,8 @@
 #define CONFIG_NTP_SYNC_HOURS_MAX 720       // 30 days
 #define CONFIG_NTP_SERVER_MAX 63
 #define CONFIG_CERTS_HASH_LEN 32    // SHA-256
+#define CONFIG_RTC_OFFSET_MIN (-64)
+#define CONFIG_RTC_OFFSET_MAX 63
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -49,7 +51,10 @@ typedef struct {
     // SHA-256 of the approved /certs/roots.pem (extra TLS roots on the SD card); all zero = none.
     uint8_t certs_hash[CONFIG_CERTS_HASH_LEN];
     uint8_t wifi_powersave;                     // 1 = Wi-Fi power saving on; 0 = off (default)
-    uint8_t reserved_;                          // was padding in records up to this point
+    // RTC calibration: the PCF8523 offset register's value, -64..63 steps of 4.34 ppm; positive
+    // slows the RTC. 0 = none. This byte was padding (zero) in records saved before it had a
+    // use, so those load as "none", and the record's length doesn't change.
+    int8_t rtc_offset;
     // Two capital letters (ISO 3166, e.g. "US"): the radio rules to follow. Empty = the chip's
     // worldwide set, which is allowed everywhere but may perform worse.
     char wifi_country[4];

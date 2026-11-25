@@ -32,6 +32,7 @@
 #include "net/wifi.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
+#include "time/timeconv.h"
 #include "time/timesync.h"
 #include "tls/certstore.h"
 
@@ -59,6 +60,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "version           the commit this firmware was built from\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
+    shell_printf(sh, "time cal [ppm]    RTC calibration: how fast the RTC runs\n");
     shell_printf(sh, "nts [ke]          NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
     shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
@@ -464,6 +466,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "error: erasing the configuration failed\n");
     shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run 'setup'\n");
     wifi_apply_power();
+    timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     wifi_reconnect();
 }
 
@@ -489,6 +492,9 @@ static void cmd_config(shell_t *sh, char *args) {
         shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
     else
         shell_printf(sh, "periodic sync off\n");
+    char cal[40];
+    timesync_cal_str(cal, sizeof(cal));
+    shell_printf(sh, "rtc cal:  %s\n", cal);
     if (!settings_persistent())
         shell_printf(sh, "warning:  flash storage unavailable; changes aren't saved\n");
 }
@@ -650,6 +656,39 @@ static void cmd_time_auto(shell_t *sh, const char *value) {
     show_ntp_sync_hours(sh);
 }
 
+// `time cal [off | <ppm>]`: RTC calibration (a setting, so console only to change). The value is
+// how fast the RTC runs, in ppm (negative: slow); the RTC is then slowed, or sped up, by the
+// nearest amount its offset register can do.
+static void cmd_time_cal(shell_t *sh, const char *value) {
+    char cal[40];
+    while (*value == ' ')
+        value++;
+    if (!*value) {
+        timesync_cal_str(cal, sizeof(cal));
+        shell_printf(sh, "rtc calibration: %s\n", cal);
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    int32_t mppm = 0;
+    int steps = 0;
+    if (strcmp(value, "off") &&
+        (!timeconv_parse_ppm(value, &mppm) || !timeconv_cal_steps(mppm, &steps))) {
+        shell_printf(sh, "not changed: give 'off', or how fast the RTC runs in ppm, from %d to %d "
+                         "(negative: slow)\n",
+                     TIMECONV_CAL_STEPS_MIN * TIMECONV_CAL_STEP_MPPM / 1000,
+                     TIMECONV_CAL_STEPS_MAX * TIMECONV_CAL_STEP_MPPM / 1000);
+        return;
+    }
+    settings()->rtc_offset = (int8_t)steps;
+    save(sh);
+    bool applied = timesync_apply_cal();
+    timesync_cal_str(cal, sizeof(cal));
+    log_msg(SOS_LOG_NOTICE, "config: rtc calibration %s", cal);
+    shell_printf(sh, "rtc calibration: %s%s\n", cal,
+                 applied ? "" : " (saved, but the RTC didn't take it)");
+}
+
 static void show_ntp_server(shell_t *sh) {
     const char *s = settings()->ntp_server;
     if (*s)
@@ -708,8 +747,11 @@ static void cmd_time(shell_t *sh, char *args) {
         cmd_time_auto(sh, args + 4);
     else if (!strncmp(args, "server", 6) && (args[6] == ' ' || !args[6]))
         cmd_time_server(sh, args + 6);
+    else if (!strncmp(args, "cal", 3) && (args[3] == ' ' || !args[3]))
+        cmd_time_cal(sh, args + 3);
     else
-        shell_printf(sh, "usage: time [sync [sntp] | auto [off | <hours>] | server [<name> | default]]\n");
+        shell_printf(sh, "usage: time [sync [sntp] | auto [off | <hours>] | server [<name> | default] | "
+                         "cal [off | <ppm>]]\n");
 }
 
 // `nts` / `nts ke [host]` / `nts query`: NTS key exchange and authenticated time queries

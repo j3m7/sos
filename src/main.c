@@ -122,6 +122,7 @@ int main(void) {
 
     // Configuration and host key first: both may write flash, which is simplest before Wi-Fi.
     settings_init();
+    timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
     uint32_t hostkey_len;
     bool have_hostkey = hostkey_get(&hostkey, &hostkey_len);
