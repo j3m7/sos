@@ -90,4 +90,4 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
   compression, proxies.
 
 `http get|head|post` (any shell, `docs/commands.md`) runs a request as a shell job, for
-testing.
+testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), from any shell.

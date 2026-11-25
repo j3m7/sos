@@ -82,8 +82,9 @@ See [Timekeeping](../README.md#timekeeping) and
 ## HTTPS
 
 For testing the HTTPS client (`src/net/README.md`), from any shell: SSH users are the device's
-trusted owners, and their Lua scripts can make the same requests. The server's certificate must
-chain to a built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
+trusted owners, and their Lua scripts can make the same requests through `sos.http`. The server's
+certificate must chain to a built-in root or one in the approved `/certs/roots.pem`. Redirects
+aren't followed.
 
 | Command | Where | What it does |
 |---|---|---|

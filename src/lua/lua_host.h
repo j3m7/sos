@@ -15,7 +15,8 @@
 void lua_command(shell_t *sh, char *args);
 
 // Answer the running script's requests, log a background script's output, and start
-// /autorun.lua a few seconds after boot. Call from the main loop.
-void lua_host_poll(void);
+// /autorun.lua a few seconds after boot. main_loop: called from the main loop itself, where HTTPS
+// requests are served too; shell jobs pass false.
+void lua_host_poll(bool main_loop);
 
 #endif
