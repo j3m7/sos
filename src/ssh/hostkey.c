@@ -26,6 +26,10 @@
 
 _Static_assert(HOSTREC_PAGE == FLASH_PAGE_SIZE, "the record is one flash page");
 
+// An open board takes over a plain host key from older firmware and seals it. A secured board
+// must not (issue #64 step 4): together with the configuration's refuse_plain (core/settings.c).
+static const bool refuse_plain = false;
+
 static uint8_t key_der[HOSTREC_PAGE];       // the private key in use
 static uint8_t page[HOSTREC_PAGE];          // a record being built
 
@@ -55,7 +59,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     *len = 0;
 
     int kind = hostrec_kind(stored);
-    if (kind == HOSTREC_PLAIN && hostrec_open(stored, NULL, key_der, len)) {
+    if (kind == HOSTREC_PLAIN && hostrec_open(stored, NULL, refuse_plain, key_der, len)) {
         // From firmware before sealing: keep the key (and its fingerprint), store it sealed.
         ok = true;
         if (!seal.have_key)
@@ -71,14 +75,18 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         // sealed. No host key, so no SSH, until that's put right.
         log_msg(SOS_LOG_ERR, "hostkey: no host key: there's no key to %s (see `rootsecret`)",
                 kind == HOSTREC_SEALED ? "open the stored one with" : "seal a new one with");
-    } else if (kind == HOSTREC_SEALED && hostrec_open(stored, &sealer, key_der, len)) {
+    } else if (kind == HOSTREC_SEALED &&
+               hostrec_open(stored, &sealer, refuse_plain, key_der, len)) {
         ok = true;
     } else {
         log_msg(SOS_LOG_NOTICE, kind == HOSTREC_SEALED
                     ? "hostkey: the stored host key doesn't open (sealed under another root "
                       "secret, or damaged); making a NEW host key: SSH clients will see a "
                       "changed fingerprint"
-                    : "hostkey: no valid host key in flash, generating Ed25519 key...");
+                    : kind == HOSTREC_PLAIN
+                          ? "hostkey: the stored host key is unsealed and isn't used; making a "
+                            "new host key"
+                          : "hostkey: no valid host key in flash, generating Ed25519 key...");
         int n = wolfSSH_MakeEd25519Key(key_der, sizeof(key_der), WOLFSSH_ED25519KEY);
         if (n <= 0 || n > HOSTREC_MAX_KEY) {
             log_msg(SOS_LOG_ERR, "hostkey: key generation failed (%d)", n);

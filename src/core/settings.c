@@ -95,8 +95,8 @@ void settings_init(void) {
                                      "unsealed in flash");
         }
         if (!config_scrub_plain(&store))
-            log_msg(SOS_LOG_ERR, "config: an unsealed copy of the configuration is still in "
-                                 "flash (erasing it failed)");
+            log_msg(SOS_LOG_ERR, "config: an unsealed configuration record is still in flash "
+                                 "(erasing it failed)");
         return;
     }
     if (config_sealed_unopened(&store))

@@ -93,19 +93,23 @@ int config_stored(const config_store_t *store);
 // Defaults: hostname "sos", user "admin", no Wi-Fi, no keys.
 void config_defaults(sos_config_t *cfg);
 
-// Load the newest valid record, plain or sealed. Returns false (and leaves *cfg as defaults) if neither slot
+// Load the current record: the valid one with the highest sequence number, except that a
+// plain record a store accepts comes before a sealed one whatever the numbers (it was written
+// after the sealing: by older firmware after a downgrade, or by provisioning). Returns false (and leaves *cfg as defaults) if neither slot
 // holds one. *seq, if not NULL, receives the record's sequence number.
 bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq);
 
 // Save cfg to the slot not holding the newest valid record. Returns false if the write failed
 // or the written record doesn't read back as valid; the previous record is then still in place.
 // With a sealer the record is sealed, and once it's stored a plain record in the other slot is
-// erased (config_scrub_plain), so a configuration that arrived plain doesn't stay readable.
+// erased, so a configuration that arrived plain doesn't stay readable.
 bool config_save(const config_store_t *store, const sos_config_t *cfg);
 
-// Erase any slot that holds a plain record while the other holds the configuration sealed (a
-// save that lost power before it got to that). Nothing to do without a sealer. False if a plain
-// record is still there afterwards.
+// Erase a slot that has a plain record's header but isn't a record this store loads (damaged,
+// or any plain record in a store that refuses them), while the other slot holds the
+// configuration sealed: it may still hold a password. A plain record the store does load is the
+// current configuration and is left for config_save() to seal. Nothing to do without a
+// sealer. False if a slot with a plain record's header is still there afterwards.
 bool config_scrub_plain(const config_store_t *store);
 
 // True if a slot holds a sealed record, intact as stored (its CRC is right), that this store

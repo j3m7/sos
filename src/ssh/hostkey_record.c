@@ -48,13 +48,15 @@ int hostrec_kind(const uint8_t page[HOSTREC_PAGE]) {
     return HOSTREC_NONE;
 }
 
-bool hostrec_open(const uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, uint8_t *der,
-                  uint32_t *len) {
+bool hostrec_open(const uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, bool refuse_plain,
+                  uint8_t *der, uint32_t *len) {
     uint32_t n = get_le32(page + OFF_LEN);
     memset(der, 0, HOSTREC_PAGE);
     *len = 0;
     switch (hostrec_kind(page)) {
     case HOSTREC_PLAIN:
+        if (refuse_plain)
+            return false;
         memcpy(der, page + OFF_PLAIN_KEY, n);
         break;
     case HOSTREC_SEALED:

@@ -170,17 +170,32 @@ static bool seq_newer(uint32_t a, uint32_t b) {
 typedef struct {
     int kind[2];
     record_header_t hdr[2];
-    int newest;                 // the slot holding the newest usable record, or -1
+    int newest;                 // the slot holding the record to use, or -1
+    uint32_t next_seq;          // the sequence number for the next save: above every usable record
 } slots_t;
 
+// Which record is the current one. Between two of the same kind, the higher sequence number.
+// Between a plain and a sealed one, the plain one, whatever the numbers: once a configuration
+// is sealed its plain copy is erased, so a plain record next to a sealed one was written
+// afterwards, by older firmware after a downgrade (which starts numbering at 1 again) or by
+// provisioning. (Or the sealing was interrupted before the erase: then both hold the same
+// configuration.) A store that refuses plain records never gets here with one: slot_read()
+// doesn't report them.
 static void scan(const config_store_t *store, slots_t *s) {
     for (unsigned i = 0; i < 2; i++)
         s->kind[i] = slot_read(store, i, &s->hdr[i], NULL);
     bool v0 = s->kind[0] != CONFIG_STORED_NONE, v1 = s->kind[1] != CONFIG_STORED_NONE;
-    if (v0 && v1)
-        s->newest = seq_newer(s->hdr[1].seq, s->hdr[0].seq) ? 1 : 0;
+    bool one_newer = seq_newer(s->hdr[1].seq, s->hdr[0].seq);
+    if (v0 && v1 && s->kind[0] != s->kind[1])
+        s->newest = s->kind[0] == CONFIG_STORED_PLAIN ? 0 : 1;
+    else if (v0 && v1)
+        s->newest = one_newer ? 1 : 0;
     else
         s->newest = v0 ? 0 : v1 ? 1 : -1;
+    if (v0 && v1)
+        s->next_seq = s->hdr[one_newer ? 1 : 0].seq + 1;
+    else
+        s->next_seq = s->newest < 0 ? 1 : s->hdr[s->newest].seq + 1;
 }
 
 void config_defaults(sos_config_t *cfg) {
@@ -248,11 +263,14 @@ bool config_scrub_plain(const config_store_t *store) {
     scan(store, &s);
     bool clean = true;
     for (unsigned i = 0; i < 2; i++) {
-        // Anything with a plain record's header, valid or not: it may hold a password.
+        // Anything with a plain record's header: it may hold a password.
         if (s.hdr[i].magic != CONFIG_MAGIC || s.hdr[i].version != CONFIG_VERSION_PLAIN)
             continue;
-        // Only once the other slot holds the configuration sealed: never erase the only copy.
-        if (s.kind[1 - i] == CONFIG_STORED_SEALED && blank_slot(store, i))
+        // Not a plain record this store would load: that one is the current configuration
+        // (see scan) and goes only when config_save() has stored it sealed. And only when the
+        // other slot holds the configuration sealed: never erase the only copy.
+        if (s.kind[i] == CONFIG_STORED_NONE && s.kind[1 - i] == CONFIG_STORED_SEALED &&
+            blank_slot(store, i))
             continue;
         clean = false;
     }
@@ -268,7 +286,7 @@ bool config_save(const config_store_t *store, const sos_config_t *cfg) {
         .magic = CONFIG_MAGIC,
         .version = store->sealer ? CONFIG_VERSION_SEALED : CONFIG_VERSION_PLAIN,
         .length = sizeof(sos_config_t),
-        .seq = s.newest < 0 ? 1 : s.hdr[s.newest].seq + 1,
+        .seq = s.next_seq,
     };
     size_t stored = sizeof(sos_config_t);
     memset(rec, 0, sizeof(rec));
@@ -293,10 +311,17 @@ bool config_save(const config_store_t *store, const sos_config_t *cfg) {
     int want = store->sealer ? CONFIG_STORED_SEALED : CONFIG_STORED_PLAIN;
     if (slot_read(store, target, &back, NULL) != want || back.seq != h.seq)
         return false;
-    // The configuration is now stored sealed: a plain copy in the other slot (from older
-    // firmware or provisioning) must not stay readable. config_scrub_plain() at the next boot
-    // retries if this fails.
-    config_scrub_plain(store);
+    // The configuration is now stored sealed: the plain record it came from (from older
+    // firmware or provisioning), in the other slot, must not stay readable. If this fails or
+    // power is lost first, the plain record is still the current one at the next boot (see
+    // scan) and is sealed again.
+    if (store->sealer) {
+        unsigned other = 1 - target;
+        record_header_t oh;
+        memcpy(&oh, store->read(store->ctx, other), sizeof(oh));
+        if (oh.magic == CONFIG_MAGIC && oh.version == CONFIG_VERSION_PLAIN)
+            blank_slot(store, other);
+    }
     return true;
 }
 

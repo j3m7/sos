@@ -43,10 +43,12 @@ enum {
 int hostrec_kind(const uint8_t page[HOSTREC_PAGE]);
 
 // Copy the key out of the page into der (HOSTREC_PAGE bytes of room) and set *len. A sealed
-// record is opened with `sealer` (NULL: it can't be). False, with der zeroed, if the page holds
-// no usable record or the sealed one doesn't open.
-bool hostrec_open(const uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, uint8_t *der,
-                  uint32_t *len);
+// record is opened with `sealer` (NULL: it can't be). With refuse_plain a plain record isn't
+// used: for a secured board, where a plain record is one that someone who can write the flash
+// may have planted, with a key they know. False, with der zeroed, if the page holds no usable
+// record or the sealed one doesn't open.
+bool hostrec_open(const uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, bool refuse_plain,
+                  uint8_t *der, uint32_t *len);
 
 // Build a sealed record for a key in `page`. False (page zeroed) if the key is too long or
 // sealing failed.

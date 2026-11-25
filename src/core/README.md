@@ -55,12 +55,19 @@ Two layers:
     plugs in AES-256-GCM (`seal.c`), the tests a fake, the provisioning tool nothing.
   - **A plain record on a board that seals** loads, and the next save (which `settings.c` does
     at once) stores it sealed and erases the slot that held it, checking that it reads blank.
-    `config_scrub_plain()` finishes that at the next boot if power was lost in between.
+    If power is lost in between, the next boot does it again.
+  - **Plain before sealed:** a plain record comes before a sealed one whatever their sequence
+    numbers. A plain record next to a sealed one was written after the sealing, by older
+    firmware after a downgrade (which numbers from 1 again) or by provisioning, so it's the
+    configuration the user set last. The sealed save that follows is numbered above both.
+    `config_scrub_plain()` erases only what has a plain record's header and doesn't load
+    (damaged), next to the sealed configuration.
   - **A secured board** (`refuse_plain`, not set anywhere yet) doesn't see plain records at
     all: they take no part in choosing the newest record, so a planted one can't hide the sealed
     configuration.
   - **A sealed record that doesn't open** (another root secret, or changed) counts as no
-    record. It isn't erased; the log says it's there (`config_sealed_unopened()`).
+    record. It isn't erased automatically; the log says it's there
+    (`config_sealed_unopened()`). Later saves take its slot in their turn.
   - **Storage interface:** flash is reached through `config_store_t`, which the tests replace
     with a fake flash that can fail or lose power mid-write.
 - **`settings.c`, the live configuration on the device.** `settings()` returns it; edit it,

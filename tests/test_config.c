@@ -1019,23 +1019,93 @@ TEST(old_plain_record_is_sealed_with_its_fields) {
     CHECK_MEM(&a, &b, sizeof(a));
 }
 
-// Power is lost after the sealed record is written and before the plain one is erased: the
-// sealed one is the newest, and the scrub at the next boot erases the plain one.
-TEST(scrub_finishes_an_interrupted_sealing) {
+// Power is lost after the sealed record is written and before the plain one is erased. The
+// plain record is still the current one at the next boot (same contents), so the board seals
+// it again, above both sequence numbers, and this time erases it.
+TEST(an_interrupted_sealing_is_done_again) {
     sos_config_t a, b;
+    uint32_t seq = 0;
     sealed_start();
     plain_record("HomeNet");
     CHECK(config_load(&sealed_store, &a, NULL));
     static uint8_t plain[CONFIG_SLOT_SIZE];
     memcpy(plain, flash.slot[0], sizeof(plain));
-    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_save(&sealed_store, &a));          // sealed in slot 1, seq 2
     memcpy(flash.slot[0], plain, sizeof(plain));    // as if the erase never happened
 
-    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
-    CHECK(config_scrub_plain(&sealed_store));
-    CHECK(slot_is_blanked(0));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK(!config_scrub_plain(&sealed_store));      // the scrub leaves the current record alone
+    CHECK(slot_contains(0, "correct horse"));
     CHECK(config_load(&sealed_store, &b, NULL));
     CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(config_save(&sealed_store, &b));          // what settings_init() does next
+    CHECK(slot_is_blanked(0));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 3);
+    CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(config_scrub_plain(&sealed_store));
+}
+
+// Downgrade, set the board up again under the older firmware, upgrade. The older firmware
+// can't read the sealed record, so its save is a plain record numbered 1, in slot 0, next to a
+// sealed record with a higher number. The configuration just set up must win, not the old
+// sealed one, and must not be erased as a leftover.
+TEST(plain_record_saved_after_a_downgrade_wins) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    plain_record("Before");
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(config_save(&sealed_store, &a));          // upgrade: sealed in slot 1, seq 2
+    strcpy(a.hostname, "saved-twice");
+    CHECK(config_save(&sealed_store, &a));          // slot 0, seq 3
+    CHECK(config_save(&sealed_store, &a));          // slot 1, seq 4
+    CHECK_EQ(slot_version(1), 2);
+    CHECK_EQ(slot_seq(1), 4);
+
+    // The older firmware: it sees no record it knows, and saves to slot 0 with number 1.
+    CHECK(!config_load(&store, &b, NULL));
+    sample(&b, "AfterDowngrade");
+    CHECK(config_save(&store, &b));
+    CHECK_EQ(slot_version(0), 1);
+    CHECK_EQ(slot_seq(0), 1);
+
+    // Upgrade again.
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK(config_load(&sealed_store, &a, &seq));
+    CHECK(!strcmp(a.wifi_ssid, "AfterDowngrade"));
+    CHECK(!config_scrub_plain(&sealed_store));      // not a leftover: it's the configuration
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(!strcmp(a.wifi_ssid, "AfterDowngrade"));
+    CHECK(config_save(&sealed_store, &a));          // sealed, numbered above both records
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 5);
+    CHECK(!strcmp(b.wifi_ssid, "AfterDowngrade"));
+    CHECK(slot_is_blanked(0));
+    CHECK(!slot_contains(0, "AfterDowngrade") || slot_version(0) == 2);
+    CHECK(config_scrub_plain(&sealed_store));
+}
+
+// The same flash on a secured board: the plain record doesn't exist for it.
+TEST(secured_board_ignores_a_plain_record_saved_after_a_downgrade) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "Sealed");
+    CHECK(config_save(&secured_store, &a));         // slot 0, seq 1
+    CHECK(config_save(&secured_store, &a));         // slot 1, seq 2
+    static uint8_t keep[CONFIG_SLOT_SIZE];
+    memcpy(keep, flash.slot[1], sizeof(keep));
+    blank_flash();
+    plain_record("Planted");                        // slot 0, plain, seq 1
+    memcpy(flash.slot[1], keep, sizeof(keep));
+    CHECK(config_load(&secured_store, &b, &seq));
+    CHECK_EQ(seq, 2);
+    CHECK(!strcmp(b.wifi_ssid, "Sealed"));
+    CHECK(config_scrub_plain(&secured_store));      // and the planted record is erased
+    CHECK(slot_is_blanked(0));
 }
 
 // The only copy of the configuration is never erased: a plain record with no sealed one.
@@ -1064,10 +1134,12 @@ TEST(failed_erase_of_the_plain_copy_is_reported) {
     memcpy(plain, flash.slot[0], sizeof(plain));
     CHECK(config_save(&sealed_store, &a));
     memcpy(flash.slot[0], plain, sizeof(plain));
+    flash.slot[0][12] ^= 1;                         // a leftover that no longer loads
     flash.fail = true;
     CHECK(!config_scrub_plain(&sealed_store));
     flash.fail = false;
     CHECK(config_scrub_plain(&sealed_store));
+    CHECK(slot_is_blanked(0));
 }
 
 // A damaged plain record next to the sealed configuration is erased too: it may still hold the
@@ -1203,7 +1275,9 @@ TEST_MAIN(
     RUN(store_without_sealer_ignores_sealed_records);
     RUN(plain_record_loads_then_is_sealed_and_erased);
     RUN(old_plain_record_is_sealed_with_its_fields);
-    RUN(scrub_finishes_an_interrupted_sealing);
+    RUN(an_interrupted_sealing_is_done_again);
+    RUN(plain_record_saved_after_a_downgrade_wins);
+    RUN(secured_board_ignores_a_plain_record_saved_after_a_downgrade);
     RUN(scrub_keeps_a_plain_record_that_is_the_only_copy);
     RUN(failed_erase_of_the_plain_copy_is_reported);
     RUN(scrub_erases_a_damaged_plain_record);

@@ -290,14 +290,19 @@ TEST(hostkey_old_plain_record_is_read) {
     sample_key(der, sizeof(der));
     old_record(page, der, 82);
     CHECK_EQ(hostrec_kind(page), HOSTREC_PLAIN);
-    CHECK(hostrec_open(page, NULL, out, &len));             // no sealer needed
+    CHECK(hostrec_open(page, NULL, false, out, &len));             // no sealer needed
     CHECK_EQ(len, 82);
     CHECK_MEM(out, der, 82);
+    // A secured board doesn't use a plain record, with or without a sealer.
+    CHECK(!hostrec_open(page, NULL, true, out, &len));
+    CHECK(!hostrec_open(page, &sealer, true, out, &len));
+    CHECK_EQ(len, 0);
+    CHECK(all_zero(out, sizeof(out)));
     old_record(page, der, 240);                             // the longest a plain record held
     CHECK_EQ(hostrec_kind(page), HOSTREC_PLAIN);
     page[20] ^= 1;                                          // damaged: the check fails
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     CHECK_EQ(len, 0);
 }
 
@@ -315,8 +320,10 @@ TEST(hostkey_sealed_round_trip_and_layout) {
     for (unsigned i = 0; i + 8 <= HOSTREC_PAGE; i++)
         CHECK(memcmp(page + i, der + 10, 8) != 0);
     CHECK_EQ(hostrec_kind(page), HOSTREC_SEALED);
-    CHECK(hostrec_open(page, &sealer, out, &len));
+    CHECK(hostrec_open(page, &sealer, false, out, &len));
     CHECK_EQ(len, sizeof(der));
+    CHECK_MEM(out, der, sizeof(der));
+    CHECK(hostrec_open(page, &sealer, true, out, &len));    // a secured board reads it too
     CHECK_MEM(out, der, sizeof(der));
     // The header is the associated data: the blob opens by hand with the first 12 bytes.
     uint8_t by_hand[82];
@@ -331,24 +338,24 @@ TEST(hostkey_sealed_record_that_does_not_open) {
     sample_key(der, sizeof(der));
     CHECK(hostrec_seal(page, &sealer, der, sizeof(der)));
 
-    CHECK(!hostrec_open(page, NULL, out, &len));            // no sealer
+    CHECK(!hostrec_open(page, NULL, false, out, &len));            // no sealer
     CHECK_EQ(len, 0);
     CHECK(all_zero(out, sizeof(out)));
 
     page[60] ^= 1;                                          // changed
     CHECK_EQ(hostrec_kind(page), HOSTREC_SEALED);           // still looks like one
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     CHECK(all_zero(out, sizeof(out)));
     page[60] ^= 1;
 
     put_le32(page + 8, 81);                                 // another length in the header
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     put_le32(page + 8, 82);
 
     ctx.key[5] ^= 1;                                        // another root secret
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     ctx.key[5] ^= 1;
-    CHECK(hostrec_open(page, &sealer, out, &len));
+    CHECK(hostrec_open(page, &sealer, false, out, &len));
 }
 
 TEST(hostkey_record_limits) {
@@ -357,7 +364,7 @@ TEST(hostkey_record_limits) {
     uint32_t len = 0;
     sample_key(der, sizeof(der));
     CHECK(hostrec_seal(page, &sealer, der, HOSTREC_MAX_KEY));       // fills the page exactly
-    CHECK(hostrec_open(page, &sealer, out, &len));
+    CHECK(hostrec_open(page, &sealer, false, out, &len));
     CHECK_EQ(len, HOSTREC_MAX_KEY);
     CHECK_MEM(out, der, HOSTREC_MAX_KEY);
     CHECK(!hostrec_seal(page, &sealer, der, HOSTREC_MAX_KEY + 1));
@@ -375,7 +382,7 @@ TEST(hostkey_pages_that_are_not_records) {
     start();
     memset(page, 0xff, sizeof(page));                       // erased
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     memset(page, 0, sizeof(page));
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
     memcpy(page, "SOSK", 4);
@@ -385,7 +392,7 @@ TEST(hostkey_pages_that_are_not_records) {
     put_le32(page + 4, 2);
     put_le32(page + 8, HOSTREC_MAX_KEY + 1);                // a length that can't fit
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
-    CHECK(!hostrec_open(page, &sealer, out, &len));
+    CHECK(!hostrec_open(page, &sealer, false, out, &len));
     put_le32(page + 8, 0);
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
     put_le32(page + 4, 1);

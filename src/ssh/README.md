@@ -63,6 +63,9 @@ private key never leaves the device. The flash write goes through `flash_safe_ex
   key, and the log says clients will see a changed fingerprint. **With no usable root
   secret** no key is opened or made: there is no host key, so no SSH, and the log says why.
 - **Downgrade:** older firmware doesn't know the sealed record and makes itself a new host key.
+- **A secured board** must not take over a plain key (someone who can write the flash could
+  plant one they know): `refuse_plain` in `hostkey.c`, off on an open board, goes with the
+  configuration's.
 
 ## SFTP (`sftp_wolf.c`, `sftp_fs.c`)
 
