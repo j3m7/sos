@@ -278,13 +278,15 @@ static void cmd_key(shell_t *sh, char *args) {
 
 static char pending_ssid[CONFIG_SSID_MAX + 1];
 
+// The Wi-Fi settings and state, for `wifi` and `config`. "wifi password" says whether one is
+// saved (never the password itself); the board has no login password, SSH is keys only.
 static void wifi_show(shell_t *sh) {
     const sos_config_t *c = settings();
-    shell_printf(sh, "network:  %s\n", c->wifi_ssid[0] ? c->wifi_ssid : "(not configured)");
-    shell_printf(sh, "password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
-    shell_printf(sh, "state:    %s\n", wifi_state());
-    shell_printf(sh, "power:    saving %s\n", c->wifi_powersave ? "on" : "off");
-    shell_printf(sh, "country:  %s\n", c->wifi_country[0] ? c->wifi_country : "worldwide");
+    shell_printf(sh, "wifi network:  %s\n", c->wifi_ssid[0] ? c->wifi_ssid : "(not configured)");
+    shell_printf(sh, "wifi password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
+    shell_printf(sh, "wifi state:    %s\n", wifi_state());
+    shell_printf(sh, "wifi power:    saving %s\n", c->wifi_powersave ? "on" : "off");
+    shell_printf(sh, "wifi country:  %s\n", c->wifi_country[0] ? c->wifi_country : "worldwide");
 }
 
 static void stats_row(shell_t *sh, const char *name, const struct stats_proto *p) {
@@ -486,11 +488,11 @@ static void cmd_config(shell_t *sh, char *args) {
         return;
     }
     const sos_config_t *c = settings();
-    shell_printf(sh, "hostname: %s\n", c->hostname);
-    shell_printf(sh, "ssh user: %s\n", c->ssh_user);
+    shell_printf(sh, "hostname:      %s\n", c->hostname);
+    shell_printf(sh, "ssh user:      %s\n", c->ssh_user);
     wifi_show(sh);
-    shell_printf(sh, "keys:     %u trusted ('key list')\n", c->key_count);
-    shell_printf(sh, "nts:      %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
+    shell_printf(sh, "keys:          %u trusted ('key list')\n", c->key_count);
+    shell_printf(sh, "nts:           %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
                  c->ntp_server[0] ? "" : " (build default)");
     if (c->ntp_sync_hours)
         shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
@@ -498,9 +500,9 @@ static void cmd_config(shell_t *sh, char *args) {
         shell_printf(sh, "periodic sync off\n");
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
-    shell_printf(sh, "rtc cal:  %s\n", cal);
+    shell_printf(sh, "rtc cal:       %s\n", cal);
     if (!settings_persistent())
-        shell_printf(sh, "warning:  flash storage unavailable; changes aren't saved\n");
+        shell_printf(sh, "warning:       flash storage unavailable; changes aren't saved\n");
 }
 
 // --- setup: guided configuration (console only) --------------------------------------------------
