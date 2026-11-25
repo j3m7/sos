@@ -39,6 +39,13 @@ bool rtc_bus_pulled_up(void);
 // True if the chip reports its backup cell below ~2.5 V. False if it's fine or the chip is absent.
 bool rtc_battery_low(void);
 
+// The offset register (0Eh), which trims the RTC's rate: see TIMECONV_CAL_* in timeconv.h for
+// its steps. `steps` is -64..63; the chip's correction mode is left at "every two hours", its
+// default and the one that uses least power. Reading fails if the chip is absent or was set to
+// the other mode by something else; writing checks that the value reads back.
+bool rtc_read_offset(int *steps);
+bool rtc_write_offset(int steps);
+
 const char *rtc_status_str(rtc_status_t st);
 
 #endif

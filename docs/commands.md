@@ -97,6 +97,7 @@ See [Timekeeping](../README.md#timekeeping) and
 | `time sync` | any | Sync the clock and the RTC from NTS now |
 | `time sync sntp` | console only | One unauthenticated SNTP sync. `time` then shows the time as unauthenticated |
 | `time auto [<hours>\|off]` | console only to change | Show, or set, the periodic NTS sync: every 1 to 720 hours after the last sync (or after boot, if the RTC had the time), or off (default) |
+| `time cal [<ppm>\|off]` | console only to change | Show, or set, the RTC calibration. Give how fast the RTC runs in ppm (negative: slow), from -277 to 273; the RTC is slowed or sped up by the nearest step of 4.34 ppm. The value replaces the previous one, so add a newly measured error to it. See [Timekeeping](../README.md#timekeeping) for how to measure |
 | `time server [<name>\|default]` | console only to change | Show, or set, the NTS server (host name or IPv4 address). `default` goes back to the build-time server. Used from the next sync |
 | `nts` | any | NTS state: the last key exchange (cookies held, NTP server) and the last query |
 | `nts ke` | any | Run a key exchange with the build-time default server, not the one set with `time server` (development; doesn't set the clock) |

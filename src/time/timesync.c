@@ -24,7 +24,7 @@
 #endif
 
 // NTS time is authenticated, so a periodic sync may step a set clock any distance; steps larger
-// than this (RTC drift is ~10 s a week) are logged as warnings.
+// than this (an uncalibrated RTC drifts up to ~10 s a day) are logged as warnings.
 #define LARGE_STEP_S        300
 // Retry delays after a failed automatic NTS sync: doubling from the first to the last.
 #define RETRY_FIRST_MS      30000
@@ -290,6 +290,33 @@ void timesync_boot(void) {
         log_msg(SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
 }
 
+void timesync_cal_str(char *buf, unsigned len) {
+    int steps = settings()->rtc_offset;
+    if (!steps) {
+        snprintf(buf, len, "off");
+        return;
+    }
+    long mppm = (long)(steps < 0 ? -steps : steps) * TIMECONV_CAL_STEP_MPPM;
+    snprintf(buf, len, "%s by %ld.%ld ppm", steps > 0 ? "slowed" : "sped up", mppm / 1000,
+             mppm % 1000 / 100);
+}
+
+bool timesync_apply_cal(void) {
+    int want = settings()->rtc_offset, have;
+    if (rtc_read_offset(&have) && have == want)
+        return true;
+    if (rtc_boot_status == RTC_ABSENT)
+        return false;                           // already reported at boot
+    char cal[40];
+    timesync_cal_str(cal, sizeof(cal));
+    if (!rtc_write_offset(want)) {
+        log_msg(SOS_LOG_WARNING, "rtc: setting the calibration failed");
+        return false;
+    }
+    log_msg(SOS_LOG_NOTICE, "rtc: calibration %s", cal);
+    return true;
+}
+
 bool timesync_clock_set(void) {
     return source != SRC_NONE;
 }
@@ -374,6 +401,13 @@ void timesync_status(shell_t *sh) {
     } else {
         shell_printf(sh, "rtc:    %s\n", rtc_status_str(st));
     }
+
+    // The saved calibration, and whether the RTC has it (it can't if the chip is absent).
+    char cal[40];
+    int steps, want = settings()->rtc_offset;
+    timesync_cal_str(cal, sizeof(cal));
+    bool applied = rtc_read_offset(&steps) ? steps == want : want == 0;
+    shell_printf(sh, "cal:    %s%s\n", cal, applied ? "" : " (not in the RTC)");
 
     uint64_t now = time_us_64();
     shell_printf(sh, "sync:   ");

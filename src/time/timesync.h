@@ -34,6 +34,13 @@ bool timesync_request_sntp(void);
 // True once the system clock holds a real time (RTC, NTS or SNTP), so dates can be checked.
 bool timesync_clock_set(void);
 
+// Put the saved RTC calibration (settings()->rtc_offset) into the RTC if it isn't there already.
+// Call after settings_init(), and whenever the setting changes. False if the RTC didn't take it
+// (or isn't there).
+bool timesync_apply_cal(void);
+// "off", "slowed by 91.1 ppm" or "sped up by 13.0 ppm": what the saved calibration does to the RTC.
+void timesync_cal_str(char *buf, unsigned len);
+
 // Apply a sync result, if one arrived; stop a periodic sync that was turned off. Call from the
 // main loop.
 void timesync_poll(void);

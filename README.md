@@ -157,6 +157,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
+| `time cal <ppm>` / `time cal off` | RTC calibration: how fast the RTC runs, in ppm (default off; see [Timekeeping](#timekeeping)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
 | `config reset` | erase everything: no Wi-Fi network, no trusted keys, hostname and user back to `sos` and `admin` |
 
@@ -306,8 +307,8 @@ SOS syncs in three cases:
 - **Periodically, if turned on** with `time auto <hours>` on the console (1 to 720; default off).
   It syncs one interval after the last successful sync, whatever started it, or after boot if
   there has been none: a restart doesn't sync by itself when the RTC had the time, so a board
-  that restarts often doesn't keep asking the server. This corrects RTC drift, which is up to
-  about 10 s a week, on a board that stays up. Without it, or on a board that restarts more
+  that restarts often doesn't keep asking the server. This corrects RTC drift (see
+  [RTC calibration](#rtc-calibration)) on a board that stays up. Without it, or on a board that restarts more
   often than the interval, run `time sync` now and then.
 
 A successful sync sets the system clock and the RTC. NTS time is authenticated, so a sync may
@@ -326,12 +327,35 @@ from the build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the tim
 unauthenticated.
 
 - `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading
-  and backup-battery state, the last sync with its correction and round trip, a failed attempt
-  and when it's retried, and the server and periodic settings.
-- `time auto` and `time server` (without a value) show those settings; `config` lists both.
+  and backup-battery state, the RTC calibration, the last sync with its correction and round
+  trip, a failed attempt and when it's retried, and the server and periodic settings.
+- `time auto`, `time server` and `time cal` (without a value) show those settings; `config`
+  lists the first two.
 - `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
   `nts query` run the two steps by hand, for diagnosis; they don't set the clock. Naming another
   host is console only.
+
+### RTC calibration
+
+The RTC's crystal isn't trimmed, and an uncalibrated one can be well off: the board this was
+developed on ran 92 ppm fast, about 8 s a day. The PCF8523 can correct its own rate, and
+`time cal` (console only) sets that:
+
+1. **Measure.** Run `time sync`, leave the board for a day or more, restart it (so the clock
+   is taken from the RTC again), and run `time sync` once more. `time` then shows the step, for
+   example `clock stepped -5419 ms`. A negative step means the RTC ran fast. The RTC counts
+   whole seconds, so the step is only good to about a second: the longer the wait, the better.
+2. **Work out the rate:** ppm = milliseconds stepped ÷ seconds waited × 1000, positive if the
+   RTC ran fast. 5419 ms in 59,051 s is 92 ppm.
+3. **Set it:** `time cal 92`. The RTC is slowed by the nearest step it can do (4.34 ppm each,
+   here 91.1 ppm), and `time` shows `cal: slowed by 91.1 ppm`. A slow RTC takes a negative
+   value.
+
+The value isn't added to the one before: after measuring again with a calibration set, give
+the old value plus the new error. `time cal off` removes it. The calibration is a saved
+setting (`rtc_cal_ppm` when provisioning), written into the RTC at boot if the chip doesn't
+already have it, so it survives a dead coin cell. The RTC applies it as a few short
+corrections every two hours.
 
 ## Files (SD card)
 

@@ -22,3 +22,4 @@ ssh_key = ssh-ed25519 AAAA... user@host
 # wifi_powersave = on            (default off)
 # nts_server = time.example.org  (default: the firmware's SOS_NTS_SERVER)
 # nts_sync_hours = 24            (periodic clock sync; default 0 = off)
+# rtc_cal_ppm = 92               (how fast the RTC runs, in ppm; negative: slow; default 0)

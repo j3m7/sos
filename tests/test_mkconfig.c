@@ -37,7 +37,8 @@ TEST(full_file_loads_like_on_the_device) {
                  "ssh_user = dev\n"
                  "ssh_key = " KEY "\n"
                  "nts_server = time.example.org\n"
-                 "nts_sync_hours = 24\n", &cfg));
+                 "nts_sync_hours = 24\n"
+                 "rtc_cal_ppm = 92\n", &cfg));
     static uint8_t image[MKCONFIG_IMAGE_SIZE];
     CHECK(mkconfig_image(&cfg, image));
     const config_store_t store = {rd, wr, image};
@@ -54,6 +55,7 @@ TEST(full_file_loads_like_on_the_device) {
     CHECK(!strcmp(back.keys[0].comment, "me@host"));
     CHECK(!strcmp(back.ntp_server, "time.example.org"));
     CHECK_EQ(back.ntp_sync_hours, 24);
+    CHECK_EQ(back.rtc_offset, 21);                      // 92 ppm fast: 21 steps of 4.34 ppm
     // The second slot is erased, so nothing the board had saved survives.
     for (size_t i = CONFIG_SLOT_SIZE; i < MKCONFIG_IMAGE_SIZE; i++)
         if (image[i] != 0xff) {
@@ -89,6 +91,12 @@ TEST(errors_name_the_line) {
     CHECK(e != NULL);
     e = parse("nts_sync_hours = 9999\n", &cfg);
     CHECK(e != NULL);
+    e = parse("rtc_cal_ppm = 300\n", &cfg);
+    CHECK(e != NULL);
+    e = parse("rtc_cal_ppm = fast\n", &cfg);
+    CHECK(e != NULL);
+    CHECK(!parse("rtc_cal_ppm = -12.5\n", &cfg));
+    CHECK_EQ(cfg.rtc_offset, -3);
     e = parse("hostname = bad name\n", &cfg);
     CHECK(e != NULL);
 }

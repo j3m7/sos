@@ -47,6 +47,19 @@ bool timeconv_from_rtc(const uint8_t regs[TIMECONV_RTC_REGS], int64_t *t);
 // Encode t. Returns false if t is outside TIMECONV_YEAR_MIN..MAX.
 bool timeconv_to_rtc(int64_t t, uint8_t regs[TIMECONV_RTC_REGS]);
 
+// RTC calibration. The PCF8523's offset register (0Eh) holds -64..63 steps; in its default mode
+// (a correction every two hours) one step changes the RTC's rate by 4.34 ppm, and a positive
+// value slows it. Rates here are in thousandths of a ppm.
+#define TIMECONV_CAL_STEP_MPPM 4340
+#define TIMECONV_CAL_STEPS_MIN (-64)
+#define TIMECONV_CAL_STEPS_MAX 63
+
+// Parse a rate in ppm: an optional sign, up to 4 digits, and up to 3 decimals ("92", "-12.5").
+bool timeconv_parse_ppm(const char *s, int32_t *mppm);
+
+// The number of steps nearest to a rate. Returns false if that is out of the register's range.
+bool timeconv_cal_steps(int32_t mppm, int *steps);
+
 // "2026-11-23 23:30:05" (UTC) into buf (at least 20 bytes).
 void timeconv_format(int64_t t, char *buf, unsigned buflen);
 

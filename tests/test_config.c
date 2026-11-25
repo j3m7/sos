@@ -367,6 +367,48 @@ TEST(record_from_fourth_release_loads) {
     CHECK(!strcmp(a.wifi_country, "US"));
 }
 
+TEST(rtc_offset_in_the_old_padding_byte) {
+    // rtc_offset took the byte that was padding after wifi_powersave, so no record length
+    // changed and the fields around it didn't move.
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, rtc_offset), V4_LENGTH - 1);
+    CHECK_EQ(offsetof(sos_config_t, wifi_country), V4_LENGTH);
+    blank_flash();
+    sample(&a, "cal");
+    CHECK_EQ(a.rtc_offset, 0);                  // default: none
+    a.rtc_offset = -64;
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.rtc_offset, -64);
+    b.rtc_offset = 63;
+    CHECK(config_save(&store, &b));
+    CHECK(config_load(&store, &a, NULL));
+    CHECK_EQ(a.rtc_offset, 63);
+
+    // A record from before the byte had a use could hold anything there. Out of range loads as
+    // "none" and the rest of the record is kept.
+    a.rtc_offset = 100;
+    strcpy(a.wifi_country, "US");
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.rtc_offset, 0);
+    CHECK(!strcmp(b.wifi_country, "US"));
+    a.rtc_offset = -65;
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.rtc_offset, 0);
+
+    // A record from the third release ends before the byte.
+    blank_flash();
+    sample(&a, "v3");
+    a.rtc_offset = 21;
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + V3_LENGTH, 0xff, CONFIG_SLOT_SIZE - 16 - V3_LENGTH);
+    set_length(0, V3_LENGTH);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.rtc_offset, 0);
+}
+
 TEST(wifi_country_checked) {
     CHECK(config_check_country("") == NULL);
     CHECK(config_check_country("US") == NULL);
@@ -657,6 +699,7 @@ TEST_MAIN(
     RUN(record_from_third_release_loads);
     RUN(record_from_fourth_release_loads);
     RUN(wifi_country_checked);
+    RUN(rtc_offset_in_the_old_padding_byte);
     RUN(wifi_powersave_out_of_range_rejected);
     RUN(sequence_wraps_around);
     RUN(erase_resets_to_defaults);
