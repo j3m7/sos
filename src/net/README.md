@@ -54,6 +54,26 @@ issue #9455) look like the same problem.
 
 `wifi keepalive off` (console, until reboot) turns the announcement off to test this.
 
+### Packet loss and `wifi stats`
+
+`wifi stats` is for telling where packets go missing. It shows the radio's state (`wifi_radio()`:
+signal, noise floor, channel, access point, transmit rate) and lwIP's counters, which
+`config/lwipopts.h` turns on: packets per protocol, TCP segments resent (`MIB2_STATS`), and
+how full the pools got (`MEMP_STATS`). The pools matter because the driver drops a received
+frame silently when the packet pool (`PBUF_POOL_SIZE`) is empty.
+
+To find the direction of a loss, ping the board and compare: `icmp received` counts the
+requests that arrived and `icmp sent` the replies handed to the chip. `wifi stats chip` adds
+the chip's own counters (`wifi_chip_counters()`), raw, and `wifi iovar` (console) reads and
+sets chip variables, e.g. to fix the transmit rate for a test.
+
+Measured in November 2026: about 1% of pings lost (bursts up to 5%), all of them replies; no
+pool failures; noise floor about -95 dBm. Moving the board from -70 to -35 dBm changed
+nothing, and neither did a fixed 12 Mbit/s rate, turning aggregation off, or lower transmit
+power. By the chip's counters a third to a half of its transmissions went unacknowledged, so
+the loss is in the air at the access point's end (the network was on channel 5, which
+overlaps channels 1 and 6). `LWIP_TCP_RTO_TIME` (1 s) is what keeps TCP working through it.
+
 ## HTTPS client
 
 `http.c` makes one HTTPS request per connection (HTTP/1.1, `Connection: close`) over `tls/`.

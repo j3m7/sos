@@ -151,6 +151,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `config` | show the configuration |
 | `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
 | `wifi power on` / `wifi power off` | Wi-Fi power saving (default off; see below) |
+| `wifi stats` / `wifi stats chip` | signal, noise and packet counters, for chasing packet loss / plus the chip's raw counters |
 | `wifi keepalive on` / `wifi keepalive off` | address announcement (see below); off is for testing and lasts until reboot |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
