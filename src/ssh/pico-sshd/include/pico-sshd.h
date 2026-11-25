@@ -49,6 +49,7 @@ extern "C"
 #endif
 
 #define MAX_LOGIN_LENGTH 32
+#define SSH_AUTH_KEY_MAX 128       /* largest client public key recorded (ECDSA P-256 is 104) */
 #define MAX_SERVER_PKEYS 3
 
 
@@ -93,6 +94,9 @@ typedef struct ssh_session_t {
 	ssh_ringbuffer_t rb_in;            /* Decrypted input buffer */
 	ssh_ringbuffer_t rb_out;           /* Unencrypted output buffer */
 	char login[MAX_LOGIN_LENGTH + 1];  /* Logged in user */
+	uint8_t auth_key[SSH_AUTH_KEY_MAX];  /* public key (SSH wire format) whose signature
+	                                        logged the user in; empty if too long */
+	uint16_t auth_key_len;             /* 0 = none */
 	uint8_t auth_tries;                /* Count of failed authentication attempts */
 	uint32_t session_id;               /* unique per login (server->logins at login time) */
 	volatile bool work_pending;        /* (irq) input arrived, data sent, or poll tick */

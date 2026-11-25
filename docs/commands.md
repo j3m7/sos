@@ -33,6 +33,25 @@ this page is the reference.
 | `reboot` | any | Restart the device |
 | `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |
 
+## Messages
+
+Messages between the people logged in: the console and each SSH shell (not SFTP). Each person is
+named after the comment of the trusted key they logged in with (`key <n>` if it has none, see
+`key list`), the console is `console`, and a second login with the same key gets its slot
+added (`alice@laptop/2`). Messages are kept only in memory (the last 16), never in the log or on
+the card. Times are UTC, or time since boot (`+1h02m`) until the clock is set.
+
+| Command | Where | What it does |
+|---|---|---|
+| `who` | any | One line per shell: slot (0 is the console), name, where it's connected from, `chat` if it's in the chat, and how long it's been logged in. Yours is marked `*` |
+| `wall <message>` | any | Show a message in every other shell at once, as `[wall 14:02 alice@laptop] message`. Says how many shells it was sent to |
+| `chat` | any | Join the chat room: shows the last few chat lines and who is there, then each line you type at the `chat> ` prompt goes to everyone else in the room, as `[14:03] alice@laptop: hi`. Joining and leaving are announced. `/who` lists the room; `/quit`, Ctrl-C or Ctrl-D on an empty line leaves; start a line with `//` to send one beginning with `/` |
+
+A message arrives between your keystrokes: the line you're typing is cleared, the message
+printed, and the prompt and your typing redrawn. During a running command it appears on its
+own line. A client that stops reading (a suspended `ssh`) doesn't hold anyone up: its messages
+wait, and if more than 16 arrive meanwhile it's told how many it missed.
+
 ## Configuration
 
 Changes are saved in flash immediately and survive reflashing (see

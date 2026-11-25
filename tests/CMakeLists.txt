@@ -87,3 +87,9 @@ add_test(NAME termtext COMMAND test_termtext)
 add_executable(test_http_msg test_http_msg.c ${SOS_ROOT}/src/net/http_msg.c)
 target_include_directories(test_http_msg PRIVATE ${SOS_ROOT}/src)
 add_test(NAME http_msg COMMAND test_http_msg)
+
+# src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
+add_executable(test_chat test_chat.c ${SOS_ROOT}/src/chat/chat.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/termtext.c)
+target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
+add_test(NAME chat COMMAND test_chat)

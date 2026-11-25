@@ -19,6 +19,7 @@
 #include "pico-sshd.h"
 #include "pico-sshd/log.h"
 
+#include "chat/chat.h"
 #include "core/config.h"
 #include "core/log.h"
 #include "core/settings.h"
@@ -29,6 +30,8 @@
 #ifndef SOS_SSH_MAX_SESSIONS
 #define SOS_SSH_MAX_SESSIONS 3
 #endif
+
+_Static_assert(SOS_SSH_MAX_SESSIONS + 1 <= CHAT_MAX_PEERS, "chat: a peer for every shell");
 
 static ssh_server_t *server;
 // One shell per session slot, restarted whenever the slot gets a new login.
@@ -196,6 +199,39 @@ static void session_logout(void *ctx) {
     ssh_session_disconnect((ssh_session_t *)ctx);
 }
 
+// Who a new session is, for wall/chat/who: the comment of the trusted key it logged in with
+// ("key <n>" without one), or the slot if that key has been removed since. Where it's from.
+static void session_register(shell_t *sh, ssh_session_t *ss) {
+    char name[CONFIG_KEY_COMMENT_MAX + 16];
+    char from[48] = "ssh";
+    const sos_config_t *cfg = settings();
+    snprintf(name, sizeof(name), "ssh%u", ss->index + 1);
+    for (unsigned k = 0; k < cfg->key_count && ss->auth_key_len; k++) {
+        const config_key_t *key = &cfg->keys[k];
+        if (key->len == ss->auth_key_len && !memcmp(key->blob, ss->auth_key, key->len)) {
+            if (key->comment[0])
+                snprintf(name, sizeof(name), "%s", key->comment);
+            else
+                snprintf(name, sizeof(name), "key %u", k + 1);
+            break;
+        }
+    }
+    ip_addr_t ip;
+    uint16_t port;
+    if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK) {
+        char ipstr[IPADDR_STRLEN_MAX];
+        ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
+        snprintf(from, sizeof(from), "ssh %s", ipstr);
+    }
+    if (!chat_register(sh, ss->index + 1, name, from))
+        log_msg(SOS_LOG_WARNING, "chat: no room to register session %u", ss->index + 1);
+}
+
+static void session_end(unsigned i) {
+    shell_end(&session_shells[i]);          // cancel a running job (closes its files)
+    chat_unregister(&session_shells[i]);
+}
+
 static const shell_io_t session_io = {
     .name = "ssh",
     .read = session_read,
@@ -214,8 +250,8 @@ void sshd_poll(void) {
     for (unsigned i = 0; i < server->max_sessions; i++) {
         ssh_session_t *ss = ssh_server_session(server, i);
         if (ss->cstate != CS_CONNECT) {
-            if (session_shell_ids[i])
-                shell_end(&session_shells[i]);      // cancel a running job (closes its files)
+            if (session_shell_ids[i])       // (harmless for an SFTP slot: no job, not registered)
+                session_end(i);
             session_shell_ids[i] = 0;
             continue;
         }
@@ -228,12 +264,14 @@ void sshd_poll(void) {
         }
         if (session_shell_ids[i] != ss->session_id) {
             if (session_shell_ids[i])
-                shell_end(&session_shells[i]);
+                session_end(i);
             session_shell_ids[i] = ss->session_id;
             shell_init(&session_shells[i], &session_io, ss);
+            session_register(&session_shells[i], ss);
         }
         session_poll_output[i] = 0;
         shell_poll(&session_shells[i]);
+        chat_deliver(&session_shells[i]);   // messages from the others, as far as they fit
         ss->busy = shell_busy(&session_shells[i]);  // a client's EOF waits for running commands
         ssh_session_send_output(ss);        // everything the shell wrote, in as few packets as fit
     }
