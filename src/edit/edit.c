@@ -246,7 +246,8 @@ void edit_command(shell_t *sh, char *args) {
         return;
     }
     // A save interrupted (power lost) between removing the old file and renaming the new one
-    // leaves the text only in <file>.~edit: open that instead of an empty file.
+    // leaves the text only in <file>.~edit: open that instead of an empty file. If the first
+    // save of a new file was interrupted while writing, it's partial: the message says so.
     char tmp[PATH_LEN + sizeof(TMP_SUFFIX)];
     snprintf(tmp, sizeof(tmp), "%s%s", e->path, TMP_SUFFIX);
     FILINFO tfi;
@@ -273,7 +274,8 @@ void edit_command(shell_t *sh, char *args) {
     if (!files_write_allowed(sh, e->path))
         editor_message(&e->ed, "read only: this path can only be changed on the console");
     else if (recovered)
-        editor_message(&e->ed, "recovered from an interrupted save (" TMP_SUFFIX "): Ctrl-S saves it");
+        editor_message(&e->ed, "recovered from an interrupted save (" TMP_SUFFIX
+                       "), may be incomplete: Ctrl-S saves it");
     else if (tmp_left)
         editor_message(&e->ed, "an interrupted save left " TMP_SUFFIX " (incomplete): saving replaces it");
     else if (is_new)

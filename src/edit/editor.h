@@ -82,7 +82,7 @@ void editor_message(editor_t *ed, const char *msg);
 void editor_set_log_waiting(editor_t *ed, int n);
 
 // Text length as saved (with CRLF restored), and the bytes from *pos on: fills up to `cap` bytes
-// of `out`, advances *pos, returns the count (0 at the end).
+// of `out` (at least 2, room for a CRLF), advances *pos, returns the count (0 at the end).
 size_t editor_saved_len(const editor_t *ed);
 size_t editor_export(const editor_t *ed, size_t *pos, char *out, size_t cap);
 

@@ -30,6 +30,7 @@ of up to 32 KB on the console or over SSH.
   then the old file is removed and the new one renamed into place. The file isn't held open
   between saves. If the rename fails the text stays "modified", so quitting warns and Ctrl-S
   tries again. Power lost between the two leaves only `<file>.~edit`: `edit <file>` then opens
-  that, and says so; if both exist it says the leftover is incomplete and will be replaced.
+  that, and says it may be incomplete (it is if the power went while a new file's first save was
+  being written); if both exist it says the leftover is incomplete and will be replaced.
 - **Log:** on the console, the log is held while the editor runs (`shell_raw_mode()`), and the
   status bar shows `log_pending()`, counted once a second.
