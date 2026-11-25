@@ -37,8 +37,9 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
   driver's `init`), so the layer always matches the card that's in, and again at mount if the
   kind was forgotten. The rules are in `sdcrypt_card_open()` (host tested): sector 0 a header
   that opens → encrypted; otherwise the backup at 4096 if it's a header, unless sector 0 is a
-  boot sector or MBR (0x55AA: a plain card, or a PC formatted it), and a backup that opens is
-  copied back over sector 0. A header the key doesn't open, or of an unknown version, makes the
+  boot sector or MBR (0x55AA: a plain card, or a PC formatted it). A backup that opens is
+  copied back over sector 0 once the volume has mounted through it (not before: a card reused
+  elsewhere can keep an old backup). A header the key doesn't open, or of an unknown version, makes the
   card *locked*: every read and write is refused (logged once per initialization, told to the
   shell at each try) and `sd format` is the way out. `sd unmount` forgets the key.
 - **`sd format`** writes a new header (both copies) and turns the layer on before `f_mkfs`, so
