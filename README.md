@@ -116,9 +116,8 @@ cmake --build --preset debug --target flash
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
 plugging it in first. Flashing leaves the board's saved configuration, SSH host key and SD
-device key alone;
-a new board has neither a network nor a trusted key until it's set up (`setup` on the
-console, or [provisioning](#provisioning)).
+device key alone; a new board has neither a network nor a trusted key until it's set up
+(`setup` on the console, or [provisioning](#provisioning)).
 
 Developing inside a VM? See [`docs/development.md`](docs/development.md) for forwarding the
 Pico's USB connection so flashing works unattended.
