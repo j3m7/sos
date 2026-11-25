@@ -127,9 +127,12 @@ static sdcrypt_t crypt;
 static uint8_t card_id[SDCRYPT_ID_LEN];
 static uint8_t crypt_buf[8 * SDCRYPT_SECTOR];     // sectors encrypted before writing
 
+static bool repair_header;      // opened from the backup: rewrite sector 0 once the volume mounts
+
 static void crypt_off(void) {
     sdcrypt_stop(&crypt);
     card_kind = KIND_UNKNOWN;
+    repair_header = false;
 }
 
 static block_dev_err_t read_blocks_layer(sd_card_t *c, uint8_t *buf, uint32_t sector,
@@ -183,8 +186,8 @@ static const char *kind_why;    // why a locked or unsupported card can't be use
 
 // Read the card's sector 0 and backup header (into crypt_buf, which isn't in use outside a
 // write) and open them with the device key (sdcrypt_card_open has the rules). The card must be
-// initialized. Fills `info` on SDCRYPT_OK, repairing sector 0 from the backup if that was needed.
-static int open_card(sdcrypt_info_t *info) {
+// initialized. Fills `info` on SDCRYPT_OK; *from_backup says the backup opened it.
+static int open_card(sdcrypt_info_t *info, bool *from_backup) {
     uint8_t *primary = crypt_buf, *backup = crypt_buf + SDCRYPT_SECTOR;
     if (read_blocks_logged(&card, primary, 0, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
         memset(info, 0, sizeof(*info));
@@ -192,14 +195,22 @@ static int open_card(sdcrypt_info_t *info) {
     }
     bool have_backup = read_blocks_logged(&card, backup, SDCRYPT_BACKUP, 1) ==
                        SD_BLOCK_DEVICE_ERROR_NONE;
-    bool from_backup;
-    int r = sdcrypt_card_open(primary, have_backup ? backup : NULL, devkey(), info, &from_backup);
-    if (r == SDCRYPT_OK && from_backup) {
-        bool fixed = write_blocks_fed(&card, backup, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
-        log_msg(SOS_LOG_WARNING, "sd: the card's header was damaged; %s from its backup copy",
-                fixed ? "rewrote it" : "using it (rewriting sector 0 failed)");
-    }
-    return r;
+    return sdcrypt_card_open(primary, have_backup ? backup : NULL, devkey(), info, from_backup);
+}
+
+// After a mount through the layer succeeded on a card opened from its backup header: the volume
+// is really there, so sector 0 can be rewritten from the backup. (Not at detection: a card this
+// device once encrypted and then reused elsewhere can keep an old backup at 4096, and its
+// sector 0 must not be overwritten on that evidence alone.)
+static void repair_after_mount(void) {
+    if (!repair_header)
+        return;
+    repair_header = false;
+    bool fixed = read_blocks_logged(&card, crypt_buf, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
+                 sdcrypt_is_header(crypt_buf) &&
+                 write_blocks_fed(&card, crypt_buf, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
+    log_msg(SOS_LOG_WARNING, "sd: the card's header was damaged; %s from its backup copy",
+            fixed ? "rewrote it" : "using it (rewriting sector 0 failed)");
 }
 
 // Find out what kind of card this is, and turn the layer on for an encrypted one. Runs after
@@ -208,13 +219,16 @@ static int open_card(sdcrypt_info_t *info) {
 static void detect(void) {
     crypt_off();
     kind_why = NULL;
+    repair_header = false;
     sdcrypt_info_t info;
-    int r = open_card(&info);
+    bool from_backup;
+    int r = open_card(&info, &from_backup);
     if (r == SDCRYPT_PLAIN) {
         card_kind = KIND_PLAIN;
     } else if (r == SDCRYPT_OK && sdcrypt_start(&crypt, info.data_key)) {
         memcpy(card_id, info.card_id, sizeof(card_id));
         card_kind = KIND_ENCRYPTED;
+        repair_header = from_backup;
     } else if (r == SDCRYPT_UNSUPPORTED) {
         card_kind = KIND_UNSUPPORTED;
         kind_why = "the card is encrypted in a format this firmware doesn't know";
@@ -307,6 +321,8 @@ static bool mount(shell_t *sh) {
         return false;
     }
     card.state.mounted = true;
+    if (card_kind == KIND_ENCRYPTED)
+        repair_after_mount();
     log_msg(SOS_LOG_NOTICE, "sd: mounted %s%s in %lu ms", fs_type(card.state.fatfs.fs_type),
             card_kind == KIND_ENCRYPTED ? " (encrypted)" : "", (unsigned long)ms);
     return true;
@@ -648,7 +664,8 @@ static void cmd_key(shell_t *sh) {
         return;
     }
     sdcrypt_info_t info;
-    if (open_card(&info) != SDCRYPT_OK) {
+    bool from_backup;
+    if (open_card(&info, &from_backup) != SDCRYPT_OK) {
         shell_printf(sh, "can't read the card's header\n");
         return;
     }
