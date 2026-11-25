@@ -17,6 +17,7 @@
 //   time: a key that does (the SD card wrap key, which also depends on the owner secret) is
 //   made by the caller in a second step from a base key derived here.
 // - Callers wipe the keys they got when they're done with them.
+// - Only the backend sees the root secret, for the length of one derivation.
 //
 // Pure C over wolfCrypt, so it's unit tested on the host.
 
@@ -49,8 +50,14 @@ typedef struct {
     void *ctx;
 } keyprov_backend_t;
 
-// Start (or restart, in tests) with this backend, unlocked.
+// Start with this backend. Once per boot: later calls do nothing, so the backend can't be
+// swapped and a locked provider stays locked.
 void keyprov_init(const keyprov_backend_t *backend);
+
+#ifdef KEYPROV_TEST
+// Unit tests only (not compiled into the firmware): back to not started and unlocked.
+void keyprov_test_reset(void);
+#endif
 
 // Derive the key for `purpose` into out. False, with `out` zeroed, if the provider is locked or
 // not started, the purpose is unknown, or there's no usable root secret.

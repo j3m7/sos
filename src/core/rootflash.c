@@ -15,12 +15,14 @@
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootsecret.h"
+#include "core/rootsecret_priv.h"     // the one place that reads the secret out
 
 // The fourth sector from the end: below the two configuration slots (core/settings.c) and the
 // key sector (core/keysector.c).
 #define ROOT_OFFSET (PICO_FLASH_SIZE_BYTES - 4 * FLASH_SECTOR_SIZE)
 
 _Static_assert(ROOTSECRET_PAGE == FLASH_PAGE_SIZE, "the record is one flash page");
+_Static_assert(ROOTSECRET_SECTOR == FLASH_SECTOR_SIZE, "the store is one flash sector");
 
 static bool usable;
 
@@ -31,17 +33,30 @@ static const uint8_t *store_read(void *ctx) {
     return (const uint8_t *)(XIP_BASE + ROOT_OFFSET);
 }
 
-static void do_write(void *param) {
-    flash_range_erase(ROOT_OFFSET, FLASH_SECTOR_SIZE);
-    if (param)
-        flash_range_program(ROOT_OFFSET, param, FLASH_PAGE_SIZE);
+typedef struct {
+    unsigned page;
+    const uint8_t *data;        // NULL: erase the sector instead
+} flash_job_t;
+
+static void do_flash(void *param) {
+    const flash_job_t *job = param;
+    if (job->data)              // a blank page: programmed without erasing anything
+        flash_range_program(ROOT_OFFSET + job->page * FLASH_PAGE_SIZE, job->data, FLASH_PAGE_SIZE);
+    else
+        flash_range_erase(ROOT_OFFSET, FLASH_SECTOR_SIZE);
 }
 
-static bool store_write(void *ctx, const uint8_t *page) {
+static bool store_program(void *ctx, unsigned page, const uint8_t *data) {
     (void)ctx;
-    if (!usable)
-        return false;
-    return flash_safe_execute(do_write, (void *)(uintptr_t)page, 1000) == PICO_OK;
+    flash_job_t job = { page, data };
+    return usable && page < FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE &&
+           flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
+}
+
+static bool store_erase(void *ctx) {
+    (void)ctx;
+    flash_job_t job = { 0, NULL };
+    return usable && flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
 }
 
 static bool store_random(void *ctx, uint8_t *out, size_t len) {
@@ -54,7 +69,9 @@ static bool store_random(void *ctx, uint8_t *out, size_t len) {
     return rc == 0;
 }
 
-static const rootsecret_store_t store = { store_read, store_write, store_random, NULL };
+static const rootsecret_store_t store = {
+    store_read, store_program, store_erase, store_random, NULL,
+};
 
 // --- key provider backend ---------------------------------------------------------------------------
 
@@ -91,11 +108,18 @@ int rootflash_init(void) {
         log_msg(SOS_LOG_ERR, "rootsecret: the root secret's record can't be used (damaged, or from "
                              "newer firmware); it's kept as it is, and there are no keys: "
                              "`rootsecret` explains");
+    else if (rootsecret_degraded(&store))
+        log_msg(SOS_LOG_WARNING, "rootsecret: one of the root secret's two copies is damaged; "
+                                 "the other is in use");
     return state;
 }
 
 int rootflash_state(void) {
     return usable ? rootsecret_state(&store) : ROOTSECRET_INVALID;
+}
+
+bool rootflash_degraded(void) {
+    return usable && rootsecret_degraded(&store);
 }
 
 bool rootflash_usable(void) {

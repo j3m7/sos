@@ -21,7 +21,7 @@ static const char *const labels[KEYPROV_PURPOSES] = {
 };
 
 static const keyprov_backend_t *backend;
-static bool locked;
+static bool started, locked;
 
 void keyprov_wipe(void *p, size_t len) {
     volatile uint8_t *v = p;
@@ -36,9 +36,18 @@ bool keyprov_hkdf(const uint8_t *ikm, size_t ikm_len, const uint8_t *salt, size_
 }
 
 void keyprov_init(const keyprov_backend_t *b) {
+    if (started)                // once per boot: a second call can't swap the backend or unlock
+        return;
+    started = true;
     backend = b;
-    locked = false;
 }
+
+#ifdef KEYPROV_TEST
+void keyprov_test_reset(void) {
+    started = locked = false;
+    backend = NULL;
+}
+#endif
 
 const char *keyprov_label(unsigned purpose) {
     return purpose < KEYPROV_PURPOSES ? labels[purpose] : NULL;
@@ -47,7 +56,7 @@ const char *keyprov_label(unsigned purpose) {
 bool keyprov_derive(unsigned purpose, uint8_t out[KEYPROV_KEY_LEN]) {
     memset(out, 0, KEYPROV_KEY_LEN);
     const char *label = keyprov_label(purpose);
-    if (!backend || locked || !label)
+    if (!backend || !backend->root || locked || !label)
         return false;
     uint8_t root[KEYPROV_ROOT_LEN];
     bool ok = backend->root(backend->ctx, root) &&

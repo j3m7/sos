@@ -76,12 +76,20 @@ configuration, the host key and the SD cards are stored as before.
   - **Its own sector,** the fourth from the end of flash, below configuration slot A
     (`rootflash.c`). Not a page of the key sector: firmware from before the root secret rewrites
     that sector with only the pages it knows whenever it makes a host key, which would erase it.
-    Flashing, provisioning and `config reset` don't touch the sector. It's written once.
-  - **The record** (`rootsecret.c`, pure C, host tested) is one flash page: magic `SOSR`,
-    version 1, the secret, an FNV-1a check. It's made only when the page is blank. A page that
-    isn't blank and isn't a valid record is never replaced automatically (it may be from newer
-    firmware, or one flipped bit away from recoverable): the board then has no keys, the log and
-    `rootsecret` say so, and `rootsecret forget` on the console clears it.
+    Flashing, provisioning and `config reset` don't touch the sector.
+  - **The record** (`rootsecret.c`, pure C, host tested): magic `SOSR`, version 1, the secret,
+    an FNV-1a check. The sector holds it twice, in its first two flash pages, so one damaged
+    page doesn't lose everything derived from the secret; either valid copy is used, and a
+    damaged one is reported (`rootsecret`, the log).
+  - **Making it** programs page 1 and then page 0, without erasing: blank pages need no erase,
+    and the rest of the sector is never touched. A secret is used only once page 0 holds it, so
+    a first write cut off by a power loss (page 0 still blank) is finished or started over at
+    the next boot, since nothing can have been stored under it.
+  - **Never replaced automatically** otherwise: when page 0 isn't blank and there's no valid
+    copy (damaged, or a record from newer firmware), or the two copies hold different secrets,
+    the board has no keys, the log and `rootsecret` say so, and `rootsecret forget` on the
+    console erases the sector. Only `rootflash.c` can read the secret out
+    (`rootsecret_priv.h`).
 - **Key provider** (`keyprov.c`, pure C over wolfCrypt, host tested):
   `keyprov_derive(purpose, out)` gives the 32-byte key for a purpose, HKDF-SHA256 of the root
   secret with a fixed label per purpose as the info and no salt. Callers never see the root

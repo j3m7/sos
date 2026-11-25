@@ -500,7 +500,9 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
             shell_printf(sh, "root secret: none (the firmware image overlaps its flash sector)\n");
         else if (state == ROOTSECRET_OK)
             shell_printf(sh, "root secret: present, in flash (open board: it isn't protected "
-                             "from someone who has the board)\n");
+                             "from someone who has the board)%s\n",
+                         rootflash_degraded() ? "\none of its two copies is damaged; the other "
+                                                "is in use" : "");
         else if (state == ROOTSECRET_NONE)
             shell_printf(sh, "root secret: none (making it at boot failed, see dmesg; `reboot` "
                              "tries again)\n");
@@ -524,8 +526,8 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
                                                 : "there's no record to clear\n");
         return;
     }
-    shell_printf(sh, "Whatever was stored under this root secret can't be read again, by any "
-                     "firmware.\n");
+    shell_printf(sh, "This erases the root secret's whole flash sector. Whatever was stored under "
+                     "this root\nsecret can't be read again, by any firmware.\n");
     shell_ask(sh, "Clear the unusable record? Type 'yes': ", false, on_rootsecret_forget, NULL);
 }
 
