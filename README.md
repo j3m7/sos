@@ -462,7 +462,9 @@ sftp> get notes.txt
 - Upload, download (resumable: `reput`, `reget`), `ls`, `mkdir`, `rmdir`, `rm`, `rename`. The root
   is the card's root. Changing attributes (`chmod`, times) isn't supported: FAT has no Unix
   permissions.
-- About 170 KB/s up and 120 KB/s down (2 MB files; encryption-bound). Each request is handled in
+- About 250–300 KB/s up and 170–200 KB/s down (2 MB files, over Wi-Fi that loses a few percent of
+  packets). It depends on the network: lost packets and round trips are what it waits for (see
+  `config/lwipopts.h` and the SSH window in `config/user_settings.h`). Each request is handled in
   one pass of the main loop: a 32 KB read reply holds the console and other sessions for up to
   ~0.1 s.
 - Each session uses up to ~100 KB of heap while transferring. A transfer's open files count as in
