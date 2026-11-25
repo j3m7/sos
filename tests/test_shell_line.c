@@ -812,6 +812,25 @@ TEST(shell_end_cancels_raw_job) {
     CHECK(!strcmp(executed[0], "ab"));
 }
 
+TEST(raw_mode_and_redraw) {
+    start(&io_plain);
+    CHECK(!shell_raw_mode(&sh));
+    job_steps = 2;
+    job_partial = false;
+    type("job\r");
+    CHECK(!shell_raw_mode(&sh));                        // a plain job isn't raw
+    type("");
+    type("");
+    type("raw\r");
+    CHECK(shell_raw_mode(&sh));
+    clear_out();
+    shell_hide_input(&sh);                              // log output around a raw job: nothing
+    shell_show_input(&sh);
+    CHECK_OUT("");
+    type("\x11");
+    CHECK(!shell_raw_mode(&sh));
+}
+
 TEST(plain_job_after_raw_job_still_stashes) {
     start(&io_plain);
     type("raw\r");
@@ -885,5 +904,6 @@ TEST_MAIN(
     RUN(raw_job_gets_rest_of_command_read);
     RUN(raw_input_is_bounded_per_pass);
     RUN(shell_end_cancels_raw_job);
+    RUN(raw_mode_and_redraw);
     RUN(plain_job_after_raw_job_still_stashes);
 )

@@ -115,6 +115,8 @@ void shell_show_input(shell_t *sh);
 // cancels the job and drops it.
 void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
+// A raw-mode job (shell_run_raw) owns the screen: nothing else should write to this shell.
+bool shell_raw_mode(const shell_t *sh);
 
 // Like shell_run_job, in raw input mode, for full-screen programs: every key typed goes to `key`
 // as it arrives, decoded (keys.h), instead of being kept for afterwards. Ctrl-C is a key like

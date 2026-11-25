@@ -34,6 +34,9 @@ typedef struct {
     void (*write)(const char *s, size_t n);     // console output (thread context only)
     void (*hide_input)(void);                   // before printing: clear the input line
     void (*show_input)(void);                   // after printing: redraw prompt and input
+    // True while the console mustn't be written to (a full-screen program runs there): messages
+    // are kept and printed by the first log_flush() after it returns false. NULL: never.
+    bool (*hold)(void);
 } log_hooks_t;
 
 void log_init(const log_hooks_t *hooks);
@@ -42,6 +45,7 @@ void log_msg(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3
 void log_vmsg(int level, const char *fmt, va_list ap);
 
 // Print stored messages the console hasn't shown yet. Thread context; call from the main loop.
+// Does nothing while hooks->hold() is true.
 void log_flush(void);
 
 // Deferred mode: messages are only stored when logged and printed by the next log_flush(), so

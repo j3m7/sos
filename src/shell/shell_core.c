@@ -92,7 +92,7 @@ static bool answer_question(shell_t *sh, char *answer) {
 }
 
 void shell_hide_input(shell_t *sh) {
-    if (!sh->io)
+    if (!sh->io || shell_raw_mode(sh))          // full-screen program: leave its screen alone
         return;
     if (sh->job) {                              // job output on screen: don't erase it
         if (!sh->at_line_start)
@@ -161,6 +161,10 @@ void shell_run_raw(shell_t *sh, shell_job_fn step, shell_key_fn key, void *arg) 
 
 bool shell_job_running(const shell_t *sh) {
     return sh->job != NULL;
+}
+
+bool shell_raw_mode(const shell_t *sh) {
+    return sh->job != NULL && sh->key != NULL;
 }
 
 bool shell_busy(const shell_t *sh) {

@@ -146,7 +146,7 @@ void log_flush(void) {
     char line[LOG_LINE_MAX + 2];
     bool hidden = false;
 
-    if (!hooks || flushing || hooks->in_irq())
+    if (!hooks || flushing || hooks->in_irq() || (hooks->hold && hooks->hold()))
         return;
     flushing = true;
     for (;;) {
