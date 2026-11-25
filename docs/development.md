@@ -75,10 +75,13 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
   sign firmware for the board. A key used for a real board belongs offline, with a second key
   as a spare. A key made for trying this out on an open board protects nothing and needs no
   such care.
-- **`sos.otp.json`** appears in the build directory of a signed build. It holds the key's hash
-  in the form `picotool otp load` takes. **The build never loads it, and neither should you** as
-  part of normal development: writing OTP can't be undone, and with secure boot enabled a
-  board refuses every image not signed with that key. That step has its own written procedure.
+- **The build writes nothing to a board's OTP memory and makes no OTP file.** By default the
+  Pico SDK has `picotool` write `sos.otp.json` next to a signed image. That file is not just
+  the key's hash: it holds the hash, the "key valid" flag and `crit1.secure_boot_enable`, so a
+  single `picotool otp load` of it writes the key **and turns secure boot on, permanently**.
+  From then on the board refuses every image not signed with that key. The SOS build switches
+  the file off. Securing a board is a separate step with its own written procedure; don't
+  improvise it with `picotool seal`, which produces the same file if given a name for it.
 - Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
   image's metadata after the firmware is linked.
 

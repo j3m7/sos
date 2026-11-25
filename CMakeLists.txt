@@ -240,9 +240,13 @@ pico_enable_stdio_uart(sos 1)
 # signed image like any other; a board with secure boot runs only images signed with the key
 # whose hash is in its OTP memory. Without SOS_SIGN_KEY the image is unsigned, as before.
 #
-# The key is never in the repository. Signing also writes sos.otp.json to the build directory:
-# the key's hash in the form `picotool otp load` takes. Nothing in this build loads it; writing
-# OTP is a separate, irreversible step done by hand.
+# The key is never in the repository.
+#
+# No OTP file is produced. The SDK would have picotool write sos.otp.json next to the image:
+# the settings `picotool otp load` takes to make a board accept only this key, which are the
+# key's hash, the "key valid" flag AND the bit that enables secure boot. Loading that file once
+# turns secure boot on for good. A file like that doesn't belong among everyday build outputs,
+# so it's switched off below; making it is part of the written procedure for securing a board.
 if (NOT DEFINED SOS_SIGN_KEY AND DEFINED ENV{SOS_SIGN_KEY})
     set(SOS_SIGN_KEY "$ENV{SOS_SIGN_KEY}")
 endif()
@@ -254,6 +258,8 @@ if (SOS_SIGN_KEY)
     get_filename_component(SOS_SIGN_KEY "${SOS_SIGN_KEY}" ABSOLUTE)
     pico_hash_binary(sos)
     pico_sign_binary(sos "${SOS_SIGN_KEY}")
+    # pico_sign_binary() asks for the OTP file; an empty name makes the SDK leave it out.
+    set_target_properties(sos PROPERTIES PICOTOOL_OTP_FILE "")
     message(STATUS "SOS: the image is signed with ${SOS_SIGN_KEY}")
 else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
