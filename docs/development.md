@@ -40,6 +40,48 @@ The submodules can then stay uninitialized. `git submodule status` shows the pin
 when they change, check out the same commits in your copies. `-DWOLFSSL_ROOT=...` on the
 command line or a git-ignored `CMakeUserPresets.json` work too.
 
+## Signed builds
+
+The build can sign the firmware image, which is what a board with secure boot will require
+(issue #64). A board without secure boot runs a signed image like any other, so signing can be
+on in everyday builds.
+
+Make a key once, outside the repository, and keep it private (it is a secp256k1 private key in
+PEM form):
+
+```sh
+(umask 077; openssl ecparam -name secp256k1 -genkey -noout -out <keys-dir>/sos-sign.pem)
+```
+
+Point the build at it with `SOS_SIGN_KEY`, in `local.cmake`, with `-DSOS_SIGN_KEY=...`, or in
+the environment (read when CMake configures):
+
+```cmake
+# local.cmake
+set(SOS_SIGN_KEY "<keys-dir>/sos-sign.pem")
+```
+
+`picotool` then hashes and signs the image after linking: `sos.elf`, `sos.uf2` and the `flash`
+target are the signed image. Without `SOS_SIGN_KEY` the image is unsigned, as before; CMake
+prints which it is when it configures. To check an image:
+
+```sh
+picotool info -a build/sos.elf      # look for "hash: verified" and "signature: verified"
+```
+
+- **The key decides who can update a secured board.** Once a board has secure boot enabled, it
+  runs only images signed with the key whose hash was written to its one-time-programmable (OTP)
+  memory. If that key is lost, the board can never take new firmware; if it leaks, anyone can
+  sign firmware for the board. A key used for a real board belongs offline, with a second key
+  as a spare. A key made for trying this out on an open board protects nothing and needs no
+  such care.
+- **`sos.otp.json`** appears in the build directory of a signed build. It holds the key's hash
+  in the form `picotool otp load` takes. **The build never loads it, and neither should you** as
+  part of normal development: writing OTP can't be undone, and with secure boot enabled a
+  board refuses every image not signed with that key. That step has its own written procedure.
+- Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
+  image's metadata after the firmware is linked.
+
 ## Editor
 
 `.vscode/` configures VS Code to use [clangd](https://clangd.llvm.org/) (extension
