@@ -1006,6 +1006,7 @@ static void run_job(void) {
         lua_newtable(L);
         lua_setfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
         next_timer_id = 0;
+        http_open = false;
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         lua_pushcfunction(L, traceback);            // stack index 1: message handler
         if (lua_job.repl) {

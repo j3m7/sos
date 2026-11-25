@@ -75,6 +75,31 @@ static bool fake_job(shell_t *sh, void *arg, bool cancel) {
     return job_calls < job_steps;
 }
 
+// "raw": starts a raw-mode job that records its keys and finishes after Ctrl-Q, on its next step.
+static int raw_keys_got[64], n_raw_keys, raw_steps, raw_cancels;
+static bool raw_quit;
+
+static void fake_raw_key(shell_t *sh, int key, void *arg) {
+    (void)sh;
+    CHECK(arg == &job_arg_token);
+    if (n_raw_keys < 64)
+        raw_keys_got[n_raw_keys] = key;
+    n_raw_keys++;
+    if (key == 0x11)
+        raw_quit = true;
+}
+
+static bool fake_raw_step(shell_t *sh, void *arg, bool cancel) {
+    (void)sh;
+    CHECK(arg == &job_arg_token);
+    raw_steps++;
+    if (cancel) {
+        raw_cancels++;
+        return false;
+    }
+    return !raw_quit;
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
@@ -82,6 +107,12 @@ void shell_execute(shell_t *sh, char *cmd) {
     if (!strcmp(cmd, "job")) {
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
+        return;
+    }
+    if (!strcmp(cmd, "raw")) {
+        n_raw_keys = raw_steps = raw_cancels = 0;
+        raw_quit = false;
+        shell_run_raw(sh, fake_raw_step, fake_raw_key, &job_arg_token);
         return;
     }
     shell_printf(sh, "<%s>\n", cmd);
@@ -691,6 +722,131 @@ TEST(raw_write_translates_newlines) {
     CHECK(!memcmp(fake.out, "a\0b\r\n", 5));
 }
 
+
+// --- raw input mode (shell_run_raw) ----------------------------------------------------------
+
+TEST(raw_job_gets_every_key) {
+    start(&io_plain);
+    type("raw\r");
+    CHECK(shell_job_running(&sh));
+    clear_out();
+    type("a\x03\x04\x7f\x1b[A\x1b[3~\xc3\xa9");      // Ctrl-C and Ctrl-D are keys too
+    CHECK(shell_job_running(&sh));
+    CHECK_EQ(n_raw_keys, 8);
+    CHECK_EQ(raw_keys_got[0], 'a');
+    CHECK_EQ(raw_keys_got[1], 0x03);
+    CHECK_EQ(raw_keys_got[2], 0x04);
+    CHECK_EQ(raw_keys_got[3], 0x7f);
+    CHECK_EQ(raw_keys_got[4], KEY_UP);
+    CHECK_EQ(raw_keys_got[5], KEY_DELETE);
+    CHECK_EQ(raw_keys_got[6], 0xc3);                    // UTF-8 bytes as they come
+    CHECK_EQ(raw_keys_got[7], 0xa9);
+    CHECK_OUT("");                                      // nothing echoed
+    CHECK_EQ(raw_cancels, 0);
+    CHECK_EQ(fake.logouts, 0);
+    CHECK_EQ(n_executed, 1);
+}
+
+TEST(raw_enter_is_cr) {
+    start(&io_plain);
+    type("raw\r");
+    type("\r\n\n\r");                                   // CRLF, LF, CR
+    CHECK_EQ(n_raw_keys, 3);
+    CHECK_EQ(raw_keys_got[0], '\r');
+    CHECK_EQ(raw_keys_got[1], '\r');
+    CHECK_EQ(raw_keys_got[2], '\r');
+    type("\n");                                         // LF of a CRLF split across reads
+    CHECK_EQ(n_raw_keys, 3);
+}
+
+TEST(raw_job_ends_with_its_step) {
+    start(&io_plain);
+    type("raw\r");
+    clear_out();
+    type("x\x11");                                      // Ctrl-Q: the step after it finishes
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(raw_cancels, 0);
+    CHECK_OUT("sos> ");
+    type("ls\r");                                       // a command again
+    CHECK_EQ(n_executed, 2);
+    CHECK(!strcmp(executed[1], "ls"));
+}
+
+TEST(raw_job_gets_rest_of_command_read) {
+    start(&io_plain);
+    type("raw\rab\x1b[");                               // typed with the command
+    CHECK_EQ(n_raw_keys, 0);
+    type("B");                                           // sequence completed in the next read
+    CHECK_EQ(n_raw_keys, 3);
+    CHECK_EQ(raw_keys_got[0], 'a');
+    CHECK_EQ(raw_keys_got[1], 'b');
+    CHECK_EQ(raw_keys_got[2], KEY_DOWN);
+}
+
+TEST(raw_input_is_bounded_per_pass) {
+    static char lots[600];
+    memset(lots, 'z', sizeof(lots));
+    start(&io_plain);
+    type("raw\r");
+    fake.in = lots;
+    fake.in_len = sizeof(lots);
+    fake.in_pos = 0;
+    shell_poll(&sh);
+    CHECK(fake.in_pos >= 256 && fake.in_pos < sizeof(lots));
+    CHECK_EQ(raw_steps, 1);                             // a step after each bounded batch
+    while (fake.in_pos < fake.in_len)
+        shell_poll(&sh);
+    CHECK_EQ(n_raw_keys, (int)sizeof(lots));
+}
+
+TEST(shell_end_cancels_raw_job) {
+    start(&io_plain);
+    type("raw\r");
+    type("q");
+    shell_end(&sh);
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(raw_cancels, 1);
+    start(&io_plain);                                   // next session: lines again
+    type("ab\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "ab"));
+}
+
+TEST(raw_mode_and_redraw) {
+    start(&io_plain);
+    CHECK(!shell_raw_mode(&sh));
+    job_steps = 2;
+    job_partial = false;
+    type("job\r");
+    CHECK(!shell_raw_mode(&sh));                        // a plain job isn't raw
+    type("");
+    type("");
+    type("raw\r");
+    CHECK(shell_raw_mode(&sh));
+    clear_out();
+    shell_hide_input(&sh);                              // log output around a raw job: nothing
+    shell_show_input(&sh);
+    CHECK_OUT("");
+    type("\x11");
+    CHECK(!shell_raw_mode(&sh));
+}
+
+TEST(plain_job_after_raw_job_still_stashes) {
+    start(&io_plain);
+    type("raw\r");
+    type("\x11");
+    CHECK(!shell_job_running(&sh));
+    job_steps = 2;
+    job_partial = false;
+    type("job\r");
+    type("ls\r");                                       // a plain job keeps input for later
+    CHECK_EQ(n_raw_keys, 1);
+    type("");                                           // step 2: the job ends
+    type("");                                           // then the kept line runs
+    CHECK_EQ(n_executed, 3);
+    CHECK(!strcmp(executed[2], "ls"));
+}
+
 TEST_MAIN(
     RUN(init_prints_greeting_and_prompt);
     RUN(command_is_echoed_and_executed);
@@ -742,4 +898,12 @@ TEST_MAIN(
     RUN(redraw_during_job_keeps_output);
     RUN(write_space);
     RUN(raw_write_translates_newlines);
+    RUN(raw_job_gets_every_key);
+    RUN(raw_enter_is_cr);
+    RUN(raw_job_ends_with_its_step);
+    RUN(raw_job_gets_rest_of_command_read);
+    RUN(raw_input_is_bounded_per_pass);
+    RUN(shell_end_cancels_raw_job);
+    RUN(raw_mode_and_redraw);
+    RUN(plain_job_after_raw_job_still_stashes);
 )

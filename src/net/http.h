@@ -23,6 +23,7 @@
 #include "tls/tls.h"
 
 #define HTTP_BODY_MAX        (16 * 1024)    // request body; it's copied
+#define HTTP_HEAD_MAX        1536           // request line and headers, together
 #define HTTP_DEFAULT_TIMEOUT 30000          // ms
 
 typedef enum {

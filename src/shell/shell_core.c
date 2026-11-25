@@ -92,7 +92,7 @@ static bool answer_question(shell_t *sh, char *answer) {
 }
 
 void shell_hide_input(shell_t *sh) {
-    if (!sh->io)
+    if (!sh->io || shell_raw_mode(sh))          // full-screen program: leave its screen alone
         return;
     if (sh->job) {                              // job output on screen: don't erase it
         if (!sh->at_line_start)
@@ -130,51 +130,18 @@ static void run_line(shell_t *sh, char *cmd) {
 
 // --- input ---------------------------------------------------------------------
 
-// Terminals send special keys as escape sequences, which must not end up in the line:
-// CSI "ESC [ params final" (arrows, Delete, Ctrl+arrow, bracketed paste), SS3 "ESC O x"
-// (application-mode arrows, F1-F4) and "ESC x" (Alt+key). They may be split across reads,
-// so the state lives in shell_t. A control character cancels a sequence and is handled
-// normally, so a stray ESC can't swallow Enter or Ctrl-C.
-enum { ESC_NONE, ESC_START, ESC_CSI, ESC_SS3 };
-
-// Returns true if c was consumed as part of an escape sequence.
-static bool escape_sequence(shell_t *sh, unsigned char c) {
-    if (c == 0x1b) {
-        sh->esc = ESC_START;
-        return true;
-    }
-    if (sh->esc == ESC_NONE)
-        return false;
-    if (c < 0x20) {                         // control character: abandon the sequence
-        sh->esc = ESC_NONE;
-        return false;
-    }
-    switch (sh->esc) {
-    case ESC_START:
-        sh->esc = c == '[' ? ESC_CSI : c == 'O' ? ESC_SS3 : ESC_NONE;
-        break;
-    case ESC_CSI:                           // parameter/intermediate bytes until a final byte
-        if (c >= 0x40 && c <= 0x7e)
-            sh->esc = ESC_NONE;
-        break;
-    default:                                // SS3: one byte
-        sh->esc = ESC_NONE;
-        break;
-    }
-    return true;
-}
-
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->io = io;
     sh->ctx = ctx;
     sh->line_len = 0;
     sh->last_was_cr = false;
-    sh->esc = ESC_NONE;
+    sh->keys = (keys_t)KEYS_INIT;
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
     sh->job = NULL;             // a job of an earlier session was cancelled by shell_end()
     sh->job_arg = NULL;
+    sh->key = NULL;
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
     shell_printf(sh, "\nType 'help' for commands.\n");
@@ -184,10 +151,20 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
 void shell_run_job(shell_t *sh, shell_job_fn step, void *arg) {
     sh->job = step;
     sh->job_arg = arg;
+    sh->key = NULL;
+}
+
+void shell_run_raw(shell_t *sh, shell_job_fn step, shell_key_fn key, void *arg) {
+    shell_run_job(sh, step, arg);
+    sh->key = key;
 }
 
 bool shell_job_running(const shell_t *sh) {
     return sh->job != NULL;
+}
+
+bool shell_raw_mode(const shell_t *sh) {
+    return sh->job != NULL && sh->key != NULL;
 }
 
 bool shell_busy(const shell_t *sh) {
@@ -205,6 +182,7 @@ void shell_end(shell_t *sh) {
     if (sh->job) {
         shell_job_fn step = sh->job;
         sh->job = NULL;
+        sh->key = NULL;
         step(sh, sh->job_arg, true);
     }
     sh->answer = NULL;
@@ -231,7 +209,8 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         }
         sh->last_was_cr = (c == '\r');
 
-        if (escape_sequence(sh, (unsigned char)c))
+        int k = keys_feed(&sh->keys, (unsigned char)c);
+        if (k == KEYS_NONE || k > 0xff)         // special keys: no line editing with them (yet)
             continue;
         if (c == '\r' || c == '\n') {
             shell_printf(sh, "\n");
@@ -277,6 +256,51 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
     }
 }
 
+// Raw input mode: decode the bytes into keys for the job. Enter is '\r' whichever of CR, LF or
+// CRLF the terminal sends.
+static void raw_keys(shell_t *sh, const char *buf, size_t n) {
+    for (size_t i = 0; i < n && sh->key; i++) {
+        char c = buf[i];
+        if (c == '\n' && sh->last_was_cr) {
+            sh->last_was_cr = false;
+            continue;
+        }
+        sh->last_was_cr = (c == '\r');
+        int k = keys_feed(&sh->keys, (unsigned char)c);
+        if (k == KEYS_NONE)
+            continue;
+        sh->key(sh, k == '\n' ? '\r' : k, sh->job_arg);
+    }
+}
+
+// While a raw-mode job runs: up to RAW_PASS_MAX input bytes go to the job as keys, then one step.
+#define RAW_PASS_MAX 256
+
+static void poll_raw(shell_t *sh) {
+    if (sh->ahead_len) {        // typed after the command that started the job, in the same read
+        size_t len = sh->ahead_len;
+        sh->ahead_len = 0;
+        raw_keys(sh, sh->ahead, len);
+    }
+    char buf[32];
+    int n;
+    size_t total = 0;
+    while (total < RAW_PASS_MAX && (n = sh->io->read(sh->ctx, buf, sizeof(buf))) > 0) {
+        raw_keys(sh, buf, (size_t)n);
+        total += (size_t)n;
+    }
+    if (!sh->job)               // key() must not end the job, but don't call NULL if it did
+        return;
+    if (!sh->job(sh, sh->job_arg, false)) {
+        sh->job = NULL;
+        sh->job_arg = NULL;
+        sh->key = NULL;
+        if (!sh->at_line_start)
+            write_out(sh, "\n", 1);
+        prompt(sh);
+    }
+}
+
 // While a job runs: Ctrl-C cancels it (and drops input typed meanwhile); other input is kept.
 static void poll_job(shell_t *sh) {
     char buf[32];
@@ -310,7 +334,10 @@ void shell_poll(shell_t *sh) {
     char buf[32];
     int n;
     if (sh->job) {
-        poll_job(sh);
+        if (sh->key)
+            poll_raw(sh);
+        else
+            poll_job(sh);
         return;
     }
     if (sh->ahead_len) {        // input typed during the last job

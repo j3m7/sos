@@ -63,9 +63,10 @@ static void log_unlock(uint32_t saved) { restore_interrupts(saved); }
 static void log_write(const char *s, size_t n) { console_write(NULL, s, (int)n); }
 static void log_hide(void) { shell_hide_input(&console_shell); }
 static void log_show(void) { shell_show_input(&console_shell); }
+static bool log_hold(void) { return shell_raw_mode(&console_shell); }   // e.g. the editor
 
 static const log_hooks_t log_hooks = {
-    log_now, log_in_irq, log_lock, log_unlock, log_write, log_hide, log_show,
+    log_now, log_in_irq, log_lock, log_unlock, log_write, log_hide, log_show, log_hold,
 };
 
 // --- main ----------------------------------------------------------------------------------------

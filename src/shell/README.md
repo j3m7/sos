@@ -18,8 +18,23 @@ translation (`crlf`), and `admin` (true for the console only).
   `shell_run_job(sh, step, arg)`. `step()` is called once per main-loop pass, does a bounded
   amount of work, and returns false when it has finished. Ctrl-C, or the session ending, calls
   it with `cancel` so it can clean up. Input typed meanwhile is kept and run afterwards.
+- **Raw input:** `shell_run_raw(sh, step, key, arg)` runs a job in raw input mode, for
+  full-screen programs: every key typed goes to `key()` as it arrives (decoded by `keys.c`)
+  instead of being kept for afterwards, and Enter is always `'\r'`. Ctrl-C is an ordinary key
+  there, so the program needs its own way out; the session ending still cancels it. At most 256
+  input bytes are handled a pass, then one `step()`. `shell_raw_mode()` says a shell is in it: then
+  `shell_hide_input()`/`shell_show_input()` leave the screen alone, and the log holds console
+  messages back (`log_hooks_t.hold`) until the program ends.
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
+
+## `keys.c`: terminal keys (pure C, host tested)
+
+`keys_feed()` takes input one byte at a time and turns escape sequences into key codes: the
+arrows, Home/End, Insert/Delete, PgUp/PgDn (CSI, SS3 and vt220 `~` forms, modifiers ignored),
+and the terminal's answer to a cursor position query (`KEY_CURSOR_POS`). Other bytes come back
+as themselves. A control character inside a sequence abandons it, so a stray ESC can't swallow
+Enter or Ctrl-C. The line editor uses it too, and ignores the special keys.
 
 ## `termtext.c`: outside text on the terminal (pure C, host tested)
 

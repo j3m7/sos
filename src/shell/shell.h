@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "shell/keys.h"
+
 // Minimal line-oriented shell. Each instance has its own line buffer and talks to one channel
 // (the USB/UART console, an SSH session, ...) through a shell_io_t, so sessions don't share
 // input or output.
@@ -36,13 +38,19 @@ typedef void (*shell_answer_fn)(shell_t *sh, char *answer, void *arg);
 // clean up, free `arg` if needed and return false.
 typedef bool (*shell_job_fn)(shell_t *sh, void *arg, bool cancel);
 
+// One key for a job in raw input mode (shell_run_raw): a byte (0x00-0xff, Ctrl-C included) or a
+// KEY_* code from keys.h. Enter is always '\r'. For KEY_CURSOR_POS, the row and column are in
+// sh->keys.param[0] and [1]. It must not end the job itself (shell_end): let its step return
+// false instead.
+typedef void (*shell_key_fn)(shell_t *sh, int key, void *arg);
+
 struct shell {
     const shell_io_t *io;
     void *ctx;
     char line[SHELL_LINE_MAX + 1];
     size_t line_len;
     bool last_was_cr;
-    unsigned char esc;          // escape sequence state (arrow keys etc.), see shell_core.c
+    keys_t keys;                // escape sequence state (arrow keys etc.), see keys.h
     // Pending question (shell_ask): the next line goes to `answer` instead of a command.
     shell_answer_fn answer;
     void *answer_arg;
@@ -52,6 +60,7 @@ struct shell {
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
+    shell_key_fn key;           // raw input mode (shell_run_raw): every key goes to the job
     bool at_line_start;         // last output ended with a newline
     char ahead[SHELL_LINE_MAX]; // input typed while a job ran, processed when it ends
     size_t ahead_len;
@@ -106,6 +115,17 @@ void shell_show_input(shell_t *sh);
 // cancels the job and drops it.
 void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
+// A raw-mode job (shell_run_raw) owns the screen: nothing else should write to this shell.
+bool shell_raw_mode(const shell_t *sh);
+
+// Like shell_run_job, in raw input mode, for full-screen programs: every key typed goes to `key`
+// as it arrives, decoded (keys.h), instead of being kept for afterwards. Ctrl-C is a key like
+// any other and doesn't cancel the job, so the program needs its own way out (its step returns
+// false); the session ending still cancels it. `key` is called before `step` in the same pass,
+// for about 256 input bytes a pass at most, and may be called before the first step (keys typed
+// with the command), so the program's state must be ready when shell_run_raw() returns. Keys that
+// arrive in the same pass after the program decided to finish still go to `key`: ignore them.
+void shell_run_raw(shell_t *sh, shell_job_fn step, shell_key_fn key, void *arg);
 // A job is running or typed-ahead input is waiting to run.
 bool shell_busy(const shell_t *sh);
 
