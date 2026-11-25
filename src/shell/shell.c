@@ -21,6 +21,7 @@
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
+#include "core/version.h"
 #include "core/wdog.h"
 #include "edit/edit.h"
 #include "files/files.h"
@@ -55,6 +56,7 @@ static void save(shell_t *sh) {
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
+    shell_printf(sh, "version           the commit this firmware was built from\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "nts [ke]          NTS status / key exchange (development)\n");
@@ -774,6 +776,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_help(sh);
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
+    else if (!strcmp(cmd, "version"))
+        shell_printf(sh, "SOS %s\n", sos_version);
     else if (!strcmp(cmd, "time"))
         cmd_time(sh, args);
     else if (!strcmp(cmd, "tls"))
