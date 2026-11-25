@@ -95,6 +95,8 @@ set(SOS_SOURCES
     src/core/log.c
     src/core/config.c
     src/core/settings.c
+    src/core/keysector.c
+    src/core/devkey.c
     src/core/wdog.c
     src/core/fault.c
     src/core/stackmon.c
@@ -116,6 +118,7 @@ set(SOS_SOURCES
     src/files/sdcard.c
     src/files/files.c
     src/files/path.c
+    src/files/sdcrypt.c
     src/time/rtc.c
     src/time/timeconv.c
     src/time/timesync.c

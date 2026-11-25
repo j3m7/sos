@@ -13,6 +13,7 @@
 #include <wolfssh/ssh.h>
 
 #include "chat/chat.h"
+#include "core/devkey.h"
 #include "core/fault.h"
 #include "core/log.h"
 #include "core/settings.h"
@@ -125,6 +126,7 @@ int main(void) {
     const uint8_t *hostkey;
     uint32_t hostkey_len;
     bool have_hostkey = hostkey_get(&hostkey, &hostkey_len);
+    devkey_init();                      // unlocks encrypted SD cards; made on first boot
 
     if (cyw43_arch_init_with_country(wifi_country_code())) {
         log_msg(SOS_LOG_ERR, "cyw43 init failed");

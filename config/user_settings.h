@@ -54,6 +54,7 @@ extern "C"
 #define WOLFSSL_AES_SIV         /* NTS AEAD (AEAD_AES_SIV_CMAC_256); needs CMAC, CTR, direct */
 #define WOLFSSL_AES_COUNTER
 #define WOLFSSL_AES_DIRECT
+#define WOLFSSL_AES_XTS         /* SD card encryption (src/files/sdcrypt.c) */
 #define WOLFSSL_NO_SOCK
 //#define WOLFSSL_SP_NO_DYNSTACK
 
