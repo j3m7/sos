@@ -36,6 +36,14 @@ and the terminal's answer to a cursor position query (`KEY_CURSOR_POS`). Other b
 as themselves. A control character inside a sequence abandons it, so a stray ESC can't swallow
 Enter or Ctrl-C. The line editor uses it too, and ignores the special keys.
 
+## `charwidth.c`: columns on the terminal (pure C, host tested)
+
+`charwidth(cp)` says how many columns a code point takes: 2 for East Asian wide and fullwidth
+characters (CJK, Hangul, most emoji), 0 for combining marks, ZWNJ/ZWJ and Hangul medial and
+final jamo, 1 otherwise. The editor lays out its lines with it. The range tables in
+`charwidth_table.h` are generated from the Unicode database by `tools/gen_charwidth.py`
+(Unicode 16.0 now); rerun it with a newer Python to update them.
+
 ## `termtext.c`: outside text on the terminal (pure C, host tested)
 
 Text that comes from outside (an HTTP response, say) goes through `termtext_filter()` before

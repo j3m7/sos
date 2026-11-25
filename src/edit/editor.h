@@ -16,8 +16,12 @@
 #define EDITOR_ROWS_MIN  4
 #define EDITOR_ROWS_MAX  60
 #define EDITOR_COLS_MIN  20
-#define EDITOR_COLS_MAX  200
-#define EDITOR_ROW_BYTES (16 + EDITOR_COLS_MAX * 4)    // most output one screen row can take
+#define EDITOR_COLS_MAX  160
+#define EDITOR_MAX_MARKS 2              // combining marks shown on one character; more show as '?'
+// Most output one screen row can take: each column holds one character of up to 4 bytes with
+// its marks. It must fit in what edit.c can send at once (2048 bytes, SSH's output per pass),
+// which is what limits EDITOR_COLS_MAX.
+#define EDITOR_ROW_BYTES (16 + EDITOR_COLS_MAX * 4 * (1 + EDITOR_MAX_MARKS))
 #define EDITOR_FIND_MAX  64
 #define EDITOR_TAB       8
 

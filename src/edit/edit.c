@@ -37,7 +37,7 @@
 typedef struct {
     editor_t ed;
     char path[PATH_LEN];
-    char out[2048];                 // screen output and save buffer
+    char out[2048];                 // screen output and save buffer (SSH takes 2048 a pass)
     FIL file;
     bool quit;
     bool want_size;                 // send the size query when there's room
@@ -46,6 +46,10 @@ typedef struct {
     uint64_t size_expires;          // size_asked ends then (Ctrl+F3 sends the same bytes)
     uint64_t next_log_check;
 } edit_t;
+
+// A screen row goes out whole, so the largest must fit in one write (and in SSH's 2048 bytes a
+// pass), or it would never be drawn.
+_Static_assert(EDITOR_ROW_BYTES + 32 <= sizeof(((edit_t *)0)->out), "a screen row must fit in out[]");
 
 static void put(shell_t *sh, const char *s) {
     sh->io->write(sh->ctx, s, (int)strlen(s));     // raw: no newline translation needed

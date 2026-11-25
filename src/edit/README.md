@@ -10,7 +10,13 @@ of up to 32 KB on the console or over SSH.
   CRLF again (`editor_export()`).
 - **Keys** come from `keys.h`; `editor_key()` returns what the caller must do: save, quit, or ask
   the terminal for its size.
-- **Screen:** each character is one column, a tab up to the next multiple of 8. Controls, invalid
+- **Screen:** each character takes the columns `charwidth()` gives (two for CJK and most emoji,
+  none for combining marks), a tab up to the next multiple of 8; a letter and its combining marks
+  (up to `EDITOR_MAX_MARKS`, 2) move and delete as one, and a mark beyond that or with no letter
+  to go on shows as `?`. A wide character cut by either edge of the screen shows as spaces. All of
+  this is one function, `unit_bytes()`, so layout, cursor and drawing agree; and since each column
+  holds one unit of at most 12 bytes, a row's output is bounded (`EDITOR_ROW_BYTES`, 1936 bytes at
+  the 160-column limit) whatever the file holds, and fits one SSH write. Controls, invalid
   UTF-8 and the code points `termtext_hidden()` names show as `?`, so nothing in a file can send
   the terminal a sequence or hide what its bytes are. Lines don't wrap; the view scrolls
   sideways.
