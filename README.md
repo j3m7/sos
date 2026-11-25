@@ -133,7 +133,8 @@ picocom -b 115200 /dev/ttyACM0
 `help` lists the commands. [docs/commands.md](docs/commands.md) is the full reference, and marks
 which commands work only on the console. The greeting above the first prompt (and after each SSH
 login) names the commit the firmware was built from, e.g. `SOS 9332d0364fb3`; `version` shows it
-too, with `-dirty` if the build had uncommitted changes.
+too, with `-dirty` if the build had uncommitted changes, followed by the board's serial number
+and the RP2350 chip revision.
 
 ## Configuration
 
@@ -442,9 +443,10 @@ kind is in.
   forget` clears it, after which only the keys shown at format read the old cards. Firmware
   from before encryption erases the whole key sector if it ever has to make a new SSH host key,
   which would take the device key with it.
-- **Speed:** the encryption is software AES (the RP2350 has no AES hardware): about 690 KB/s
-  write and 650 KB/s read on the card, against 2.0 / 1.7 MB/s unencrypted. Copying on the card
-  slows down by about as much; SFTP is limited by SSH's own encryption and barely changes.
+- **Speed:** the encryption is software AES (the RP2350 has no AES hardware), using wolfSSL's
+  Thumb-2 assembly: about 1.1 MB/s write and 1.0 MB/s read on the card, against 2.0 / 1.7 MB/s
+  unencrypted. Copying on the card slows down by about as much; SFTP is limited by SSH's own
+  encryption and barely changes.
 - A PC sees an encrypted card as unformatted. Don't let it format the card.
 
 ### File transfer (SFTP)

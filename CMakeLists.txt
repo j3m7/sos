@@ -78,9 +78,17 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES
 
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
-# AES and SHA-256 lookup tables in SRAM (FLASH_QUALIFIER in config/user_settings.h): about 3x
-# faster encrypted SD card writes for 8.7 KB of RAM.
-set_source_files_properties(${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c
+# AES: wolfSSL's Thumb-2 assembly, the inline-assembly version (thumb2-aes-asm_c.c; issue #59),
+# about 60% faster than the C code for encrypted SD cards, and its two 1 KB tables stay in flash
+# (the XIP cache holds them). Only aes.c and the assembly get WOLFSSL_ARMASM: globally it would
+# switch SHA-2, ChaCha, Curve25519 etc. to assembly too. WOLFSSL_ARMASM turns on
+# WOLFSSL_USE_ALIGN, which changes struct Aes, so config/user_settings.h defines that for every
+# file: with it on aes.c only, the first SSH login corrupted the heap.
+set(SOS_AES_ASM_SRC ${WOLFSSL_ROOT}/wolfcrypt/src/port/arm/thumb2-aes-asm_c.c)
+set_source_files_properties(${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${SOS_AES_ASM_SRC} PROPERTIES
+    COMPILE_DEFINITIONS "WOLFSSL_ARMASM;WOLFSSL_ARMASM_THUMB2;WOLFSSL_ARMASM_INLINE;WOLFSSL_ARMASM_NO_HW_CRYPTO;WOLFSSL_ARMASM_NO_NEON")
+# SHA-256's constants in SRAM (FLASH_QUALIFIER in config/user_settings.h).
+set_source_files_properties(${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c
     PROPERTIES COMPILE_DEFINITIONS SOS_WOLFCRYPT_TABLES_IN_RAM)
 
 # --- SSH server (src/ssh/pico-sshd: copied from pico-sshd, see THIRD_PARTY.md) ---
@@ -108,6 +116,7 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/core/heap.c
+    src/core/chipinfo.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -155,6 +164,10 @@ add_executable(sos ${SOS_SOURCES}
     ${LUA_SOURCES}
 )
 add_dependencies(sos sos_version)
+# wolfSSL's Thumb-2 AES (see above), linked last. Where its code lands in flash matters: listed
+# before the Lua sources, encrypted SD card reads ran 16% slower (841 vs 1000 KB/s), from code
+# competing for the same XIP cache lines. Re-measure with `sd test` after moving it.
+target_sources(sos PRIVATE ${SOS_AES_ASM_SRC})
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
@@ -206,6 +219,7 @@ target_link_libraries(sos
     pico_stdlib
     pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
+    pico_unique_id          # board serial, shown by `version`
     pico_lwip_sntp
     hardware_flash
     hardware_i2c
