@@ -419,7 +419,8 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
         } else {
             open++;
             open_user += conns[i]->use == TLS_USER;
-            opening += conns[i]->state != TLS_READY;     // its handshake's peak still to come
+            tls_state_t st = conns[i]->state;              // its handshake's peak still to come
+            opening += st == TLS_RESOLVING || st == TLS_CONNECTING || st == TLS_HANDSHAKE;
         }
     }
     const char *refused = tls_admit(open, open_user, opening, use, free_heap);
