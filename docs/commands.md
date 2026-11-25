@@ -81,7 +81,8 @@ See [Timekeeping](../README.md#timekeeping) and
 
 ## HTTPS
 
-For testing the HTTPS client (`src/net/README.md`). The server's certificate must chain to a
+For testing the HTTPS client (`src/net/README.md`); Lua scripts use it through `sos.http`, from
+any shell. The server's certificate must chain to a
 built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
 
 | Command | Where | What it does |

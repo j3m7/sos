@@ -435,6 +435,9 @@ coroutine libraries, `require` (see below), and `sos`:
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
+| `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=}` (see below) |
+| `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
+| `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
 only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them; use a
@@ -458,6 +461,29 @@ local greet = require "greet"
 print(greet.hello("pico"))
 ```
 
+**HTTPS:** `sos.http` makes one request at a time with the HTTPS client (`src/net/README.md`),
+from scripts started on the console or over SSH. The server certificate is checked as for every
+TLS connection, and redirects aren't followed (the script sees the 3xx and `headers.location`).
+Any status is a response; `nil` and a message mean there was none (DNS, TLS, timeout, a bad
+option, a body over `max_body`). Options, all optional except `url` for `request`:
+
+| Option | |
+|---|---|
+| `headers` | extra request headers, `{["X-Name"] = "value"}`. `Content-Type` here is the same as `content_type`; `Host`, `Content-Length`, `Connection` and the like are set by the client and refused |
+| `body`, `content_type` | request body (up to 16 KB) and its type (no `Content-Type` header if not given) |
+| `timeout` | milliseconds until the headers arrive, then between pieces of the body (default 30000) |
+| `max_body` | the most response body to accept, in bytes (default 32 KB; the script's 128 KB covers it) |
+
+The response's `headers` table has lower-case names; a repeated header's values are joined with
+`, `. The body is the server's bytes as they are: a script that prints it prints whatever the
+server sent, escape sequences included.
+
+```lua
+local r, err = sos.http.post("https://ntfy.example/alerts", "disk almost full",
+                             {headers = {Title = "sos"}})
+if not r then print("failed: " .. err) elseif r.status ~= 200 then print(r.status, r.reason) end
+```
+
 - **Stopping:** Ctrl-C ends the script even if it catches errors with `pcall` or `xpcall`: from
   then on, any code it runs outside a `pcall` raises "interrupted" again. The exception is a
   single long call into C, such as a pattern match that backtracks for minutes, which can't be
@@ -465,7 +491,8 @@ print(greet.hello("pico"))
   other script can start.
 
 - **How it works:** core 1 never touches the card, network or shells. Each `sos` call is a
-  request that core 0's main loop answers (one per pass); output goes through a buffer that the
+  request that core 0's main loop answers (one per pass; an HTTPS request is answered once its
+  headers or the next piece of its body are in, with the main loop going on meanwhile); output goes through a buffer that the
   shell drains as its channel takes it. The heap is shared (malloc is mutex-protected), and each
   script may allocate up to 128 KB ("not enough memory" beyond). Core 1 gets a 32 KB stack from
   the heap when the first script runs, and pauses while core 0 writes flash.

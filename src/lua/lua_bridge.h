@@ -61,6 +61,12 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    // HTTPS (net/http.h), one request at a time, answered from the main loop once there's
+    // something to say, so these can take a while. Ctrl-C answers them at once with an error.
+    LR_HTTP_REQUEST,                // opts: an http_opts_t -> once the headers are in:
+                                    // result: status, path: reason, data/len: headers
+    LR_HTTP_READ,                   // -> data/len: body bytes (len 0: the end)
+    LR_HTTP_CLOSE,                  // drop the request (the body isn't wanted)
 } lua_req_type_t;
 
 typedef struct {
@@ -70,6 +76,8 @@ typedef struct {
     char path[LUA_PATH_MAX];
     uint32_t offset;
     uint32_t len;
+    const void *opts;               // LR_HTTP_REQUEST: core 1's http_opts_t, and the strings it
+                                    // points at, which core 0 reads while core 1 waits
     int64_t result;                 // < 0: failed (error has why); LUA_REQ_NOT_FOUND: no such file
     char error[64];
     uint8_t data[LUA_REQ_DATA];
@@ -83,6 +91,9 @@ extern lua_req_t lua_req;
 
 // LR_LIST packs entries into data as: uint32 size, uint8 is_dir, name, NUL; result = count,
 // len = bytes used. A listing that doesn't fit continues with offset = entries already returned.
+
+// LR_HTTP_REQUEST packs the headers into data as http_resp_t stores them: "name:value\n" each,
+// names in lower case.
 
 // --- output: core 1 writes, core 0 reads -------------------------------------------------------
 

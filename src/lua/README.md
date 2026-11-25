@@ -7,15 +7,16 @@ log, the clock, a shell) is a request that core 0 answers.
 ```
 core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   interpreter, `sos` library  ──req──►  lua_host_poll(): one request per pass
-                              ◄──ans──  (files, log, time)
+                              ◄──ans──  (files, log, time, HTTPS)
   print() ──► output ring buffer ─────► drained into the shell that started the script
 ```
 
 ## `lua_bridge.h`: the shared state
 
 - **One request mailbox** (`lua_req`): core 1 fills in the request (`LR_LOG`, `LR_TIME`,
-  `LR_READ`, `LR_WRITE`, `LR_LIST`, `LR_REMOVE`, `LR_MKDIR`), sets a flag, and waits. Core 0
-  answers, then clears the flag.
+  `LR_READ`, `LR_WRITE`, `LR_LIST`, `LR_REMOVE`, `LR_MKDIR`, and `LR_HTTP_REQUEST`,
+  `LR_HTTP_READ`, `LR_HTTP_CLOSE` for `sos.http`), sets a flag, and waits. Core 0 answers, then
+  clears the flag.
 - **A 2 KB output ring buffer** for the script's output.
 - **A cancel flag** that core 0 sets on Ctrl-C, or when the session ends.
 - **Hand-over:** one side writes the data, then sets the flag after a memory barrier
@@ -72,6 +73,18 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   instruction, and doesn't print the "interrupted" error.
 - **`lua_host_poll()`** answers at most one request per main-loop pass, each a bounded amount
   of work, so the watchdog, SSH and the console keep going whatever the script does.
+- **HTTPS (`sos.http`):** core 0 owns the script's one request (`net/http.h`). Core 1 sends
+  `LR_HTTP_REQUEST` with a pointer to an `http_opts_t` on its stack, whose strings are in the
+  script's Lua state: core 0 reads them while core 1 waits, and `http_start()` copies them.
+  These requests stay pending across passes: each pass polls the connection once, and answers
+  when the headers are in (status, reason, and the headers as `http_resp_t` stores them), or
+  when there's body to hand over (`LR_HTTP_READ`, up to 4 KB per answer). They're served only
+  from the main loop (`lua_host_poll(true)`), never from a shell job, because the TLS
+  handshake needs stack and an SSH session's job runs deep inside `sshd_poll()`. Ctrl-C answers
+  a pending one with "interrupted" at once. A request the script abandoned (an error while
+  reading the body, say) is closed when the next one starts, when a prompt line ends, or when the
+  script ends. The whole body goes into one Lua string, limited by `max_body` (default 32 KB),
+  so a script stays within its 128 KB.
 - **File rights:** script file changes pass `files_write_allowed()` with no shell, so a script
   has SFTP's rights even when started on the console. The console's extra rights (`/certs`)
   are for what the person types there, not for code they run. Once the script's shell is gone,

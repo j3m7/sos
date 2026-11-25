@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // Core 0's side of Lua: the `lua` shell command, and the requests the script on core 1 makes
-// (files on the SD card, log, time). Requests are answered from the main loop, one per pass,
-// each a bounded amount of work, so the watchdog, SSH and the console keep going whatever the
-// script does. The script's output goes to the shell that started it, as fast as that shell's
-// channel takes it.
+// (files on the SD card, log, time, HTTPS). Requests are answered from the main loop, one per
+// pass, each a bounded amount of work, so the watchdog, SSH and the console keep going whatever
+// the script does. The script's output goes to the shell that started it, as fast as that
+// shell's channel takes it.
 
 #include "lua/lua_host.h"
 
@@ -26,6 +26,7 @@
 #include "files/sdcard.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_core1.h"
+#include "net/http.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
 
@@ -157,28 +158,127 @@ static void serve_change(FRESULT (*op)(const TCHAR *)) {
 static FRESULT do_mkdir(const TCHAR *p) { return f_mkdir(p); }
 static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 
-static void serve(void) {
-    lua_req.result = 0;
-    lua_req.error[0] = '\0';
-    switch (lua_req.type) {
-    case LR_LOG:
-        log_msg(SOS_LOG_NOTICE, "lua: %s", (const char *)lua_req.data);
-        break;
-    case LR_TIME: {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        if (tv.tv_sec < 1704067200)             // before 2024: not set
-            req_error("the clock isn't set");
-        else
-            lua_req.result = tv.tv_sec;
-        break;
+// --- HTTPS (sos.http) ----------------------------------------------------------------------------
+//
+// The script's request (one at a time) belongs to core 0; core 1 sees only what the answers copy
+// out. HTTPS requests are answered from the main loop only (lua_host_poll(true)), never from
+// inside a shell job: the TLS handshake needs stack, and an SSH session's job runs deep inside
+// sshd_poll().
+
+static http_req_t *http;                // the script's request, if any
+static bool http_started;               // the pending LR_HTTP_REQUEST has been started
+
+static void http_drop(void) {
+    http_close(http);
+    http = NULL;
+}
+
+_Static_assert(HTTP_HEADERS_MAX <= LUA_REQ_DATA, "the headers must fit in one answer");
+_Static_assert(HTTP_REASON_MAX < LUA_PATH_MAX, "the reason must fit in lua_req.path");
+
+// Answer LR_HTTP_REQUEST once the headers are in.
+static bool serve_http_request(void) {
+    if (!http_started) {
+        const char *err;
+        http_drop();                            // one left over from a request the script abandoned
+        http = http_start(lua_req.opts, &err);
+        if (!http)
+            return !req_error(err);
+        http_started = true;
     }
-    case LR_READ:   serve_read(); break;
-    case LR_WRITE:  serve_write(); break;
-    case LR_LIST:   serve_list(); break;
-    case LR_REMOVE: serve_change(do_unlink); break;
-    case LR_MKDIR:  serve_change(do_mkdir); break;
-    default:        req_error("unknown request"); break;
+    http_state_t st = http_poll(http);
+    if (st == HTTP_FAILED) {
+        req_error(http_error(http));
+        http_drop();
+        return true;
+    }
+    if (st < HTTP_BODY)
+        return false;
+    const http_resp_t *p = http_response(http);
+    snprintf(lua_req.path, sizeof(lua_req.path), "%s", p->reason);
+    memcpy(lua_req.data, p->hdr, p->hdr_len);
+    lua_req.len = (uint32_t)p->hdr_len;
+    lua_req.result = p->status;
+    return true;
+}
+
+// Answer LR_HTTP_READ with as much of the body as there is now, up to a full answer.
+static bool serve_http_read(void) {
+    if (!http)
+        return !req_error("no request");
+    uint32_t got = 0;
+    while (got < LUA_REQ_DATA) {
+        int n = http_read(http, lua_req.data + got, LUA_REQ_DATA - got);
+        if (n <= 0)
+            break;
+        got += (uint32_t)n;
+    }
+    if (!got) {
+        http_state_t st = http_poll(http);
+        if (st == HTTP_FAILED) {                // cut short, or timed out
+            req_error(http_error(http));
+            http_drop();
+            return true;
+        }
+        if (st != HTTP_DONE)
+            return false;                       // nothing yet
+        http_drop();                            // the end: len 0
+    }
+    lua_req.len = got;
+    lua_req.result = got;
+    return true;
+}
+
+// Returns true once the request is answered.
+static bool serve_http(void) {
+    if (lua_job.cancel || !owner) {
+        http_drop();
+        return !req_error("interrupted");
+    }
+    switch (lua_req.type) {
+    case LR_HTTP_REQUEST: return serve_http_request();
+    case LR_HTTP_READ:    return serve_http_read();
+    default:              http_drop(); return true;     // LR_HTTP_CLOSE
+    }
+}
+
+static bool is_http(lua_req_type_t t) {
+    return t == LR_HTTP_REQUEST || t == LR_HTTP_READ || t == LR_HTTP_CLOSE;
+}
+
+// Answer the pending request, if it can be answered here and now.
+static void serve(bool main_loop) {
+    if (is_http(lua_req.type)) {
+        if (!main_loop)
+            return;
+        lua_req.result = 0;
+        lua_req.error[0] = '\0';
+        if (!serve_http())
+            return;                             // not yet: again next pass
+        http_started = false;
+    } else {
+        lua_req.result = 0;
+        lua_req.error[0] = '\0';
+        switch (lua_req.type) {
+        case LR_LOG:
+            log_msg(SOS_LOG_NOTICE, "lua: %s", (const char *)lua_req.data);
+            break;
+        case LR_TIME: {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            if (tv.tv_sec < 1704067200)         // before 2024: not set
+                req_error("the clock isn't set");
+            else
+                lua_req.result = tv.tv_sec;
+            break;
+        }
+        case LR_READ:   serve_read(); break;
+        case LR_WRITE:  serve_write(); break;
+        case LR_LIST:   serve_list(); break;
+        case LR_REMOVE: serve_change(do_unlink); break;
+        case LR_MKDIR:  serve_change(do_mkdir); break;
+        default:        req_error("unknown request"); break;
+        }
     }
     __dmb();
     lua_req.done = true;
@@ -191,6 +291,8 @@ static bool repl;                       // the owner is at the Lua prompt (`lua`
 static void repl_answer(shell_t *sh, char *answer, void *arg);
 
 static void finish(void) {
+    http_drop();
+    http_started = false;
     free(owner_code);
     owner_code = NULL;
     lua_job.code = NULL;
@@ -200,9 +302,9 @@ static void finish(void) {
     lua_job.state = LJ_IDLE;
 }
 
-void lua_host_poll(void) {
+void lua_host_poll(bool main_loop) {
     if (lua_req.pending && !lua_req.done)
-        serve();
+        serve(main_loop);
     // At the prompt, the owner's shell is always either answering our question or running one of
     // our jobs. If it's doing neither, its session ended (shell_end() or shell_init() dropped the
     // question): close the prompt.
@@ -250,7 +352,7 @@ static bool lua_step(shell_t *sh, void *arg, bool cancel) {
         owner = NULL;                           // lua_host_poll() finishes up
         return false;
     }
-    lua_host_poll();                            // answer a request without waiting a pass
+    lua_host_poll(false);                       // answer a request without waiting a pass
     drain(sh);
     if (lua_job.state != LJ_DONE || lua_out.head != lua_out.tail)
         return true;
@@ -302,7 +404,7 @@ static bool repl_step(shell_t *sh, void *arg, bool cancel) {
         repl_ask(sh);
         return false;
     }
-    lua_host_poll();
+    lua_host_poll(false);
     if (lua_job.state == LJ_DONE)
         return repl_ended(sh);
     if (!repl_sent) {
@@ -323,6 +425,7 @@ static bool repl_step(shell_t *sh, void *arg, bool cancel) {
     __dmb();
     if (lua_job.repl_cmd || lua_out.head != lua_out.tail)
         return true;
+    http_drop();                                // one that an error in the line left open
     repl_more = lua_job.repl_incomplete;
     repl_ask(sh);
     return false;
@@ -335,7 +438,7 @@ static bool repl_quit_step(shell_t *sh, void *arg, bool cancel) {
         owner = NULL;                           // lua_host_poll() finishes up
         return false;
     }
-    lua_host_poll();
+    lua_host_poll(false);
     if (lua_job.state != LJ_DONE) {
         drain(sh);
         return true;

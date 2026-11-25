@@ -128,7 +128,7 @@ int main(void) {
         nts_poll();
         shell_poll(&console_shell);
         sshd_poll();
-        lua_host_poll();                // requests from a Lua script on core 1
+        lua_host_poll(true);            // requests from a Lua script on core 1
         log_flush();                    // messages logged in interrupt context
         if (time_reached(next_blink)) {
             led = !led;

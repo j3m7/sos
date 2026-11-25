@@ -13,7 +13,8 @@
 // an interactive prompt.
 void lua_command(shell_t *sh, char *args);
 
-// Answer the running script's requests; call from the main loop.
-void lua_host_poll(void);
+// Answer the running script's requests. main_loop: called from the main loop itself, where
+// HTTPS requests are served too; shell jobs pass false.
+void lua_host_poll(bool main_loop);
 
 #endif

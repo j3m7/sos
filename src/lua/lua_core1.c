@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "hardware/sync.h"
 #include "pico/flash.h"
@@ -20,6 +21,7 @@
 
 #include "lua/lua_bridge.h"
 #include "lua/lua_core1.h"
+#include "net/http.h"
 
 #define HOOK_EVERY 1000             // instructions between cancel checks
 
@@ -290,6 +292,230 @@ static int simple(lua_State *L, lua_req_type_t type) {
 static int l_remove(lua_State *L) { return simple(L, LR_REMOVE); }
 static int l_mkdir(lua_State *L) { return simple(L, LR_MKDIR); }
 
+// --- sos.http ----------------------------------------------------------------------------------
+//
+// sos.http.request(opts), sos.http.get(url [, opts]), sos.http.post(url, body [, opts]): one
+// HTTPS request (net/http.h), made by core 0. Returns a table {status, reason, headers, body},
+// whatever the status, or nil and an error when there's no response (bad options, DNS, TLS,
+// timeout, a body larger than max_body). The whole body is read into a string.
+
+#define HTTP_LUA_HEADERS    32              // extra request headers
+#define HTTP_LUA_BODY_MAX   (32 * 1024)     // default max_body: a script has 128 KB in all
+
+// A request answered "interrupted" because the script is being stopped: stop now.
+static void check_cancel(lua_State *L) {
+    if (lua_job.cancel)
+        interrupt(L);
+}
+
+// The string field `name` of table t, or NULL if it's nil. It stays on the stack (which keeps
+// it alive for core 0 to read). No NUL bytes: they'd cut the text short.
+static const char *opt_string(lua_State *L, int t, const char *name) {
+    if (lua_getfield(L, t, name) == LUA_TNIL)
+        return NULL;
+    if (lua_type(L, -1) != LUA_TSTRING)
+        luaL_error(L, "'%s' must be a string", name);
+    size_t len;
+    const char *s = lua_tolstring(L, -1, &len);
+    if (strlen(s) != len && strcmp(name, "body"))
+        luaL_error(L, "'%s' contains a NUL byte", name);
+    return s;
+}
+
+static lua_Integer opt_integer(lua_State *L, int t, const char *name, lua_Integer def,
+                               lua_Integer min, lua_Integer max) {
+    lua_getfield(L, t, name);
+    lua_Integer v = def;
+    if (!lua_isnil(L, -1)) {
+        int ok;
+        v = lua_tointegerx(L, -1, &ok);
+        if (!ok || v < min || v > max)
+            luaL_error(L, "'%s' must be an integer from %I to %I", name, min, max);
+    }
+    lua_pop(L, 1);
+    return v;
+}
+
+// Turn the headers table at index h into "Name: value" strings, kept in a new table pushed on
+// the stack, with pointers to them in lines[] (NULL-terminated). A Content-Type header becomes
+// *content_type, since the client sends that one itself.
+static void header_lines(lua_State *L, int h, const char **lines, const char **content_type) {
+    lua_newtable(L);
+    int keep = lua_gettop(L), n = 0;
+    lua_pushnil(L);
+    while (lua_next(L, h)) {                    // key at -2, value at -1
+        size_t klen, vlen;
+        if (lua_type(L, -2) != LUA_TSTRING || (lua_type(L, -1) != LUA_TSTRING &&
+                                               lua_type(L, -1) != LUA_TNUMBER))
+            luaL_error(L, "headers must map names to strings");
+        lua_pushvalue(L, -1);                   // a copy: tostring on a number changes it
+        const char *k = lua_tolstring(L, -3, &klen);
+        const char *v = lua_tolstring(L, -1, &vlen);
+        if (strlen(k) != klen || strlen(v) != vlen)
+            luaL_error(L, "header '%s' contains a NUL byte", k);
+        if (!strcasecmp(k, "content-type")) {
+            *content_type = v;
+            lua_setfield(L, keep, "content-type");
+        } else {
+            if (n == HTTP_LUA_HEADERS)
+                luaL_error(L, "more than %d headers", HTTP_LUA_HEADERS);
+            lines[n] = lua_pushfstring(L, "%s: %s", k, v);
+            lua_rawseti(L, keep, ++n);
+            lua_pop(L, 1);                      // the copy
+        }
+        lua_pop(L, 1);                          // the value; the key stays for lua_next
+    }
+    lines[n] = NULL;
+}
+
+// The headers from the answer ("name:value\n" each) as a table; a repeated header's values are
+// joined with ", ".
+static void push_headers(lua_State *L) {
+    lua_newtable(L);
+    const char *s = (const char *)lua_req.data, *end = s + lua_req.len;
+    while (s < end) {
+        const char *nl = memchr(s, '\n', (size_t)(end - s));
+        const char *colon = memchr(s, ':', (size_t)(nl - s));
+        if (!nl || !colon)
+            break;
+        lua_pushlstring(L, s, (size_t)(colon - s));
+        lua_pushvalue(L, -1);
+        if (lua_rawget(L, -3) == LUA_TSTRING) {
+            lua_pushliteral(L, ", ");
+            lua_pushlstring(L, colon + 1, (size_t)(nl - colon - 1));
+            lua_concat(L, 3);
+        } else {
+            lua_pop(L, 1);
+            lua_pushlstring(L, colon + 1, (size_t)(nl - colon - 1));
+        }
+        lua_rawset(L, -3);
+        s = nl + 1;
+    }
+}
+
+// The request described by the options table at index t.
+static int http_request(lua_State *L, int t) {
+    luaL_checkstack(L, 16, NULL);
+    const char *url = opt_string(L, t, "url");
+    if (!url)
+        return luaL_error(L, "'url' is required");
+    size_t body_len = 0;
+    const char *body = opt_string(L, t, "body");
+    if (body)
+        body_len = lua_rawlen(L, -1);
+    const char *method = opt_string(L, t, "method");
+    if (!method)
+        method = body ? "POST" : "GET";
+    const char *content_type = opt_string(L, t, "content_type");
+    const char *lines[HTTP_LUA_HEADERS + 1] = {NULL};
+    const char *header_ct = NULL;
+    if (lua_getfield(L, t, "headers") == LUA_TTABLE)
+        header_lines(L, lua_gettop(L), lines, &header_ct);
+    else if (!lua_isnil(L, -1))
+        return luaL_error(L, "'headers' must be a table");
+    if (!content_type)
+        content_type = header_ct;
+    lua_Integer timeout = opt_integer(L, t, "timeout", 0, 1, 600000);
+    lua_Integer max_body = opt_integer(L, t, "max_body", HTTP_LUA_BODY_MAX, 0, 0x7fffffff);
+
+    http_opts_t o = {
+        .method = method,
+        .url = url,
+        .content_type = content_type,
+        .headers = lines,
+        .body = body,
+        .body_len = body_len,
+        .timeout_ms = (uint32_t)timeout,
+    };
+    lua_req.type = LR_HTTP_REQUEST;
+    lua_req.opts = &o;
+    request();
+    lua_req.opts = NULL;
+    check_cancel(L);
+    if (lua_req.result < 0)
+        return fail(L);
+
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, (lua_Integer)lua_req.result);
+    lua_setfield(L, -2, "status");
+    lua_pushstring(L, lua_req.path);
+    lua_setfield(L, -2, "reason");
+    push_headers(L);
+    lua_setfield(L, -2, "headers");
+
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    size_t total = 0;
+    for (;;) {
+        lua_req.type = LR_HTTP_READ;
+        request();
+        check_cancel(L);
+        if (lua_req.result < 0) {
+            luaL_pushresult(&b);
+            return fail(L);
+        }
+        if (lua_req.len == 0)
+            break;
+        if (total + lua_req.len > (size_t)max_body) {
+            lua_req.type = LR_HTTP_CLOSE;
+            request();
+            check_cancel(L);
+            luaL_pushresult(&b);
+            lua_pushnil(L);
+            lua_pushfstring(L, "response body larger than %I bytes (max_body)", max_body);
+            return 2;
+        }
+        luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
+        total += lua_req.len;
+    }
+    luaL_pushresult(&b);
+    lua_setfield(L, -2, "body");
+    return 1;
+}
+
+static int l_http_request(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    return http_request(L, 1);
+}
+
+// A copy of the options table at index opts (or a new one), with method and url set; pushed.
+static int with_options(lua_State *L, int opts, const char *method, int url) {
+    luaL_checkstring(L, url);
+    if (!lua_isnoneornil(L, opts))
+        luaL_checktype(L, opts, LUA_TTABLE);
+    lua_newtable(L);
+    int t = lua_gettop(L);
+    if (!lua_isnoneornil(L, opts)) {
+        lua_pushnil(L);
+        while (lua_next(L, opts)) {
+            lua_pushvalue(L, -2);
+            lua_insert(L, -2);
+            lua_rawset(L, t);
+        }
+    }
+    lua_pushstring(L, method);
+    lua_setfield(L, t, "method");
+    lua_pushvalue(L, url);
+    lua_setfield(L, t, "url");
+    return t;
+}
+
+static int l_http_get(lua_State *L) {
+    return http_request(L, with_options(L, 2, "GET", 1));
+}
+
+static int l_http_post(lua_State *L) {
+    luaL_checkstring(L, 2);
+    int t = with_options(L, 3, "POST", 1);
+    lua_pushvalue(L, 2);
+    lua_setfield(L, t, "body");
+    return http_request(L, t);
+}
+
+static const luaL_Reg http_lib[] = {
+    {"request", l_http_request}, {"get", l_http_get}, {"post", l_http_post}, {NULL, NULL},
+};
+
 static const luaL_Reg sos_lib[] = {
     {"log", l_log},       {"time", l_time},     {"uptime", l_uptime}, {"sleep", l_sleep},
     {"read", l_read},     {"write", l_write},   {"append", l_append}, {"list", l_list},
@@ -444,6 +670,8 @@ static void setup_package(lua_State *L) {
 
 static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
+    luaL_newlib(L, http_lib);
+    lua_setfield(L, -2, "http");
     return 1;
 }
 
