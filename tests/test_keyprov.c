@@ -550,6 +550,32 @@ TEST(torn_page_b_starts_over) {
     check_secret_is(0x60);                  // a new secret, not the cut-off one
 }
 
+// Page A blank and page B a complete record of a version this firmware doesn't know: by the
+// format's rule (page A is written last, nothing is used before) that secret was never used, so
+// it's started over like a cut-off write.
+TEST(unused_newer_record_in_page_b_starts_over) {
+    made();
+    memset(PAGE(0), 0xff, ROOTSECRET_PAGE);
+    PAGE(1)[4] = 2;
+    CHECK_EQ(rootsecret_state(&fake_store), ROOTSECRET_NONE);
+    bool created = false;
+    CHECK_EQ(rootsecret_ensure(&fake_store, &created), ROOTSECRET_OK);
+    CHECK(created);
+    CHECK_EQ(erases, 1);
+    check_secret_is(0x60);
+}
+
+// The write of page A is cut short during the very first boot: B's secret is in use from then
+// on, and the caller is told a secret was made.
+TEST(first_boot_with_a_torn_page_a_reports_created) {
+    blank();
+    program_tears_at = 2;
+    bool created = false;
+    CHECK_EQ(rootsecret_ensure(&fake_store, &created), ROOTSECRET_OK);
+    CHECK(created);
+    CHECK(rootsecret_degraded(&fake_store));
+}
+
 TEST(torn_page_b_and_a_failing_erase) {
     blank();
     program_tears_at = 1;
@@ -651,6 +677,8 @@ TEST_MAIN(
     RUN(no_random_numbers_no_secret);
     RUN(failed_first_program_leaves_none);
     RUN(torn_page_b_starts_over);
+    RUN(unused_newer_record_in_page_b_starts_over);
+    RUN(first_boot_with_a_torn_page_a_reports_created);
     RUN(torn_page_b_and_a_failing_erase);
     RUN(power_cut_between_the_copies_is_finished);
     RUN(torn_page_a_uses_b);

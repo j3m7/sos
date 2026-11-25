@@ -22,6 +22,10 @@
 // - Page 0 is written last, and a secret is only ever used once page 0 holds it. So a blank
 //   page 0 means no secret from this sector was ever used, and an interrupted first write (page
 //   1 partly or fully written, page 0 blank) is finished or started over at the next boot.
+//   This is a rule of the format, for every later version of the record too: write page 0
+//   last, and never use a secret before page 0 holds it. This firmware erases a sector whose
+//   page 0 is blank and whose page 1 holds a record's worth of anything it can't use (a write
+//   cut short, or a complete record of a version it doesn't know), on the strength of that rule.
 // - Using it: either valid copy will do. If the other page is blank it's filled in; if it's
 //   damaged it's left alone and reported (rootsecret_degraded).
 // - Anything else is never replaced automatically: page 0 not blank and no valid copy (damaged,

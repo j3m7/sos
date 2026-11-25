@@ -152,16 +152,16 @@ int rootsecret_ensure(const rootsecret_store_t *store, bool *created) {
         s = S_UNFINISHED_B;
     }
     if (s == S_UNFINISHED_B) {
-        // Copy B to A. Until A holds it the secret isn't used: a failure here leaves "none".
+        // Copy B to A. What counts is what the sector then holds: A still blank leaves "none"
+        // (the secret isn't used, the next boot tries again); A written, even only in part,
+        // makes B's secret the one in use.
         memcpy(page, store->read(store->ctx) + PAGE_B * ROOTSECRET_PAGE, sizeof(page));
-        bool ok = program_page(store, PAGE_A, page);
+        program_page(store, PAGE_A, page);
         wipe(page, sizeof(page));
         s = classify(store->read(store->ctx), NULL, NULL);
-        if (!ok || s != S_OK)
-            return public_state(s);
-        if (created)
+        if (s == S_OK && created)
             *created = made;
-        return ROOTSECRET_OK;
+        return public_state(s);
     }
     if (s != S_OK)
         return ROOTSECRET_INVALID;
