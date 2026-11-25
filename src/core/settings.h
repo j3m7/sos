@@ -28,11 +28,17 @@ void settings_init(void);
 // The live configuration. Edit it, then settings_save().
 sos_config_t *settings(void);
 
-// Write the live configuration to flash. False on failure (the previous version stays).
+// Write the live configuration to flash. False on failure (the previous version stays). If the
+// configuration has no owner secret yet, one is made first (see config.h): at the first save of
+// a new board, when a plain record is sealed, and after `config reset`.
 bool settings_save(void);
 
+// Does the configuration have an owner secret (to encrypt and open SD cards with)?
+bool settings_has_owner_secret(void);
+
 // Erase the saved configuration: back to the defaults (hostname "sos", user "admin"), with no
-// network and no trusted keys.
+// network and no trusted keys. The owner secret goes with it: SD cards this board encrypted can
+// then only be read with the key shown when each was formatted.
 bool settings_reset(void);
 
 // False if flash can't be used (the firmware image overlaps the config slots).

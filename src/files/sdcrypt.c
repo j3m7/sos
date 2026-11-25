@@ -18,8 +18,23 @@ _Static_assert(OFF_TAG == OFF_KEY + SDCRYPT_KEY_LEN, "layout");
 
 #define VERSION     1
 #define CIPHER_XTS_AES_128  1
-#define WRAP_GCM_DEVKEY     1
+#define WRAP_GCM_DEVKEY     1       // the old device key: recognised, not opened
+#define WRAP_GCM_CARDKEY    2
 #define TAG_LEN     16
+
+bool sdcrypt_wrap_key(uint8_t out[SDCRYPT_DEVKEY_LEN], const uint8_t base[SDCRYPT_DEVKEY_LEN],
+                      const uint8_t owner[32]) {
+    Hmac hmac;
+    bool init = wc_HmacInit(&hmac, NULL, INVALID_DEVID) == 0;
+    bool ok = init && wc_HmacSetKey(&hmac, WC_SHA256, base, SDCRYPT_DEVKEY_LEN) == 0 &&
+              wc_HmacUpdate(&hmac, owner, 32) == 0 && wc_HmacFinal(&hmac, out) == 0;
+    if (init)
+        wc_HmacFree(&hmac);
+    sdcrypt_wipe(&hmac, sizeof(hmac));
+    if (!ok)
+        sdcrypt_wipe(out, SDCRYPT_DEVKEY_LEN);
+    return ok;
+}
 
 void sdcrypt_wipe(void *p, unsigned len) {
     volatile uint8_t *v = p;
@@ -43,7 +58,7 @@ bool sdcrypt_header_build(uint8_t sector[SDCRYPT_SECTOR], const uint8_t devkey[S
     memcpy(sector + OFF_MAGIC, magic, sizeof(magic));
     sector[OFF_VERSION] = VERSION;
     sector[OFF_CIPHER] = CIPHER_XTS_AES_128;
-    sector[OFF_WRAP] = WRAP_GCM_DEVKEY;
+    sector[OFF_WRAP] = WRAP_GCM_CARDKEY;
     put_le32(sector + OFF_OFFSET, SDCRYPT_OFFSET);
     memcpy(sector + OFF_CARD_ID, card_id, SDCRYPT_ID_LEN);
     memcpy(sector + OFF_NONCE, nonce, SDCRYPT_NONCE_LEN);
@@ -71,7 +86,11 @@ int sdcrypt_header_open(const uint8_t sector[SDCRYPT_SECTOR],
     if (!sdcrypt_is_header(sector))
         return SDCRYPT_PLAIN;
     if (sector[OFF_VERSION] != VERSION || sector[OFF_CIPHER] != CIPHER_XTS_AES_128 ||
-        sector[OFF_WRAP] != WRAP_GCM_DEVKEY || get_le32(sector + OFF_OFFSET) != SDCRYPT_OFFSET)
+        get_le32(sector + OFF_OFFSET) != SDCRYPT_OFFSET)
+        return SDCRYPT_UNSUPPORTED;
+    if (sector[OFF_WRAP] == WRAP_GCM_DEVKEY)
+        return SDCRYPT_OLD_WRAP;
+    if (sector[OFF_WRAP] != WRAP_GCM_CARDKEY)
         return SDCRYPT_UNSUPPORTED;
 
     Aes gcm;
@@ -98,7 +117,7 @@ static int open_one(const uint8_t *sector, const uint8_t *devkey, sdcrypt_info_t
     }
     if (!devkey) {
         memset(info, 0, sizeof(*info));
-        return SDCRYPT_NO_DEVKEY;
+        return sector[OFF_WRAP] == WRAP_GCM_DEVKEY ? SDCRYPT_OLD_WRAP : SDCRYPT_NO_DEVKEY;
     }
     return sdcrypt_header_open(sector, devkey, info);
 }

@@ -12,7 +12,7 @@
 // `config reset` and provisioning don't touch it, so the keys survive reflashing.
 enum {
     KEYSECTOR_HOSTKEY,      // the SSH host key (ssh/hostkey.c)
-    KEYSECTOR_DEVKEY,       // the device key that unlocks encrypted SD cards (core/devkey.c)
+    KEYSECTOR_DEVKEY,       // unused: held the SD cards' device key of older firmware; left as it is
     KEYSECTOR_PAGES
 };
 

@@ -28,8 +28,15 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
   XTS-AES-128 under the card's data key, tweak = the logical sector number, little-endian
   (dm-crypt's `plain64`, so `cryptsetup --type plain --cipher aes-xts-plain64 --key-size 256
   --offset 8192` opens it). The header holds a random card id and the data key encrypted with
-  AES-256-GCM under the device key (`core/devkey.c`); the GCM associated data covers the fields
-  before the nonce.
+  AES-256-GCM under the board's card key; the GCM associated data covers the fields before the
+  nonce.
+- **The card key** (`cardkey.c`) is HMAC-SHA256 of the configuration's owner secret, keyed
+  with a base key derived from the board's root secret (`KEYPROV_SD_WRAP_BASE`, derived at
+  boot before the key provider locks and held in RAM). It's computed when a card is opened or
+  formatted and wiped afterwards. No owner secret (a board never set up, or after `config
+  reset`) means no card key: encrypted cards stay locked, and an encrypted `sd format` makes
+  the owner secret and saves the configuration. A header with wrap id 1 (the device key of
+  older firmware) is recognised and refused.
 - **The layer** sits in `sdcard.c`'s existing block hooks (`card.read_blocks` etc.), so FatFs
   and everything above it don't change. Reads are decrypted in place; writes are encrypted into
   a 4 KB buffer a chunk at a time, since the caller's buffer must stay as it is. The sector

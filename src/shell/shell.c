@@ -93,7 +93,6 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "wifi              Wi-Fi network\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
-    shell_printf(sh, "sd devkey         the device key that unlocks encrypted cards\n");
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
@@ -122,7 +121,6 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "sd format [exfat|fat32] [plain]\n");
         shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
         shell_printf(sh, "                  showing the card's key once, to store offline\n");
-        shell_printf(sh, "sd devkey forget  clear the device key\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
@@ -485,6 +483,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     }
     if (!settings_reset())
         shell_printf(sh, "error: erasing the configuration failed\n");
+    sdcard_owner_gone();                // an encrypted card doesn't stay open under the old owner
     shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run 'setup'\n");
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
@@ -546,9 +545,14 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
 
 static void cmd_config(shell_t *sh, char *args) {
     if (args && !strcmp(args, "reset")) {
-        if (require_admin(sh))
-            shell_ask(sh, "Erase Wi-Fi settings, user and trusted keys? Type 'yes': ", false,
-                      on_reset_confirm, NULL);
+        if (require_admin(sh)) {
+            shell_printf(sh, "This also destroys the owner secret that unlocks this board's "
+                             "encrypted SD cards.\nCards it encrypted can then only be read on "
+                             "a PC, with the key shown when each was\nformatted. Setting the "
+                             "board up again does not bring them back.\n");
+            shell_ask(sh, "Erase Wi-Fi settings, trusted keys and the owner secret? Type 'yes': ",
+                      false, on_reset_confirm, NULL);
+        }
         return;
     }
     if (args && *args) {

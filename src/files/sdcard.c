@@ -25,10 +25,10 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
-#include "core/devkey.h"
 #include "core/log.h"
 #include "core/wdog.h"
 #include "files/files.h"
+#include "files/cardkey.h"
 #include "files/sdcrypt.h"
 
 // --- hardware configuration (called by the library) ------------------------------------------
@@ -120,7 +120,7 @@ static enum {
     KIND_UNKNOWN,           // not mounted since the card was (re)initialized
     KIND_PLAIN,
     KIND_ENCRYPTED,         // the layer is on
-    KIND_LOCKED,            // encrypted, but the device key doesn't open it (or there is none)
+    KIND_LOCKED,            // encrypted, but this board's card key doesn't open it (or there is none)
     KIND_UNSUPPORTED,       // encrypted in a format this firmware doesn't know
 } card_kind;
 static sdcrypt_t crypt;
@@ -185,7 +185,7 @@ static void hex(char *out, const uint8_t *p, unsigned n) {
 static const char *kind_why;    // why a locked or unsupported card can't be used
 
 // Read the card's sector 0 and backup header (into crypt_buf, which isn't in use outside a
-// write) and open them with the device key (sdcrypt_card_open has the rules). The card must be
+// write) and open them with this board's card key (sdcrypt_card_open has the rules). The card must be
 // initialized. Fills `info` on SDCRYPT_OK; *from_backup says the backup opened it.
 static int open_card(sdcrypt_info_t *info, bool *from_backup) {
     uint8_t *primary = crypt_buf, *backup = crypt_buf + SDCRYPT_SECTOR;
@@ -195,7 +195,12 @@ static int open_card(sdcrypt_info_t *info, bool *from_backup) {
     }
     bool have_backup = read_blocks_logged(&card, backup, SDCRYPT_BACKUP, 1) ==
                        SD_BLOCK_DEVICE_ERROR_NONE;
-    return sdcrypt_card_open(primary, have_backup ? backup : NULL, devkey(), info, from_backup);
+    uint8_t key[CARDKEY_LEN];
+    bool have_key = cardkey_get(key);
+    int r = sdcrypt_card_open(primary, have_backup ? backup : NULL, have_key ? key : NULL, info,
+                              from_backup);
+    sdcrypt_wipe(key, sizeof(key));
+    return r;
 }
 
 // After a mount through the layer succeeded on a card opened from its backup header: the volume
@@ -234,9 +239,16 @@ static void detect(void) {
         kind_why = "the card is encrypted in a format this firmware doesn't know";
     } else {
         card_kind = KIND_LOCKED;
-        kind_why = r == SDCRYPT_NO_DEVKEY
-            ? "the card is encrypted, but this device has no usable device key (sd devkey)"
-            : "the card is encrypted with another device's key (or both header copies are damaged)";
+        kind_why = r == SDCRYPT_OLD_WRAP
+            ? "the card was encrypted by older firmware, under a key this firmware doesn't use: "
+              "reformat it (`sd format`), or read it on a PC with the key shown at its format"
+            : r == SDCRYPT_NO_DEVKEY
+            ? (cardkey_possible()
+                   ? "the card is encrypted, and this board has no owner secret to open cards "
+                     "with yet (it has not been set up)"
+                   : "the card is encrypted, and this board has no key for cards (see `rootsecret`)")
+            : "the card is encrypted under another board's key, or this board's configuration "
+              "was erased since it was formatted (or both header copies are damaged)";
     }
     sdcrypt_wipe(&info, sizeof(info));
     if (kind_why)
@@ -505,8 +517,11 @@ static uint8_t new_key[SDCRYPT_KEY_LEN];
 
 static bool start_encrypted(shell_t *sh) {
     uint8_t id[SDCRYPT_ID_LEN], nonce[SDCRYPT_NONCE_LEN], key[SDCRYPT_KEY_LEN];
-    if (!devkey_create()) {     // the first encrypted card makes the device key
-        shell_printf(sh, "format failed: couldn't make the device key (see dmesg)\n");
+    uint8_t wrap[CARDKEY_LEN];
+    // The first encrypted card on a board that was never set up makes the owner secret (and
+    // saves the configuration to hold it).
+    if (!cardkey_ensure() || !cardkey_get(wrap)) {
+        shell_printf(sh, "format failed: no key to encrypt the card with (see dmesg)\n");
         return false;
     }
     WC_RNG rng;
@@ -518,13 +533,14 @@ static bool start_encrypted(shell_t *sh) {
         wc_FreeRng(&rng);
     }
     uint8_t *header = crypt_buf;            // free: the layer is off while formatting
-    ok = ok && sdcrypt_header_build(header, devkey(), id, nonce, key) &&
+    ok = ok && sdcrypt_header_build(header, wrap, id, nonce, key) &&
          write_blocks_fed(&card, header, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
          write_blocks_fed(&card, header, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
          sdcrypt_start(&crypt, key);
     if (ok)
         memcpy(new_key, key, sizeof(new_key));
     sdcrypt_wipe(key, sizeof(key));
+    sdcrypt_wipe(wrap, sizeof(wrap));
     if (!ok) {
         shell_printf(sh, "format failed: couldn't write the encryption header\n");
         return false;
@@ -651,9 +667,9 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
         shell_printf(sh, "usage: sd format [exfat|fat32] [plain]\n");
         return;
     }
-    if (!format_plain && devkey_state() == DEVKEY_INVALID) {
-        shell_printf(sh, "the device key can't be used (see `sd devkey`), so the card can't be "
-                         "encrypted: use `sd format plain`\n");
+    if (!format_plain && !cardkey_possible()) {
+        shell_printf(sh, "this board's root secret can't be used (see `rootsecret`), so the card "
+                         "can't be encrypted: use `sd format plain`\n");
         return;
     }
 
@@ -684,58 +700,17 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
 }
 
-// --- device key --------------------------------------------------------------------------------
+// --- owner change -------------------------------------------------------------------------------
 
-static void on_forget_confirm(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
-    if (!answer || strcmp(answer, "yes")) {
-        shell_printf(sh, "the device key is kept\n");
+// The configuration was erased (`config reset`): the owner secret is gone, so an encrypted
+// card must not stay open under the old one. Unmounts it and forgets its key.
+void sdcard_owner_gone(void) {
+    if (card_kind != KIND_ENCRYPTED && card_kind != KIND_LOCKED)
         return;
-    }
-    if (files_in_use(sh))
-        return;
-    f_unmount(sd_get_drive_prefix(&card));
+    if (card.state.mounted)
+        f_unmount(sd_get_drive_prefix(&card));
     card.state.mounted = false;
     crypt_off();
-    shell_printf(sh, devkey_forget() ? "the device key is cleared; the next encrypted `sd format` "
-                                       "makes a new one\n"
-                                     : "clearing the device key failed (see dmesg)\n");
-}
-
-// `sd devkey`: the device key's state; `sd devkey forget` (console): clear it, the explicit way
-// out of a key record that can't be used.
-static void cmd_devkey(shell_t *sh, const char *arg) {
-    if (!arg) {
-        switch (devkey_state()) {
-        case DEVKEY_NONE:
-            shell_printf(sh, "device key: none yet (the first encrypted `sd format` makes it)\n");
-            break;
-        case DEVKEY_OK:
-            shell_printf(sh, "device key: present (unlocks the cards this device encrypted)\n");
-            break;
-        default:
-            shell_printf(sh, "device key: present but unusable (damaged, or written by newer "
-                             "firmware). It's kept as it is: newer firmware may read it, and its\n"
-                             "cards' keys saved at format still work on a PC. `sd devkey forget` "
-                             "clears it.\n");
-        }
-        return;
-    }
-    if (strcmp(arg, "forget")) {
-        shell_printf(sh, "usage: sd devkey [forget]\n");
-        return;
-    }
-    if (!sh->io->admin) {
-        shell_printf(sh, "the device key can only be cleared on the serial console\n");
-        return;
-    }
-    if (devkey_state() == DEVKEY_NONE) {
-        shell_printf(sh, "there's no device key\n");
-        return;
-    }
-    shell_printf(sh, "Cards this device encrypted can then only be read with the key shown when\n");
-    shell_printf(sh, "they were formatted.\n");
-    shell_ask(sh, "Clear the device key? Type 'yes': ", false, on_forget_confirm, NULL);
 }
 
 // --- dispatch ------------------------------------------------------------------------------------
@@ -756,8 +731,6 @@ void sdcard_command(shell_t *sh, char *args) {
         cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg, arg2);
-    else if (!strcmp(sub, "devkey"))
-        cmd_devkey(sh, arg);
     else if (!strcmp(sub, "unmount")) {
         if (files_in_use(sh))
             return;
@@ -774,5 +747,5 @@ void sdcard_command(shell_t *sh, char *args) {
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
-                         "devkey [forget]|unmount]\n");
+                         "unmount]\n");
 }

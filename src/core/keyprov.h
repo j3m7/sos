@@ -37,7 +37,6 @@ enum {
     KEYPROV_CONFIG_SEAL,        // "SOS v1 config seal": seals the saved configuration
     KEYPROV_HOSTKEY_SEAL,       // "SOS v1 host key seal": seals the SSH host key
     KEYPROV_CONSOLE_PASSWORD,   // "SOS v1 console password": keys the password verifier
-    KEYPROV_SD_DEVICE,          // "SOS v1 sd device key"
     KEYPROV_SD_WRAP_BASE,       // "SOS v1 sd card wrap base": with the owner secret, wraps cards
     KEYPROV_PURPOSES
 };

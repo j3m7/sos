@@ -33,6 +33,7 @@
 #define CONFIG_CERTS_HASH_LEN 32    // SHA-256
 #define CONFIG_RTC_OFFSET_MIN (-64)
 #define CONFIG_RTC_OFFSET_MAX 63
+#define CONFIG_OWNER_SECRET_LEN 32
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -64,6 +65,12 @@ typedef struct {
     // Two capital letters (ISO 3166, e.g. "US"): the radio rules to follow. Empty = the chip's
     // worldwide set, which is allowed everywhere but may perform worse.
     char wifi_country[4];
+    // The owner secret: random bytes that tie the SD cards this board encrypts to this
+    // configuration (files/cardkey.h). All zero = none yet. It exists only in a sealed record:
+    // a plain record never carries one (it's zeroed on load and on a plain save), so a
+    // configuration that arrives plain gets a new owner. Erasing the configuration destroys it.
+    // Never shown, logged or exported.
+    uint8_t owner_secret[CONFIG_OWNER_SECRET_LEN];
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------

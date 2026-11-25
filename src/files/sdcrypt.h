@@ -12,13 +12,15 @@
 // sector number as the tweak, little-endian (dm-crypt's "plain64"), so Linux can open a card
 // with `cryptsetup open --type plain --cipher aes-xts-plain64 --key-size 256 --offset 8192`.
 // The data key is random per card and stored in the header encrypted with AES-256-GCM under
-// the device key; the GCM associated data is the header fields before the nonce.
+// the board's card key (files/cardkey.h: derived from the root secret and the configuration's
+// owner secret); the GCM associated data is the header fields before the nonce.
 //
 // Header layout (512 bytes, multi-byte numbers little-endian):
 //    0  magic "SOS-CRYPT-CARD\0\0"     16
 //   16  version (1)                    1
 //   17  cipher (1 = XTS-AES-128)       1
-//   18  wrap (1 = AES-256-GCM, device key)  1
+//   18  wrap (2 = AES-256-GCM, the card key; 1 = the same under the device key that firmware
+//       before the owner secret kept in flash: no longer opened)  1
 //   19  reserved (0)                   1
 //   20  data offset in sectors (8192)  4
 //   24  card id (random)               16
@@ -35,21 +37,23 @@
 
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/hmac.h>
 
 #define SDCRYPT_SECTOR      512
 #define SDCRYPT_OFFSET      8192u       // first sector of the encrypted volume (4 MB)
 #define SDCRYPT_BACKUP      4096u       // sector of the header's backup copy
 #define SDCRYPT_KEY_LEN     32          // data key: XTS-AES-128 (two 128-bit keys)
-#define SDCRYPT_DEVKEY_LEN  32          // device key: AES-256-GCM
+#define SDCRYPT_DEVKEY_LEN  32          // the board's card key: AES-256-GCM
 #define SDCRYPT_ID_LEN      16
 #define SDCRYPT_NONCE_LEN   12
 
 enum {
-    SDCRYPT_OK = 0,             // a header, and the device key opened it
+    SDCRYPT_OK = 0,             // a header, and the card key opened it
     SDCRYPT_PLAIN,              // not a header: a plain card (or not this sector)
     SDCRYPT_UNSUPPORTED,        // a header of a version or cipher this firmware doesn't know
-    SDCRYPT_WRONG_KEY,          // a header the device key doesn't open (another device, or damaged)
-    SDCRYPT_NO_DEVKEY,          // a header, but there's no device key to open it with
+    SDCRYPT_WRONG_KEY,          // a header the card key doesn't open (another board or owner, or damaged)
+    SDCRYPT_NO_DEVKEY,          // a header, but there's no card key to open it with
+    SDCRYPT_OLD_WRAP,           // a header wrapped under the old device key: not opened any more
 };
 
 typedef struct {
@@ -73,7 +77,7 @@ int sdcrypt_header_open(const uint8_t sector[SDCRYPT_SECTOR],
                         const uint8_t devkey[SDCRYPT_DEVKEY_LEN], sdcrypt_info_t *info);
 
 // Open a card from its sector 0 (`primary`) and the backup copy at SDCRYPT_BACKUP (`backup`,
-// NULL if it couldn't be read), with the device key (NULL if there is none):
+// NULL if it couldn't be read), with the board's card key (`devkey`; NULL if there is none):
 // - sector 0 is a header that opens: SDCRYPT_OK.
 // - otherwise the backup, if it's a header, unless sector 0 is a plain card's boot sector or
 //   MBR (ends in 0x55AA: a plain card, or one a PC formatted over an encrypted one). If the
@@ -94,6 +98,10 @@ void sdcrypt_stop(sdcrypt_t *c);                // forgets the key
 // decrypt in place.
 bool sdcrypt_encrypt(sdcrypt_t *c, uint8_t *out, const uint8_t *in, uint32_t lsector, uint32_t count);
 bool sdcrypt_decrypt(sdcrypt_t *c, uint8_t *buf, uint32_t lsector, uint32_t count);
+
+// The card key: HMAC-SHA256(key = base, message = owner). False (out zeroed) on failure.
+bool sdcrypt_wrap_key(uint8_t out[SDCRYPT_DEVKEY_LEN], const uint8_t base[SDCRYPT_DEVKEY_LEN],
+                      const uint8_t owner[32]);
 
 // Clear memory that held a key (not optimized away).
 void sdcrypt_wipe(void *p, unsigned len);

@@ -65,6 +65,27 @@ static const sealer_t sealer = { seal_seal, seal_open, &seal };
 // sealed at once. A secured board will refuse them (refuse_plain; issue #64 step 4).
 static const config_store_t store = { flash_slot_read, flash_slot_write, NULL, &sealer, false };
 
+// --- owner secret ------------------------------------------------------------------------------------
+
+bool settings_has_owner_secret(void) {
+    for (unsigned i = 0; i < sizeof(live.owner_secret); i++)
+        if (live.owner_secret[i])
+            return true;
+    return false;
+}
+
+// Before a save: a configuration without an owner secret gets a new one. Only when it can be
+// stored sealed; never logged.
+static void ensure_owner_secret(void) {
+    if (settings_has_owner_secret() || !seal.have_key)
+        return;
+    if (random_bytes(NULL, live.owner_secret, sizeof(live.owner_secret)))
+        log_msg(SOS_LOG_NOTICE, "config: this configuration is a new owner for encrypted SD "
+                                "cards (cards encrypted under an earlier one stay locked)");
+    else
+        log_msg(SOS_LOG_ERR, "config: making the owner secret failed (no random numbers)");
+}
+
 // --- public API ----------------------------------------------------------------------------------
 
 void settings_init(void) {
@@ -86,7 +107,9 @@ void settings_init(void) {
         log_msg(SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
         if (config_stored(&store) == CONFIG_STORED_PLAIN) {
             // From older firmware or a provisioning image: store it sealed, and erase the
-            // plain copy (config_save does both).
+            // plain copy (config_save does both). A plain record has no owner secret, so this
+            // configuration gets a new one.
+            ensure_owner_secret();
             if (config_save(&store, &live))
                 log_msg(SOS_LOG_NOTICE, "config: the saved configuration was unsealed (older "
                                         "firmware, or provisioning); it's now stored sealed");
@@ -115,6 +138,7 @@ sos_config_t *settings(void) {
 }
 
 bool settings_save(void) {
+    ensure_owner_secret();
     if (!config_save(&store, &live)) {
         log_msg(SOS_LOG_ERR, "config: saving to flash failed");
         return false;

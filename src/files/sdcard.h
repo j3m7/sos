@@ -8,12 +8,16 @@
 
 #include "shell/shell.h"
 
-// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|key|devkey [forget]|unmount]`;
-// format, key and devkey forget need an admin channel.
+// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount]`;
+// test, speed <MHz>, format and unmount need an admin channel.
 void sdcard_command(shell_t *sh, char *args);
 
 // Mount the card if it isn't yet (initializing the driver first). Says why on failure: to `sh`,
 // or in the log when `sh` is NULL.
 bool sdcard_mount(shell_t *sh);
+
+// After the configuration was erased: an encrypted card is unmounted and its key forgotten (the
+// owner secret it was opened with no longer exists).
+void sdcard_owner_gone(void);
 
 #endif

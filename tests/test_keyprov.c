@@ -109,7 +109,6 @@ static const char *const known[KEYPROV_PURPOSES] = {
     [KEYPROV_CONFIG_SEAL]      = "41dbd79babd1d214f590c73f780cf881ec7b3213018e776ca981a5933d7d5eef",
     [KEYPROV_HOSTKEY_SEAL]     = "fcedf13ff40fe0df04a72b35882f77ee5189d50737419ac689145ea05671961c",
     [KEYPROV_CONSOLE_PASSWORD] = "affba2708c2332c7529d9ecb6436349f289f0e30de1a057e389722e8220e4072",
-    [KEYPROV_SD_DEVICE]        = "119125edf4b82450ddee3f4503d629c0f566f858b34fb560786b2f58f8724221",
     [KEYPROV_SD_WRAP_BASE]     = "20f5fc197b743e02cb731f9aa3c803959d39b29f08e21f92b465b52f9c254e0e",
 };
 
@@ -184,7 +183,7 @@ TEST(derive_fails_after_lock) {
     start();
     uint8_t key[KEYPROV_KEY_LEN];
     CHECK(!keyprov_locked());
-    CHECK(keyprov_derive(KEYPROV_SD_DEVICE, key));
+    CHECK(keyprov_derive(KEYPROV_SD_WRAP_BASE, key));
     keyprov_lock();
     CHECK(keyprov_locked());
     CHECK_EQ(lock_calls, 1);
