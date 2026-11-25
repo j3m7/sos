@@ -120,6 +120,10 @@ plugging it in first. Flashing leaves the board's saved configuration and SSH ho
 alone; a new board has neither a network nor a trusted key until it's set up
 (`setup` on the console, or [provisioning](#provisioning)).
 
+The image can be signed as part of the build (`SOS_SIGN_KEY`; see
+[Signed builds](docs/development.md#signed-builds)). A board without secure boot runs signed
+and unsigned images alike.
+
 Developing inside a VM? See [`docs/development.md`](docs/development.md) for forwarding the
 Pico's USB connection so flashing works unattended.
 
