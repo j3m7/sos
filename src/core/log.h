@@ -48,6 +48,10 @@ void log_vmsg(int level, const char *fmt, va_list ap);
 // Does nothing while hooks->hold() is true.
 void log_flush(void);
 
+// How many stored messages the console will print at the next log_flush() (one more if some
+// were dropped before it showed them). For a full-screen program to say messages are waiting.
+int log_pending(void);
+
 // Deferred mode: messages are only stored when logged and printed by the next log_flush(), so
 // they never land in the middle of a shell command's output. Off by default (boot messages print
 // immediately); turn it on once the main loop calls log_flush() between commands.

@@ -180,6 +180,23 @@ void log_flush(void) {
     flushing = false;
 }
 
+int log_pending(void) {
+    if (!hooks)
+        return 0;
+    uint32_t saved = hooks->lock();
+    int n = lost_unprinted ? 1 : 0;
+    uint32_t pos = printed;
+    while (before(pos, end)) {              // pos is at an entry's level byte
+        if (at(pos) - 1 <= console_level)
+            n++;
+        while (before(pos, end) && at(pos) != '\n')
+            pos++;
+        pos++;
+    }
+    hooks->unlock(saved);
+    return n;
+}
+
 bool log_history_next(uint32_t *cursor, char *buf, size_t buflen) {
     if (!hooks)
         return false;

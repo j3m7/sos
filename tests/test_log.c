@@ -232,10 +232,15 @@ TEST(held_console_keeps_messages_for_later) {
     CHECK_EQ(out_len, 0);
     CHECK_EQ(hides, 0);
     CHECK_EQ(history_count(), 1);               // in the history meanwhile
+    log_msg(SOS_LOG_INFO, "not for the console");
+    log_msg(SOS_LOG_WARNING, "also held");
+    CHECK_EQ(log_pending(), 2);                 // the info message won't be printed
     held = false;
     log_flush();
     CHECK(strstr(out, "<hide>") == out);
-    CHECK(strstr(out, "while held\n<show>") != NULL);
+    CHECK(strstr(out, "also held\n<show>") != NULL);
+    CHECK(strstr(out, "not for the console") == NULL);
+    CHECK_EQ(log_pending(), 0);
 }
 
 TEST(held_console_overflow_is_reported) {
@@ -244,6 +249,8 @@ TEST(held_console_overflow_is_reported) {
     for (int i = 0; i < 400; i++)
         log_msg(SOS_LOG_NOTICE, "held %03d", i);
     CHECK_EQ(out_len, 0);
+    int pending = log_pending();
+    CHECK(pending > 1 && pending < 400);        // what's left, plus one for the dropped ones
     held = false;
     log_flush();
     CHECK(strstr(out, "[log: some messages were dropped before they were shown]") != NULL);
