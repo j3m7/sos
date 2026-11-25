@@ -133,7 +133,8 @@ picocom -b 115200 /dev/ttyACM0
 `help` lists the commands. [docs/commands.md](docs/commands.md) is the full reference, and marks
 which commands work only on the console. The greeting above the first prompt (and after each SSH
 login) names the commit the firmware was built from, e.g. `SOS 9332d0364fb3`; `version` shows it
-too, with `-dirty` if the build had uncommitted changes.
+too, with `-dirty` if the build had uncommitted changes, followed by the board's serial number
+and the RP2350 chip revision.
 
 ## Configuration
 

@@ -113,6 +113,7 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/core/heap.c
+    src/core/chipinfo.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -215,6 +216,7 @@ target_link_libraries(sos
     pico_stdlib
     pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
+    pico_unique_id          # board serial, shown by `version`
     pico_lwip_sntp
     hardware_flash
     hardware_i2c
