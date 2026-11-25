@@ -119,7 +119,8 @@ static bool image_write(void *ctx, unsigned slot, const void *data, size_t len) 
 }
 
 bool mkconfig_image(const sos_config_t *cfg, uint8_t image[MKCONFIG_IMAGE_SIZE]) {
-    const config_store_t store = {image_read, image_write, image};
+    // No sealer: the image is a plain record, which an open board seals at its first boot.
+    const config_store_t store = {image_read, image_write, image, NULL, false};
     sos_config_t back;
     memset(image, 0xff, MKCONFIG_IMAGE_SIZE);
     return config_save(&store, cfg) && config_load(&store, &back, NULL) &&

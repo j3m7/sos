@@ -43,7 +43,7 @@ static bool flash_write(void *ctx, unsigned slot, const void *data, size_t len) 
 }
 
 static fake_flash_t flash;
-static config_store_t store = { flash_read, flash_write, &flash };
+static config_store_t store = { flash_read, flash_write, &flash, NULL, false };
 
 static void blank_flash(void) {
     memset(&flash, 0, sizeof(flash));
@@ -682,6 +682,549 @@ TEST(crc32_known_value) {
     CHECK_EQ(config_crc32("123456789", 9), 0xcbf43926u);                    // standard check value
 }
 
+// --- sealed records ---------------------------------------------------------------------------------
+//
+// config.c seals through sealer_t and knows no cryptography, so these tests use a fake sealer
+// that keeps the rules a real one has: the blob is 28 bytes longer than the data, the data
+// isn't readable in it, and it opens only with the same key, the same associated data and
+// unchanged bytes. The real AES-256-GCM sealer is tested with config.c in test_seal.c.
+
+typedef struct {
+    uint8_t key;
+    uint8_t next_nonce;
+    bool fail;
+    int seals, opens;
+} fake_sealer_t;
+
+static uint8_t fake_sum(const fake_sealer_t *f, const uint8_t *aad, size_t aad_len,
+                        const uint8_t *plain, size_t len, uint8_t nonce) {
+    uint32_t h = 2166136261u ^ f->key ^ ((uint32_t)nonce << 8);
+    for (size_t i = 0; i < aad_len; i++)
+        h = (h ^ aad[i]) * 16777619u;
+    for (size_t i = 0; i < len; i++)
+        h = (h ^ plain[i]) * 16777619u;
+    return (uint8_t)(h ^ (h >> 8) ^ (h >> 16) ^ (h >> 24));
+}
+
+static bool fake_seal(void *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *plain,
+                      size_t len, uint8_t *out) {
+    fake_sealer_t *f = ctx;
+    f->seals++;
+    if (f->fail) {
+        memset(out, 0, len + SEALER_OVERHEAD);
+        return false;
+    }
+    uint8_t nonce = f->next_nonce++;
+    memset(out, nonce, SEALER_NONCE_LEN);
+    for (size_t i = 0; i < len; i++)
+        out[SEALER_NONCE_LEN + i] = plain[i] ^ (uint8_t)(f->key + nonce + i);
+    memset(out + SEALER_NONCE_LEN + len, fake_sum(f, aad, aad_len, plain, len, nonce),
+           SEALER_TAG_LEN);
+    return true;
+}
+
+static bool fake_open(void *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *sealed,
+                      size_t sealed_len, uint8_t *plain) {
+    fake_sealer_t *f = ctx;
+    f->opens++;
+    size_t len = sealed_len - SEALER_OVERHEAD;
+    uint8_t nonce = sealed[0];
+    for (size_t i = 0; i < len; i++)
+        plain[i] = sealed[SEALER_NONCE_LEN + i] ^ (uint8_t)(f->key + nonce + i);
+    uint8_t sum = fake_sum(f, aad, aad_len, plain, len, nonce);
+    bool ok = !f->fail;
+    for (size_t i = 0; i < SEALER_NONCE_LEN; i++)
+        ok = ok && sealed[i] == nonce;
+    for (size_t i = 0; i < SEALER_TAG_LEN; i++)
+        ok = ok && sealed[SEALER_NONCE_LEN + len + i] == sum;
+    if (!ok)
+        memset(plain, 0, len);
+    return ok;
+}
+
+static fake_sealer_t fake = { .key = 0x5a };
+static const sealer_t fake_sealer = { fake_seal, fake_open, &fake };
+// The device's store on an open board, and on a secured one.
+static config_store_t sealed_store = { flash_read, flash_write, &flash, &fake_sealer, false };
+static config_store_t secured_store = { flash_read, flash_write, &flash, &fake_sealer, true };
+
+static void sealed_start(void) {
+    blank_flash();
+    memset(&fake, 0, sizeof(fake));
+    fake.key = 0x5a;
+    fake.next_nonce = 1;
+}
+
+static uint16_t slot_version(unsigned slot) {
+    uint16_t v;
+    memcpy(&v, flash.slot[slot] + 4, 2);
+    return v;
+}
+
+static uint32_t slot_seq(unsigned slot) {
+    uint32_t v;
+    memcpy(&v, flash.slot[slot] + 8, 4);
+    return v;
+}
+
+static bool slot_contains(unsigned slot, const char *text) {
+    size_t n = strlen(text);
+    for (size_t i = 0; i + n <= CONFIG_SLOT_SIZE; i++)
+        if (!memcmp(flash.slot[slot] + i, text, n))
+            return true;
+    return false;
+}
+
+// A slot after config.c blanked it: a zeroed header and the rest erased.
+static bool slot_is_blanked(unsigned slot) {
+    for (size_t i = 0; i < CONFIG_SLOT_SIZE; i++)
+        if (flash.slot[slot][i] != (i < 16 ? 0 : 0xff))
+            return false;
+    return true;
+}
+
+// Recompute the CRC of a sealed record after a test patched it (header up to the CRC, then the
+// sealed payload: length + 28 bytes).
+static void fix_sealed_crc(unsigned slot) {
+    static uint8_t crc_input[12 + CONFIG_SLOT_SIZE];
+    uint16_t length;
+    memcpy(&length, flash.slot[slot] + 6, 2);
+    size_t stored = (size_t)length + SEALER_OVERHEAD;
+    memcpy(crc_input, flash.slot[slot], 12);
+    memcpy(crc_input + 12, flash.slot[slot] + 16, stored);
+    uint32_t crc = config_crc32(crc_input, 12 + stored);
+    memcpy(flash.slot[slot] + 12, &crc, 4);
+}
+
+TEST(sealed_save_and_load_round_trip) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 1);
+    CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(!config_sealed_unopened(&sealed_store));
+}
+
+// The stored layout: the same 16-byte header with version 2 and the configuration's length,
+// then length + 28 bytes; nothing of the configuration readable.
+TEST(sealed_record_layout) {
+    sos_config_t a;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));
+    static const uint8_t magic[4] = { 'S', 'O', 'S', 'C' };
+    CHECK_MEM(flash.slot[0], magic, 4);
+    CHECK_EQ(slot_version(0), 2);
+    uint16_t length;
+    memcpy(&length, flash.slot[0] + 6, 2);
+    CHECK_EQ(length, sizeof(sos_config_t));
+    CHECK_EQ(slot_seq(0), 1);
+    for (size_t i = 16 + sizeof(sos_config_t) + SEALER_OVERHEAD; i < CONFIG_SLOT_SIZE; i++)
+        CHECK_EQ(flash.slot[0][i], 0xff);
+    CHECK(!slot_contains(0, "HomeNet"));
+    CHECK(!slot_contains(0, "correct horse"));
+    CHECK(!slot_contains(0, "alice@laptop"));
+}
+
+TEST(sealed_saves_alternate_slots_with_fresh_nonces) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));          // seq 1 -> slot 0
+    CHECK(config_save(&sealed_store, &a));          // seq 2 -> slot 1
+    CHECK(flash.slot[0][16] != flash.slot[1][16]);  // the sealer was asked for a new seal
+    strcpy(a.hostname, "third");
+    CHECK(config_save(&sealed_store, &a));          // seq 3 -> slot 0
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 3);
+    CHECK(!strcmp(b.hostname, "third"));
+}
+
+TEST(sealed_torn_write_keeps_previous_version) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "first");
+    CHECK(config_save(&sealed_store, &a));
+    strcpy(a.wifi_ssid, "second");
+    flash.tear_after = 700;
+    CHECK(!config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(!strcmp(b.wifi_ssid, "first"));
+}
+
+TEST(save_fails_when_sealing_fails) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "first");
+    CHECK(config_save(&sealed_store, &a));
+    int writes = flash.writes;
+    strcpy(a.wifi_ssid, "second");
+    fake.fail = true;                               // no key, or no random numbers
+    CHECK(!config_save(&sealed_store, &a));
+    CHECK_EQ(flash.writes, writes);                 // nothing was written, sealed or plain
+    fake.fail = false;
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(!strcmp(b.wifi_ssid, "first"));
+}
+
+// Any change to a sealed record makes it no record: the payload, the tag, or a header field
+// (even with the CRC put right, as someone rewriting the flash would).
+TEST(changed_sealed_record_does_not_load) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));
+    static uint8_t good[CONFIG_SLOT_SIZE];
+    memcpy(good, flash.slot[0], sizeof(good));
+    size_t tag = 16 + SEALER_NONCE_LEN + sizeof(sos_config_t);
+
+    flash.slot[0][16 + SEALER_NONCE_LEN + 40] ^= 1;         // a ciphertext bit
+    CHECK(!config_load(&sealed_store, &b, NULL));           // the CRC notices
+    fix_sealed_crc(0);
+    CHECK(!config_load(&sealed_store, &b, NULL));           // and so does the seal
+    CHECK(config_sealed_unopened(&sealed_store));
+
+    memcpy(flash.slot[0], good, sizeof(good));
+    flash.slot[0][tag] ^= 1;                                // the tag
+    fix_sealed_crc(0);
+    CHECK(!config_load(&sealed_store, &b, NULL));
+
+    memcpy(flash.slot[0], good, sizeof(good));
+    flash.slot[0][16] ^= 1;                                 // the nonce
+    fix_sealed_crc(0);
+    CHECK(!config_load(&sealed_store, &b, NULL));
+
+    memcpy(flash.slot[0], good, sizeof(good));
+    uint32_t seq = 99;                                      // the sequence number
+    memcpy(flash.slot[0] + 8, &seq, 4);
+    fix_sealed_crc(0);
+    CHECK(!config_load(&sealed_store, &b, NULL));
+    CHECK(config_sealed_unopened(&sealed_store));
+
+    memcpy(flash.slot[0], good, sizeof(good));              // unchanged: loads again
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_MEM(&a, &b, sizeof(a));
+}
+
+// An old sealed record can't be made the newest by giving it a higher sequence number.
+TEST(sealed_rollback_by_sequence_number_fails) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "old");
+    CHECK(config_save(&sealed_store, &a));          // slot 0, seq 1
+    strcpy(a.wifi_ssid, "new");
+    CHECK(config_save(&sealed_store, &a));          // slot 1, seq 2
+    uint32_t forged = 7;
+    memcpy(flash.slot[0] + 8, &forged, 4);
+    fix_sealed_crc(0);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 2);
+    CHECK(!strcmp(b.wifi_ssid, "new"));
+}
+
+TEST(sealed_under_another_key_does_not_load) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));
+    fake.key = 0x11;                                // another root secret
+    memset(&b, 0x55, sizeof(b));
+    CHECK(!config_load(&sealed_store, &b, NULL));
+    CHECK(!strcmp(b.hostname, "sos"));              // defaults
+    CHECK_EQ(b.key_count, 0);
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_NONE);
+    CHECK(config_sealed_unopened(&sealed_store));   // and it says why
+    static uint8_t before[2][CONFIG_SLOT_SIZE];
+    memcpy(before, flash.slot, sizeof(before));
+    CHECK(config_scrub_plain(&sealed_store));       // nothing is erased on its own
+    CHECK_MEM(flash.slot, before, sizeof(before));
+}
+
+TEST(sealed_contents_out_of_range_rejected) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    a.key_count = CONFIG_MAX_KEYS + 1;
+    CHECK(!config_save(&sealed_store, &a));         // sealed fine, but doesn't validate
+    CHECK(!config_load(&sealed_store, &b, NULL));
+}
+
+// A store without a sealer (the provisioning tool) saves plain and can't use sealed records.
+TEST(store_without_sealer_ignores_sealed_records) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(!config_load(&store, &b, NULL));
+    CHECK_EQ(config_stored(&store), CONFIG_STORED_NONE);
+    CHECK(config_save(&store, &a));
+    CHECK_EQ(slot_version(0), 1);
+    CHECK(config_scrub_plain(&store));              // and never erases anything
+    CHECK_EQ(slot_version(0), 1);
+}
+
+// --- plain records on a board that seals --------------------------------------------------------------
+
+// A plain record, as older firmware saved it or the provisioning tool wrote it: slot 0, seq 1.
+static void plain_record(const char *ssid) {
+    sos_config_t a;
+    sample(&a, ssid);
+    CHECK(config_save(&store, &a));
+}
+
+// Upgrade and provisioning: the plain record loads, the next save stores it sealed, and the
+// plain copy is erased so the Wi-Fi password isn't left readable.
+TEST(plain_record_loads_then_is_sealed_and_erased) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    plain_record("HomeNet");
+    CHECK(slot_contains(0, "correct horse"));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK(config_load(&sealed_store, &a, &seq));
+    CHECK_EQ(seq, 1);
+    CHECK(!strcmp(a.wifi_ssid, "HomeNet"));
+
+    CHECK(config_save(&sealed_store, &a));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK_EQ(slot_version(1), 2);
+    CHECK_EQ(slot_seq(1), 2);
+    CHECK(slot_is_blanked(0));
+    CHECK(!slot_contains(0, "correct horse"));
+    CHECK(!slot_contains(1, "correct horse"));
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 2);
+    CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(config_scrub_plain(&sealed_store));
+}
+
+// A record of every released length, saved plain by its firmware, is sealed the same way.
+TEST(old_plain_record_is_sealed_with_its_fields) {
+    sos_config_t a, b;
+    sealed_start();
+    plain_record("HomeNet");
+    set_length(0, V1_LENGTH);                       // as the first release saved it
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(!strcmp(a.wifi_ssid, "HomeNet"));
+    CHECK_EQ(a.ntp_sync_hours, 0);
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(slot_is_blanked(0));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_MEM(&a, &b, sizeof(a));
+}
+
+// Power is lost after the sealed record is written and before the plain one is erased. The
+// plain record is still the current one at the next boot (same contents), so the board seals
+// it again, above both sequence numbers, and this time erases it.
+TEST(an_interrupted_sealing_is_done_again) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    plain_record("HomeNet");
+    CHECK(config_load(&sealed_store, &a, NULL));
+    static uint8_t plain[CONFIG_SLOT_SIZE];
+    memcpy(plain, flash.slot[0], sizeof(plain));
+    CHECK(config_save(&sealed_store, &a));          // sealed in slot 1, seq 2
+    memcpy(flash.slot[0], plain, sizeof(plain));    // as if the erase never happened
+
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK(!config_scrub_plain(&sealed_store));      // the scrub leaves the current record alone
+    CHECK(slot_contains(0, "correct horse"));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(config_save(&sealed_store, &b));          // what settings_init() does next
+    CHECK(slot_is_blanked(0));
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 3);
+    CHECK_MEM(&a, &b, sizeof(a));
+    CHECK(config_scrub_plain(&sealed_store));
+}
+
+// Downgrade, set the board up again under the older firmware, upgrade. The older firmware
+// can't read the sealed record, so its save is a plain record numbered 1, in slot 0, next to a
+// sealed record with a higher number. The configuration just set up must win, not the old
+// sealed one, and must not be erased as a leftover.
+TEST(plain_record_saved_after_a_downgrade_wins) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    plain_record("Before");
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(config_save(&sealed_store, &a));          // upgrade: sealed in slot 1, seq 2
+    strcpy(a.hostname, "saved-twice");
+    CHECK(config_save(&sealed_store, &a));          // slot 0, seq 3
+    CHECK(config_save(&sealed_store, &a));          // slot 1, seq 4
+    CHECK_EQ(slot_version(1), 2);
+    CHECK_EQ(slot_seq(1), 4);
+
+    // The older firmware: it sees no record it knows, and saves to slot 0 with number 1.
+    CHECK(!config_load(&store, &b, NULL));
+    sample(&b, "AfterDowngrade");
+    CHECK(config_save(&store, &b));
+    CHECK_EQ(slot_version(0), 1);
+    CHECK_EQ(slot_seq(0), 1);
+
+    // Upgrade again.
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK(config_load(&sealed_store, &a, &seq));
+    CHECK(!strcmp(a.wifi_ssid, "AfterDowngrade"));
+    CHECK(!config_scrub_plain(&sealed_store));      // not a leftover: it's the configuration
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(!strcmp(a.wifi_ssid, "AfterDowngrade"));
+    CHECK(config_save(&sealed_store, &a));          // sealed, numbered above both records
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 5);
+    CHECK(!strcmp(b.wifi_ssid, "AfterDowngrade"));
+    CHECK(slot_is_blanked(0));
+    CHECK(!slot_contains(0, "AfterDowngrade") || slot_version(0) == 2);
+    CHECK(config_scrub_plain(&sealed_store));
+}
+
+// The same flash on a secured board: the plain record doesn't exist for it.
+TEST(secured_board_ignores_a_plain_record_saved_after_a_downgrade) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "Sealed");
+    CHECK(config_save(&secured_store, &a));         // slot 0, seq 1
+    CHECK(config_save(&secured_store, &a));         // slot 1, seq 2
+    static uint8_t keep[CONFIG_SLOT_SIZE];
+    memcpy(keep, flash.slot[1], sizeof(keep));
+    blank_flash();
+    plain_record("Planted");                        // slot 0, plain, seq 1
+    memcpy(flash.slot[1], keep, sizeof(keep));
+    CHECK(config_load(&secured_store, &b, &seq));
+    CHECK_EQ(seq, 2);
+    CHECK(!strcmp(b.wifi_ssid, "Sealed"));
+    CHECK(config_scrub_plain(&secured_store));      // and the planted record is erased
+    CHECK(slot_is_blanked(0));
+}
+
+// The only copy of the configuration is never erased: a plain record with no sealed one.
+TEST(scrub_keeps_a_plain_record_that_is_the_only_copy) {
+    sos_config_t a;
+    sealed_start();
+    plain_record("HomeNet");
+    CHECK(!config_scrub_plain(&sealed_store));      // "a plain record is still there"
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(!strcmp(a.wifi_ssid, "HomeNet"));
+    // Nor when the other slot holds a sealed record that doesn't open.
+    CHECK(config_save(&sealed_store, &a));          // slot 1 sealed, slot 0 blanked
+    plain_record("Other");                          // a plain record again, in slot 0, seq 3
+    fake.key = 0x11;
+    CHECK(!config_scrub_plain(&sealed_store));
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK(!strcmp(a.wifi_ssid, "Other"));
+}
+
+TEST(failed_erase_of_the_plain_copy_is_reported) {
+    sos_config_t a;
+    sealed_start();
+    plain_record("HomeNet");
+    CHECK(config_load(&sealed_store, &a, NULL));
+    static uint8_t plain[CONFIG_SLOT_SIZE];
+    memcpy(plain, flash.slot[0], sizeof(plain));
+    CHECK(config_save(&sealed_store, &a));
+    memcpy(flash.slot[0], plain, sizeof(plain));
+    flash.slot[0][12] ^= 1;                         // a leftover that no longer loads
+    flash.fail = true;
+    CHECK(!config_scrub_plain(&sealed_store));
+    flash.fail = false;
+    CHECK(config_scrub_plain(&sealed_store));
+    CHECK(slot_is_blanked(0));
+}
+
+// A damaged plain record next to the sealed configuration is erased too: it may still hold the
+// password.
+TEST(scrub_erases_a_damaged_plain_record) {
+    sos_config_t a;
+    sealed_start();
+    plain_record("HomeNet");
+    CHECK(config_load(&sealed_store, &a, NULL));
+    static uint8_t plain[CONFIG_SLOT_SIZE];
+    memcpy(plain, flash.slot[0], sizeof(plain));
+    CHECK(config_save(&sealed_store, &a));
+    memcpy(flash.slot[0], plain, sizeof(plain));
+    flash.slot[0][12] ^= 1;                         // its CRC no longer matches
+    CHECK(slot_contains(0, "correct horse"));
+    CHECK(config_scrub_plain(&sealed_store));
+    CHECK(slot_is_blanked(0));
+}
+
+// --- a secured board: plain records don't exist --------------------------------------------------------
+
+TEST(secured_board_does_not_load_a_plain_record) {
+    sos_config_t a;
+    sealed_start();
+    plain_record("Planted");
+    memset(&a, 0x55, sizeof(a));
+    CHECK(!config_load(&secured_store, &a, NULL));
+    CHECK(!strcmp(a.hostname, "sos"));
+    CHECK_EQ(a.key_count, 0);
+    CHECK_EQ(config_stored(&secured_store), CONFIG_STORED_NONE);
+}
+
+// A planted plain record with a high sequence number must not hide the sealed configuration.
+TEST(secured_board_plain_record_cannot_hide_the_sealed_one) {
+    sos_config_t a, b;
+    uint32_t seq = 0;
+    sealed_start();
+    sample(&a, "Real");
+    CHECK(config_save(&secured_store, &a));         // slot 0, seq 1, sealed
+    // The attacker writes a plain record into slot 1 with a much higher sequence number.
+    static uint8_t keep[CONFIG_SLOT_SIZE];
+    memcpy(keep, flash.slot[0], sizeof(keep));
+    blank_flash();
+    plain_record("Planted");                        // slot 0, plain
+    memcpy(flash.slot[1], flash.slot[0], CONFIG_SLOT_SIZE);
+    uint32_t high = 1000;
+    memcpy(flash.slot[1] + 8, &high, 4);
+    fix_crc(1);
+    memcpy(flash.slot[0], keep, sizeof(keep));
+
+    CHECK_EQ(config_stored(&secured_store), CONFIG_STORED_SEALED);
+    CHECK(config_load(&secured_store, &b, &seq));
+    CHECK_EQ(seq, 1);
+    CHECK(!strcmp(b.wifi_ssid, "Real"));
+    // The next save takes the sealed record's number, not the planted one's, and the planted
+    // record is erased.
+    CHECK(config_save(&secured_store, &b));
+    CHECK(config_load(&secured_store, &b, &seq));
+    CHECK_EQ(seq, 2);
+    CHECK(!strcmp(b.wifi_ssid, "Real"));
+    CHECK(!slot_contains(0, "Planted") && !slot_contains(1, "Planted"));
+    // On an open board the same flash would load the planted record: that's what "open" means.
+    memcpy(flash.slot[0], keep, sizeof(keep));
+    blank_flash();
+}
+
+// A sealed record that doesn't open never makes a secured board fall back to a plain one.
+TEST(secured_board_no_fallback_to_plain_when_sealed_fails) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "Real");
+    CHECK(config_save(&secured_store, &a));         // slot 0 sealed
+    static uint8_t keep[CONFIG_SLOT_SIZE];
+    memcpy(keep, flash.slot[0], sizeof(keep));
+    blank_flash();
+    plain_record("Planted");
+    memcpy(flash.slot[1], flash.slot[0], CONFIG_SLOT_SIZE);
+    memcpy(flash.slot[0], keep, sizeof(keep));
+    flash.slot[0][16 + SEALER_NONCE_LEN + 5] ^= 1;  // the sealed record is damaged
+    fix_sealed_crc(0);
+    CHECK(!config_load(&secured_store, &b, NULL));
+    CHECK(!strcmp(b.hostname, "sos"));
+    CHECK(config_sealed_unopened(&secured_store));
+}
+
 TEST_MAIN(
     RUN(blank_flash_loads_defaults);
     RUN(save_and_load_round_trip);
@@ -720,4 +1263,25 @@ TEST_MAIN(
     RUN(remove_keeps_order);
     RUN(key_list_capacity);
     RUN(crc32_known_value);
+    RUN(sealed_save_and_load_round_trip);
+    RUN(sealed_record_layout);
+    RUN(sealed_saves_alternate_slots_with_fresh_nonces);
+    RUN(sealed_torn_write_keeps_previous_version);
+    RUN(save_fails_when_sealing_fails);
+    RUN(changed_sealed_record_does_not_load);
+    RUN(sealed_rollback_by_sequence_number_fails);
+    RUN(sealed_under_another_key_does_not_load);
+    RUN(sealed_contents_out_of_range_rejected);
+    RUN(store_without_sealer_ignores_sealed_records);
+    RUN(plain_record_loads_then_is_sealed_and_erased);
+    RUN(old_plain_record_is_sealed_with_its_fields);
+    RUN(an_interrupted_sealing_is_done_again);
+    RUN(plain_record_saved_after_a_downgrade_wins);
+    RUN(secured_board_ignores_a_plain_record_saved_after_a_downgrade);
+    RUN(scrub_keeps_a_plain_record_that_is_the_only_copy);
+    RUN(failed_erase_of_the_plain_copy_is_reported);
+    RUN(scrub_erases_a_damaged_plain_record);
+    RUN(secured_board_does_not_load_a_plain_record);
+    RUN(secured_board_plain_record_cannot_hide_the_sealed_one);
+    RUN(secured_board_no_fallback_to_plain_when_sealed_fails);
 )

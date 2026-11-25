@@ -153,8 +153,16 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
     add_test(NAME sdcrypt COMMAND test_sdcrypt)
     add_dependencies(test_sdcrypt sdcrypt)
 
+    # src/core/seal.c: sealing stored records (AES-256-GCM, cross-checked against OpenSSL), with
+    # the two record formats that seal through it: src/core/config.c, src/ssh/hostkey_record.c.
+    add_executable(test_seal test_seal.c ${SOS_ROOT}/src/core/seal.c ${SOS_ROOT}/src/core/config.c
+        ${SOS_ROOT}/src/ssh/hostkey_record.c)
+    target_include_directories(test_seal PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_seal PRIVATE wolfcrypt_host OpenSSL::Crypto)
+    add_test(NAME seal COMMAND test_seal)
+
     add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)
 elseif (TARGET wolfcrypt_host)
-    message(WARNING "sdcrypt test skipped: it also needs OpenSSL's libcrypto")
+    message(WARNING "sdcrypt and seal tests skipped: they also need OpenSSL's libcrypto")
 endif()

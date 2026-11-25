@@ -186,10 +186,16 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
   the announcement off until the next reboot, for testing.
 - Storage: one record in two alternating flash sectors below the key sector, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
-  reflashing. The Wi-Fi password and keys are stored unencrypted.
+  reflashing.
+- It's stored sealed (AES-256-GCM under a key derived from the board's root secret): the flash
+  contents don't show the Wi-Fi password, and a record someone else wrote doesn't load. On an
+  open board (no secure boot) the root secret is itself in flash, so this protects nothing yet
+  from someone who has the board; it's the format a secured board uses (issue #64). A record
+  that isn't sealed (saved by older firmware, or written by provisioning) is loaded by an open
+  board, stored sealed at once, and its unsealed copy erased.
   The record format only grows at the end: a record saved by older firmware still loads, with
   newer settings at their defaults. Firmware older than a saved record ignores it and starts
-  empty.
+  empty; so does firmware from before sealing, for any sealed record.
 - The firmware has no configuration of its own. With nothing saved (a new board, or after
   `config reset`) there is no network and no trusted key, so no SSH, until `setup` on the
   console or provisioning.
@@ -208,7 +214,9 @@ tools/provision.sh other.conf     # the same, from another file; -n only builds 
 trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
-everything saved on the board; the firmware and the SSH host key stay as they are.
+everything saved on the board; the firmware and the SSH host key stay as they are. The record it
+writes is not sealed (this machine doesn't have the board's key): the board seals it at its
+first boot and erases the unsealed copy.
 
 - `ninja flash` doesn't touch the configuration, so provisioning is needed once per board, and
   again after `config reset`, a full flash erase, or to put a board into a known state for a
@@ -253,8 +261,8 @@ ssh <device-ip>
   matter: any name logs in with a trusted key, and the name is only shown (`ssh`, `who`, the
   log). The keys are what decide who gets in.
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
-  flash sector (the key sector, which also holds the SD cards' device key); it survives
-  reflashing. The private key never leaves the device.
+  flash sector (the key sector, which also holds the SD cards' device key), sealed like the
+  configuration; it survives reflashing. The private key never leaves the device.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
   ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets

@@ -52,6 +52,21 @@ The Ed25519 host key is the first page of the key sector, the last 4 KB of flash
 the device at first boot (`hostkey_get()`, before Wi-Fi starts) and survives reflashing; the
 private key never leaves the device. The flash write goes through `flash_safe_execute()`.
 
+- **Sealed:** the record (`hostkey_record.c`, pure C, host tested) holds the key sealed with
+  AES-256-GCM under the key provider's host-key key (`core/seal.h`, `core/keyprov.h`), with the
+  record's header as associated data. `hostkey_get()` opens it at boot into RAM, where the SSH
+  server uses it; the seal key is wiped again before `hostkey_get()` returns.
+- **Upgrade:** a plain record from firmware before sealing is read, and stored sealed at once:
+  the same key, the same fingerprint. That rewrites the key sector (erase, then program), with
+  the same power-cut window as any change to it.
+- **A sealed key that doesn't open** (another root secret, or damage) is replaced by a new
+  key, and the log says clients will see a changed fingerprint. **With no usable root
+  secret** no key is opened or made: there is no host key, so no SSH, and the log says why.
+- **Downgrade:** older firmware doesn't know the sealed record and makes itself a new host key.
+- **A secured board** must not take over a plain key (someone who can write the flash could
+  plant one they know): `refuse_plain` in `hostkey.c`, off on an open board, goes with the
+  configuration's.
+
 ## SFTP (`sftp_wolf.c`, `sftp_fs.c`)
 
 wolfSSH's SFTP server (`wolfsftp.c`) is compiled through `sftp_wolf.c`, so its file functions

@@ -9,7 +9,10 @@
 #include "pico/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/keyprov.h"
 #include "core/log.h"
+#include "core/random.h"
+#include "core/seal.h"
 
 // Slot A and B: the two sectors below the host key (the last sector, see hostkey.c).
 #define SLOT_OFFSET(slot) (PICO_FLASH_SIZE_BYTES - (3 - (slot)) * FLASH_SECTOR_SIZE)
@@ -52,7 +55,15 @@ static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t 
     return flash_safe_execute(do_write, &job, 1000) == PICO_OK;
 }
 
-static const config_store_t store = { flash_slot_read, flash_slot_write, NULL };
+// The key the configuration is sealed under (KEYPROV_CONFIG_SEAL), derived once in
+// settings_init(), before the key provider locks. It stays here, in RAM, for as long as the
+// board runs: every save needs it. Nothing copies it elsewhere.
+static seal_ctx_t seal = { .random = random_bytes };
+static const sealer_t sealer = { seal_seal, seal_open, &seal };
+
+// An open board: plain records (from older firmware, or a provisioning image) are loaded, and
+// sealed at once. A secured board will refuse them (refuse_plain; issue #64 step 4).
+static const config_store_t store = { flash_slot_read, flash_slot_write, NULL, &sealer, false };
 
 // --- public API ----------------------------------------------------------------------------------
 
@@ -65,11 +76,33 @@ void settings_init(void) {
         return;
     }
 
+    seal.have_key = keyprov_derive(KEYPROV_CONFIG_SEAL, seal.key);
+    if (!seal.have_key)
+        log_msg(SOS_LOG_ERR, "config: no key to seal the configuration with (see `rootsecret`): "
+                             "a sealed configuration can't be read, and nothing can be saved");
+
     uint32_t seq;
     if (config_load(&store, &live, &seq)) {
         log_msg(SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
+        if (config_stored(&store) == CONFIG_STORED_PLAIN) {
+            // From older firmware or a provisioning image: store it sealed, and erase the
+            // plain copy (config_save does both).
+            if (config_save(&store, &live))
+                log_msg(SOS_LOG_NOTICE, "config: the saved configuration was unsealed (older "
+                                        "firmware, or provisioning); it's now stored sealed");
+            else
+                log_msg(SOS_LOG_ERR, "config: sealing the saved configuration failed; it stays "
+                                     "unsealed in flash");
+        }
+        if (!config_scrub_plain(&store))
+            log_msg(SOS_LOG_ERR, "config: an unsealed configuration record is still in flash "
+                                 "(erasing it failed)");
         return;
     }
+    if (config_sealed_unopened(&store))
+        log_msg(SOS_LOG_ERR, "config: a sealed configuration is present and doesn't open "
+                             "(sealed under another root secret, or changed); it's left as it "
+                             "is and the board starts unconfigured");
     // Nothing saved (a new board, after `config reset`, or records this firmware can't read):
     // no network and no trusted keys until someone sets it up. The firmware carries no
     // configuration of its own.
