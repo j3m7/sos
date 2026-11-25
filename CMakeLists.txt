@@ -195,6 +195,8 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # Hardware watchdog: the main loop must come round within this time or the chip resets.
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
+set(SOS_CONSOLE_IDLE_LOCK_MIN 10 CACHE STRING
+    "Minutes without a key typed after which an open console locks itself (0 = never)")
 # Default NTS server (authenticated time), until one is set on the device with `time server`.
 # Its certificate chain must end at a root in src/tls/tls_roots.c.
 set(SOS_NTS_SERVER "time.cloudflare.com" CACHE STRING "NTS-KE server host name")
@@ -206,6 +208,7 @@ string(TIMESTAMP SOS_BUILD_EPOCH "%s" UTC)
 target_compile_definitions(sos PRIVATE
     SOS_SSH_MAX_SESSIONS=${SOS_SSH_MAX_SESSIONS}
     SOS_WATCHDOG_MS=${SOS_WATCHDOG_MS}
+    SOS_CONSOLE_IDLE_LOCK_MIN=${SOS_CONSOLE_IDLE_LOCK_MIN}
     SOS_NTS_SERVER="${SOS_NTS_SERVER}"
     SOS_NTP_SERVER="${SOS_NTP_SERVER}"
     SOS_BUILD_EPOCH=${SOS_BUILD_EPOCH}LL

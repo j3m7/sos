@@ -182,7 +182,7 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
 - **It locks itself** when the USB terminal goes away (the cable is unplugged or the terminal
   program closes the port) and after 10 minutes with nothing typed
-  (`SOS_CONSOLE_IDLE_LOCK_MIN` at build time; 0 turns the idle lock off). A command still
+  (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off). A command still
   running then, the editor included, is ended, and unsaved text in the editor is lost. On the
   UART console there is no connection to watch, so only the idle lock applies.
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2

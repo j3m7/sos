@@ -32,7 +32,8 @@
 #include "time/timesync.h"
 #include "tls/tls.h"
 
-// Minutes without a key typed after which an open console locks itself. 0: never.
+// Minutes without a key typed after which an open console locks itself. 0: never. A CMake
+// setting (-DSOS_CONSOLE_IDLE_LOCK_MIN=..., or local.cmake).
 #ifndef SOS_CONSOLE_IDLE_LOCK_MIN
 #define SOS_CONSOLE_IDLE_LOCK_MIN 10
 #endif
