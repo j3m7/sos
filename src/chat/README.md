@@ -41,6 +41,14 @@ otherwise delivery stops until a later pass. Output goes between `shell_hide_inp
 `shell_show_input()`, like a log line: the typed line is cleared and redrawn after it (a secret
 answer stays hidden), and during a job the message gets its own line.
 
+**A full ring.** A pasted burst is posted in one `shell_poll()`, before anyone can receive it,
+so overwriting freely would drop lines even for readers that keep up. So when a wall or chat
+line would overwrite a message some peer hasn't had yet, and that message is younger than
+`CHAT_WAIT_US` (2 s), the sender waits: `wait_for_room()` runs as a job, which also holds back
+the rest of the sender's typed input, and posts once the readers have caught up or the
+message is old enough. A stalled client therefore holds a sender back for at most 2 s. Ctrl-C
+while waiting drops the message (and in the chat leaves the room). Joins and leaves never wait.
+
 When a message is about to be overwritten, every peer that hasn't got past it yet is moved
 past it, and if the message was for that peer, its `missed` count goes up. The next delivery
 starts with `(N messages missed)`. So the count only covers messages that peer would have

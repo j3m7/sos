@@ -17,6 +17,7 @@ typedef struct {
     uint32_t seq;                       // 0 = empty
     uint32_t from;                      // sender's peer id (never delivered back to it)
     uint8_t kind;
+    uint64_t posted_us;
     char stamp[CHAT_STAMP_MAX + 1];
     char name[CHAT_NAME_MAX + 1];       // copied: the sender may be gone when it's delivered
     char text[SHELL_LINE_MAX + 1];
@@ -33,6 +34,9 @@ typedef struct {
     uint32_t room_since;                // first message seq of this stay in the room
     uint32_t next;                      // seq of the next message to look at
     uint32_t missed;                    // messages for it the ring overwrote before delivery
+    // A wall or chat line waiting for room in the ring (see wait_for_room()).
+    uint8_t wait_kind;
+    char wait_text[SHELL_LINE_MAX + 1];
 } peer_t;
 
 static const chat_hooks_t *hooks;
@@ -112,11 +116,28 @@ static void post(peer_t *from, int kind, const char *text) {
     m->seq = head++;
     m->from = from->id;
     m->kind = (uint8_t)kind;
+    m->posted_us = now_us();
     m->stamp[0] = '\0';
     if (hooks && hooks->stamp)
         hooks->stamp(m->stamp, sizeof(m->stamp));
     strcpy(m->name, from->name);
     clean(m->text, SHELL_LINE_MAX, text ? text : "");
+}
+
+// Posting now would overwrite a message that someone hasn't had yet, and that message is recent.
+// Then wall and chat wait (as a job, so the sender's further input waits too): a pasted burst
+// reaches everyone who keeps up, and a stalled client holds the sender back for at most
+// CHAT_WAIT_US.
+static bool ring_full(void) {
+    const msg_t *m = &ring[head % CHAT_RING];
+    if (!m->seq || now_us() - m->posted_us >= CHAT_WAIT_US)
+        return false;
+    for (unsigned i = 0; i < CHAT_MAX_PEERS; i++) {
+        const peer_t *p = &peers[i];
+        if (p->sh && p->next <= m->seq && for_peer(m, p))
+            return true;
+    }
+    return false;
 }
 
 static int format(const msg_t *m, char *buf, size_t len) {
@@ -246,6 +267,8 @@ static void cmd_who_room(shell_t *sh, const peer_t *self) {
     shell_printf(sh, "\n");
 }
 
+static void send(shell_t *sh, peer_t *self, int kind, const char *text);
+
 void chat_cmd_wall(shell_t *sh, char *args) {
     peer_t *self = find(sh);
     if (!args) {
@@ -264,14 +287,58 @@ void chat_cmd_wall(shell_t *sh, char *args) {
         shell_printf(sh, "wall: nobody else is logged in\n");
         return;
     }
-    post(self, MSG_WALL, args);
-    shell_printf(sh, "sent to %u shell%s\n", others, others == 1 ? "" : "s");
+    send(sh, self, MSG_WALL, args);
 }
 
 static void chat_line(shell_t *sh, char *line, void *arg);
 
 static void ask_again(shell_t *sh) {
     shell_ask_eof(sh, "chat> ", chat_line, NULL);
+}
+
+static void sent(shell_t *sh, peer_t *self, int kind, const char *text) {
+    post(self, kind, text);
+    if (kind == MSG_WALL) {
+        unsigned others = 0;
+        for (unsigned i = 0; i < CHAT_MAX_PEERS; i++)
+            if (peers[i].sh && &peers[i] != self)
+                others++;
+        shell_printf(sh, "sent to %u shell%s\n", others, others == 1 ? "" : "s");
+    } else {
+        ask_again(sh);
+    }
+}
+
+// Job: post the waiting message once the ring has room. Ctrl-C (or the session ending) drops it,
+// and in the chat also leaves the room.
+static bool wait_for_room(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    peer_t *self = find(sh);
+    if (!self)
+        return false;
+    if (cancel) {
+        if (self->wait_kind == MSG_WALL) {
+            shell_printf(sh, "wall: not sent\n");
+        } else if (self->in_room) {
+            leave_room(self);
+            shell_printf(sh, "(left the chat)\n");
+        }
+        return false;
+    }
+    if (ring_full())
+        return true;
+    sent(sh, self, self->wait_kind, self->wait_text);
+    return false;
+}
+
+static void send(shell_t *sh, peer_t *self, int kind, const char *text) {
+    if (!ring_full()) {
+        sent(sh, self, kind, text);
+        return;
+    }
+    self->wait_kind = (uint8_t)kind;
+    snprintf(self->wait_text, sizeof(self->wait_text), "%s", text);
+    shell_run_job(sh, wait_for_room, NULL);
 }
 
 static void chat_line(shell_t *sh, char *line, void *arg) {
@@ -293,7 +360,8 @@ static void chat_line(shell_t *sh, char *line, void *arg) {
         shell_printf(sh, "chat: /who lists the room; /quit, Ctrl-C or Ctrl-D leaves; "
                          "start a line with // to send a /\n");
     } else if (strspn(line, " ") < len) {
-        post(self, MSG_CHAT, line[0] == '/' ? line + 1 : line);
+        send(sh, self, MSG_CHAT, line[0] == '/' ? line + 1 : line);
+        return;
     }
     ask_again(sh);
 }

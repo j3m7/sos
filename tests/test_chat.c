@@ -270,16 +270,87 @@ TEST(slow_client_throttled_then_missed) {
     CHECK(!has(2, "two"));
     pass();
     CHECK(has(2, "two"));
-    // Stalled while the ring wraps: told how many it missed, then gets the rest.
+    // Stalled while the ring wraps: the sender waits up to CHAT_WAIT_US, then overwrites; the
+    // stalled peer is told how many it missed, then gets the rest.
     fk[2].space = 0;
+    clear(1);
     for (int k = 0; k < CHAT_RING + 3; k++)
         type(1, "wall more\r");
     pass();
+    pass();
+    CHECK(shell_job_running(&sh[1]));           // alice waits for room
+    CHECK_EQ(count(1, "sent to"), CHAT_RING);
+    fake_now += CHAT_WAIT_US;
+    pass();
+    pass();
+    pass();
+    CHECK(!shell_job_running(&sh[1]));
+    CHECK_EQ(count(1, "sent to"), CHAT_RING + 3);
     clear(2);
     fk[2].space = 100000;
     pass();
     CHECK(has(2, "(3 messages missed)\n"));
     CHECK_EQ(count(2, "] more"), CHAT_RING);
+}
+
+TEST(burst_reaches_readers_that_keep_up) {
+    setup();
+    chat_register(&sh[1], 1, "alice", "a");
+    chat_register(&sh[2], 2, "bob", "b");
+    type(1, "chat\r");
+    type(2, "chat\r");
+    pass();
+    clear(2);
+    for (int k = 0; k < CHAT_RING * 2; k++)    // a paste, all in one read
+        type(1, "line\r");
+    for (int k = 0; k < 10; k++)
+        pass();
+    CHECK(!has(2, "missed"));
+    CHECK_EQ(count(2, "alice: line"), CHAT_RING * 2);
+    CHECK(!shell_job_running(&sh[1]));
+    CHECK(has(1, "chat> "));
+}
+
+TEST(ctrl_c_while_waiting) {
+    setup();
+    chat_register(&sh[1], 1, "alice", "a");
+    chat_register(&sh[2], 2, "bob", "b");
+    chat_register(&sh[3], 3, "carol", "c");
+    fk[2].space = 0;
+    for (int k = 0; k < CHAT_RING + 1; k++)
+        type(1, "wall w\r");
+    pass();
+    CHECK(shell_job_running(&sh[1]));
+    type(1, "\x03");
+    pass();
+    CHECK(has(1, "wall: not sent"));
+    CHECK(!shell_job_running(&sh[1]));
+    // In the chat, Ctrl-C while waiting drops the line and leaves the room.
+    type(3, "chat\r");
+    type(2, "chat\r");
+    pass();
+    fake_now += CHAT_WAIT_US;                   // let the old walls go
+    for (int k = 0; k < CHAT_RING + 1; k++)
+        type(3, "c\r");
+    pass();
+    pass();
+    CHECK(shell_job_running(&sh[3]));
+    type(3, "\x03");
+    pass();
+    CHECK(has(3, "(left the chat)"));
+    CHECK(has(3, "sos> "));
+    // The session ending while waiting leaves the room too.
+    type(1, "chat\r");
+    pass();
+    fake_now += CHAT_WAIT_US;
+    for (int k = 0; k < CHAT_RING + 1; k++)
+        type(1, "d\r");
+    pass();
+    pass();
+    CHECK(shell_job_running(&sh[1]));
+    shell_end(&sh[1]);
+    chat_unregister(&sh[1]);
+    CHECK(chat_name(&sh[1]) == NULL);
 }
 
 TEST(missed_counts_only_messages_for_the_peer) {
@@ -384,6 +455,8 @@ TEST_MAIN(
     RUN(chat_slash_lines);
     RUN(join_shows_recent_history);
     RUN(slow_client_throttled_then_missed);
+    RUN(burst_reaches_readers_that_keep_up);
+    RUN(ctrl_c_while_waiting);
     RUN(missed_counts_only_messages_for_the_peer);
     RUN(unregister_announces_and_frees);
     RUN(table_full);

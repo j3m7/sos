@@ -50,7 +50,9 @@ the card. Times are UTC, or time since boot (`+1h02m`) until the clock is set.
 A message arrives between your keystrokes: the line you're typing is cleared, the message
 printed, and the prompt and your typing redrawn. During a running command it appears on its
 own line. A client that stops reading (a suspended `ssh`) doesn't hold anyone up: its messages
-wait, and if more than 16 arrive meanwhile it's told how many it missed.
+wait, and if more than 16 arrive meanwhile it's told how many it missed. (A sender whose
+message would push out one that a reader hasn't had yet waits up to 2 seconds for it to catch
+up, so a pasted burst isn't lost; Ctrl-C drops the message.)
 
 ## Configuration
 
