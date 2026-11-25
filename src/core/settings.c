@@ -120,6 +120,11 @@ void settings_init(void) {
         if (!config_scrub_plain(&store))
             log_msg(SOS_LOG_ERR, "config: an unsealed configuration record is still in flash "
                                  "(erasing it failed)");
+        // A sealed configuration from before the owner secret: give it one now, so "no owner
+        // secret" only ever means that nothing is saved.
+        if (!settings_has_owner_secret() && seal.have_key &&
+            config_stored(&store) == CONFIG_STORED_SEALED)
+            settings_save();
         return;
     }
     if (config_sealed_unopened(&store))
