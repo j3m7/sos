@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 
+#include "core/keysector.h"
 #include "core/log.h"
 #include "ssh/hostkey.h"
 
@@ -8,15 +9,13 @@
 #include <string.h>
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
 #include <wolfssh/ssh.h>
 #include <wolfssh/keygen.h>
 
-// The host key lives in the last 4 KB sector of flash, well clear of the firmware image.
-// `picotool load` only rewrites the sectors the image occupies, so it survives reflashing.
-#define HOSTKEY_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+// The host key is the first page of the key sector (core/keysector.h), which survives
+// reflashing.
 #define HOSTKEY_MAGIC   0x4b534f53u   // "SOSK"
 #define HOSTKEY_VERSION 1u
 #define HOSTKEY_MAX_DER (FLASH_PAGE_SIZE - 16)
@@ -43,7 +42,7 @@ static uint32_t fnv1a(const uint8_t *p, uint32_t n) {
 }
 
 static const hostkey_record_t *flash_record(void) {
-    return (const hostkey_record_t *)(XIP_BASE + HOSTKEY_OFFSET);
+    return (const hostkey_record_t *)keysector_page(KEYSECTOR_HOSTKEY);
 }
 
 static bool record_valid(const hostkey_record_t *r) {
@@ -51,19 +50,8 @@ static bool record_valid(const hostkey_record_t *r) {
            r->len > 0 && r->len <= HOSTKEY_MAX_DER && r->check == fnv1a(r->der, r->len);
 }
 
-static void do_write(void *param) {
-    flash_range_erase(HOSTKEY_OFFSET, FLASH_SECTOR_SIZE);
-    if (param)
-        flash_range_program(HOSTKEY_OFFSET, (const uint8_t *)param, FLASH_PAGE_SIZE);
-}
-
 static bool flash_write(const hostkey_record_t *r) {
-    extern char __flash_binary_end;
-    if ((uintptr_t)&__flash_binary_end > XIP_BASE + HOSTKEY_OFFSET) {
-        log_msg(SOS_LOG_ERR, "hostkey: firmware image overlaps host key sector");
-        return false;
-    }
-    return flash_safe_execute(do_write, (void *)r, 1000) == PICO_OK;
+    return keysector_write(KEYSECTOR_HOSTKEY, (const uint8_t *)r);
 }
 
 bool hostkey_get(const uint8_t **der, uint32_t *len) {
@@ -96,5 +84,5 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
 }
 
 bool hostkey_erase(void) {
-    return flash_safe_execute(do_write, NULL, 1000) == PICO_OK;
+    return keysector_write(KEYSECTOR_HOSTKEY, NULL);      // keeps the device key
 }

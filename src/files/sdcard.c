@@ -16,14 +16,20 @@
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
 
+#include "diskio.h"
 #include "ff.h"
 #include "f_util.h"
 #include "hw_config.h"
 #include "sd_card.h"
 
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/random.h>
+
+#include "core/devkey.h"
 #include "core/log.h"
 #include "core/wdog.h"
 #include "files/files.h"
+#include "files/sdcrypt.h"
 
 // --- hardware configuration (called by the library) ------------------------------------------
 
@@ -104,15 +110,167 @@ static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32
     return r;
 }
 
+// --- encryption (see files/sdcrypt.h) ----------------------------------------------------------
+//
+// Between FatFs and the driver: on an encrypted card, FatFs's sector n is the card's sector
+// n + SDCRYPT_OFFSET, decrypted after reading and encrypted before writing. The kind of card is
+// found at each mount (detect()).
+
+static enum {
+    KIND_UNKNOWN,           // not mounted since the card was (re)initialized
+    KIND_PLAIN,
+    KIND_ENCRYPTED,         // the layer is on
+    KIND_LOCKED,            // encrypted, but the device key doesn't open it (or there is none)
+    KIND_UNSUPPORTED,       // encrypted in a format this firmware doesn't know
+} card_kind;
+static sdcrypt_t crypt;
+static uint8_t card_id[SDCRYPT_ID_LEN];
+static uint8_t crypt_buf[8 * SDCRYPT_SECTOR];     // sectors encrypted before writing
+
+static bool repair_header;      // opened from the backup: rewrite sector 0 once the volume mounts
+
+static void crypt_off(void) {
+    sdcrypt_stop(&crypt);
+    card_kind = KIND_UNKNOWN;
+    repair_header = false;
+}
+
+static block_dev_err_t read_blocks_layer(sd_card_t *c, uint8_t *buf, uint32_t sector,
+                                         uint32_t count) {
+    if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED)
+        return SD_BLOCK_DEVICE_ERROR_NO_DEVICE;
+    if (card_kind != KIND_ENCRYPTED)
+        return read_blocks_logged(c, buf, sector, count);
+    block_dev_err_t r = read_blocks_logged(c, buf, sector + SDCRYPT_OFFSET, count);
+    if (r == SD_BLOCK_DEVICE_ERROR_NONE && !sdcrypt_decrypt(&crypt, buf, sector, count))
+        r = SD_BLOCK_DEVICE_ERROR_UNSUPPORTED;
+    return r;
+}
+
+static block_dev_err_t write_blocks_layer(sd_card_t *c, const uint8_t *buf, uint32_t sector,
+                                          uint32_t count) {
+    if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED)
+        return SD_BLOCK_DEVICE_ERROR_NO_DEVICE;
+    if (card_kind != KIND_ENCRYPTED)
+        return write_blocks_fed(c, buf, sector, count);
+    // The caller's buffer (FatFs's window, or the caller's data) must not change: encrypt into
+    // crypt_buf, a chunk at a time.
+    const uint32_t chunk = sizeof(crypt_buf) / SDCRYPT_SECTOR;
+    while (count) {
+        uint32_t n = count < chunk ? count : chunk;
+        if (!sdcrypt_encrypt(&crypt, crypt_buf, buf, sector, n))
+            return SD_BLOCK_DEVICE_ERROR_UNSUPPORTED;
+        block_dev_err_t r = write_blocks_fed(c, crypt_buf, sector + SDCRYPT_OFFSET, n);
+        if (r != SD_BLOCK_DEVICE_ERROR_NONE)
+            return r;
+        buf += n * SDCRYPT_SECTOR;
+        sector += n;
+        count -= n;
+    }
+    return SD_BLOCK_DEVICE_ERROR_NONE;
+}
+
+static uint32_t get_num_sectors_layer(sd_card_t *c) {
+    uint32_t n = get_num_sectors_cached(c);
+    if (card_kind == KIND_ENCRYPTED)
+        return n > SDCRYPT_OFFSET ? n - SDCRYPT_OFFSET : 0;
+    return n;
+}
+
+static void hex(char *out, const uint8_t *p, unsigned n) {
+    for (unsigned i = 0; i < n; i++)
+        snprintf(out + 2 * i, 3, "%02x", p[i]);
+}
+
+static const char *kind_why;    // why a locked or unsupported card can't be used
+
+// Read the card's sector 0 and backup header (into crypt_buf, which isn't in use outside a
+// write) and open them with the device key (sdcrypt_card_open has the rules). The card must be
+// initialized. Fills `info` on SDCRYPT_OK; *from_backup says the backup opened it.
+static int open_card(sdcrypt_info_t *info, bool *from_backup) {
+    uint8_t *primary = crypt_buf, *backup = crypt_buf + SDCRYPT_SECTOR;
+    if (read_blocks_logged(&card, primary, 0, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
+        memset(info, 0, sizeof(*info));
+        return SDCRYPT_PLAIN;   // unreadable: FatFs will say so
+    }
+    bool have_backup = read_blocks_logged(&card, backup, SDCRYPT_BACKUP, 1) ==
+                       SD_BLOCK_DEVICE_ERROR_NONE;
+    return sdcrypt_card_open(primary, have_backup ? backup : NULL, devkey(), info, from_backup);
+}
+
+// After a mount through the layer succeeded on a card opened from its backup header: the volume
+// is really there, so sector 0 can be rewritten from the backup. (Not at detection: a card this
+// device once encrypted and then reused elsewhere can keep an old backup at 4096, and its
+// sector 0 must not be overwritten on that evidence alone.)
+static void repair_after_mount(void) {
+    if (!repair_header)
+        return;
+    repair_header = false;
+    bool fixed = read_blocks_logged(&card, crypt_buf, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
+                 sdcrypt_is_header(crypt_buf) &&
+                 write_blocks_fed(&card, crypt_buf, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
+    log_msg(SOS_LOG_WARNING, "sd: the card's header was damaged; %s from its backup copy",
+            fixed ? "rewrote it" : "using it (rewriting sector 0 failed)");
+}
+
+// Find out what kind of card this is, and turn the layer on for an encrypted one. Runs after
+// every card initialization (init_layer), and at mount if the kind isn't known. A card that
+// can't be used is logged once here; mount() tells the shell each time.
+static void detect(void) {
+    crypt_off();
+    kind_why = NULL;
+    repair_header = false;
+    sdcrypt_info_t info;
+    bool from_backup;
+    int r = open_card(&info, &from_backup);
+    if (r == SDCRYPT_PLAIN) {
+        card_kind = KIND_PLAIN;
+    } else if (r == SDCRYPT_OK && sdcrypt_start(&crypt, info.data_key)) {
+        memcpy(card_id, info.card_id, sizeof(card_id));
+        card_kind = KIND_ENCRYPTED;
+        repair_header = from_backup;
+    } else if (r == SDCRYPT_UNSUPPORTED) {
+        card_kind = KIND_UNSUPPORTED;
+        kind_why = "the card is encrypted in a format this firmware doesn't know";
+    } else {
+        card_kind = KIND_LOCKED;
+        kind_why = r == SDCRYPT_NO_DEVKEY
+            ? "the card is encrypted, but this device has no usable device key (sd devkey)"
+            : "the card is encrypted with another device's key (or both header copies are damaged)";
+    }
+    sdcrypt_wipe(&info, sizeof(info));
+    if (kind_why)
+        log_msg(SOS_LOG_WARNING, "sd: %s", kind_why);
+}
+
+// Every card initialization finds the card's kind again, so the layer always matches the card
+// that's in, however it was reinitialized (a mount, or the driver after an error).
+static DSTATUS (*lib_init)(sd_card_t *);
+
+static DSTATUS init_layer(sd_card_t *c) {
+    // The library calls init on every disk_initialize(), also when the card is already up:
+    // detect only on a real initialization (or if the kind was forgotten), so a locked card is
+    // logged once per insertion rather than at every try.
+    bool was_up = !(c->state.m_Status & STA_NOINIT);
+    DSTATUS st = lib_init(c);
+    if (st & STA_NOINIT)
+        crypt_off();
+    else if (!was_up || card_kind == KIND_UNKNOWN)
+        detect();
+    return st;
+}
+
 static bool driver_init(void) {
     static bool ready;
     if (!ready && sd_init_driver()) {
         lib_write_blocks = card.write_blocks;   // set by sd_init_driver()
-        card.write_blocks = write_blocks_fed;
+        card.write_blocks = write_blocks_layer;
         lib_read_blocks = card.read_blocks;
-        card.read_blocks = read_blocks_logged;
+        card.read_blocks = read_blocks_layer;
         lib_get_num_sectors = card.get_num_sectors;
-        card.get_num_sectors = get_num_sectors_cached;
+        card.get_num_sectors = get_num_sectors_layer;
+        lib_init = card.init;
+        card.init = init_layer;
         ready = true;
     }
     return ready;
@@ -143,6 +301,15 @@ static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
     uint64_t t0 = time_us_64();
+    if (!(disk_initialize(0) & STA_NOINIT)) {    // no card: f_mount says so below
+        if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
+            detect();
+        if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
+            if (sh)
+                shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
+            return false;
+        }
+    }
     FRESULT fr = f_mount(&card.state.fatfs, sd_get_drive_prefix(&card), 1);
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
     if (fr != FR_OK) {
@@ -154,8 +321,10 @@ static bool mount(shell_t *sh) {
         return false;
     }
     card.state.mounted = true;
-    log_msg(SOS_LOG_NOTICE, "sd: mounted %s in %lu ms", fs_type(card.state.fatfs.fs_type),
-            (unsigned long)ms);
+    if (card_kind == KIND_ENCRYPTED)
+        repair_after_mount();
+    log_msg(SOS_LOG_NOTICE, "sd: mounted %s%s in %lu ms", fs_type(card.state.fatfs.fs_type),
+            card_kind == KIND_ENCRYPTED ? " (encrypted)" : "", (unsigned long)ms);
     return true;
 }
 
@@ -168,6 +337,13 @@ static void cmd_info(shell_t *sh) {
     uint64_t card_mb = (uint64_t)card.state.sectors * 512 / (1024 * 1024);
     shell_printf(sh, "card:   %s, %llu MB, SPI clock %lu kHz\n", card_type(),
                  (unsigned long long)card_mb, (unsigned long)(spi_get_baudrate(spi.hw_inst) / 1000));
+    if (card_kind == KIND_ENCRYPTED) {
+        char id[2 * SDCRYPT_ID_LEN + 1];
+        hex(id, card_id, SDCRYPT_ID_LEN);
+        shell_printf(sh, "crypt:  XTS-AES-128, card id %s\n", id);
+    } else {
+        shell_printf(sh, "crypt:  none (a plain card)\n");
+    }
     if (fr != FR_OK) {
         shell_printf(sh, "free:   f_getfree failed: %s\n", FRESULT_str(fr));
         return;
@@ -304,6 +480,7 @@ static void cmd_speed(shell_t *sh, const char *mhz) {
         return;
     f_unmount(sd_get_drive_prefix(&card));
     card.state.mounted = false;
+    crypt_off();
     card.state.m_Status |= STA_NOINIT;      // next mount initializes the card at the new rate
     spi.baud_rate = (uint)(f * 1000000);
     if (mount(sh))
@@ -318,6 +495,50 @@ static void cmd_speed(shell_t *sh, const char *mhz) {
 #define FORMAT_WORK_BYTES    (32 * 1024)    // bigger is faster (f_mkfs writes this much at once)
 
 static BYTE format_type;                    // FM_EXFAT or FM_FAT32
+static bool format_plain;                   // no encryption
+
+// Start an encrypted card: a new random data key and card id in a header at sector 0 and its
+// backup, then turn the layer on, so f_mkfs writes the volume encrypted.
+static bool start_encrypted(shell_t *sh) {
+    uint8_t id[SDCRYPT_ID_LEN], nonce[SDCRYPT_NONCE_LEN], key[SDCRYPT_KEY_LEN];
+    if (!devkey_create()) {     // the first encrypted card makes the device key
+        shell_printf(sh, "format failed: couldn't make the device key (see dmesg)\n");
+        return false;
+    }
+    WC_RNG rng;
+    bool ok = wc_InitRng(&rng) == 0;
+    if (ok) {
+        ok = wc_RNG_GenerateBlock(&rng, id, sizeof(id)) == 0 &&
+             wc_RNG_GenerateBlock(&rng, nonce, sizeof(nonce)) == 0 &&
+             wc_RNG_GenerateBlock(&rng, key, sizeof(key)) == 0;
+        wc_FreeRng(&rng);
+    }
+    uint8_t *header = crypt_buf;            // free: the layer is off while formatting
+    ok = ok && sdcrypt_header_build(header, devkey(), id, nonce, key) &&
+         write_blocks_fed(&card, header, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
+         write_blocks_fed(&card, header, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
+         sdcrypt_start(&crypt, key);
+    sdcrypt_wipe(key, sizeof(key));
+    if (!ok) {
+        shell_printf(sh, "format failed: couldn't write the encryption header\n");
+        return false;
+    }
+    memcpy(card_id, id, sizeof(card_id));
+    card_kind = KIND_ENCRYPTED;
+    return true;
+}
+
+// A plain card: no layer, and no header copy left behind (f_mkfs overwrites sector 0, not the
+// backup at 4096, which would otherwise make the card look encrypted again).
+static bool start_plain(shell_t *sh) {
+    memset(crypt_buf, 0, SDCRYPT_SECTOR);
+    if (write_blocks_fed(&card, crypt_buf, SDCRYPT_BACKUP, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
+        shell_printf(sh, "format failed: couldn't write the card\n");
+        return false;
+    }
+    card_kind = KIND_PLAIN;
+    return true;
+}
 
 static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     (void)arg;
@@ -335,8 +556,18 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     const char *drive = sd_get_drive_prefix(&card);
     f_unmount(drive);
     card.state.mounted = false;
+    crypt_off();
     const char *name = format_type == FM_EXFAT ? "exFAT" : "FAT32";
-    log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s", name);
+    if ((disk_initialize(0) & STA_NOINIT) ||
+        !(format_plain ? start_plain(sh) : start_encrypted(sh))) {
+        if (disk_status(0) & STA_NOINIT)
+            shell_printf(sh, "format failed: no card\n");
+        crypt_off();
+        free(work);
+        return;
+    }
+    log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s%s", name,
+            format_plain ? "" : ", encrypted");
 
     MKFS_PARM opt = { .fmt = format_type, .n_fat = 1, .align = FORMAT_ALIGN_SECTORS };
     uint64_t t0 = time_us_64();
@@ -351,6 +582,7 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
             (unsigned long)io_stats.reads, (unsigned long)io_stats.writes,
             (unsigned long)io_stats.sectors, (unsigned long)io_stats.last_sector,
             (unsigned long)io_stats.last_count);
+    crypt_off();                            // mount() finds the card's kind again
     if (fr != FR_OK) {
         log_msg(SOS_LOG_ERR, "sd: format failed: %s (%d) after %lu ms", FRESULT_str(fr), fr,
                 (unsigned long)ms);
@@ -365,19 +597,31 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     cmd_info(sh);
 }
 
-static void cmd_format(shell_t *sh, const char *type) {
+static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     if (!sh->io->admin) {
         shell_printf(sh, "the card can only be formatted on the serial console\n");
         return;
     }
     if (files_in_use(sh))
         return;
+    if (type && !strcmp(type, "plain") && !mode) {      // `sd format plain`
+        mode = type;
+        type = NULL;
+    }
+    format_plain = mode && !strcmp(mode, "plain");
     if (!type || !strcmp(type, "exfat"))
         format_type = FM_EXFAT;
     else if (!strcmp(type, "fat32"))
         format_type = FM_FAT32;
-    else {
-        shell_printf(sh, "usage: sd format [exfat|fat32]\n");
+    else
+        type = "";
+    if ((type && *type == '\0') || (mode && !format_plain)) {
+        shell_printf(sh, "usage: sd format [exfat|fat32] [plain]\n");
+        return;
+    }
+    if (!format_plain && devkey_state() == DEVKEY_INVALID) {
+        shell_printf(sh, "the device key can't be used (see `sd devkey`), so the card can't be "
+                         "encrypted: use `sd format plain`\n");
         return;
     }
 
@@ -389,10 +633,105 @@ static void cmd_format(shell_t *sh, const char *type) {
         return;
     }
     // One-line prompt: log lines redraw only the input line.
-    shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s.\n"
-                 "SSH sessions pause until it's done.\n",
-                 format_type == FM_EXFAT ? "exFAT" : "FAT32");
+    if (format_plain)
+        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s, not\n"
+                     "encrypted: anyone with the card can read it.\n",
+                     format_type == FM_EXFAT ? "exFAT" : "FAT32");
+    else
+        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s,\n"
+                     "encrypted with a new key that this device keeps. A PC can't read it;\n"
+                     "`sd key` shows the key, to keep somewhere safe for recovery. Files from\n"
+                     "before stay on the card unencrypted until new data overwrites them: for\n"
+                     "a card that held private files unencrypted, use a new card instead.\n",
+                     format_type == FM_EXFAT ? "exFAT" : "FAT32");
+    shell_printf(sh, "SSH sessions pause until it's done.\n");
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
+}
+
+// --- key ---------------------------------------------------------------------------------------
+
+// Show the card's data key, to keep offline: it's what a PC needs to read the card (or a
+// replacement board, later) if this device is lost.
+static void cmd_key(shell_t *sh) {
+    if (!sh->io->admin) {
+        shell_printf(sh, "the card's key can only be shown on the serial console\n");
+        return;
+    }
+    if (!mount(sh))
+        return;
+    if (card_kind != KIND_ENCRYPTED) {
+        shell_printf(sh, "the card isn't encrypted\n");
+        return;
+    }
+    sdcrypt_info_t info;
+    bool from_backup;
+    if (open_card(&info, &from_backup) != SDCRYPT_OK) {
+        shell_printf(sh, "can't read the card's header\n");
+        return;
+    }
+    char id[2 * SDCRYPT_ID_LEN + 1], key[2 * SDCRYPT_KEY_LEN + 1];
+    hex(id, info.card_id, SDCRYPT_ID_LEN);
+    hex(key, info.data_key, SDCRYPT_KEY_LEN);
+    sdcrypt_wipe(&info, sizeof(info));
+    shell_printf(sh, "card id:  %s\n", id);
+    shell_printf(sh, "data key: %s\n", key);
+    sdcrypt_wipe(key, sizeof(key));
+    shell_printf(sh, "Anyone with this key can read the card: keep it offline. To read the card on\n"
+                     "a PC: tools/host/sdcrypt.c, or cryptsetup (`sdcrypt info` prints the line).\n");
+    log_msg(SOS_LOG_NOTICE, "sd: the card's key was shown on the console");
+}
+
+// --- device key --------------------------------------------------------------------------------
+
+static void on_forget_confirm(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer || strcmp(answer, "yes")) {
+        shell_printf(sh, "the device key is kept\n");
+        return;
+    }
+    if (files_in_use(sh))
+        return;
+    f_unmount(sd_get_drive_prefix(&card));
+    card.state.mounted = false;
+    crypt_off();
+    shell_printf(sh, devkey_forget() ? "the device key is cleared; the next encrypted `sd format` "
+                                       "makes a new one\n"
+                                     : "clearing the device key failed (see dmesg)\n");
+}
+
+// `sd devkey`: the device key's state; `sd devkey forget` (console): clear it, the explicit way
+// out of a key record that can't be used.
+static void cmd_devkey(shell_t *sh, const char *arg) {
+    if (!arg) {
+        switch (devkey_state()) {
+        case DEVKEY_NONE:
+            shell_printf(sh, "device key: none yet (the first encrypted `sd format` makes it)\n");
+            break;
+        case DEVKEY_OK:
+            shell_printf(sh, "device key: present (unlocks the cards this device encrypted)\n");
+            break;
+        default:
+            shell_printf(sh, "device key: present but unusable (damaged, or written by newer "
+                             "firmware). It's kept as it is: newer firmware may read it, and its\n"
+                             "cards' saved keys (sd key) still work on a PC. `sd devkey forget` "
+                             "clears it.\n");
+        }
+        return;
+    }
+    if (strcmp(arg, "forget")) {
+        shell_printf(sh, "usage: sd devkey [forget]\n");
+        return;
+    }
+    if (!sh->io->admin) {
+        shell_printf(sh, "the device key can only be cleared on the serial console\n");
+        return;
+    }
+    if (devkey_state() == DEVKEY_NONE) {
+        shell_printf(sh, "there's no device key\n");
+        return;
+    }
+    shell_printf(sh, "Cards this device encrypted can then only be read with their saved key (sd key).\n");
+    shell_ask(sh, "Clear the device key? Type 'yes': ", false, on_forget_confirm, NULL);
 }
 
 // --- dispatch ------------------------------------------------------------------------------------
@@ -412,7 +751,11 @@ void sdcard_command(shell_t *sh, char *args) {
     else if (!strcmp(sub, "speed"))
         cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
-        cmd_format(sh, arg);
+        cmd_format(sh, arg, arg2);
+    else if (!strcmp(sub, "key"))
+        cmd_key(sh);
+    else if (!strcmp(sub, "devkey"))
+        cmd_devkey(sh, arg);
     else if (!strcmp(sub, "unmount")) {
         if (files_in_use(sh))
             return;
@@ -424,8 +767,9 @@ void sdcard_command(shell_t *sh, char *args) {
         }
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
+        crypt_off();                        // forget the card's key
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
-        shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32]|unmount]\n");
+        shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|key|devkey [forget]|unmount]\n");
 }
