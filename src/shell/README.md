@@ -22,7 +22,9 @@ translation (`crlf`), and `admin` (true for the console only).
   full-screen programs: every key typed goes to `key()` as it arrives (decoded by `keys.c`)
   instead of being kept for afterwards, and Enter is always `'\r'`. Ctrl-C is an ordinary key
   there, so the program needs its own way out; the session ending still cancels it. At most 256
-  input bytes are handled a pass, then one `step()`.
+  input bytes are handled a pass, then one `step()`. `shell_raw_mode()` says a shell is in it: then
+  `shell_hide_input()`/`shell_show_input()` leave the screen alone, and the log holds console
+  messages back (`log_hooks_t.hold`) until the program ends.
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
 

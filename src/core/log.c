@@ -146,7 +146,7 @@ void log_flush(void) {
     char line[LOG_LINE_MAX + 2];
     bool hidden = false;
 
-    if (!hooks || flushing || hooks->in_irq())
+    if (!hooks || flushing || hooks->in_irq() || (hooks->hold && hooks->hold()))
         return;
     flushing = true;
     for (;;) {
@@ -178,6 +178,23 @@ void log_flush(void) {
     if (hidden)
         hooks->show_input();
     flushing = false;
+}
+
+int log_pending(void) {
+    if (!hooks)
+        return 0;
+    uint32_t saved = hooks->lock();
+    int n = lost_unprinted ? 1 : 0;
+    uint32_t pos = printed;
+    while (before(pos, end)) {              // pos is at an entry's level byte
+        if (at(pos) - 1 <= console_level)
+            n++;
+        while (before(pos, end) && at(pos) != '\n')
+            pos++;
+        pos++;
+    }
+    hooks->unlock(saved);
+    return n;
 }
 
 bool log_history_next(uint32_t *cursor, char *buf, size_t buflen) {

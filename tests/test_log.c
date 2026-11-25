@@ -36,11 +36,17 @@ static void f_write(const char *s, size_t n) {
 static void f_hide(void) { hides++; f_write("<hide>", 6); }
 static void f_show(void) { shows++; f_write("<show>", 6); }
 
-static const log_hooks_t hooks = { f_now, f_in_irq, f_lock, f_unlock, f_write, f_hide, f_show };
+static bool held;
+static bool f_hold(void) { return held; }
+
+static const log_hooks_t hooks = {
+    f_now, f_in_irq, f_lock, f_unlock, f_write, f_hide, f_show, f_hold,
+};
 
 static void reset(void) {
     now = 1234000;
     irq = false;
+    held = false;
     locked = hides = shows = 0;
     out_len = 0;
     out[0] = '\0';
@@ -218,6 +224,39 @@ TEST(overflow_before_printing_is_reported) {
     CHECK_EQ(shows, 1);
 }
 
+TEST(held_console_keeps_messages_for_later) {
+    reset();
+    held = true;                                // a full-screen program on the console
+    log_msg(SOS_LOG_NOTICE, "while held");
+    log_flush();
+    CHECK_EQ(out_len, 0);
+    CHECK_EQ(hides, 0);
+    CHECK_EQ(history_count(), 1);               // in the history meanwhile
+    log_msg(SOS_LOG_INFO, "not for the console");
+    log_msg(SOS_LOG_WARNING, "also held");
+    CHECK_EQ(log_pending(), 2);                 // the info message won't be printed
+    held = false;
+    log_flush();
+    CHECK(strstr(out, "<hide>") == out);
+    CHECK(strstr(out, "also held\n<show>") != NULL);
+    CHECK(strstr(out, "not for the console") == NULL);
+    CHECK_EQ(log_pending(), 0);
+}
+
+TEST(held_console_overflow_is_reported) {
+    reset();
+    held = true;
+    for (int i = 0; i < 400; i++)
+        log_msg(SOS_LOG_NOTICE, "held %03d", i);
+    CHECK_EQ(out_len, 0);
+    int pending = log_pending();
+    CHECK(pending > 1 && pending < 400);        // what's left, plus one for the dropped ones
+    held = false;
+    log_flush();
+    CHECK(strstr(out, "[log: some messages were dropped before they were shown]") != NULL);
+    CHECK(strstr(out, "held 399") != NULL);
+}
+
 TEST(logging_while_printing_does_not_recurse) {
     reset();
     log_from_write = true;
@@ -259,6 +298,8 @@ TEST_MAIN(
     RUN(history_cursor_continues);
     RUN(history_drops_oldest_when_full);
     RUN(overflow_before_printing_is_reported);
+    RUN(held_console_keeps_messages_for_later);
+    RUN(held_console_overflow_is_reported);
     RUN(logging_while_printing_does_not_recurse);
     RUN(level_names);
     RUN(nothing_before_init);
