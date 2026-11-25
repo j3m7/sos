@@ -408,13 +408,13 @@ unencrypted; `sd` shows which kind is in.
   rewritten from the second.
 - **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
   flash, which can be read out.
-- **Recovery:** an encrypted `sd format` prints the card's id and data key when it finishes,
-  and only then: no command shows it later, so someone with console access can't read it out
-  afterwards. Store it offline: it's the only way to read the card if the device is lost. With
-  it, a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it with the key in
-  a file, and `sdcrypt info` prints the `cryptsetup` line to open the card directly). A card
-  whose key wasn't saved can't have it shown again; formatting it anew shows a new key (and
-  erases the card).
+- **Recovery:** an encrypted `sd format` prints the card's id and data key when it finishes, and
+  only then: no command shows it later. (The device key that unlocks the card is still in the
+  device's flash, which anyone with the device can read out.) Store it offline: it's the only
+  way to read the card if the device is lost. With it, a Linux PC reads the card
+  (`tools/host/sdcrypt.c` decrypts an image of it with the key in a file, and `sdcrypt info`
+  prints the `cryptsetup` line to open the card directly). A card whose key wasn't saved can't
+  have it shown again; formatting it anew shows a new key (and erases the card).
 - **The device key is never replaced on its own.** If its flash record is damaged (or was
   written by newer firmware), encrypted cards stay locked and `sd devkey` says so; `sd devkey
   forget` clears it, after which only the keys shown at format read the old cards. Firmware
