@@ -15,7 +15,9 @@
 #include "chat/chat.h"
 #include "core/devkey.h"
 #include "core/fault.h"
+#include "core/keyprov.h"
 #include "core/log.h"
+#include "core/rootflash.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -121,7 +123,9 @@ int main(void) {
         return 1;
     }
 
-    // Configuration and host key first: both may write flash, which is simplest before Wi-Fi.
+    // The root secret, then configuration and host key: all three may write flash, which is
+    // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
+    rootflash_init();
     settings_init();
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
@@ -134,6 +138,9 @@ int main(void) {
         return 1;
     }
     wifi_start();                       // connects in the background; the console works meanwhile
+
+    // Every key has been derived by now: no more until reset (core/keyprov.h).
+    keyprov_lock();
 
     shell_init(&console_shell, &console_io, NULL);
     chat_init(&chat_hooks);

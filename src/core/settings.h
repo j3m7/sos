@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// The device's live configuration (see config.h), kept in flash just below the SSH host key:
+// The device's live configuration (see config.h), kept in flash just below the key sector (the SSH host
+// key), and above the root secret (core/rootflash.h):
 //
-//   ... firmware ... | config slot A | config slot B | host key |   <- end of flash
+//   ... firmware ... | root secret | config slot A | config slot B | key sector |   <- end of flash
 //
 // With nothing saved (a new board, or after `config reset`) it is empty: no network, no trusted
 // keys. The firmware holds no configuration of its own; a board gets one from `setup` on the

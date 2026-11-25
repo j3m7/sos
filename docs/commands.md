@@ -63,6 +63,8 @@ Changes are saved in flash immediately and survive reflashing (see
 | Command | Where | What it does |
 |---|---|---|
 | `config` | any | Show the configuration: hostname, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
+| `rootsecret` | any | The state of the root secret, from which the keys that protect stored data are derived: present (in flash on an open board, where it isn't protected from someone who has the board), none, or present but unusable (damaged, or from newer firmware; kept as it is). Nothing is stored under it yet |
+| `rootsecret forget` | console only | Clear a root secret record that can't be used, after you type `yes`; the next boot makes a new one. Refused while the root secret is usable |
 | `config reset` | console only | Erase the saved configuration, after you type `yes`. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
 | `setup` | console only | Guided setup: Wi-Fi network and password, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |

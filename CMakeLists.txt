@@ -101,6 +101,9 @@ set(SOS_SOURCES
     src/core/settings.c
     src/core/keysector.c
     src/core/devkey.c
+    src/core/rootsecret.c
+    src/core/rootflash.c
+    src/core/keyprov.c
     src/core/wdog.c
     src/core/fault.c
     src/core/stackmon.c
