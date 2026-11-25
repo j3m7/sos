@@ -21,6 +21,7 @@
 
 #include "pico-sshd/ringbuffer.h"
 
+#include "core/heap.h"
 #include "core/log.h"
 #include "time/timesync.h"
 #include "tls/certstore.h"
@@ -391,14 +392,6 @@ static void handshake_step(tls_conn_t *c) {
 
 // --- public --------------------------------------------------------------------------------------
 
-// Free heap: what isn't in use, inside malloc's arena or beyond it (as `mem` counts it).
-static size_t heap_free(void) {
-    extern char __end__, __HeapLimit;
-    struct mallinfo mi = mallinfo();
-    size_t total = (size_t)(&__HeapLimit - &__end__);
-    return total > mi.uordblks ? total - mi.uordblks : 0;
-}
-
 tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
                      tls_use_t use) {
     size_t free_heap = heap_free();         // before this connection's own allocation
@@ -418,7 +411,7 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     }
 
     cyw43_arch_lwip_begin();
-    unsigned slot = TLS_MAX_CONNS, open = 0, open_user = 0;
+    unsigned slot = TLS_MAX_CONNS, open = 0, open_user = 0, opening = 0;
     for (unsigned i = 0; i < TLS_MAX_CONNS; i++) {
         if (!conns[i]) {
             if (slot == TLS_MAX_CONNS)
@@ -426,9 +419,10 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
         } else {
             open++;
             open_user += conns[i]->use == TLS_USER;
+            opening += conns[i]->state != TLS_READY;     // its handshake's peak still to come
         }
     }
-    const char *refused = tls_admit(open, open_user, use, free_heap);
+    const char *refused = tls_admit(open, open_user, opening, use, free_heap);
     if (refused)
         slot = TLS_MAX_CONNS;
     if (slot < TLS_MAX_CONNS) {

@@ -27,8 +27,12 @@ typedef enum {
     TLS_USER,           // started by someone (http, sos.http)
 } tls_use_t;
 
-// NULL if a connection for `use` may open, with `open` connections open of which `open_user`
-// are TLS_USER, and `heap_free` bytes of heap free; otherwise why not.
-const char *tls_admit(unsigned open, unsigned open_user, tls_use_t use, size_t heap_free);
+// NULL if a connection for `use` may open, with `open` connections open, of which `open_user` are
+// TLS_USER and `opening` haven't finished their handshake, and `heap_free` bytes of heap free;
+// otherwise why not. Connections still opening haven't reached their peak, so the free heap must
+// cover TLS_HEAP_NEEDED for each of them as well as for the new one: two requests started in the
+// same second don't both count on the same free memory.
+const char *tls_admit(unsigned open, unsigned open_user, unsigned opening, tls_use_t use,
+                      size_t heap_free);
 
 #endif
