@@ -104,6 +104,8 @@ set(SOS_SOURCES
     src/core/rootsecret.c
     src/core/rootflash.c
     src/core/keyprov.c
+    src/core/seal.c
+    src/core/random.c
     src/core/wdog.c
     src/core/fault.c
     src/core/stackmon.c
@@ -121,6 +123,7 @@ set(SOS_SOURCES
     src/net/http_msg.c
     src/ssh/sshd.c
     src/ssh/hostkey.c
+    src/ssh/hostkey_record.c
     src/ssh/sftp_fs.c
     src/files/sdcard.c
     src/files/files.c

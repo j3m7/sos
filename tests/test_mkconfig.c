@@ -41,7 +41,7 @@ TEST(full_file_loads_like_on_the_device) {
                  "rtc_cal_ppm = 92\n", &cfg));
     static uint8_t image[MKCONFIG_IMAGE_SIZE];
     CHECK(mkconfig_image(&cfg, image));
-    const config_store_t store = {rd, wr, image};
+    const config_store_t store = {rd, wr, image, NULL, false};
     uint32_t seq = 0;
     CHECK(config_load(&store, &back, &seq));
     CHECK_EQ(seq, 1);

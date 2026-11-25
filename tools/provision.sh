@@ -12,6 +12,10 @@
 # whatever was saved there. The firmware and the SSH host key are not touched. Like flashing, it
 # needs the board on USB; it reboots it into BOOTSEL and back.
 #
+# The record is written unsealed: this machine doesn't have the board's key. An open board
+# loads it, stores it sealed at its first boot and erases the unsealed copy. (A board with
+# secure boot will refuse an unsealed record; it's set up on its console.)
+#
 # Use the source tree the board's firmware was built from: firmware older than the record's
 # format ignores it and starts empty.
 #

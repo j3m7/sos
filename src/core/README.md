@@ -47,6 +47,20 @@ Two layers:
     A record from older firmware loads with the newer fields at their defaults; firmware that
     doesn't know a record's length ignores it. `_Static_assert`s pin the offsets of released
     fields.
+  - **Sealed or plain:** the header's version says which. Version 2 is sealed: after the same
+    16-byte header come a nonce, the ciphertext and a tag, with the header (magic, version,
+    length, sequence number) as associated data, so a sealed payload can't be put under another
+    sequence number. Version 1 is plain, as older firmware and the provisioning tool write it.
+    `config.c` seals through `sealer_t` (`sealer.h`) and has no cryptography in it: the device
+    plugs in AES-256-GCM (`seal.c`), the tests a fake, the provisioning tool nothing.
+  - **A plain record on a board that seals** loads, and the next save (which `settings.c` does
+    at once) stores it sealed and erases the slot that held it, checking that it reads blank.
+    `config_scrub_plain()` finishes that at the next boot if power was lost in between.
+  - **A secured board** (`refuse_plain`, not set anywhere yet) doesn't see plain records at
+    all: they take no part in choosing the newest record, so a planted one can't hide the sealed
+    configuration.
+  - **A sealed record that doesn't open** (another root secret, or changed) counts as no
+    record. It isn't erased; the log says it's there (`config_sealed_unopened()`).
   - **Storage interface:** flash is reached through `config_store_t`, which the tests replace
     with a fake flash that can fail or lose power mid-write.
 - **`settings.c`, the live configuration on the device.** `settings()` returns it; edit it,
@@ -58,7 +72,11 @@ Two layers:
     firmware carries no configuration of its own.
   - **Provisioning:** `tools/provision.sh` (`ninja provision`) builds a record on the host
     with `config.c` itself (`tools/host/mkconfig.c`) and loads it into slot A with `picotool`,
-    erasing slot B. The device validates it like any saved record when it boots.
+    erasing slot B. The device validates it like any saved record when it boots, and seals it.
+  - **The seal key** (`KEYPROV_CONFIG_SEAL`) is derived in `settings_init()`, before the key
+    provider locks, and kept in RAM by `settings.c` while the board runs: every save needs it.
+    Without a usable root secret a sealed configuration can't be read and nothing can be
+    saved; the log says so.
   - **Flash writes** go through `flash_safe_execute()`, which pauses core 1 (Lua) while
     flash is busy.
 
@@ -66,8 +84,9 @@ Only the console may change the configuration; see `require_admin()` in `shell/s
 
 ## Root secret and key provider (`rootsecret.c`, `rootflash.c`, `keyprov.c`)
 
-The base for protecting what the board stores (issue #64). **Nothing uses it yet:** the
-configuration, the host key and the SD cards are stored as before.
+The base for protecting what the board stores (issue #64). The saved configuration and the SSH
+host key are sealed under keys from it (`seal.c`: AES-256-GCM, a random nonce per seal, the
+record's header as associated data). SD cards still use the device key in the key sector.
 
 - **Root secret:** 32 random bytes, made from the TRNG at the first boot. Every other key is
   derived from it. On an open board (no secure boot) it's kept in flash, which protects nothing

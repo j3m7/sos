@@ -6,6 +6,11 @@
 //
 //   ... firmware ... | root secret | config slot A | config slot B | key sector |   <- end of flash
 //
+// It's stored sealed: AES-256-GCM under a key derived from the board's root secret
+// (core/seal.h, core/keyprov.h), so the flash contents don't give away the Wi-Fi password or let
+// someone plant a trusted key. The seal key is held in RAM by settings.c while the board runs.
+// A plain record (older firmware, provisioning) is loaded on an open board and sealed at once.
+//
 // With nothing saved (a new board, or after `config reset`) it is empty: no network, no trusted
 // keys. The firmware holds no configuration of its own; a board gets one from `setup` on the
 // console or from tools/provision.sh, which writes the saved record over USB.

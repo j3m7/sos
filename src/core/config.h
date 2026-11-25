@@ -4,7 +4,8 @@
 // Persistent device configuration: Wi-Fi network and power saving, hostname, trusted SSH public
 // keys, time sync, approved TLS roots.
 //
-// Stored as one record in two alternating flash slots (A/B). Each save goes to the slot not
+// Stored as one record in two alternating flash slots (A/B), sealed on the device (see "storage"
+// below). Each save goes to the slot not
 // holding the current record, with a higher sequence number; loading picks the valid record with
 // the highest sequence number, so a power cut during a save leaves the previous version in place.
 // Storage is reached through config_store_t so the logic runs (and is tested) without flash.
@@ -17,6 +18,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "core/sealer.h"
 
 #define CONFIG_SSID_MAX      32     // 802.11 SSID limit
 #define CONFIG_PASSWORD_MAX  63     // WPA2 passphrase limit
@@ -73,18 +76,42 @@ typedef struct {
     // Replace slot 0 or 1 with len bytes of data (len <= CONFIG_SLOT_SIZE). True on success.
     bool (*write)(void *ctx, unsigned slot, const void *data, size_t len);
     void *ctx;
+    // How records are sealed (the device: AES-256-GCM under a key derived from the root secret,
+    // core/seal.h). NULL: records are saved plain and sealed ones can't be read (the host
+    // provisioning tool, which has no key).
+    const sealer_t *sealer;
+    // Don't load plain records. For a secured board, where anyone can write the flash over USB
+    // and a plain record would be a way to inject a configuration. An open board loads them
+    // (records from older firmware, provisioning images) and seals them: see config_save().
+    bool refuse_plain;
 } config_store_t;
+
+// What the newest usable record is.
+enum { CONFIG_STORED_NONE, CONFIG_STORED_PLAIN, CONFIG_STORED_SEALED };
+int config_stored(const config_store_t *store);
 
 // Defaults: hostname "sos", user "admin", no Wi-Fi, no keys.
 void config_defaults(sos_config_t *cfg);
 
-// Load the newest valid record. Returns false (and leaves *cfg as defaults) if neither slot
+// Load the newest valid record, plain or sealed. Returns false (and leaves *cfg as defaults) if neither slot
 // holds one. *seq, if not NULL, receives the record's sequence number.
 bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq);
 
 // Save cfg to the slot not holding the newest valid record. Returns false if the write failed
 // or the written record doesn't read back as valid; the previous record is then still in place.
+// With a sealer the record is sealed, and once it's stored a plain record in the other slot is
+// erased (config_scrub_plain), so a configuration that arrived plain doesn't stay readable.
 bool config_save(const config_store_t *store, const sos_config_t *cfg);
+
+// Erase any slot that holds a plain record while the other holds the configuration sealed (a
+// save that lost power before it got to that). Nothing to do without a sealer. False if a plain
+// record is still there afterwards.
+bool config_scrub_plain(const config_store_t *store);
+
+// True if a slot holds a sealed record, intact as stored (its CRC is right), that this store
+// can't open: sealed under another root secret, or changed since. Such a record counts as no
+// record and is not erased automatically; this is for saying so.
+bool config_sealed_unopened(const config_store_t *store);
 
 // Erase both records (factory reset): the next load returns defaults.
 bool config_erase(const config_store_t *store);

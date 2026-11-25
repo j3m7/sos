@@ -6,7 +6,9 @@
 #include <string.h>
 
 #define CONFIG_MAGIC          0x43534f53u   // "SOSC"
-#define CONFIG_FORMAT_VERSION 1
+// The header's version says how the payload is stored:
+#define CONFIG_VERSION_PLAIN  1     // as it is (older firmware, the provisioning tool)
+#define CONFIG_VERSION_SEALED 2     // sealed through the store's sealer (core/sealer.h)
 
 // Payload lengths written by each release, oldest first; a record must have one of them, so a
 // field is never cut off partway. When adding fields to sos_config_t, append the new size.
@@ -37,20 +39,30 @@ static bool known_length(uint16_t length) {
 #define HAS_FIELD(length, field) \
     ((length) >= offsetof(sos_config_t, field) + sizeof(((sos_config_t *)0)->field))
 
+// A stored record: this header, then the payload. A plain record's payload is the first
+// `length` bytes of sos_config_t. A sealed record's is those bytes sealed: nonce, ciphertext,
+// tag (length + SEALER_OVERHEAD bytes), with the header up to the CRC as the associated data,
+// so a sealed payload can't be moved under another header (an older sequence number, say).
 typedef struct {
     uint32_t magic;
-    uint16_t version;
-    uint16_t length;        // payload bytes: one of record_lengths
+    uint16_t version;       // CONFIG_VERSION_PLAIN or CONFIG_VERSION_SEALED
+    uint16_t length;        // configuration bytes: one of record_lengths
     uint32_t seq;           // higher = newer (compared with wrap-around)
-    uint32_t crc;           // CRC-32 over magic..seq and the payload
+    uint32_t crc;           // CRC-32 over magic..seq and the payload as stored
 } record_header_t;
 
-typedef struct {
-    record_header_t hdr;
-    sos_config_t cfg;
-} record_t;
+#define HEADER_LEN sizeof(record_header_t)
+#define HEADER_AAD offsetof(record_header_t, crc)       // magic, version, length, seq
+#define RECORD_MAX (HEADER_LEN + sizeof(sos_config_t) + SEALER_OVERHEAD)
 
-_Static_assert(sizeof(record_t) <= CONFIG_SLOT_SIZE, "config record must fit in one slot");
+_Static_assert(HEADER_LEN == 16 && HEADER_AAD == 12, "the header's layout is part of the format");
+_Static_assert(RECORD_MAX <= CONFIG_SLOT_SIZE, "config record must fit in one slot");
+
+static void wipe(void *p, size_t len) {
+    volatile uint8_t *v = p;
+    while (len--)
+        *v++ = 0;
+}
 
 // --- CRC-32 (IEEE 802.3, as used by zlib) -------------------------------------------------------
 
@@ -69,10 +81,11 @@ uint32_t config_crc32(const void *data, size_t len) {
     return crc32_update(0, data, len);
 }
 
-// Covers the stored payload length; call only with a length already checked to be in range.
-static uint32_t record_crc(const record_t *r) {
-    uint32_t crc = crc32_update(0, &r->hdr, offsetof(record_header_t, crc));
-    return crc32_update(crc, &r->cfg, r->hdr.length);
+// Over the header up to the CRC and `stored` payload bytes; call only with a length already
+// checked to be in range.
+static uint32_t record_crc(const uint8_t *record, size_t stored) {
+    uint32_t crc = crc32_update(0, record, HEADER_AAD);
+    return crc32_update(crc, record + HEADER_LEN, stored);
 }
 
 // --- records ------------------------------------------------------------------------------------
@@ -81,22 +94,18 @@ static bool terminated(const char *s, size_t size) {
     return memchr(s, '\0', size) != NULL;
 }
 
-// A record is valid if its header and CRC check out and its contents are within bounds.
-static bool record_valid(const record_t *r) {
-    if (r->hdr.magic != CONFIG_MAGIC || r->hdr.version != CONFIG_FORMAT_VERSION ||
-        !known_length(r->hdr.length) || r->hdr.crc != record_crc(r))
-        return false;
-    const sos_config_t *c = &r->cfg;
+// Are the first `length` bytes of a configuration within bounds?
+static bool contents_valid(const sos_config_t *c, uint16_t length) {
     // Later fields: only check those the record contains (the rest load as 0).
-    if (HAS_FIELD(r->hdr.length, ntp_sync_hours) && c->ntp_sync_hours > CONFIG_NTP_SYNC_HOURS_MAX)
+    if (HAS_FIELD(length, ntp_sync_hours) && c->ntp_sync_hours > CONFIG_NTP_SYNC_HOURS_MAX)
         return false;
-    if (HAS_FIELD(r->hdr.length, ntp_server) &&
+    if (HAS_FIELD(length, ntp_server) &&
         (!terminated(c->ntp_server, sizeof(c->ntp_server)) ||
          (c->ntp_server[0] && config_check_ntp_server(c->ntp_server))))
         return false;
-    if (HAS_FIELD(r->hdr.length, wifi_powersave) && c->wifi_powersave > 1)
+    if (HAS_FIELD(length, wifi_powersave) && c->wifi_powersave > 1)
         return false;
-    if (HAS_FIELD(r->hdr.length, wifi_country) &&
+    if (HAS_FIELD(length, wifi_country) &&
         (!terminated(c->wifi_country, sizeof(c->wifi_country)) ||
          config_check_country(c->wifi_country)))
         return false;
@@ -112,25 +121,66 @@ static bool record_valid(const record_t *r) {
     return true;
 }
 
+// What a slot holds that this store can use: nothing, a plain record or a sealed one. A record
+// counts only if its header and CRC check out, it opens (a sealed one), and its contents are
+// within bounds. A plain record doesn't count in a store that refuses them, nor a sealed one in
+// a store without a sealer. *hdr gets the header; *out (if not NULL) the configuration, with
+// the fields a shorter record lacks as 0.
+static int slot_read(const config_store_t *store, unsigned slot, record_header_t *hdr,
+                     sos_config_t *out) {
+    static sos_config_t tmp;    // too big for the stack; loads and saves are single-threaded
+    const uint8_t *record = store->read(store->ctx, slot);
+    record_header_t h;
+    memcpy(&h, record, sizeof(h));
+    if (hdr)
+        *hdr = h;
+    if (h.magic != CONFIG_MAGIC || !known_length(h.length))
+        return CONFIG_STORED_NONE;
+    int kind;
+    size_t stored = h.length;
+    if (h.version == CONFIG_VERSION_PLAIN && !store->refuse_plain) {
+        kind = CONFIG_STORED_PLAIN;
+    } else if (h.version == CONFIG_VERSION_SEALED && store->sealer) {
+        kind = CONFIG_STORED_SEALED;
+        stored += SEALER_OVERHEAD;
+    } else {
+        return CONFIG_STORED_NONE;
+    }
+    if (h.crc != record_crc(record, stored))
+        return CONFIG_STORED_NONE;
+
+    bool ok = true;
+    memset(&tmp, 0, sizeof(tmp));
+    if (kind == CONFIG_STORED_PLAIN)
+        memcpy(&tmp, record + HEADER_LEN, h.length);
+    else
+        ok = store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
+                                 stored, (uint8_t *)&tmp);
+    ok = ok && contents_valid(&tmp, h.length);
+    if (ok && out)
+        memcpy(out, &tmp, sizeof(*out));
+    wipe(&tmp, sizeof(tmp));
+    return ok ? kind : CONFIG_STORED_NONE;
+}
+
 static bool seq_newer(uint32_t a, uint32_t b) {
     return (int32_t)(a - b) > 0;
 }
 
-// Index of the slot holding the newest valid record, or -1.
-static int newest_slot(const config_store_t *store, const record_t **out) {
-    const record_t *r0 = (const record_t *)store->read(store->ctx, 0);
-    const record_t *r1 = (const record_t *)store->read(store->ctx, 1);
-    bool v0 = record_valid(r0), v1 = record_valid(r1);
-    int slot = -1;
+typedef struct {
+    int kind[2];
+    record_header_t hdr[2];
+    int newest;                 // the slot holding the newest usable record, or -1
+} slots_t;
+
+static void scan(const config_store_t *store, slots_t *s) {
+    for (unsigned i = 0; i < 2; i++)
+        s->kind[i] = slot_read(store, i, &s->hdr[i], NULL);
+    bool v0 = s->kind[0] != CONFIG_STORED_NONE, v1 = s->kind[1] != CONFIG_STORED_NONE;
     if (v0 && v1)
-        slot = seq_newer(r1->hdr.seq, r0->hdr.seq) ? 1 : 0;
-    else if (v0)
-        slot = 0;
-    else if (v1)
-        slot = 1;
-    if (out)
-        *out = slot == 0 ? r0 : slot == 1 ? r1 : NULL;
-    return slot;
+        s->newest = seq_newer(s->hdr[1].seq, s->hdr[0].seq) ? 1 : 0;
+    else
+        s->newest = v0 ? 0 : v1 ? 1 : -1;
 }
 
 void config_defaults(sos_config_t *cfg) {
@@ -139,45 +189,119 @@ void config_defaults(sos_config_t *cfg) {
     strcpy(cfg->ssh_user, "admin");
 }
 
+int config_stored(const config_store_t *store) {
+    slots_t s;
+    scan(store, &s);
+    return s.newest < 0 ? CONFIG_STORED_NONE : s.kind[s.newest];
+}
+
 bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) {
-    const record_t *r;
+    slots_t s;
     config_defaults(cfg);
-    if (newest_slot(store, &r) < 0)
+    scan(store, &s);
+    if (s.newest < 0 || slot_read(store, (unsigned)s.newest, NULL, cfg) == CONFIG_STORED_NONE) {
+        config_defaults(cfg);
         return false;
-    memcpy(cfg, &r->cfg, r->hdr.length);       // fields a shorter record lacks stay 0
+    }
     // This byte was padding before it became rtc_offset. A value out of range can only be left
     // over from that, so it means "none" instead of making the whole record invalid.
     if (cfg->rtc_offset < CONFIG_RTC_OFFSET_MIN || cfg->rtc_offset > CONFIG_RTC_OFFSET_MAX)
         cfg->rtc_offset = 0;
     if (seq)
-        *seq = r->hdr.seq;
+        *seq = s.hdr[s.newest].seq;
     return true;
 }
 
-bool config_save(const config_store_t *store, const sos_config_t *cfg) {
-    const record_t *current;
-    int slot = newest_slot(store, &current);
-    static record_t rec;        // too big for the stack; saves are rare and single-threaded
-
-    memset(&rec, 0, sizeof(rec));
-    rec.hdr.magic = CONFIG_MAGIC;
-    rec.hdr.version = CONFIG_FORMAT_VERSION;
-    rec.hdr.length = sizeof(sos_config_t);
-    rec.hdr.seq = slot < 0 ? 1 : current->hdr.seq + 1;
-    memcpy(&rec.cfg, cfg, sizeof(rec.cfg));
-    rec.hdr.crc = record_crc(&rec);
-
-    unsigned target = slot == 0 ? 1 : 0;
-    if (!store->write(store->ctx, target, &rec, sizeof(rec)))
+// Replace a slot with an invalid header (zeroes) and nothing else. True only if the slot then
+// reads that way: the write erases the whole slot first, so what was there is gone.
+static bool blank_slot(const config_store_t *store, unsigned slot) {
+    static const uint8_t blank[HEADER_LEN];     // zeroes: an invalid header
+    if (!store->write(store->ctx, slot, blank, sizeof(blank)))
         return false;
-    const record_t *back = (const record_t *)store->read(store->ctx, target);
-    return record_valid(back) && back->hdr.seq == rec.hdr.seq;
+    const uint8_t *now = store->read(store->ctx, slot);
+    if (memcmp(now, blank, sizeof(blank)) != 0)
+        return false;
+    for (size_t i = HEADER_LEN; i < CONFIG_SLOT_SIZE; i++)
+        if (now[i] != 0xff)
+            return false;
+    return true;
+}
+
+bool config_sealed_unopened(const config_store_t *store) {
+    for (unsigned i = 0; i < 2; i++) {
+        const uint8_t *record = store->read(store->ctx, i);
+        record_header_t h;
+        memcpy(&h, record, sizeof(h));
+        if (h.magic == CONFIG_MAGIC && h.version == CONFIG_VERSION_SEALED &&
+            known_length(h.length) &&
+            h.crc == record_crc(record, (size_t)h.length + SEALER_OVERHEAD) &&
+            slot_read(store, i, NULL, NULL) == CONFIG_STORED_NONE)
+            return true;
+    }
+    return false;
+}
+
+bool config_scrub_plain(const config_store_t *store) {
+    if (!store->sealer)
+        return true;
+    slots_t s;
+    scan(store, &s);
+    bool clean = true;
+    for (unsigned i = 0; i < 2; i++) {
+        // Anything with a plain record's header, valid or not: it may hold a password.
+        if (s.hdr[i].magic != CONFIG_MAGIC || s.hdr[i].version != CONFIG_VERSION_PLAIN)
+            continue;
+        // Only once the other slot holds the configuration sealed: never erase the only copy.
+        if (s.kind[1 - i] == CONFIG_STORED_SEALED && blank_slot(store, i))
+            continue;
+        clean = false;
+    }
+    return clean;
+}
+
+bool config_save(const config_store_t *store, const sos_config_t *cfg) {
+    static uint8_t rec[RECORD_MAX];     // too big for the stack; saves are rare and single-threaded
+    slots_t s;
+    scan(store, &s);
+
+    record_header_t h = {
+        .magic = CONFIG_MAGIC,
+        .version = store->sealer ? CONFIG_VERSION_SEALED : CONFIG_VERSION_PLAIN,
+        .length = sizeof(sos_config_t),
+        .seq = s.newest < 0 ? 1 : s.hdr[s.newest].seq + 1,
+    };
+    size_t stored = sizeof(sos_config_t);
+    memset(rec, 0, sizeof(rec));
+    memcpy(rec, &h, HEADER_LEN);
+    if (store->sealer) {
+        if (!store->sealer->seal(store->sealer->ctx, rec, HEADER_AAD, (const uint8_t *)cfg,
+                                 sizeof(*cfg), rec + HEADER_LEN))
+            return false;
+        stored += SEALER_OVERHEAD;
+    } else {
+        memcpy(rec + HEADER_LEN, cfg, sizeof(*cfg));
+    }
+    h.crc = record_crc(rec, stored);
+    memcpy(rec, &h, HEADER_LEN);
+
+    unsigned target = s.newest == 0 ? 1 : 0;
+    bool ok = store->write(store->ctx, target, rec, HEADER_LEN + stored);
+    wipe(rec, sizeof(rec));
+    if (!ok)
+        return false;
+    record_header_t back;
+    int want = store->sealer ? CONFIG_STORED_SEALED : CONFIG_STORED_PLAIN;
+    if (slot_read(store, target, &back, NULL) != want || back.seq != h.seq)
+        return false;
+    // The configuration is now stored sealed: a plain copy in the other slot (from older
+    // firmware or provisioning) must not stay readable. config_scrub_plain() at the next boot
+    // retries if this fails.
+    config_scrub_plain(store);
+    return true;
 }
 
 bool config_erase(const config_store_t *store) {
-    static const uint8_t blank[sizeof(record_header_t)];   // zeroes: an invalid header
-    return store->write(store->ctx, 0, blank, sizeof(blank)) &&
-           store->write(store->ctx, 1, blank, sizeof(blank));
+    return blank_slot(store, 0) && blank_slot(store, 1);
 }
 
 // --- validation ---------------------------------------------------------------------------------
