@@ -60,9 +60,9 @@ that abort their connection; don't close the pcb again in `ssh_server_err()`). *
 upstream on 2026-11-25** as 9c025dc. Items 4, 6, 7 and 10, the ML-KEM stack finding and the
 multi-session work are notes only, in
 [tjko/pico-sshd#3](https://github.com/tjko/pico-sshd/issues/3) (no reply yet); item 11 hasn't
-been reported. Also noted there: with an rx
-buffer smaller than the SSH window (4096), `ssh_process_input()` can leave channel data unread
-and stall the session (SOS's copy has the same code path; it uses 4096, which avoids it).
+been reported. Also noted in #3: with an rx buffer smaller than the SSH window (4096),
+`ssh_process_input()` can leave channel data unread and stall the session (SOS's copy has the
+same code path; it uses 4096, which avoids it).
 
 1. `CMakeLists.txt`: `target_sources(pico-telnetd-lib ...)` adds the library's sources to the
    wrong target, so `pico-sshd-lib` only builds in projects that also use pico-telnetd.
