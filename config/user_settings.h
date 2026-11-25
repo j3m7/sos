@@ -55,12 +55,16 @@ extern "C"
 #define WOLFSSL_AES_COUNTER
 #define WOLFSSL_AES_DIRECT
 #define WOLFSSL_AES_XTS         /* SD card encryption (src/files/sdcrypt.c) */
-/* Lookup tables in SRAM for the files CMakeLists.txt marks (aes.c, sha256.c): read from flash,
-   varied data misses the XIP cache, and encrypted SD card writes ran at a third of the speed. */
+/* Lookup tables in SRAM for the files CMakeLists.txt marks (sha256.c). AES uses wolfSSL's Thumb-2
+   assembly (CMakeLists.txt), whose tables are fine in flash; the C AES's were not. */
 #ifdef SOS_WOLFCRYPT_TABLES_IN_RAM
 #define FLASH_QUALIFIER __attribute__((section(".time_critical.wolfcrypt_tables")))
 #endif
 #define WOLFSSL_NO_SOCK
+/* Aligned members in wolfCrypt's structs. aes.c and the Thumb-2 AES assembly are built with
+   WOLFSSL_ARMASM (CMakeLists.txt), which turns this on and changes struct Aes: every file must
+   agree on the layout. It also aligns GHASH's local buffer. */
+#define WOLFSSL_USE_ALIGN
 //#define WOLFSSL_SP_NO_DYNSTACK
 
 #define WOLFSSL_WOLFSSH

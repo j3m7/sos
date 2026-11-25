@@ -52,6 +52,11 @@ add_executable(test_config test_config.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)
 add_test(NAME config COMMAND test_config)
 
+# src/core/chipinfo.c: the RP2350 revision's name, shown by `version`.
+add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
+target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
+add_test(NAME chipinfo COMMAND test_chipinfo)
+
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)

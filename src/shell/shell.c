@@ -10,11 +10,13 @@
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
+#include "pico/unique_id.h"
 #include "lwip/memp.h"
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
 #include "chat/chat.h"
+#include "core/chipinfo.h"
 #include "core/config.h"
 #include "core/fault.h"
 #include "core/heap.h"
@@ -56,10 +58,21 @@ static void save(shell_t *sh) {
 
 // --- information ---------------------------------------------------------------------------------
 
+// The commit, then which board and chip this is. The serial is the one the board shows over USB
+// (and to picotool); the chip revision decides which published attacks apply (issue #64).
+static void cmd_version(shell_t *sh) {
+    char serial[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1], chip[64];
+    pico_get_unique_board_id_string(serial, sizeof(serial));
+    chipinfo_format(chip, sizeof(chip), rp2350_chip_version(), rp2350_rom_version());
+    shell_printf(sh, "SOS %s\n", sos_version);
+    shell_printf(sh, "board: serial %s\n", serial);
+    shell_printf(sh, "chip: %s\n", chip);
+}
+
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
-    shell_printf(sh, "version           the commit this firmware was built from\n");
+    shell_printf(sh, "version           firmware commit, board serial and chip revision\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "time cal [ppm]    RTC calibration: how fast the RTC runs\n");
@@ -856,7 +869,7 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
     else if (!strcmp(cmd, "version"))
-        shell_printf(sh, "SOS %s\n", sos_version);
+        cmd_version(sh);
     else if (!strcmp(cmd, "time"))
         cmd_time(sh, args);
     else if (!strcmp(cmd, "tls"))
