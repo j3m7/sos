@@ -21,7 +21,8 @@ network, mostly asleep, and you connect to it to get basic tasks done.
 ### Design principles
 
 - **Secure by default**: every network connection is encrypted and authenticated; no
-  plaintext logins or protocols. Credentials and keys never leave the device unencrypted.
+  plaintext logins or protocols. Credentials and keys leave the device unencrypted only on the
+  serial console (an encrypted SD card's recovery key, shown once when the card is formatted).
 - **Low power**: idle in low-power sleep, wake on network activity or timers, use Wi-Fi power
   saving, and do as little work as possible while nobody is connected.
 - **Headless**: fully usable and recoverable without a screen; the USB serial console is for
