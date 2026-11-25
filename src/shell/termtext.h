@@ -7,8 +7,11 @@
 // Printable ASCII, newline and tab pass. So does valid UTF-8 for U+00A0 and above, so accented
 // and non-Latin text shows as itself. Everything that a terminal could act on becomes '.':
 // C0 controls (ESC starts escape sequences), DEL, and the C1 controls, both as raw bytes
-// 0x80-0x9F (0x9B is CSI on 8-bit terminals) and UTF-8-encoded (U+0080-U+009F). Invalid UTF-8
-// becomes '.' too. CR is dropped, since the shell turns '\n' into CRLF itself.
+// 0x80-0x9F (0x9B is CSI on 8-bit terminals) and UTF-8-encoded (U+0080-U+009F). So do code
+// points that would make the text on screen differ from its bytes: bidi controls (U+202E and
+// the like), zero-width and other invisible characters, and tag characters (see hidden() in
+// termtext.c). Invalid UTF-8 becomes '.' too. CR is dropped, since the shell turns '\n' into
+// CRLF itself.
 //
 // Input can come in pieces: a UTF-8 sequence split between calls is held until it's complete.
 

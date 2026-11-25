@@ -98,6 +98,25 @@ TEST(utf8_invalid) {
     CHECK_TEXT("\xf0", ".");
 }
 
+TEST(hidden) {
+    // Bidi controls: RLO would show "abc" + "txt.exe" reversed as "exe.txt".
+    CHECK_TEXT("abc\xe2\x80\xaetxt.exe", "abc.txt.exe");                 // U+202E RLO
+    CHECK_TEXT("\xe2\x80\xaa\xe2\x80\xab\xe2\x80\xac\xe2\x80\xad", "....");  // U+202A-D
+    CHECK_TEXT("\xe2\x81\xa6\xe2\x81\xa7\xe2\x81\xa8\xe2\x81\xa9", "....");  // U+2066-9
+    CHECK_TEXT("\xe2\x80\x8e\xe2\x80\x8f\xd8\x9c", "...");          // LRM, RLM, ALM
+    // Zero-width and invisible.
+    CHECK_TEXT("pay\xe2\x80\x8bpal", "pay.pal");                        // U+200B ZWSP
+    CHECK_TEXT("\xe2\x81\xa0\xe2\x81\xa4", "..");                     // U+2060, U+2064
+    CHECK_TEXT("\xef\xbb\xbfhi", ".hi");                                 // U+FEFF BOM
+    CHECK_TEXT("\xe2\x80\xa8\xe2\x80\xa9", "..");                     // U+2028, U+2029
+    CHECK_TEXT("\xf3\xa0\x80\x81\xf3\xa0\x81\xbf", "..");           // U+E0001, U+E007F
+    // Neighbours pass, and so do ZWNJ and ZWJ.
+    CHECK_TEXT("\xe2\x80\x8a\xe2\x80\x90", "\xe2\x80\x8a\xe2\x80\x90");   // U+200A, U+2010
+    CHECK_TEXT("\xe2\x80\x8c\xe2\x80\x8d", "\xe2\x80\x8c\xe2\x80\x8d");   // U+200C, U+200D
+    CHECK_TEXT("\xe2\x80\xaf\xe2\x81\xa5", "\xe2\x80\xaf\xe2\x81\xa5");   // U+202F, U+2065
+    CHECK_TEXT("\xef\xbb\xbe\xf3\xa0\x82\x80", "\xef\xbb\xbe\xf3\xa0\x82\x80");  // U+FEFE, U+E0080
+}
+
 // Random bytes in random pieces: the output never contains a C0 control other than \n and
 // \t, DEL, or a C1 control, raw or UTF-8-encoded; and it never grows beyond the input.
 TEST(fuzz) {
@@ -138,5 +157,6 @@ TEST_MAIN(
     RUN(c1_utf8);
     RUN(utf8_valid);
     RUN(utf8_invalid);
+    RUN(hidden);
     RUN(fuzz);
 )

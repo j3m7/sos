@@ -79,22 +79,25 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
     }
     snprintf(r->method, sizeof(r->method), "%s", o->method ? o->method : "");
     http_request_t req = {o->method, &r->url, o->content_type, o->headers, o->body_len};
-    char head[1536];
-    size_t head_len = http_request_build(&req, head, sizeof(head), err);
-    if (!head_len) {
-        free(r);
-        return NULL;
-    }
-    r->out = malloc(head_len + o->body_len);
+    // Built straight into the heap buffer, not on the caller's stack, then trimmed to size.
+    r->out = malloc(HTTP_HEAD_MAX + o->body_len);
     if (!r->out) {
         free(r);
         *err = "out of memory";
         return NULL;
     }
-    memcpy(r->out, head, head_len);
+    size_t head_len = http_request_build(&req, r->out, HTTP_HEAD_MAX, err);
+    if (!head_len) {
+        free(r->out);
+        free(r);
+        return NULL;
+    }
     if (o->body_len)
         memcpy(r->out + head_len, o->body, o->body_len);
     r->out_len = head_len + o->body_len;
+    char *trimmed = realloc(r->out, r->out_len);
+    if (trimmed)
+        r->out = trimmed;
 
     http_resp_init(&r->resp, !strcmp(r->method, "HEAD"));
     r->timeout_ms = o->timeout_ms ? o->timeout_ms : HTTP_DEFAULT_TIMEOUT;

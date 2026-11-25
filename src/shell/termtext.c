@@ -29,6 +29,30 @@ static int second_ok(uint8_t lead, uint8_t c) {
     }
 }
 
+// The code point of a complete, valid UTF-8 sequence.
+static uint32_t decode(const uint8_t *p, unsigned n) {
+    uint32_t cp = p[0] & (0x7F >> n);
+    for (unsigned k = 1; k < n; k++)
+        cp = cp << 6 | (p[k] & 0x3F);
+    return cp;
+}
+
+// Code points that print nothing, or change how the text around them is shown, so the text
+// on screen can differ from its bytes: C1 controls, bidi controls, zero-width and other
+// invisible characters, line/paragraph separators and tag characters. ZWNJ and ZWJ (U+200C,
+// U+200D) pass: scripts such as Persian and the Indic ones, and emoji sequences, need them.
+static bool hidden(uint32_t cp) {
+    return (cp >= 0x80 && cp <= 0x9F)           // C1 controls
+        || cp == 0x061C                         // ARABIC LETTER MARK
+        || cp == 0x200B                         // ZERO WIDTH SPACE
+        || cp == 0x200E || cp == 0x200F         // LRM, RLM
+        || (cp >= 0x2028 && cp <= 0x202E)       // LS, PS; LRE, RLE, PDF, LRO, RLO
+        || (cp >= 0x2060 && cp <= 0x2064)       // WORD JOINER, invisible operators
+        || (cp >= 0x2066 && cp <= 0x2069)       // LRI, RLI, FSI, PDI
+        || cp == 0xFEFF                         // ZERO WIDTH NO-BREAK SPACE (BOM)
+        || (cp >= 0xE0000 && cp <= 0xE007F);    // tag characters
+}
+
 // One byte that isn't part of a pending sequence.
 static size_t plain(termtext_t *t, uint8_t c, char *out) {
     if (c == '\r')
@@ -67,8 +91,8 @@ size_t termtext_filter(termtext_t *t, const uint8_t *in, size_t len, char *out) 
         t->pend[t->n++] = c;
         if (t->n < t->need)
             continue;
-        // Complete. U+0080-U+009F (C2 80 - C2 9F) are the C1 controls.
-        if (t->need == 2 && t->pend[0] == 0xC2 && t->pend[1] <= 0x9F) {
+        // Complete.
+        if (hidden(decode(t->pend, t->n))) {
             out[o++] = '.';
         } else {
             for (unsigned k = 0; k < t->n; k++)
