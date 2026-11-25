@@ -81,9 +81,12 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   when there's body to hand over (`LR_HTTP_READ`, up to 4 KB per answer). They're served only
   from the main loop (`lua_host_poll(true)`), never from a shell job, because the TLS
   handshake needs stack and an SSH session's job runs deep inside `sshd_poll()`. Ctrl-C answers
-  a pending one with "interrupted" at once. A request the script abandoned (an error while
-  reading the body, say) is closed when the next one starts, when a prompt line ends, or when the
-  script ends. The whole body goes into one Lua string, limited by `max_body` (default 32 KB),
+  a pending one with "interrupted" at once. `http_request()` keeps a guard in a to-be-closed
+  slot, so however the call ends with the body unread (an error, "not enough memory", Ctrl-C,
+  `max_body`), it sends `LR_HTTP_CLOSE` and the TLS connection is freed while the script goes on.
+  The exception is a coroutine that dies with an error, which isn't unwound until
+  `coroutine.close()`: core 0 then drops the request when the next one starts, when a prompt line
+  ends, or when the script ends. The whole body goes into one Lua string, limited by `max_body` (default 32 KB),
   so a script stays within its 128 KB.
 - **File rights:** script file changes pass `files_write_allowed()` with no shell, so a script
   has SFTP's rights even when started on the console. The console's extra rights (`/certs`)

@@ -302,10 +302,29 @@ static int l_mkdir(lua_State *L) { return simple(L, LR_MKDIR); }
 #define HTTP_LUA_HEADERS    32              // extra request headers
 #define HTTP_LUA_BODY_MAX   (32 * 1024)     // default max_body: a script has 128 KB in all
 
+#define HTTP_CLOSER "sos.http.closer"       // registry: metatable of the to-be-closed guard
+
+static bool http_open;                      // core 0 holds a request whose body isn't all read
+
 // A request answered "interrupted" because the script is being stopped: stop now.
 static void check_cancel(lua_State *L) {
     if (lua_job.cancel)
         interrupt(L);
+}
+
+// __close of the guard that http_request() keeps in a to-be-closed slot: however the call ends
+// (an error, "not enough memory" while the body grows, Ctrl-C, max_body), a request left
+// unfinished is dropped, so it doesn't hold a TLS connection while the script goes on.
+// (A coroutine that dies with an error isn't unwound until coroutine.close(); core 0 then drops
+// the request with the next one, at the end of the prompt line, or when the script ends.)
+static int http_closer(lua_State *L) {
+    (void)L;
+    if (http_open) {
+        http_open = false;
+        lua_req.type = LR_HTTP_CLOSE;
+        request();
+    }
+    return 0;
 }
 
 // The string field `name` of table t, or NULL if it's nil. It stays on the stack (which keeps
@@ -434,6 +453,10 @@ static int http_request(lua_State *L, int t) {
     check_cancel(L);
     if (lua_req.result < 0)
         return fail(L);
+    http_open = true;
+    lua_newtable(L);                            // the guard (see http_closer)
+    luaL_setmetatable(L, HTTP_CLOSER);
+    lua_toclose(L, -1);
 
     lua_createtable(L, 0, 4);
     lua_pushinteger(L, (lua_Integer)lua_req.result);
@@ -450,16 +473,16 @@ static int http_request(lua_State *L, int t) {
         lua_req.type = LR_HTTP_READ;
         request();
         check_cancel(L);
-        if (lua_req.result < 0) {
+        if (lua_req.result < 0) {               // core 0 has dropped the request
+            http_open = false;
             luaL_pushresult(&b);
             return fail(L);
         }
-        if (lua_req.len == 0)
+        if (lua_req.len == 0) {                 // the end: core 0 has dropped it
+            http_open = false;
             break;
-        if (total + lua_req.len > (size_t)max_body) {
-            lua_req.type = LR_HTTP_CLOSE;
-            request();
-            check_cancel(L);
+        }
+        if (total + lua_req.len > (size_t)max_body) {   // the guard closes it
             luaL_pushresult(&b);
             lua_pushnil(L);
             lua_pushfstring(L, "response body larger than %I bytes (max_body)", max_body);
@@ -672,6 +695,10 @@ static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
     luaL_newlib(L, http_lib);
     lua_setfield(L, -2, "http");
+    luaL_newmetatable(L, HTTP_CLOSER);
+    lua_pushcfunction(L, http_closer);
+    lua_setfield(L, -2, "__close");
+    lua_pop(L, 1);
     return 1;
 }
 
