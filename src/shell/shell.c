@@ -77,6 +77,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "wifi              Wi-Fi network\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
+    shell_printf(sh, "sd devkey         the device key that unlocks encrypted cards\n");
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
@@ -103,7 +104,10 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
         shell_printf(sh, "config reset      erase the configuration\n");
         shell_printf(sh, "crash fault|stack|panic|hang  testing: stop the firmware that way\n");
-        shell_printf(sh, "sd format [exfat|fat32]  erase and format the SD card\n");
+        shell_printf(sh, "sd format [exfat|fat32] [plain]\n");
+        shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
+        shell_printf(sh, "                  showing the card's key once, to store offline\n");
+        shell_printf(sh, "sd devkey forget  clear the device key\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
