@@ -26,7 +26,6 @@
 #include "tls/certstore.h"
 #include "tls/tls_roots.h"
 
-#define TLS_MAX_CONNS 2         // open at once
 #define TLS_HOST_MAX  63
 #define TLS_ALPN_MAX  31
 
@@ -36,6 +35,7 @@ struct tls_conn {
     char host[TLS_HOST_MAX + 1];
     char alpn[TLS_ALPN_MAX + 1];    // "" = none
     uint16_t port;
+    tls_use_t use;
     uint64_t deadline_us;
     uint64_t connected_us;
 
@@ -391,13 +391,24 @@ static void handshake_step(tls_conn_t *c) {
 
 // --- public --------------------------------------------------------------------------------------
 
-tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms) {
+// Free heap: what isn't in use, inside malloc's arena or beyond it (as `mem` counts it).
+static size_t heap_free(void) {
+    extern char __end__, __HeapLimit;
+    struct mallinfo mi = mallinfo();
+    size_t total = (size_t)(&__HeapLimit - &__end__);
+    return total > mi.uordblks ? total - mi.uordblks : 0;
+}
+
+tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
+                     tls_use_t use) {
+    size_t free_heap = heap_free();         // before this connection's own allocation
     tls_conn_t *c = calloc(1, sizeof(*c));
     if (!c)
         return NULL;
     snprintf(c->host, sizeof(c->host), "%s", host);
     snprintf(c->alpn, sizeof(c->alpn), "%s", alpn ? alpn : "");
     c->port = port;
+    c->use = use;
     c->deadline_us = time_us_64() + (uint64_t)timeout_ms * 1000;
     c->heap_base = heap_now;
     c->state = TLS_RESOLVING;
@@ -407,9 +418,19 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     }
 
     cyw43_arch_lwip_begin();
-    unsigned slot;
-    for (slot = 0; slot < TLS_MAX_CONNS && conns[slot]; slot++)
-        ;
+    unsigned slot = TLS_MAX_CONNS, open = 0, open_user = 0;
+    for (unsigned i = 0; i < TLS_MAX_CONNS; i++) {
+        if (!conns[i]) {
+            if (slot == TLS_MAX_CONNS)
+                slot = i;
+        } else {
+            open++;
+            open_user += conns[i]->use == TLS_USER;
+        }
+    }
+    const char *refused = tls_admit(open, open_user, use, free_heap);
+    if (refused)
+        slot = TLS_MAX_CONNS;
     if (slot < TLS_MAX_CONNS) {
         c->id = next_id++;
         conns[slot] = c;
@@ -421,7 +442,7 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     }
     cyw43_arch_lwip_end();
     if (slot == TLS_MAX_CONNS)
-        fail(c, "too many TLS connections");
+        fail(c, refused ? refused : "too many TLS connections open");
     return c;
 }
 

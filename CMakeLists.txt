@@ -121,6 +121,7 @@ set(SOS_SOURCES
     src/time/nts_ke.c
     src/time/nts_ntp.c
     src/tls/tls.c
+    src/tls/tls_admit.c
     src/tls/tls_roots.c
     src/tls/certstore.c
     src/tls/certbundle.c
