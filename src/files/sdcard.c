@@ -183,6 +183,9 @@ static void hex(char *out, const uint8_t *p, unsigned n) {
 }
 
 static const char *kind_why;    // why a locked or unsupported card can't be used
+// The card is locked because the board had no card key when it was looked at (no owner secret
+// yet). That can change without the card changing: mount() looks again once there is one.
+static bool locked_without_key;
 
 // Read the card's sector 0 and backup header (into crypt_buf, which isn't in use outside a
 // write) and open them with this board's card key (sdcrypt_card_open has the rules). The card must be
@@ -225,6 +228,7 @@ static void detect(void) {
     crypt_off();
     kind_why = NULL;
     repair_header = false;
+    locked_without_key = false;
     sdcrypt_info_t info;
     bool from_backup;
     int r = open_card(&info, &from_backup);
@@ -239,6 +243,7 @@ static void detect(void) {
         kind_why = "the card is encrypted in a format this firmware doesn't know";
     } else {
         card_kind = KIND_LOCKED;
+        locked_without_key = r == SDCRYPT_NO_DEVKEY;
         kind_why = r == SDCRYPT_OLD_WRAP
             ? "the card was encrypted by older firmware, under a key this firmware doesn't use: "
               "reformat it (`sd format`), or read it on a PC with the key shown at its format"
@@ -314,6 +319,14 @@ static bool mount(shell_t *sh) {
         return true;
     uint64_t t0 = time_us_64();
     if (!(disk_initialize(0) & STA_NOINIT)) {    // no card: f_mount says so below
+        if (card_kind == KIND_LOCKED && locked_without_key) {
+            // The board has been set up since (it has an owner secret now): the answer, or at
+            // least the reason, may be different.
+            uint8_t key[CARDKEY_LEN];
+            if (cardkey_get(key))
+                card_kind = KIND_UNKNOWN;
+            sdcrypt_wipe(key, sizeof(key));
+        }
         if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
             detect();
         if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
