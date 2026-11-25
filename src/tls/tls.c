@@ -44,6 +44,8 @@ struct tls_conn {
     ip_addr_t addr;
     volatile bool connected, peer_closed, tcp_failed;
     volatile err_t tcp_err;
+    uint64_t tcp_connected_us;      // when the server accepted (its timeouts count from here)
+    uint64_t tcp_closed_us;         // when the server closed or the connection failed
     struct tcp_pcb *pcb;
     ssh_ringbuffer_t rx;            // TCP payload not yet taken by wolfSSL; TCP_WND bytes
 
@@ -122,6 +124,16 @@ static void wolf_error(tls_conn_t *c, const char *what, int err) {
     char reason[WOLFSSL_MAX_ERROR_SZ];
     wolfSSL_ERR_error_string_n((unsigned long)err, reason, sizeof(reason));
     fail(c, "%s: %s (%d)", what, reason, err);
+    // Servers give up on slow clients (time.cloudflare.com: 2 s without progress), so say how
+    // long this one waited. A time at such a limit means our side stalled: a lost packet not
+    // yet resent (see LWIP_TCP_RTO_TIME in lwipopts.h), or a blocked main loop.
+    cyw43_arch_lwip_begin();
+    uint64_t connected = c->tcp_connected_us, closed = c->tcp_closed_us;
+    bool reset = c->tcp_failed;
+    cyw43_arch_lwip_end();
+    if (closed && connected)
+        log_msg(SOS_LOG_WARNING, "tls: %s %s the connection %lu ms after accepting it", c->host,
+                reset ? "reset" : "closed", (unsigned long)((closed - connected) / 1000));
 }
 
 // --- lwIP side (interrupt context: no heap, no logging) ------------------------------------------
@@ -147,8 +159,10 @@ static void dns_found(const char *name, const ip_addr_t *addr, void *arg) {
 static err_t tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
     (void)pcb;
     tls_conn_t *c = arg;
-    if (err == ERR_OK)
+    if (err == ERR_OK) {
+        c->tcp_connected_us = time_us_64();
         c->connected = true;
+    }
     return ERR_OK;
 }
 
@@ -159,6 +173,8 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
         log_msg(SOS_LOG_DEBUG, "tls: tcp recv %s, err %d", p ? "data" : "FIN", (int)err);
         if (p)
             pbuf_free(p);
+        if (!c->tcp_closed_us)
+            c->tcp_closed_us = time_us_64();
         c->peer_closed = true;
         return ERR_OK;
     }
@@ -177,6 +193,8 @@ static void tcp_err_cb(void *arg, err_t err) {
     log_msg(SOS_LOG_DEBUG, "tls: tcp error %d", (int)err);
     c->pcb = NULL;                              // lwIP has freed it
     c->tcp_err = err;
+    if (!c->tcp_closed_us)
+        c->tcp_closed_us = time_us_64();
     c->tcp_failed = true;
 }
 
@@ -248,7 +266,15 @@ int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len) {
 
 static bool wolf_initialised;
 
+static bool setup_session(tls_conn_t *c);
+
 static void start_connect(tls_conn_t *c) {
+    // Everything slow comes first (trusted roots, the SD card's root file): a server starts
+    // timing us when it accepts the connection, so the ClientHello must follow at once.
+    uint64_t t0 = time_us_64();
+    if (!setup_session(c))
+        return;
+    log_msg(SOS_LOG_DEBUG, "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
     if (ssh_ringbuffer_init(&c->rx, NULL, TCP_WND) != 0) {
         fail(c, "out of memory");
         return;
@@ -259,6 +285,9 @@ static void start_connect(tls_conn_t *c) {
         tcp_arg(pcb, c);
         tcp_recv(pcb, tcp_recv_cb);
         tcp_err(pcb, tcp_err_cb);
+        // TLS records are written whole; with Nagle, a record waits for the previous one to be
+        // acknowledged (e.g. the first request behind the handshake's Finished).
+        tcp_nagle_disable(pcb);
         if (tcp_connect(pcb, &c->addr, c->port, tcp_connected_cb) != ERR_OK) {
             tcp_abort(pcb);
             pcb = NULL;
@@ -273,24 +302,25 @@ static void start_connect(tls_conn_t *c) {
     c->state = TLS_CONNECTING;
 }
 
-static void start_handshake(tls_conn_t *c) {
+// Create the wolfSSL session and load the trust anchors. False if it failed (see c->error).
+static bool setup_session(tls_conn_t *c) {
     if (!wolf_initialised) {
         if (wolfSSL_Init() != WOLFSSL_SUCCESS) {
             fail(c, "wolfSSL init failed");
-            return;
+            return false;
         }
         wolf_initialised = true;
     }
     c->ctx = wolfSSL_CTX_new(wolfTLSv1_3_client_method());
     if (!c->ctx) {
         fail(c, "out of memory");
-        return;
+        return false;
     }
     for (unsigned i = 0; i < tls_root_count; i++) {
         int r = tls_load_root(c->ctx, tls_roots[i].der, tls_roots[i].len);
         if (r != WOLFSSL_SUCCESS) {
             wolf_error(c, "loading root certificate", r);
-            return;
+            return false;
         }
     }
     certstore_load(c->ctx);                    // approved extra roots from the SD card, if any
@@ -301,7 +331,7 @@ static void start_handshake(tls_conn_t *c) {
     c->ssl = wolfSSL_new(c->ctx);
     if (!c->ssl) {
         fail(c, "out of memory");
-        return;
+        return false;
     }
     wolfSSL_SetIOReadCtx(c->ssl, c);
     wolfSSL_SetIOWriteCtx(c->ssl, c);
@@ -315,7 +345,7 @@ static void start_handshake(tls_conn_t *c) {
     if (wolfSSL_set_groups(c->ssl, groups, 2) != WOLFSSL_SUCCESS ||
         wolfSSL_UseKeyShare(c->ssl, WOLFSSL_ECC_X25519) != WOLFSSL_SUCCESS) {
         fail(c, "setting the key exchange groups failed");
-        return;
+        return false;
     }
     if (wolfSSL_UseSNI(c->ssl, WOLFSSL_SNI_HOST_NAME, c->host, (word16)strlen(c->host)) !=
             WOLFSSL_SUCCESS ||
@@ -323,9 +353,9 @@ static void start_handshake(tls_conn_t *c) {
         (c->alpn[0] && wolfSSL_UseALPN(c->ssl, c->alpn, (word32)strlen(c->alpn),
                                        WOLFSSL_ALPN_FAILED_ON_MISMATCH) != WOLFSSL_SUCCESS)) {
         fail(c, "setting up the TLS session failed");
-        return;
+        return false;
     }
-    c->state = TLS_HANDSHAKE;
+    return true;
 }
 
 static void handshake_step(tls_conn_t *c) {
@@ -409,10 +439,11 @@ tls_state_t tls_poll(tls_conn_t *c) {
         if (c->tcp_failed) {
             fail(c, "TCP connect to %s:%u failed (%d)", c->host, c->port, (int)c->tcp_err);
         } else if (c->connected) {
-            c->connected_us = time_us_64();
-            start_handshake(c);
-            if (c->state == TLS_HANDSHAKE)
-                handshake_step(c);
+            cyw43_arch_lwip_begin();
+            c->connected_us = c->tcp_connected_us;
+            cyw43_arch_lwip_end();
+            c->state = TLS_HANDSHAKE;
+            handshake_step(c);
         }
         break;
     case TLS_HANDSHAKE:

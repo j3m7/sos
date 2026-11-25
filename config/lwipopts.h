@@ -40,6 +40,11 @@
 #define TCP_SND_BUF                 (8 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
 #define LWIP_TCP_KEEPALIVE          1
+// First retransmission timeout of a connection, as in RFC 6298 (lwIP's default is 3 s). It
+// stays near this value for a connection's first few round trips. Wi-Fi drops the odd packet,
+// and servers don't wait: time.cloudflare.com closes an NTS key exchange that stalls for 2 s,
+// which the default's ~2.5 s resend always missed.
+#define LWIP_TCP_RTO_TIME           1000
 
 #define LWIP_NETIF_STATUS_CALLBACK  1
 #define LWIP_NETIF_LINK_CALLBACK    1
