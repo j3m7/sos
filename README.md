@@ -148,6 +148,7 @@ The Wi-Fi network, hostname and trusted public keys are set on the serial consol
 
 ```
 sos> setup
+New console password (8 to 64 characters):         (not echoed; asked twice)
 Wi-Fi network (SSID): my-network
 Wi-Fi password (empty for an open network):        (not echoed)
 Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pub)
@@ -166,11 +167,40 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
 | `time cal <ppm>` / `time cal off` | RTC calibration: how fast the RTC runs, in ppm (default off; see [Timekeeping](#timekeeping)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
-| `config reset` | erase everything: no Wi-Fi network, no trusted keys, hostname back to `sos` |
+| `passwd` | set or change the console password |
+| `logout` | on the console: lock it again |
+| `config reset` | erase everything: no Wi-Fi network, no trusted keys, no console password, hostname back to `sos`; locks the board's encrypted SD cards |
+
+### The console password
+
+The serial console asks for a password before it takes any command, like a login. Until it's
+typed the console shows nothing: no greeting, no log lines, no messages from other sessions.
+
+- **Setting it:** a board with no console password opens straight into setting one (a new
+  board: the whole of `setup`, which starts with it). `passwd` changes it, after asking for
+  the current one. `logout` (or Ctrl-D) locks the console again. SSH sessions aren't
+  affected: they log in with their keys.
+- **Wrong passwords:** each check takes about 0.3 s by design, and after a wrong answer the
+  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot, so
+  what limits guessing in the end is the cost of each check; choose a password that isn't
+  guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
+- **It stays open after a login** until `logout`: unplugging the cable or closing the terminal
+  does not lock it yet (planned: issue #64).
+- **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
+  of the password, then keyed with a key from the board's root secret. A copy of the flash
+  isn't enough to try passwords against.
+- **Forgotten:** there is no way round it. Erase the configuration over USB (or provision the
+  board again): the board starts as new, and the SD cards it encrypted are locked, readable
+  only with the key shown when each was formatted.
+- **Log lines** that would have been printed while the console was locked wait in the log
+  history and are printed after the login (`dmesg` in an SSH session shows them meanwhile).
+- **What it protects:** the console of a board someone can plug a cable into. On a board
+  without secure boot it's a speed bump, not a wall: the flash can be read and rewritten over
+  USB (issue #64).
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
-  so a remote session can't lock itself out; physical access to the console is the trust
-  boundary (it already allows reflashing).
+  so a remote session can't lock itself out. The console is the admin channel, behind its
+  password.
 - Changes apply immediately: a new key works for the next login, `wifi set` reconnects.
 - Wi-Fi connects in the background, retries after failures (wrong password, network not
   found) and reconnects if the link drops; the console is usable throughout.
@@ -210,13 +240,15 @@ ninja -C build provision          # from provision.conf, or the file named by $S
 tools/provision.sh other.conf     # the same, from another file; -n only builds and checks it
 ```
 
-`provision.conf` (git-ignored; see `provision.conf.example`) lists the Wi-Fi network, hostname,
+`provision.conf` (git-ignored; see `provision.conf.example`) lists the console password, the Wi-Fi network, hostname,
 trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
 everything saved on the board; the firmware and the SSH host key stay as they are. The record it
 writes is not sealed (this machine doesn't have the board's key): the board seals it at its
-first boot and erases the unsealed copy. **Provisioning makes the board a new owner:** like
+first boot and erases the unsealed copy. A `console_password` line sets the console password
+(it travels in the image in the clear until that first boot); without one, the board asks for a
+new password the first time its console is used. **Provisioning makes the board a new owner:** like
 `config reset`, it locks the SD cards the board encrypted before (see
 [Encrypted cards](#encrypted-cards)); `provision.sh` says so when it finishes.
 

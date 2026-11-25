@@ -132,7 +132,7 @@ static void run_line(shell_t *sh, char *cmd) {
 
 // --- input ---------------------------------------------------------------------
 
-void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
+void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->io = io;
     sh->ctx = ctx;
     sh->line_len = 0;
@@ -146,7 +146,15 @@ void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->key = NULL;
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
+}
+
+void shell_greet(shell_t *sh) {
     shell_printf(sh, "\nSOS %s\nType 'help' for commands.\n", sos_version);
+}
+
+void shell_init(shell_t *sh, const shell_io_t *io, void *ctx) {
+    shell_bind(sh, io, ctx);
+    shell_greet(sh);
     prompt(sh);
 }
 
@@ -347,7 +355,13 @@ void shell_poll(shell_t *sh) {
         size_t len = sh->ahead_len;
         memcpy(ahead, sh->ahead, len);
         sh->ahead_len = 0;
+        // Typed-ahead input can be a password (typed while a check was running): don't leave
+        // copies of it behind.
+        memset(sh->ahead, 0, len);
         process_input(sh, ahead, len);
+        volatile char *v = ahead;
+        for (size_t i = 0; i < len; i++)
+            v[i] = 0;
         if (sh->job)
             return;
     }

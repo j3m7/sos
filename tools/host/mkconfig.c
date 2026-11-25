@@ -48,6 +48,9 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         const char *err = config_key_parse(value, &key);
         return err ? err : config_key_add(cfg, &key);
     }
+    if (!strcmp(name, "console_password"))
+        return set_text(cfg->console_password, sizeof(cfg->console_password), value,
+                        config_check_console_password);
     if (!strcmp(name, "wifi_country"))
         return set_text(cfg->wifi_country, sizeof(cfg->wifi_country), value, config_check_country);
     if (!strcmp(name, "wifi_powersave")) {

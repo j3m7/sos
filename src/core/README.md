@@ -70,6 +70,12 @@ Two layers:
     zeroes it when it loads a plain record and never writes it in one, so a configuration that
     arrives plain (provisioning, older firmware) can't carry or plant one. `settings.c` makes a
     new one whenever it saves a configuration that has none. `config reset` destroys it.
+  - **The console password** is stored as a verifier (`console_iterations`, `console_salt`,
+    `console_verifier`; `pwverify.c`, pure C over wolfCrypt, host tested): PBKDF2-HMAC-SHA256
+    of the password, then HMAC-SHA256 under `KEYPROV_CONSOLE_PASSWORD`. Like the owner secret
+    it exists only in sealed records. The other way round, `console_password` exists only in a
+    plain record: the provisioning tool puts the password to set there, `settings.c` turns it
+    into the verifier before sealing, and it's never written sealed.
   - **A sealed record that doesn't open** (another root secret, or changed) counts as no
     record. It isn't erased automatically; the log says it's there
     (`config_sealed_unopened()`). Later saves take its slot in their turn.

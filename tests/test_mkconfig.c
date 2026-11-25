@@ -101,7 +101,27 @@ TEST(errors_name_the_line) {
     CHECK(e != NULL);
 }
 
+// console_password travels in the plain image (the board turns it into a verifier when it
+// seals the record); a bad one is refused with its line number.
+TEST(console_password_line) {
+    sos_config_t cfg, back;
+    CHECK(!parse("wifi_ssid = net\nconsole_password = open sesame 123\n", &cfg));
+    CHECK(!strcmp(cfg.console_password, "open sesame 123"));
+    static uint8_t image[MKCONFIG_IMAGE_SIZE];
+    CHECK(mkconfig_image(&cfg, image));
+    const config_store_t store = {rd, wr, image, NULL, false};
+    CHECK(config_load(&store, &back, NULL));
+    CHECK(!strcmp(back.console_password, "open sesame 123"));
+    CHECK_EQ(back.console_iterations, 0);               // no verifier: the tool can't make one
+    const char *err = parse("wifi_ssid = net\nconsole_password = short\n", &cfg);
+    CHECK(err != NULL && strstr(err, "line 2") != NULL);
+    // Without the line there's no password in the image.
+    CHECK(!parse("wifi_ssid = net\n", &cfg));
+    CHECK_EQ(cfg.console_password[0], '\0');
+}
+
 TEST_MAIN(
+    RUN(console_password_line);
     RUN(full_file_loads_like_on_the_device);
     RUN(empty_file_gives_defaults);
     RUN(errors_name_the_line);

@@ -11,6 +11,7 @@
 
 #include "core/keyprov.h"
 #include "core/log.h"
+#include "core/pwverify.h"
 #include "core/random.h"
 #include "core/seal.h"
 
@@ -65,6 +66,95 @@ static const sealer_t sealer = { seal_seal, seal_open, &seal };
 // sealed at once. A secured board will refuse them (refuse_plain; issue #64 step 4).
 static const config_store_t store = { flash_slot_read, flash_slot_write, NULL, &sealer, false };
 
+// --- console password --------------------------------------------------------------------------------
+
+// PBKDF2 iterations for a newly set password: about 0.3 s per check. Measured on the RP2350
+// (a debug build, 150 MHz): 4000 iterations took 634 ms, so about 158 us each. Setting a
+// password logs the time it took (`dmesg`), to check this on other builds. The count is stored
+// with each verifier, so changing it doesn't affect a password already set.
+#ifndef SOS_CONSOLE_PW_ITERATIONS
+#define SOS_CONSOLE_PW_ITERATIONS 2000
+#endif
+// Iterations per main-loop pass while a password is checked.
+#define CHECK_SLICE 100
+
+_Static_assert(PWV_SALT_LEN == CONFIG_CONSOLE_SALT_LEN && PWV_LEN == CONFIG_CONSOLE_VERIFIER_LEN &&
+               PWV_ITERATIONS_MIN == CONFIG_CONSOLE_ITERATIONS_MIN &&
+               PWV_ITERATIONS_MAX == CONFIG_CONSOLE_ITERATIONS_MAX, "config.h mirrors pwverify.h");
+
+// The key the verifier is keyed with: in RAM while the board runs (a password can be checked
+// or set at any time). Nothing copies it elsewhere.
+static uint8_t pw_key[PWV_LEN];
+static bool have_pw_key;
+static pwv_job_t pw_job;
+static bool pw_checking;
+
+bool settings_console_has_password(void) {
+    return live.console_iterations != 0;
+}
+
+const char *settings_console_set_password(const char *password) {
+    const char *err = config_check_console_password(password);
+    if (err)
+        return err;
+    if (!have_pw_key)
+        return "this board has no key to protect a password with (see `rootsecret`)";
+    uint8_t salt[PWV_SALT_LEN], verifier[PWV_LEN];
+    uint64_t t0 = time_us_64();
+    if (!random_bytes(NULL, salt, sizeof(salt)) ||
+        !pwv_compute(password, strlen(password), salt, SOS_CONSOLE_PW_ITERATIONS, pw_key, verifier))
+        return "making the password's verifier failed";
+    // How long one check of this password costs (the same derivation), for tuning the count.
+    log_msg(SOS_LOG_INFO, "config: password verifier made in %lu ms (%u iterations)",
+            (unsigned long)((time_us_64() - t0) / 1000), (unsigned)SOS_CONSOLE_PW_ITERATIONS);
+    live.console_iterations = SOS_CONSOLE_PW_ITERATIONS;
+    memcpy(live.console_salt, salt, sizeof(salt));
+    memcpy(live.console_verifier, verifier, sizeof(verifier));
+    memset(verifier, 0, sizeof(verifier));
+    return NULL;
+}
+
+bool settings_console_check_begin(const char *password) {
+    settings_console_check_abort();
+    pw_checking = have_pw_key && settings_console_has_password() &&
+                  pwv_start(&pw_job, password, strlen(password), live.console_salt,
+                            live.console_iterations);
+    return pw_checking;
+}
+
+int settings_console_check_step(void) {
+    if (!pw_checking)
+        return -1;
+    if (!pwv_step(&pw_job, CHECK_SLICE))
+        return 0;
+    uint8_t verifier[PWV_LEN];
+    pw_checking = false;
+    bool right = pwv_finish(&pw_job, pw_key, verifier) &&
+                 pwv_equal(verifier, live.console_verifier);
+    memset(verifier, 0, sizeof(verifier));
+    return right ? 1 : -1;
+}
+
+void settings_console_check_abort(void) {
+    if (pw_checking)
+        pwv_abort(&pw_job);
+    pw_checking = false;
+}
+
+// A plain record (provisioning) may bring the console password to set: turn it into the
+// verifier and forget it, before the record is sealed.
+static void take_provisioned_password(void) {
+    if (!live.console_password[0])
+        return;
+    const char *err = settings_console_set_password(live.console_password);
+    memset(live.console_password, 0, sizeof(live.console_password));
+    if (err)
+        log_msg(SOS_LOG_ERR, "config: the provisioned console password wasn't set: %s", err);
+    else
+        log_msg(SOS_LOG_NOTICE, "config: console password set from the provisioned "
+                                "configuration");
+}
+
 // --- owner secret ------------------------------------------------------------------------------------
 
 bool settings_has_owner_secret(void) {
@@ -98,6 +188,7 @@ void settings_init(void) {
     }
 
     seal.have_key = keyprov_derive(KEYPROV_CONFIG_SEAL, seal.key);
+    have_pw_key = keyprov_derive(KEYPROV_CONSOLE_PASSWORD, pw_key);
     if (!seal.have_key)
         log_msg(SOS_LOG_ERR, "config: no key to seal the configuration with (see `rootsecret`): "
                              "a sealed configuration can't be read, and nothing can be saved");
@@ -110,6 +201,7 @@ void settings_init(void) {
             // plain copy (config_save does both). A plain record has no owner secret, so this
             // configuration gets a new one.
             ensure_owner_secret();
+            take_provisioned_password();
             if (config_save(&store, &live))
                 log_msg(SOS_LOG_NOTICE, "config: the saved configuration was unsealed (older "
                                         "firmware, or provisioning); it's now stored sealed");

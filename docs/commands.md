@@ -30,7 +30,7 @@ this page is the reference.
 | `dmesg` | any | The system log kept in memory |
 | `log` | any | Show the log levels: `console` (printed on the serial console) and `history` (kept for `dmesg`) |
 | `log console\|history <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug` |
-| `logout` (or `exit`, Ctrl-D) | any | End this session |
+| `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set) |
 | `reboot` | any | Restart the device |
 | `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |
 
@@ -62,11 +62,12 @@ Changes are saved in flash immediately and survive reflashing (see
 
 | Command | Where | What it does |
 |---|---|---|
-| `config` | any | Show the configuration: hostname, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
+| `config` | any | Show the configuration: hostname, whether a console password is set, Wi-Fi, number of trusted keys, NTS server, periodic sync and RTC calibration |
 | `rootsecret` | any | The state of the root secret, from which the keys that protect stored data are derived: present (in flash on an open board, where it isn't protected from someone who has the board), none, or present but unusable (damaged, or from newer firmware; kept as it is). It's stored twice; if one copy is damaged the other is used and this says so. The saved configuration and the SSH host key are sealed under keys derived from it |
 | `rootsecret forget` | console only | Clear a root secret record that can't be used, after you type `yes`: its whole flash sector is erased and the next boot makes a new one. Refused while the root secret is usable. A configuration and host key sealed under the old one can't be read again |
 | `config reset` | console only | Erase the saved configuration, after you type `yes`. **This also destroys the owner secret:** SD cards this board encrypted can then only be read on a PC with the key shown when each was formatted, and setting the board up again does not bring them back; the command says so before asking. A mounted encrypted card is unmounted. The device is then as new: no Wi-Fi network, no trusted keys (so no SSH), hostname `sos`. Set it up again with `setup`, or provision it from the development machine (`ninja provision`) |
-| `setup` | console only | Guided setup: Wi-Fi network and password, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
+| `passwd` | console only | Set the console password, or change it after typing the current one. 8 to 64 printable ASCII characters, asked twice, not echoed. The console asks for it before taking any command; after a wrong answer the next one waits 1 s, 2 s, 4 s ... up to 30 s. If it's forgotten, the only way back in is to erase the configuration over USB, which locks the board's encrypted SD cards |
+| `setup` | console only | Guided setup: the console password first if none is set, then: Wi-Fi network and password, and a public key to trust. Enter keeps the value in brackets, Ctrl-C cancels without changing anything |
 | `hostname [<name>]` | console only to change | Show or set the hostname. A new name takes effect at the next Wi-Fi connect (`wifi connect`) |
 | `key` / `key list` | any | List the trusted SSH public keys, numbered, with their fingerprints |
 | `key add [<line>]` | console only | Trust a public key: one `authorized_keys` line (ssh-ed25519 or ecdsa-sha2-nistp256; up to 8 keys). Without a line it asks for one |

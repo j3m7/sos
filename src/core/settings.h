@@ -33,6 +33,23 @@ sos_config_t *settings(void);
 // a new board, when a plain record is sealed, and after `config reset`.
 bool settings_save(void);
 
+// --- the console password (shell/login.h asks for it; core/pwverify.h is how it's checked) ---
+//
+// The configuration holds a verifier, never the password. The key the verifier is made with
+// (KEYPROV_CONSOLE_PASSWORD) is derived in settings_init() and held in RAM by settings.c while
+// the board runs, like the configuration's seal key.
+
+// Is a console password set?
+bool settings_console_has_password(void);
+// Set it in the live configuration (the caller saves). NULL, or why not. Takes a few hundred
+// milliseconds (the slow derivation).
+const char *settings_console_set_password(const char *password);
+// Check a password in slices: begin (false if it can't start), then step until it returns
+// something other than 0: 1 = right, -1 = wrong. abort drops a check under way.
+bool settings_console_check_begin(const char *password);
+int settings_console_check_step(void);
+void settings_console_check_abort(void);
+
 // Does the configuration have an owner secret (to encrypt and open SD cards with)?
 bool settings_has_owner_secret(void);
 

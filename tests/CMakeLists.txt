@@ -27,6 +27,13 @@ add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
+# src/shell/login.c: the console's lock (password prompt, delays, the gate), with the real
+# shell_core.c.
+add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/login.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c)
+target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
+add_test(NAME login COMMAND test_login)
+
 # src/shell/keys.c: terminal key decoding (escape sequences to key codes).
 add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)
@@ -139,6 +146,12 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_include_directories(test_keyprov PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_keyprov PRIVATE wolfcrypt_host)
     add_test(NAME keyprov COMMAND test_keyprov)
+
+    # src/core/pwverify.c: the console password's verifier (PBKDF2-HMAC-SHA256, then keyed).
+    add_executable(test_pwverify test_pwverify.c ${SOS_ROOT}/src/core/pwverify.c)
+    target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_pwverify PRIVATE wolfcrypt_host)
+    add_test(NAME pwverify COMMAND test_pwverify)
 else()
     message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
 endif()

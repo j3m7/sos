@@ -58,8 +58,12 @@ The USB/UART console is the only *admin* channel (`shell_io_t.admin`). Only the 
 change the configuration, write `/certs`, format the card or approve root certificates. SSH
 sessions can view the configuration and use files, but can't change any of that. The console is
 also needed for what affects everyone or what TLS trusts: log levels, `time sync sntp`,
-`nts ke <host>` and `sd test`. Physical
-access is the trust boundary, since it already allows reflashing.
+`nts ke <host>` and `sd test`.
+
+The console itself is behind the console password (`shell/login.c`): it takes no command, and
+shows no log lines or messages, until the password is typed. On a board without secure boot
+that slows down someone with physical access but doesn't stop them, since the flash can be read
+and rewritten over USB; the rest of issue #64 is what closes that.
 
 ## Tests
 

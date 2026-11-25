@@ -71,6 +71,12 @@ struct shell {
 // Bind a shell to a channel and print the greeting and first prompt.
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx);
 
+// The two halves, for a channel that must show nothing until someone has logged in (the
+// console, shell/login.h): bind without printing anything; and the greeting, which names the
+// firmware version. Follow with shell_show_input() for the prompt.
+void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx);
+void shell_greet(shell_t *sh);
+
 // Process any input waiting on the channel, or run the next step of a job. Never blocks; call
 // regularly from the main loop.
 void shell_poll(shell_t *sh);
@@ -86,6 +92,10 @@ void shell_logout(shell_t *sh);
 // Run one command line (spaces trimmed, never empty). Implemented by the command module
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
+
+// Start the console (the admin channel) on a shell that was bound with shell_bind(): ask for
+// the console password, or open it if none is set (shell/login.h). Implemented by shell.c.
+void shell_console_start(shell_t *console);
 
 // Ask a question: `prompt` replaces "sos> " and the next line typed is passed to `answer`
 // instead of being run as a command. With `secret`, the answer isn't echoed. Never blocks: call
