@@ -24,8 +24,12 @@ of up to 32 KB on the console or over SSH.
   screen updates as the channel's free space allows (`shell_write_space()`).
 - **Screen size:** on start and Ctrl-L it moves the cursor to row and column 999 and asks where it
   is (`ESC [ 6 n`); the answer is the size. The first frame waits up to 0.5 s for it.
+- **Terminal:** the alternate screen, with autowrap off so a wide character can't push a row onto
+  the next one; rows are erased before they're drawn, so a full row keeps its last character.
 - **Saving:** through `files_write_allowed()` (so `/certs` is console-only), into `<file>.~edit`,
   then the old file is removed and the new one renamed into place. The file isn't held open
-  between saves.
+  between saves. If the rename fails the text stays "modified", so quitting warns and Ctrl-S
+  tries again. Power lost between the two leaves only `<file>.~edit`: `edit <file>` then opens
+  that, and says so; if both exist it says the leftover is incomplete and will be replaced.
 - **Log:** on the console, the log is held while the editor runs (`shell_raw_mode()`), and the
   status bar shows `log_pending()`, counted once a second.

@@ -10,7 +10,8 @@
 #include "shell/keys.h"
 #include "test.h"
 
-// --- a tiny terminal: cursor movement, erase, and printable bytes (UTF-8 as one cell) ---------
+// --- a tiny terminal: cursor movement, erase, and printable bytes (UTF-8 as one cell). Like a
+// real one with autowrap off, the cursor stays on the last column after writing there. ------
 
 #define T_ROWS EDITOR_ROWS_MAX
 #define T_COLS EDITOR_COLS_MAX
@@ -72,11 +73,12 @@ static void t_feed(const char *s, size_t n) {
         CHECK(!(c >= 0x80 && c <= 0x9f) || i > 0);
         size_t l = c < 0x80 ? 1 : c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
         CHECK(i + l <= n);
-        if (t_col < t_cols) {
-            memcpy(screen[t_row][t_col], s + i, l);
-            screen[t_row][t_col][l] = '\0';
-        }
-        t_col++;
+        // Autowrap off (as edit.c sets it): the cursor stays in the last column, and what's
+        // written there overwrites it, as on a real terminal.
+        memcpy(screen[t_row][t_col], s + i, l);
+        screen[t_row][t_col][l] = '\0';
+        if (t_col < t_cols - 1)
+            t_col++;
         i += l;
     }
 }
@@ -279,6 +281,25 @@ TEST(scrolls_down_and_up) {
     draw();
     CHECK_LINE(0, "line 1");
     CHECK_EQ(t_row, 0);
+    editor_free(&ed);
+}
+
+TEST(full_width_row_keeps_its_last_character) {
+    open_text("abcdefghijklmnopqrst\nxyz", 5, 20);      // exactly 20 columns
+    draw();
+    CHECK_LINE(0, "abcdefghijklmnopqrst");
+    CHECK_LINE(1, "xyz");
+    editor_free(&ed);
+}
+
+TEST(long_file_name_shows_its_end) {
+    char name[200];
+    memset(name, 'd', sizeof(name));
+    strcpy(name + 150, "/the-file.txt");
+    CHECK(editor_init(&ed, name, "", 0));
+    CHECK(strlen(ed.name) == sizeof(ed.name) - 1);
+    CHECK(!strncmp(ed.name, "...", 3));
+    CHECK(strstr(ed.name, "/the-file.txt") != NULL);
     editor_free(&ed);
 }
 
@@ -499,6 +520,8 @@ TEST_MAIN(
     RUN(tabs_expand_to_tab_stops);
     RUN(up_and_down_keep_the_column);
     RUN(scrolls_down_and_up);
+    RUN(full_width_row_keeps_its_last_character);
+    RUN(long_file_name_shows_its_end);
     RUN(long_lines_scroll_sideways);
     RUN(only_changed_rows_are_redrawn);
     RUN(drawing_fits_the_space_given);

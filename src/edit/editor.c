@@ -8,7 +8,8 @@
 // column (a tab up to the next multiple of EDITOR_TAB), so wide CJK characters misalign the rest
 // of their line. Anything a terminal could act on, or that would hide what the bytes are
 // (controls, invalid UTF-8, bidi and invisible characters: termtext_hidden()), shows as '?'.
-// Lines don't wrap: the view scrolls sideways to follow the cursor.
+// Lines don't wrap: the view scrolls sideways to follow the cursor. The terminal's autowrap should
+// be off (edit.c does that), so a wide character can't push a row onto the next one.
 
 #include "edit/editor.h"
 
@@ -235,7 +236,11 @@ void editor_invalidate(editor_t *ed) {
 
 bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
     memset(ed, 0, sizeof(*ed));
-    snprintf(ed->name, sizeof(ed->name), "%s", name);
+    size_t nl = strlen(name);               // a long path: its end, where the file name is
+    if (nl < sizeof(ed->name))
+        snprintf(ed->name, sizeof(ed->name), "%s", name);
+    else
+        snprintf(ed->name, sizeof(ed->name), "...%s", name + nl - (sizeof(ed->name) - 4));
     ed->rows = 24;
     ed->cols = 80;
 
@@ -567,20 +572,22 @@ static size_t message_row(const editor_t *ed, char *out, size_t n) {
     return put_text(out, n, ed->msg, (size_t)ed->cols, NULL);
 }
 
-// Render screen row r (0-based) into out (EDITOR_ROW_BYTES): position, contents, erase to the end.
+// Render screen row r (0-based) into out (EDITOR_ROW_BYTES): position, erase the row, contents.
+// Erasing first: after a character in the last column the cursor stays on it, so an erase
+// after the contents would remove that character from a full row.
 static size_t render_row(const editor_t *ed, int r, char *out) {
-    size_t n = (size_t)snprintf(out, 16, "\x1b[%d;1H", r + 1);
+    size_t n = (size_t)snprintf(out, 16, "\x1b[%d;1H\x1b[K", r + 1);
     if (r < text_rows(ed)) {
         if (ed->draw_past_end)
             out[n++] = '~';
         else
             n = text_row(ed, ed->draw_line, out, n);
     } else if (r == text_rows(ed)) {
-        return status_row(ed, out, n);      // fills the whole row
+        n = status_row(ed, out, n);
     } else {
         n = message_row(ed, out, n);
     }
-    return put(out, n, "\x1b[K", 3);
+    return n;
 }
 
 static uint32_t hash(const char *s, size_t n) {

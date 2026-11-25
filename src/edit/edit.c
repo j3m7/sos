@@ -8,7 +8,8 @@
 // The editor runs as a raw-mode shell job: keys arrive through edit_key(), and each main-loop pass
 // edit_step() sends as much of the screen update as the channel takes without waiting. It uses
 // the terminal's alternate screen (xterm, and most terminals since), so the shell's output is
-// back as it was afterwards, and asks the terminal for its size by moving the cursor to the
+// back as it was afterwards, with autowrap off (a wide character then can't push a row onto the
+// next one: it only hides the end of its own row), and asks the terminal for its size by moving the cursor to the
 // far corner and asking where it ended up.
 
 #include "edit/edit.h"
@@ -30,6 +31,7 @@
 #define PATH_LEN        256
 #define TMP_SUFFIX      ".~edit"
 #define SIZE_WAIT_US    500000      // first frame: wait this long for the terminal's size
+#define SIZE_ANSWER_US  3000000     // a cursor position report later than this isn't the answer
 #define LOG_CHECK_US    1000000     // how often to count held log messages (console)
 
 typedef struct {
@@ -41,6 +43,7 @@ typedef struct {
     bool want_size;                 // send the size query when there's room
     bool size_asked;                // ... sent: the next cursor position report is the answer
     uint64_t size_wait_until;       // no drawing before then (unless the answer comes)
+    uint64_t size_expires;          // size_asked ends then (Ctrl+F3 sends the same bytes)
     uint64_t next_log_check;
 } edit_t;
 
@@ -85,10 +88,11 @@ static void save(shell_t *sh, edit_t *e) {
                 f_unlink(tmp);
                 fr = ur;
             } else if ((fr = f_rename(tmp, e->path)) != FR_OK) {
+                // Still "modified": quitting warns, and Ctrl-S tries again.
                 files_release();
-                snprintf(msg, sizeof(msg), "saved as %s only: %s", path_basename(tmp),
+                snprintf(msg, sizeof(msg), "only saved as %s: %s", path_basename(tmp),
                          files_error(fr));
-                editor_saved(&e->ed, true, msg);
+                editor_saved(&e->ed, false, msg);
                 return;
             }
         }
@@ -133,13 +137,20 @@ static void edit_key(shell_t *sh, int key, void *arg) {
 static bool edit_step(shell_t *sh, void *arg, bool cancel) {
     edit_t *e = arg;
     if (cancel || e->quit) {
-        if (!cancel)
-            put(sh, "\x1b[?1049l");         // back to the shell's screen
+        if (!cancel) {
+            // Bottom row, erased, for a terminal without an alternate screen (the prompt goes
+            // there); autowrap back on; back to the shell's screen.
+            char bye[48];
+            snprintf(bye, sizeof(bye), "\x1b[%d;1H\x1b[K\x1b[?7h\x1b[?1049l", e->ed.rows);
+            put(sh, bye);
+        }
         editor_free(&e->ed);
         free(e);
         return false;
     }
     uint64_t now = time_us_64();
+    if (e->size_asked && now >= e->size_expires)
+        e->size_asked = false;
     // Only the console's log is held while the editor runs there (main.c's log hold).
     if (sh->io->admin && now >= e->next_log_check) {
         editor_set_log_waiting(&e->ed, log_pending());
@@ -150,6 +161,7 @@ static bool edit_step(shell_t *sh, void *arg, bool cancel) {
         e->want_size = false;
         e->size_asked = true;
         e->size_wait_until = now + SIZE_WAIT_US;
+        e->size_expires = now + SIZE_ANSWER_US;
     }
     if (now < e->size_wait_until)
         return true;
@@ -167,12 +179,12 @@ static bool edit_step(shell_t *sh, void *arg, bool cancel) {
 // --- the command ---------------------------------------------------------------------------------
 
 // Read the file into a new buffer: *text (NULL for a new file) and *len. False after saying why.
-static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len) {
+static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len, bool quiet_missing) {
     *text = NULL;
     *len = 0;
     FILINFO fi;
     FRESULT fr = f_stat(path, &fi);
-    if (fr == FR_NO_FILE)
+    if (fr == FR_NO_FILE && quiet_missing)
         return true;                        // a new file
     if (fr != FR_OK) {
         shell_printf(sh, "edit: %s: %s\n", path, files_error(fr));
@@ -229,12 +241,28 @@ void edit_command(shell_t *sh, char *args) {
     }
     char *text;
     size_t len;
-    if (!sdcard_mount(sh) || !load(sh, e->path, &e->file, &text, &len)) {
+    if (!sdcard_mount(sh) || !load(sh, e->path, &e->file, &text, &len, true)) {
         free(e);
         return;
     }
+    // A save interrupted (power lost) between removing the old file and renaming the new one
+    // leaves the text only in <file>.~edit: open that instead of an empty file.
+    char tmp[PATH_LEN + sizeof(TMP_SUFFIX)];
+    snprintf(tmp, sizeof(tmp), "%s%s", e->path, TMP_SUFFIX);
+    FILINFO tfi;
+    bool tmp_left = f_stat(tmp, &tfi) == FR_OK && !(tfi.fattrib & AM_DIR);
+    bool recovered = false;
+    if (tmp_left && !text) {
+        if (!load(sh, tmp, &e->file, &text, &len, false)) {
+            free(e);
+            return;
+        }
+        recovered = true;
+    }
     bool ok = editor_init(&e->ed, e->path, text, len);
     bool is_new = text == NULL;
+    if (recovered)
+        e->ed.modified = true;              // saving puts it under the real name
     free(text);
     if (!ok) {
         shell_printf(sh, "edit: out of memory\n");
@@ -244,9 +272,13 @@ void edit_command(shell_t *sh, char *args) {
     }
     if (!files_write_allowed(sh, e->path))
         editor_message(&e->ed, "read only: this path can only be changed on the console");
+    else if (recovered)
+        editor_message(&e->ed, "recovered from an interrupted save (" TMP_SUFFIX "): Ctrl-S saves it");
+    else if (tmp_left)
+        editor_message(&e->ed, "an interrupted save left " TMP_SUFFIX " (incomplete): saving replaces it");
     else if (is_new)
         editor_message(&e->ed, "new file; Ctrl-S save, Ctrl-Q quit, Ctrl-F find, Ctrl-L redraw");
-    put(sh, "\x1b[?1049h");                 // the alternate screen
+    put(sh, "\x1b[?1049h\x1b[?7l");         // the alternate screen, autowrap off
     e->want_size = true;
     shell_run_raw(sh, edit_step, edit_key, e);
 }

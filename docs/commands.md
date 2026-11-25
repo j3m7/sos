@@ -141,7 +141,8 @@ and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 
 | **Ctrl-L** | Redraw, and ask the terminal for its size again |
 
 - **Saving** writes `<file>.~edit` first, then replaces the file with it, so an interrupted save
-  never leaves half a file. If two people edit the same file, the last save wins.
+  never leaves half a file. If the power goes in the middle, `edit <file>` picks the text up from
+  `<file>.~edit` and tells you. If two people edit the same file, the last save wins.
 - **Files with CRLF line ends** keep them. Control characters, invalid UTF-8 and invisible or
   bidi characters show as `?` (they're kept as they are). Wide (CJK) characters push the rest
   of their line one column out. Long lines scroll sideways instead of wrapping.
