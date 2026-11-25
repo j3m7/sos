@@ -373,8 +373,7 @@ working directory:
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
 | `echo <text> [> file \| >> file]` | print, or write/append a line |
 | `sd` | card and volume information, SPI clock |
-| `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain` |
-| `sd key` | console only: show an encrypted card's data key, for offline recovery |
+| `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd devkey [forget]` | the device key's state; console only: clear it |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
@@ -409,7 +408,9 @@ unencrypted; `sd` shows which kind is in.
   rewritten from the second.
 - **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
   flash, which can be read out.
-- **Recovery:** `sd key` on the console prints the card's data key. Store it offline: with it,
+- **Recovery:** an encrypted `sd format` prints the card's data key when it finishes, and only
+  then: no command shows it later, so someone with console access can't read it out afterwards.
+  Store it offline: with it,
   a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it with the key in a
   file, and `sdcrypt info` prints the `cryptsetup` line to open the card directly).
 - **The device key is never replaced on its own.** If its flash record is damaged (or was

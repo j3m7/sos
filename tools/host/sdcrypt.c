@@ -2,14 +2,14 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // Read an encrypted SOS SD card on a PC (see src/files/sdcrypt.h for the format), with the data
-// key that `sd key` prints on the device's console. Uses OpenSSL's libcrypto, so it's also an
+// key that an encrypted `sd format` prints on the device's console when it finishes. Uses OpenSSL's libcrypto, so it's also an
 // independent check of the device's encryption.
 //
 //   cc -O2 -o sdcrypt tools/host/sdcrypt.c -lcrypto
 //   sdcrypt info <card-or-image>
 //   sdcrypt decrypt <card-or-image> <key-file> <out-image>
 //
-// The key file holds the 64 hex digits `sd key` printed (`-` reads them from stdin), so the key
+// The key file holds the 64 hex digits `sd format` printed (`-` reads them from stdin), so the key
 // doesn't end up in the shell history or the process list.
 //
 // `decrypt` writes the plain volume: a partition table and one FAT/exFAT partition, as `sd
@@ -113,8 +113,8 @@ int main(int argc, char **argv) {
         if (rc)
             return 1;
         printf("cipher:  XTS-AES-128, volume from sector %u\n", offset);
-        printf("open on Linux (key: 32 bytes, from the hex `sd key` prints):\n"
-               "  xxd -r -p key.txt > key.bin          # key.txt: the hex from `sd key`\n"
+        printf("open on Linux (key: 32 bytes, from the hex `sd format` printed):\n"
+               "  xxd -r -p key.txt > key.bin          # key.txt: the hex from `sd format`\n"
                "  sudo cryptsetup open --type plain --cipher aes-xts-plain64 --key-size 256 \\\n"
                "       --offset %u --key-file key.bin %s sos\n"
                "  sudo fdisk -l /dev/mapper/sos      # the partition's start sector\n"
@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
     if (kf != stdin)
         fclose(kf);
     if (parse_key(hex, key)) {
-        fprintf(stderr, "the key file must hold the 64 hex digits `sd key` prints\n");
+        fprintf(stderr, "the key file must hold the 64 hex digits `sd format` printed\n");
         return 2;
     }
     FILE *in = fopen(argv[2], "rb");

@@ -11,7 +11,8 @@ The SD card library ([no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk
   command, SFTP, or the TLS root certificates.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
-  formatting (encrypted unless `plain`) and an encrypted card's key (`sd key`).
+  formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
+  end).
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
 
@@ -51,7 +52,7 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
 - **Old data:** `f_mkfs` writes only the filesystem's structures, so formatting a used plain
   card encrypted leaves its old files readable in the clear until they're overwritten.
 - **Host tool** `tools/host/sdcrypt.c` (OpenSSL's libcrypto) reads a card or image on a PC with
-  the key from `sd key`, kept in a file; `tests/test_sdcrypt.c` checks the device code against
+  the key shown when the card was formatted, kept in a file; `tests/test_sdcrypt.c` checks the device code against
   it and decrypts a test image with it.
 
 ## `files.c`: the file commands

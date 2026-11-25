@@ -11,7 +11,7 @@
 
 // The device key: 32 random bytes in the key sector (core/keysector.h). It wraps the data key of
 // each encrypted SD card (files/sdcrypt.h), so losing it makes those cards unreadable unless
-// their key was saved with `sd key`. It survives reflashing, `config reset` and provisioning.
+// their key was saved when `sd format` showed it. It survives reflashing, `config reset` and provisioning.
 //
 // It's made from the TRNG when the first encrypted card is formatted (devkey_create), not at
 // boot, so a board that never encrypts never rewrites the key sector. A page that holds a key
