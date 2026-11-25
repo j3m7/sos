@@ -38,19 +38,26 @@ static uint32_t decode(const uint8_t *p, unsigned n) {
 }
 
 // Code points that print nothing, or change how the text around them is shown, so the text
-// on screen can differ from its bytes: C1 controls, bidi controls, zero-width and other
-// invisible characters, line/paragraph separators and tag characters. ZWNJ and ZWJ (U+200C,
-// U+200D) pass: scripts such as Persian and the Indic ones, and emoji sequences, need them.
+// on screen can differ from its bytes: C1 controls, bidi controls, the known channels for
+// hiding text (zero-width characters, tag characters, the variation selectors supplement) and
+// a few other invisible format characters. Not every invisible character: that would take the
+// Unicode tables. ZWNJ and ZWJ (U+200C, U+200D) pass, since scripts such as Persian and the
+// Indic ones, and emoji sequences, need them; so do U+FE00-U+FE0F (emoji and CJK variants).
+// Tags are the exception on purpose: blocking them breaks the subdivision flags (England,
+// Scotland, Wales), but they can carry hidden ASCII.
 static bool hidden(uint32_t cp) {
     return (cp >= 0x80 && cp <= 0x9F)           // C1 controls
         || cp == 0x061C                         // ARABIC LETTER MARK
+        || cp == 0x180E                         // MONGOLIAN VOWEL SEPARATOR
         || cp == 0x200B                         // ZERO WIDTH SPACE
         || cp == 0x200E || cp == 0x200F         // LRM, RLM
         || (cp >= 0x2028 && cp <= 0x202E)       // LS, PS; LRE, RLE, PDF, LRO, RLO
-        || (cp >= 0x2060 && cp <= 0x2064)       // WORD JOINER, invisible operators
-        || (cp >= 0x2066 && cp <= 0x2069)       // LRI, RLI, FSI, PDI
+        || (cp >= 0x2060 && cp <= 0x206F)       // WORD JOINER, invisible operators, LRI, RLI,
+                                                // FSI, PDI, deprecated format controls
         || cp == 0xFEFF                         // ZERO WIDTH NO-BREAK SPACE (BOM)
-        || (cp >= 0xE0000 && cp <= 0xE007F);    // tag characters
+        || (cp >= 0xFFF9 && cp <= 0xFFFB)       // interlinear annotation controls
+        || (cp >= 0xE0000 && cp <= 0xE007F)     // tag characters
+        || (cp >= 0xE0100 && cp <= 0xE01EF);    // variation selectors supplement
 }
 
 // One byte that isn't part of a pending sequence.

@@ -106,15 +106,58 @@ TEST(hidden) {
     CHECK_TEXT("\xe2\x80\x8e\xe2\x80\x8f\xd8\x9c", "...");          // LRM, RLM, ALM
     // Zero-width and invisible.
     CHECK_TEXT("pay\xe2\x80\x8bpal", "pay.pal");                        // U+200B ZWSP
-    CHECK_TEXT("\xe2\x81\xa0\xe2\x81\xa4", "..");                     // U+2060, U+2064
+    CHECK_TEXT("\xe2\x81\xa0\xe2\x81\xa4\xe2\x81\xa5\xe2\x81\xaf", "....");  // U+2060,4,5,F
+    CHECK_TEXT("\xe1\xa0\x8e", ".");                                     // U+180E
+    CHECK_TEXT("\xef\xbf\xb9\xef\xbf\xbb", "..");                     // U+FFF9, U+FFFB
+    CHECK_TEXT("\xf3\xa0\x84\x80\xf3\xa0\x87\xaf", "..");           // U+E0100, U+E01EF
     CHECK_TEXT("\xef\xbb\xbfhi", ".hi");                                 // U+FEFF BOM
     CHECK_TEXT("\xe2\x80\xa8\xe2\x80\xa9", "..");                     // U+2028, U+2029
     CHECK_TEXT("\xf3\xa0\x80\x81\xf3\xa0\x81\xbf", "..");           // U+E0001, U+E007F
     // Neighbours pass, and so do ZWNJ and ZWJ.
     CHECK_TEXT("\xe2\x80\x8a\xe2\x80\x90", "\xe2\x80\x8a\xe2\x80\x90");   // U+200A, U+2010
     CHECK_TEXT("\xe2\x80\x8c\xe2\x80\x8d", "\xe2\x80\x8c\xe2\x80\x8d");   // U+200C, U+200D
-    CHECK_TEXT("\xe2\x80\xaf\xe2\x81\xa5", "\xe2\x80\xaf\xe2\x81\xa5");   // U+202F, U+2065
+    CHECK_TEXT("\xe2\x80\xaf\xe2\x81\xb0", "\xe2\x80\xaf\xe2\x81\xb0");   // U+202F, U+2070
+    CHECK_TEXT("\xe1\xa0\x8d\xef\xbf\xbc", "\xe1\xa0\x8d\xef\xbf\xbc");   // U+180D, U+FFFC
+    CHECK_TEXT("\xef\xb8\x8f\xf3\xa0\x87\xb0", "\xef\xb8\x8f\xf3\xa0\x87\xb0");  // U+FE0F, U+E01F0
     CHECK_TEXT("\xef\xbb\xbe\xf3\xa0\x82\x80", "\xef\xbb\xbe\xf3\xa0\x82\x80");  // U+FEFE, U+E0080
+}
+
+// A hidden code point split across calls: hidden() runs on the carried-over bytes.
+TEST(hidden_split) {
+    termtext_t t = TERMTEXT_INIT;
+    size_t o = 0;
+    o += termtext_filter(&t, (const uint8_t *)"a\xe2", 2, out + o);
+    o += termtext_filter(&t, (const uint8_t *)"\x80", 1, out + o);
+    o += termtext_filter(&t, (const uint8_t *)"\xae" "b", 2, out + o);
+    o += termtext_flush(&t, out + o);
+    out[o] = '\0';
+    CHECK(!strcmp(out, "a.b"));
+}
+
+// Decode valid UTF-8 output; returns the sequence length at s[i] and its code point in *cp,
+// or 0 if s[i] doesn't start a valid sequence (the filter never outputs one).
+static size_t utf8_at(const char *s, size_t len, size_t i, uint32_t *cp) {
+    uint8_t c = (uint8_t)s[i];
+    size_t n = c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC2 ? 2 : 0;
+    if (!n || i + n > len)
+        return 0;
+    uint32_t v = n == 1 ? c : (uint32_t)(c & (0x7F >> n));
+    for (size_t k = 1; k < n; k++) {
+        uint8_t d = (uint8_t)s[i + k];
+        if ((d & 0xC0) != 0x80)
+            return 0;
+        v = v << 6 | (d & 0x3F);
+    }
+    *cp = v;
+    return n;
+}
+
+// The filter's own list, restated so the fuzz test checks the output against it.
+static int is_hidden(uint32_t cp) {
+    return (cp >= 0x80 && cp <= 0x9F) || cp == 0x061C || cp == 0x180E || cp == 0x200B ||
+           cp == 0x200E || cp == 0x200F || (cp >= 0x2028 && cp <= 0x202E) ||
+           (cp >= 0x2060 && cp <= 0x206F) || cp == 0xFEFF || (cp >= 0xFFF9 && cp <= 0xFFFB) ||
+           (cp >= 0xE0000 && cp <= 0xE007F) || (cp >= 0xE0100 && cp <= 0xE01EF);
 }
 
 // Random bytes in random pieces: the output never contains a C0 control other than \n and
@@ -129,7 +172,8 @@ TEST(fuzz) {
             uint8_t b = (uint8_t)(seed >> 16);
             // Bias toward interesting bytes.
             if ((seed >> 8) % 4 == 0)
-                b = (uint8_t[]){0x1b, 0x9b, 0xc2, 0xe2, 0xf0, 0x80, 0xbf, '\r', '\n'}[(seed >> 4) % 9];
+                b = (uint8_t[]){0x1b, 0x9b, 0xc2, 0xe2, 0xf0, 0x80, 0xbf, '\r', '\n',
+                                0xae, 0x8b, 0x81, 0xa8, 0xf3, 0xa0, 0xef, 0xbb}[(seed >> 4) % 17];
             in[i] = b;
         }
         termtext_t t = TERMTEXT_INIT;
@@ -147,6 +191,16 @@ TEST(fuzz) {
             CHECK(!(c >= 0x80 && c <= 0x9f && (i == 0 || (uint8_t)out[i - 1] == 0xc2 ||
                                                (uint8_t)out[i - 1] < 0x80)));
         }
+        // Valid UTF-8 throughout, and no hidden code point.
+        for (size_t i = 0; i < o;) {
+            uint32_t cp = 0;
+            size_t n = utf8_at(out, o, i, &cp);
+            CHECK(n > 0);
+            if (!n)
+                break;
+            CHECK(!is_hidden(cp));
+            i += n;
+        }
     }
 }
 
@@ -158,5 +212,6 @@ TEST_MAIN(
     RUN(utf8_valid);
     RUN(utf8_invalid);
     RUN(hidden);
+    RUN(hidden_split);
     RUN(fuzz);
 )
