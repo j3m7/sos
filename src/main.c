@@ -32,6 +32,11 @@
 #include "time/timesync.h"
 #include "tls/tls.h"
 
+// Minutes without a key typed after which an open console locks itself. 0: never.
+#ifndef SOS_CONSOLE_IDLE_LOCK_MIN
+#define SOS_CONSOLE_IDLE_LOCK_MIN 10
+#endif
+
 // --- console -------------------------------------------------------------------------------------
 
 // The USB/UART console shell. stdio already translates "\n" to "\r\n".
@@ -56,6 +61,8 @@ static int console_read(void *ctx, char *buf, int len) {
     while (n < len && (c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT)
         buf[n++] = (char)c;
     console_gate_set(login_locked());
+    if (n)
+        login_activity();               // someone is typing: the idle lock starts over
     return n;
 }
 
@@ -195,7 +202,11 @@ int main(void) {
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
-        console_gate_set(login_locked());   // follows a login or a logout in this pass
+        // The console locks itself when the USB terminal goes away, and when nothing was typed
+        // for SOS_CONSOLE_IDLE_LOCK_MIN minutes. (The UART has no connection signal: for it
+        // there is only the idle lock.)
+        login_poll(&console_shell, stdio_usb_connected(), SOS_CONSOLE_IDLE_LOCK_MIN * 60000u);
+        console_gate_set(login_locked());   // follows a login, a logout or a lock in this pass
         if (!login_locked())            // a locked console shows nothing
             chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
         sshd_poll();

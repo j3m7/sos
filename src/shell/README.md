@@ -53,6 +53,11 @@ The console asks for the console password before it takes any command (issue #64
 - **No usable root secret:** the console stays locked whatever the configuration says, and
   takes only `rootsecret`, `rootsecret forget` and `reboot`.
 - **`logout`** on the console locks it again (`console_io.logout` in `main.c`).
+- **It locks itself** (`login_poll()`, called from the main loop): when `stdio_usb_connected()`
+  goes from true to false, and when nothing was typed (`login_activity()`, from the console's
+  read) for the idle limit. It ends a running job (`shell_end()`), discards the line being
+  typed and any typed-ahead input (`shell_discard_input()`), drops a pending question, and asks
+  for the password. Not while no password is set.
 
 ## `keys.c`: terminal keys (pure C, host tested)
 
