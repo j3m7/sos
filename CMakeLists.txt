@@ -245,6 +245,37 @@ pico_set_program_description(sos "Small/Secure OS")
 pico_enable_stdio_usb(sos 1)
 pico_enable_stdio_uart(sos 1)
 
+# Signed builds (issue #64). With SOS_SIGN_KEY set (local.cmake, -D, or the environment) to a
+# secp256k1 private key in PEM form, picotool hashes and signs the image after linking, so
+# sos.elf, sos.uf2 and `ninja flash` are the signed image. A board without secure boot runs a
+# signed image like any other; a board with secure boot runs only images signed with the key
+# whose hash is in its OTP memory. Without SOS_SIGN_KEY the image is unsigned, as before.
+#
+# The key is never in the repository.
+#
+# No OTP file is produced. The SDK would have picotool write sos.otp.json next to the image:
+# the settings `picotool otp load` takes to make a board accept only this key, which are the
+# key's hash, the "key valid" flag AND the bit that enables secure boot. Loading that file once
+# turns secure boot on for good. A file like that doesn't belong among everyday build outputs,
+# so it's switched off below; making it is part of the written procedure for securing a board.
+if (NOT DEFINED SOS_SIGN_KEY AND DEFINED ENV{SOS_SIGN_KEY})
+    set(SOS_SIGN_KEY "$ENV{SOS_SIGN_KEY}")
+endif()
+if (SOS_SIGN_KEY)
+    if (NOT EXISTS "${SOS_SIGN_KEY}")
+        message(FATAL_ERROR "SOS_SIGN_KEY (${SOS_SIGN_KEY}) doesn't exist. Unset it to build "
+            "unsigned, or see docs/development.md for making a key.")
+    endif()
+    get_filename_component(SOS_SIGN_KEY "${SOS_SIGN_KEY}" ABSOLUTE)
+    pico_hash_binary(sos)
+    pico_sign_binary(sos "${SOS_SIGN_KEY}")
+    # pico_sign_binary() asks for the OTP file; an empty name makes the SDK leave it out.
+    set_target_properties(sos PROPERTIES PICOTOOL_OTP_FILE "")
+    message(STATUS "SOS: the image is signed with ${SOS_SIGN_KEY}")
+else()
+    message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
+endif()
+
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map
 
 # `ninja -C build provision` : write the board's configuration from provision.conf (or
