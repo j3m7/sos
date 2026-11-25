@@ -21,6 +21,11 @@ Downloaded 2026-11-23.
 | pico-2-w-pinout.pdf | Pinout diagram | https://datasheets.raspberrypi.com/picow/pico-2-w-pinout.pdf |
 | connecting-to-the-internet-with-pico-w.pdf | Wi-Fi and Bluetooth with the CYW43 driver, lwIP and BTstack | https://datasheets.raspberrypi.com/picow/connecting-to-the-internet-with-pico-w.pdf |
 
+## boards/ — other boards (candidates, not the current hardware)
+| File | Description | Source |
+|---|---|---|
+| pimoroni_pico_plus2/Pimoroni_Pico_Plus_2_W_Schematic.pdf | Pimoroni Pico Plus 2 W schematic (title block reads "Pico Plus 2 (PIM726)", dated 2024-09-26, but shows the RM2 Wi-Fi module): RP2350B, 16 MB flash, 8 MB PSRAM on GPIO 47, AP7366 LDO for 3V3, VBUS→VSYS Schottky diode, VBUS sense on the Wi-Fi chip's GPIO 2, VSYS sense on GPIO 43, SWD connector. Evaluated 2026-11-25 as a production candidate; Pimoroni's stock was then A2 silicon | Pimoroni product page, https://shop.pimoroni.com/products/pimoroni-pico-plus-2-w (downloaded 2026-11-25) |
+
 ## sdk/ — software
 | File | Description | Source |
 |---|---|---|
