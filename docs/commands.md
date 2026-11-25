@@ -81,14 +81,15 @@ See [Timekeeping](../README.md#timekeeping) and
 
 ## HTTPS
 
-For testing the HTTPS client (`src/net/README.md`). The server's certificate must chain to a
-built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
+For testing the HTTPS client (`src/net/README.md`), from any shell: SSH users are the device's
+trusted owners, and their Lua scripts can make the same requests. The server's certificate must
+chain to a built-in root or one in the approved `/certs/roots.pem`. Redirects aren't followed.
 
 | Command | Where | What it does |
 |---|---|---|
-| `http get <url>` | console only | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body, headers and reason phrase show as `.`, including the C1 range (raw or UTF-8-encoded); other UTF-8 text shows as itself |
-| `http head <url>` | console only | Print the status line and the response headers |
-| `http post <url> <text>` | console only | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
+| `http get <url>` | any | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body, headers and reason phrase show as `.`, including the C1 range (raw or UTF-8-encoded); other UTF-8 text shows as itself |
+| `http head <url>` | any | Print the status line and the response headers |
+| `http post <url> <text>` | any | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
 
 URLs must start with `https://`, and the path must already be percent-encoded (no spaces).
 

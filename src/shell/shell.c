@@ -68,12 +68,12 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
+    shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
-        shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
