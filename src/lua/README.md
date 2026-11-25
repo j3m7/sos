@@ -61,7 +61,12 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
 - **Background scripts** (`lua -b <file>`, and `/autorun.lua` at boot) have no owner shell:
   `background` is set instead, and `script_alive()` (owner or background) is what lets requests
   change files. `lua_host_poll()` drains their output into the log a line at a time (control
-  characters as `.`) and logs how they ended. `lua ps` and `lua stop` work on whatever runs.
+  characters as `.`; long lines continue on the next), and logs how they ended. Each pass drains
+  only what core 1 had written when it started: core 1 refills the buffer as it's drained, so
+  "until it's empty" would never end with a script printing in a loop. At most 10 lines a second
+  are logged; the rest are counted and reported. `lua ps` and `lua stop` work on whatever runs;
+  a prompt stopped while its shell waits for a line is closed from `lua_host_poll()`, which hands
+  the shell back (`shell_cancel_question()`).
 - **Autorun:** `autorun_check()` runs once, 3 s after boot, from `lua_host_poll()`. It starts
   `/autorun.lua` if the card has one, unless the last reset was a fault (`fault_last()`) or the
   watchdog (`wdog_caused_reset()`): a script that brings the device down then doesn't run again

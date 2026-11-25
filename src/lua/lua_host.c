@@ -217,35 +217,66 @@ static void finish(void) {
 // `lua -b <file>`, or /autorun.lua at boot: no shell, so the output goes to the log, a line at a
 // time (INFO, so it's in `dmesg` but not on the console), and the end is logged too.
 
-#define BG_LINE_MAX 160
+// At most BG_LINES_PER_SEC lines a second reach the log; beyond that they're counted and dropped,
+// so a script printing in a loop doesn't push everything else (failed logins, warnings) out of
+// the log history.
+#define BG_LINES_PER_SEC 10
 
-static char bg_line[BG_LINE_MAX + 1];
+static char bg_line[LOG_LINE_MAX + 1];
 static size_t bg_len;
+static uint64_t bg_window_us;           // start of the current second
+static unsigned bg_window_lines, bg_dropped;
+
+// Room for a line's text in one log message, after the "<script>: " prefix.
+static size_t bg_room(void) {
+    size_t prefix = strlen(job_desc) + 2;
+    return prefix + 40 < LOG_LINE_MAX ? LOG_LINE_MAX - prefix : 40;
+}
+
+static void bg_report_dropped(void) {
+    if (bg_dropped)
+        log_msg(SOS_LOG_INFO, "%s: ... %u lines dropped (more than %d a second)", job_desc,
+                bg_dropped, BG_LINES_PER_SEC);
+    bg_dropped = 0;
+}
 
 static void bg_flush_line(void) {
     if (!bg_len)
         return;
-    bg_line[bg_len] = '\0';
-    log_msg(SOS_LOG_INFO, "%s: %s", job_desc, bg_line);
+    uint64_t now = time_us_64();
+    if (now - bg_window_us >= 1000000) {
+        bg_report_dropped();
+        bg_window_us = now;
+        bg_window_lines = 0;
+    }
+    if (bg_window_lines < BG_LINES_PER_SEC) {
+        bg_line[bg_len] = '\0';
+        log_msg(SOS_LOG_INFO, "%s: %s", job_desc, bg_line);
+        bg_window_lines++;
+    } else {
+        bg_dropped++;
+    }
     bg_len = 0;
 }
 
+// Move what core 1 has written so far into the log. Only up to where head was on entry: core 1
+// refills the buffer as it's drained, so "until it's empty" could go on forever.
 static void bg_drain(void) {
-    for (;;) {
-        __dmb();
-        if (lua_out.head == lua_out.tail)
-            break;
+    __dmb();
+    uint32_t end = lua_out.head;
+    size_t room = bg_room();
+    while (lua_out.tail != end) {
         char c = lua_out.buf[lua_out.tail % LUA_OUT_SIZE];
         __dmb();
         lua_out.tail++;
-        __sev();                                // core 1 may be waiting for room
-        if (c == '\n' || bg_len == BG_LINE_MAX) {
+        if (c == '\n' || bg_len == room) {     // a long line continues on the next one
             bg_flush_line();
             if (c == '\n')
                 continue;
         }
         bg_line[bg_len++] = ((unsigned char)c < 0x20 && c != '\t') || c == 0x7f ? '.' : c;
     }
+    __sev();                                    // core 1 may be waiting for room
 }
 
 // The error on its own line (WARNING); its traceback, if any, a line at a time (INFO).
@@ -269,6 +300,7 @@ static void bg_poll(void) {
     if (lua_job.state != LJ_DONE || lua_out.head != lua_out.tail)
         return;
     bg_flush_line();
+    bg_report_dropped();
     unsigned s = (unsigned)((time_us_64() - job_start_us) / 1000000);
     if (lua_job.ok)
         log_msg(SOS_LOG_NOTICE, "lua: %s finished after %u s", job_desc, s);
@@ -293,6 +325,18 @@ void lua_host_poll(void) {
         lua_job.repl_quit = true;
         lua_job.cancel = true;
         __sev();
+    }
+    // The prompt ended while its shell waited for a line: stopped from elsewhere (`lua stop`).
+    // Nothing on that shell would notice, so close it here and give the shell back.
+    if (repl && owner && lua_job.state == LJ_DONE && !owner->job) {
+        shell_t *sh = owner;
+        lua_out.tail = lua_out.head;
+        shell_hide_input(sh);
+        shell_cancel_question(sh);
+        shell_printf(sh, "lua: the prompt was stopped ('lua stop')\n");
+        shell_show_input(sh);
+        finish();
+        return;
     }
     if (background && lua_job.state != LJ_IDLE) {
         bg_poll();
@@ -489,6 +533,8 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
     owner = bg ? NULL : sh;
     background = bg;
     bg_len = 0;
+    bg_window_us = 0;
+    bg_window_lines = bg_dropped = 0;
     job_start_us = time_us_64();
     __dmb();
     lua_job.state = LJ_START;
@@ -565,6 +611,9 @@ void lua_command(shell_t *sh, char *args) {
     bool bg = false;
     if (args && !strncmp(args, "-e ", 3)) {
         code = args + 3;
+    } else if (args && !strcmp(args, "-b")) {
+        shell_printf(sh, "usage: lua -b <file>\n");
+        return;
     } else if (args) {
         if (!strncmp(args, "-b ", 3)) {
             bg = true;

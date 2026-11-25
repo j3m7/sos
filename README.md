@@ -429,13 +429,17 @@ session. One script runs at a time.
 **Background scripts and autorun:** `lua -b <file>` runs a script with no shell: its output goes to
 the log, a line at a time (`dmesg`; INFO, so not on the console), and its end is logged
 (finished, stopped, or failed with the error). `lua ps` shows the running script, and `lua stop`
-stops it, wherever it runs. If the card has `/autorun.lua`, it starts in the background a few
-seconds after boot. After a crash or watchdog reset it's skipped (and that's logged), so a script
-that brings the device down can't do it at every boot; remove or rename the file to turn
+stops it, wherever it runs. At most 10 lines a second of a background script's output reach the
+log; the rest are counted ("... N lines dropped"), so a chatty script can't push everything else
+out of the log history. If the card has `/autorun.lua`, it starts in the background a few seconds
+after boot. After a crash or watchdog reset it's skipped (and that's logged), so a script that
+brings the device down can't do it at every boot. It stays off until the next normal boot
+(`reboot`, or power), even if the reset had nothing to do with it: on an unattended board, check
+the log, or start it by hand with `lua -b /autorun.lua`. Remove or rename the file to turn
 autorun off. Timers (`sos.every`, `sos.after`) are how a background script does periodic work:
 
 ```lua
--- /autorun.lua: log the free space on the card every 10 minutes
+-- /autorun.lua: log how many entries the card's top directory has, every 10 minutes
 sos.every(600, function()
   local n = 0
   for _, e in ipairs(sos.list("/") or {}) do n = n + 1 end
