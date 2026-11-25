@@ -4,6 +4,8 @@
 #include "net/wifi.h"
 
 #include "pico/cyw43_arch.h"
+#include <string.h>
+
 #include "pico/stdlib.h"
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
@@ -30,6 +32,11 @@
 // ~20 minutes later the router's ARP entry expired and nobody could reach it. Sending once a
 // minute kept broadcasts arriving. One broadcast frame each time.
 #define KEEPALIVE_MS        60000
+
+// Broadcom ioctls the driver has no names for (WLC_GET_RATE 12, WLC_GET_PHY_NOISE 135), in its
+// encoding: number << 1, bit 0 set for a write.
+#define IOCTL_GET_RATE      (12 << 1)
+#define IOCTL_GET_PHY_NOISE (135 << 1)
 
 typedef enum { W_OFF, W_CONNECTING, W_UP, W_WAIT } wifi_st_t;
 
@@ -190,4 +197,59 @@ const char *wifi_state(void) {
     case W_WAIT:       return "waiting to retry";
     }
     return "?";
+}
+
+bool wifi_radio(wifi_radio_t *r) {
+    memset(r, 0, sizeof(*r));
+    if (state != W_UP)
+        return false;
+    uint32_t ch[3] = {0};           // channel_info_t: hardware, target, scan channel
+    // Extras; left 0 if the chip doesn't answer.
+    cyw43_ioctl(&cyw43_state, IOCTL_GET_RATE, sizeof(r->rate), (uint8_t *)&r->rate, CYW43_ITF_STA);
+    cyw43_ioctl(&cyw43_state, IOCTL_GET_PHY_NOISE, sizeof(r->noise), (uint8_t *)&r->noise,
+                CYW43_ITF_STA);
+    uint8_t var[12] = "qtxpower";
+    if (cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, sizeof(var), var, CYW43_ITF_STA) == 0) {
+        memcpy(&r->txpower, var, 4);
+        r->txpower &= 0xff;         // the top bit flags an override
+    }
+    return cyw43_wifi_get_rssi(&cyw43_state, &r->rssi) == 0 &&
+           cyw43_wifi_get_bssid(&cyw43_state, r->bssid) == 0 &&
+           cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_CHANNEL, sizeof(ch), (uint8_t *)ch,
+                       CYW43_ITF_STA) == 0 &&
+           ((r->channel = ch[0]), true);
+}
+
+unsigned wifi_chip_counters(uint32_t *out, unsigned max) {
+    static uint8_t buf[1024];       // too big for the stack
+    memset(buf, 0, sizeof(buf));
+    strcpy((char *)buf, "counters");
+    if (cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, sizeof(buf), buf, CYW43_ITF_STA) != 0)
+        return 0;
+    unsigned n = sizeof(buf) / 4;
+    if (n > max)
+        n = max;
+    memcpy(out, buf, n * 4);
+    return n;
+}
+
+int wifi_iovar_get(const char *name, uint32_t *value) {
+    uint8_t buf[64] = {0};
+    size_t n = strlen(name);
+    if (n + 1 > sizeof(buf) - 4)
+        return -1;
+    memcpy(buf, name, n + 1);
+    int r = cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, sizeof(buf), buf, CYW43_ITF_STA);
+    memcpy(value, buf, 4);
+    return r;
+}
+
+int wifi_iovar_set(const char *name, uint32_t value) {
+    uint8_t buf[64] = {0};
+    size_t n = strlen(name);
+    if (n + 1 > sizeof(buf) - 4)
+        return -1;
+    memcpy(buf, name, n + 1);
+    memcpy(buf + n + 1, &value, 4);
+    return cyw43_ioctl(&cyw43_state, CYW43_IOCTL_SET_VAR, n + 1 + 4, buf, CYW43_ITF_STA);
 }

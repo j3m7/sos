@@ -11,7 +11,9 @@
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
+#include "lwip/memp.h"
 #include "lwip/netif.h"
+#include "lwip/stats.h"
 
 #include "core/config.h"
 #include "core/fault.h"
@@ -64,6 +66,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
+    shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
@@ -79,6 +82,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
+        shell_printf(sh, "wifi iovar <name> [<value>]  debugging: read or set a Wi-Fi chip variable\n");
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
         shell_printf(sh, "key del <n>       stop trusting key n\n");
         shell_printf(sh, "hostname <name>   set the hostname\n");
@@ -270,6 +274,71 @@ static void wifi_show(shell_t *sh) {
     shell_printf(sh, "power:    saving %s\n", c->wifi_powersave ? "on" : "off");
 }
 
+static void stats_row(shell_t *sh, const char *name, const struct stats_proto *p) {
+    shell_printf(sh, "  %-5s sent %-8u received %-8u dropped %u (checksum %u, length %u, memory %u, "
+                     "protocol %u, other %u)\n", name, (unsigned)p->xmit, (unsigned)p->recv,
+                 (unsigned)p->drop, (unsigned)p->chkerr, (unsigned)p->lenerr, (unsigned)p->memerr,
+                 (unsigned)p->proterr, (unsigned)p->err);
+}
+
+// Radio state and packet counters, for chasing packet loss.
+static void wifi_stats(shell_t *sh, bool chip) {
+    wifi_radio_t r;
+    if (wifi_radio(&r))
+        shell_printf(sh, "radio:  signal %d dBm, channel %u, access point "
+                         "%02x:%02x:%02x:%02x:%02x:%02x\n", (int)r.rssi, (unsigned)r.channel,
+                     r.bssid[0], r.bssid[1], r.bssid[2], r.bssid[3], r.bssid[4], r.bssid[5]);
+    else
+        shell_printf(sh, "radio:  not connected\n");
+    if (r.channel)
+        shell_printf(sh, "        noise %d dBm, transmit rate %d.%d Mbit/s, transmit power limit %s"
+                         "%d.%02d dBm\n", (int)r.noise, (int)(r.rate / 2), (int)(r.rate % 2) * 5,
+                     r.txpower == 127 ? "not set: " : "", (int)(r.txpower / 4),
+                     (int)(r.txpower % 4) * 25);
+    struct stats_ st;
+    cyw43_arch_lwip_begin();
+    st = lwip_stats;
+    struct stats_mem pool = *lwip_stats.memp[MEMP_PBUF_POOL], seg = *lwip_stats.memp[MEMP_TCP_SEG],
+                     pcb = *lwip_stats.memp[MEMP_TCP_PCB];
+    cyw43_arch_lwip_end();
+    shell_printf(sh, "packets since boot:\n");
+    stats_row(sh, "arp", &st.etharp);
+    stats_row(sh, "ip", &st.ip);
+    stats_row(sh, "icmp", &st.icmp);
+    stats_row(sh, "udp", &st.udp);
+    stats_row(sh, "tcp", &st.tcp);
+    shell_printf(sh, "tcp:    %u segments resent, %u connections reset or failed\n",
+                 (unsigned)st.mib2.tcpretranssegs,
+                 (unsigned)(st.mib2.tcpattemptfails + st.mib2.tcpestabresets));
+    shell_printf(sh, "pools:  packets %u/%u in use (most %u, %u failures); segments most %u/%u "
+                     "(%u failures); connections most %u/%u (%u failures); heap most %u/%u "
+                     "(%u failures)\n",
+                 (unsigned)pool.used, (unsigned)pool.avail, (unsigned)pool.max, (unsigned)pool.err,
+                 (unsigned)seg.max, (unsigned)seg.avail, (unsigned)seg.err, (unsigned)pcb.max,
+                 (unsigned)pcb.avail, (unsigned)pcb.err, (unsigned)st.mem.max,
+                 (unsigned)st.mem.avail, (unsigned)st.mem.err);
+    if (!chip)
+        return;
+    // The chip's counters come as a version/length word and 32-bit values. Their layout differs
+    // between firmware versions and isn't published for this one, so they're shown raw; compare
+    // two readings. Positions in version 10, worked out from how they move (not confirmed):
+    // 0 frames sent, 2 resent, 15 received, 45 beacon times, 49 RTS sent, 75 CTS received,
+    // 85 our access point's beacons received, 87 other networks' beacons, 88 response timeouts,
+    // 67/68 received with a bad checksum / header, 70 receptions started.
+    static uint32_t c[128];
+    unsigned n = wifi_chip_counters(c, 128);
+    if (!n) {
+        shell_printf(sh, "chip counters: not available\n");
+        return;
+    }
+    shell_printf(sh, "chip counters (version %u, %u bytes), index: value, zeros omitted:\n",
+                 (unsigned)(c[0] & 0xffff), (unsigned)(c[0] >> 16));
+    for (unsigned i = 1, col = 0; i < n; i++)
+        if (c[i])
+            shell_printf(sh, "%3u: %-10u%s", i - 1, (unsigned)c[i], ++col % 5 ? " " : "\n");
+    shell_printf(sh, "\n");
+}
+
 static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
     (void)arg;
     if (!answer)
@@ -316,6 +385,19 @@ static void cmd_wifi(shell_t *sh, char *args) {
             return;
         wifi_set_keepalive(!strcmp(args, "keepalive on"));
         log_msg(SOS_LOG_NOTICE, "wifi: keepalive %s (until reboot)", wifi_keepalive() ? "on" : "off");
+    } else if (!strcmp(args, "stats") || !strcmp(args, "stats chip")) {
+        wifi_stats(sh, args[5] != 0);
+    } else if (!strncmp(args, "iovar ", 6)) {
+        // Debugging only: `wifi iovar <name> [value]` reads or writes a chip variable.
+        if (!require_admin(sh))
+            return;
+        char *name = args + 6, *val = strchr(name, ' ');
+        if (val)
+            *val++ = '\0';
+        uint32_t v = val ? (uint32_t)strtoul(val, NULL, 0) : 0;
+        int r = val ? wifi_iovar_set(name, v) : wifi_iovar_get(name, &v);
+        shell_printf(sh, "%s %s: result %d, value %u (0x%x)\n", val ? "set" : "get", name, r,
+                     (unsigned)v, (unsigned)v);
     } else if (!strcmp(args, "power")) {
         shell_printf(sh, "power saving: %s\n", settings()->wifi_powersave ? "on" : "off");
     } else if (!strcmp(args, "power on") || !strcmp(args, "power off")) {
@@ -326,7 +408,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_apply_power();
         log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
-        shell_printf(sh, "usage: wifi [set|connect|power [on|off]|keepalive on|off]\n");
+        shell_printf(sh, "usage: wifi [set|connect|stats [chip]|power [on|off]|keepalive on|off|iovar <name> [<value>]]\n");
     }
 }
 

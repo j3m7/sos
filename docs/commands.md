@@ -57,6 +57,9 @@ Changes are saved in flash immediately and survive reflashing (see
 | `wifi connect` | console only | Reconnect now |
 | `wifi power` | any | Show whether Wi-Fi power saving is on |
 | `wifi power on\|off` | console only | Turn power saving on or off (saved; default off) |
+| `wifi stats` | any | For chasing packet loss: signal, noise floor, channel, access point and transmit rate; packets sent, received and dropped per protocol since boot; TCP segments resent; and how full lwIP's pools got |
+| `wifi stats chip` | any | The same, plus the Wi-Fi chip's own counters, raw (index: value). Their layout isn't published for this firmware; compare two readings. `src/shell/shell.c` lists the positions worked out so far |
+| `wifi iovar <name> [<value>]` | console only | Debugging: read or set a 32-bit variable in the Wi-Fi chip (e.g. `2g_rate`, `ampdu_tx`, `qtxpower`). Not saved. An unknown name reads back as a meaningless value, not an error |
 | `wifi keepalive on\|off` | console only | Testing only: turn the address announcements off or back on. Not saved; it's on again after a reboot |
 
 ## Time and TLS

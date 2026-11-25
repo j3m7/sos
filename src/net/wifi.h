@@ -14,6 +14,7 @@
 #define SOS_WIFI_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 // Enable station mode and start connecting if a network is configured. After cyw43_arch_init().
 void wifi_start(void);
@@ -36,6 +37,27 @@ bool wifi_keepalive(void);
 void wifi_arp_counts(unsigned *received, unsigned *sent);
 
 // True while associated and holding an IP address.
+// Radio state while connected, from the Wi-Fi chip. False if a value couldn't be read.
+typedef struct {
+    int32_t rssi;           // dBm
+    uint32_t channel;
+    uint8_t bssid[6];       // the access point
+    int32_t noise;          // dBm, the chip's noise floor estimate (0 if unknown)
+    int32_t rate;           // current transmit rate, in 500 kbit/s units (0 if unknown)
+    int32_t txpower;        // limit in quarter dBm; 127 = none set (0 if unknown)
+} wifi_radio_t;
+bool wifi_radio(wifi_radio_t *r);
+
+// The chip's own counters ("counters" iovar): a version/length word, then 32-bit counters.
+// Returns how many 32-bit words were copied to out (0 if it couldn't be read).
+unsigned wifi_chip_counters(uint32_t *out, unsigned max);
+
+// Debugging: read or write a 32-bit chip variable ("iovar") by name, e.g. "2g_rate", "ampdu_tx",
+// "qtxpower". Returns the driver's result (0 = ok). The chip answers an unknown name with
+// result 0 and the name's own bytes as the value. Changes last until the chip is restarted.
+int wifi_iovar_get(const char *name, uint32_t *value);
+int wifi_iovar_set(const char *name, uint32_t value);
+
 bool wifi_up(void);
 
 // Short description of the state, e.g. "connected", "connecting", "not configured".

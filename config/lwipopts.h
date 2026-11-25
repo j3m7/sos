@@ -68,9 +68,12 @@ void sos_sntp_get_time(unsigned int *sec, unsigned int *us);
 // The SNTP client's timer isn't counted in lwIP's default.
 #define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 1)
 
-#define MEM_STATS                   0
+// Counters for `wifi stats`: packets per protocol, TCP retransmissions (MIB2), and the pools
+// (a full packet pool drops received frames silently in the driver).
+#define MEM_STATS                   1
 #define SYS_STATS                   0
-#define MEMP_STATS                  0
+#define MEMP_STATS                  1
 #define LINK_STATS                  0
+#define MIB2_STATS                  1
 
 #endif /* SOS_LWIPOPTS_H */
