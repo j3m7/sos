@@ -196,9 +196,6 @@ set(SOS_SSH_MAX_SESSIONS 3 CACHE STRING "Maximum concurrent SSH sessions")
 # Hardware watchdog: the main loop must come round within this time or the chip resets.
 # 0 disables it. RP2350 maximum is 16777 ms. The `ssh` command shows the longest SSH work step.
 set(SOS_WATCHDOG_MS 8000 CACHE STRING "Watchdog timeout in ms (0 = off)")
-# Soak test of the RP2350 glitch detector (src/core/glitchdet.h): set to 0..3 to make a build
-# that arms the detector by software at that sensitivity. Empty (the default): never armed.
-set(SOS_GLITCH_SOAK "" CACHE STRING "Arm the glitch detector by software at this sensitivity (0-3); empty = off")
 set(SOS_CONSOLE_IDLE_LOCK_MIN 10 CACHE STRING
     "Minutes without a key typed after which an open console locks itself (0 = never)")
 # Default NTS server (authenticated time), until one is set on the device with `time server`.
@@ -240,14 +237,6 @@ target_link_libraries(sos
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)
 )
-
-if (NOT "${SOS_GLITCH_SOAK}" STREQUAL "")
-    if (NOT SOS_GLITCH_SOAK MATCHES "^[0-3]$")
-        message(FATAL_ERROR "SOS_GLITCH_SOAK must be 0, 1, 2 or 3 (or empty)")
-    endif()
-    target_compile_definitions(sos PRIVATE SOS_GLITCH_SOAK=${SOS_GLITCH_SOAK})
-    message(STATUS "SOS: SOAK TEST BUILD: the glitch detector is armed at sensitivity ${SOS_GLITCH_SOAK}")
-endif()
 
 pico_set_program_name(sos "SOS")
 pico_set_program_description(sos "Small/Secure OS")

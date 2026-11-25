@@ -137,7 +137,7 @@ static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 
 int main(void) {
     stackmon_paint();
-    glitchdet_boot();                   // why we last reset; a soak-test build arms the detector here
+    glitchdet_boot();                   // why we last reset, before anything else changes it
     stdio_init_all();
     console_gate_set(true);             // the console is locked until shell/login.c says otherwise
 
@@ -150,7 +150,6 @@ int main(void) {
     // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
     fault_boot();
     wdog_start();
-    glitchdet_report();
     if (fault_last())
         log_msg(SOS_LOG_ERR, "last reset: %s", fault_last());
     else if (wdog_caused_reset())
@@ -169,6 +168,7 @@ int main(void) {
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
     rootflash_init();
     settings_init();
+    glitchdet_start(settings()->glitch_detector);   // armed here if the setting says so
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
     uint32_t hostkey_len;
@@ -203,6 +203,7 @@ int main(void) {
             sshd_failed = !sshd_start(hostkey, hostkey_len);
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
+        glitchdet_poll();
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);

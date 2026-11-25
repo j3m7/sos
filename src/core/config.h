@@ -40,6 +40,7 @@
 #define CONFIG_CONSOLE_VERIFIER_LEN 32
 #define CONFIG_CONSOLE_ITERATIONS_MIN 1000      // as core/pwverify.h accepts
 #define CONFIG_CONSOLE_ITERATIONS_MAX 1000000
+#define CONFIG_GLITCH_DETECTOR_MAX 4         // 0 = off, 1..4 = sensitivity 0..3
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -89,6 +90,11 @@ typedef struct {
     // password to set here; the board turns it into the verifier when it seals the record,
     // and it is never written sealed (zeroed before sealing). Empty = none given.
     char console_password[CONFIG_CONSOLE_PW_MAX + 1];
+    // The glitch detector, armed by software at boot (core/glitchdet.h): 0 = off (default),
+    // 1..4 = armed at sensitivity 0..3. A trial setting, not protection. This byte was padding
+    // (zero) in records saved before it had a use, so those load as "off" and the record's
+    // length doesn't change.
+    uint8_t glitch_detector;
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------

@@ -25,6 +25,7 @@ _Static_assert(CONFIG_V5_LENGTH == 1644, "fields before owner_secret must not mo
 #define CONFIG_V6_LENGTH offsetof(sos_config_t, console_iterations) // + owner_secret
 _Static_assert(CONFIG_V6_LENGTH == 1676, "fields before console_iterations must not move");
 _Static_assert(sizeof(sos_config_t) == 1796, "the record's size is part of the format");
+_Static_assert(offsetof(sos_config_t, glitch_detector) == 1793, "it takes a former padding byte");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
@@ -245,6 +246,9 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     // over from that, so it means "none" instead of making the whole record invalid.
     if (cfg->rtc_offset < CONFIG_RTC_OFFSET_MIN || cfg->rtc_offset > CONFIG_RTC_OFFSET_MAX)
         cfg->rtc_offset = 0;
+    // The same for the glitch detector setting, also a former padding byte.
+    if (cfg->glitch_detector > CONFIG_GLITCH_DETECTOR_MAX)
+        cfg->glitch_detector = 0;
     if (seq)
         *seq = s.hdr[s.newest].seq;
     return true;

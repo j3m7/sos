@@ -67,6 +67,16 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         cfg->rtc_offset = (int8_t)steps;
         return NULL;
     }
+    if (!strcmp(name, "glitch_detector")) {
+        if (!strcmp(value, "off")) {
+            cfg->glitch_detector = 0;
+            return NULL;
+        }
+        if (value[0] < '0' || value[0] > '3' || value[1])
+            return "must be off, or a sensitivity from 0 to 3";
+        cfg->glitch_detector = (uint8_t)(value[0] - '0' + 1);
+        return NULL;
+    }
     if (!strcmp(name, "nts_sync_hours")) {
         char *end;
         unsigned long h = strtoul(value, &end, 10);

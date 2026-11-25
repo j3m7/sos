@@ -120,7 +120,22 @@ TEST(console_password_line) {
     CHECK_EQ(cfg.console_password[0], '\0');
 }
 
+TEST(glitch_detector_line) {
+    sos_config_t cfg;
+    CHECK(!parse("wifi_ssid = net\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 0);
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = 0\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 1);                   // sensitivity 0 is setting 1
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = 3\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 4);
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = off\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 0);
+    CHECK(parse("wifi_ssid = net\nglitch_detector = 4\n", &cfg) != NULL);
+    CHECK(parse("wifi_ssid = net\nglitch_detector = on\n", &cfg) != NULL);
+}
+
 TEST_MAIN(
+    RUN(glitch_detector_line);
     RUN(console_password_line);
     RUN(full_file_loads_like_on_the_device);
     RUN(empty_file_gives_defaults);

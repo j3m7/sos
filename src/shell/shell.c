@@ -90,7 +90,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "dmesg             system log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
-    shell_printf(sh, "glitch            glitch detector state and resets\n");
+    shell_printf(sh, "glitch            glitch detector setting, state and resets\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
@@ -106,6 +106,7 @@ static void cmd_help(shell_t *sh) {
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
+        shell_printf(sh, "glitch on <0-3>|off  arm the glitch detector by software (a trial setting)\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
@@ -136,7 +137,8 @@ static void cmd_uptime(shell_t *sh) {
     uint64_t s = to_us_since_boot(get_absolute_time()) / 1000000;
     shell_printf(sh, "up %llud %02llu:%02llu:%02llu%s\n",
                  s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60,
-                 fault_last() ? "" : wdog_caused_reset() ? " (last reset: watchdog)" : "");
+                 fault_last() ? "" : glitchdet_caused_reset() ? " (last reset: glitch detector)"
+                                    : wdog_caused_reset() ? " (last reset: watchdog)" : "");
     if (fault_last())
         shell_printf(sh, "last reset: %s\n", fault_last());
 }
@@ -503,31 +505,69 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
 
 // --- glitch detector -----------------------------------------------------------------------------
 
-// `glitch`: the detector's state and how often it has reset the board since power-on.
-// `glitch trig` (console, soak-test builds): make a detector fire, to see the reset reported.
-static void cmd_glitch(shell_t *sh, const char *args) {
+static void glitch_status(shell_t *sh) {
+    unsigned setting = settings()->glitch_detector;
     int armed = glitchdet_armed_sensitivity();
-    if (args && !strcmp(args, "trig")) {
-        if (!sh->io->admin)
-            shell_printf(sh, "only on the serial console\n");
-        else if (armed < 0)
-            shell_printf(sh, "the detector isn't armed in this build (SOS_GLITCH_SOAK)\n");
-        else {
-            shell_printf(sh, "simulating a detector trigger: the board resets now\n");
-            sleep_ms(50);
-            glitchdet_simulate();
-        }
-        return;
-    }
-    if (armed < 0)
-        shell_printf(sh, "glitch detector: not armed (a normal build doesn't arm it)\n");
+    if (setting == 0)
+        shell_printf(sh, "glitch detector: off\n");
     else
-        shell_printf(sh, "glitch detector: armed by software, sensitivity %d (soak test build)\n",
-                     armed);
+        shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest), %s\n",
+                     setting - 1,
+                     armed >= 0 ? "armed" : glitchdet_guard_tripped()
+                         ? "NOT armed at this boot: it reset the board several times in a row "
+                           "right after starting"
+                         : "not armed");
+    shell_printf(sh, "armed by software after boot: a trial setting to see whether it resets a "
+                     "healthy board, not protection\n");
     shell_printf(sh, "detector resets since power-on: %lu\n", (unsigned long)glitchdet_resets());
     if (glitchdet_caused_reset())
-        shell_printf(sh, "the last reset was the detector's (detectors 0x%x fired)\n",
-                     (unsigned)glitchdet_last_triggers());
+        shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
+                     (unsigned)glitchdet_last_triggers(),
+                     (unsigned long)glitchdet_last_uptime_s());
+}
+
+// `glitch`: the detector's setting, state and resets. Console only: `glitch on <0-3>` arms it now
+// and at every boot; `glitch off` disarms it; `glitch trig` makes a detector fire, to see a
+// detector reset reported.
+static void cmd_glitch(shell_t *sh, char *args) {
+    char *sub = args ? strtok(args, " ") : NULL;
+    char *arg = sub ? strtok(NULL, " ") : NULL;
+    if (!sub) {
+        glitch_status(sh);
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    if (!strcmp(sub, "off") && !arg) {
+        settings()->glitch_detector = 0;
+        glitchdet_apply(0);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector off");
+        shell_printf(sh, "glitch detector off, now and at boot\n");
+    } else if (!strcmp(sub, "on") && arg && arg[0] >= '0' && arg[0] <= '3' && !arg[1]) {
+        unsigned setting = (unsigned)(arg[0] - '0') + 1;
+        // Saved first: if arming resets the board at once, the guard at boot deals with it.
+        settings()->glitch_detector = (uint8_t)setting;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector on, sensitivity %c", arg[0]);
+        if (glitchdet_apply(setting))
+            shell_printf(sh, "glitch detector armed at sensitivity %c, now and at boot.\n"
+                             "If it resets the board, `glitch off` turns it off; after %u resets "
+                             "in a row right\nafter starting, a boot leaves it unarmed so that "
+                             "you can.\n", arg[0], GLITCHDET_GUARD_RESETS);
+        else
+            shell_printf(sh, "saved, but arming it didn't take (see dmesg)\n");
+    } else if (!strcmp(sub, "trig") && !arg) {
+        if (glitchdet_armed_sensitivity() < 0) {
+            shell_printf(sh, "the detector isn't armed, so nothing would happen\n");
+            return;
+        }
+        shell_printf(sh, "simulating a detector trigger: the board resets now\n");
+        sleep_ms(50);
+        glitchdet_simulate();
+    } else {
+        shell_printf(sh, "usage: glitch [on <0-3> | off | trig]\n");
+    }
 }
 
 // --- root secret ---------------------------------------------------------------------------------
