@@ -278,7 +278,72 @@ TEST(wipe) {
     CHECK_MEM(k, zero, 32);
 }
 
+// The card key: HMAC-SHA256 keyed with the wrap base key, over the owner secret. The expected
+// value was computed with Python's hmac/hashlib for base 40..5f and owner 80..9f.
+TEST(wrap_key_known_answer) {
+    uint8_t base[32], owner[32], key[32], other[32];
+    static const uint8_t want[32] = {
+        0xe0, 0x65, 0x67, 0x59, 0x4e, 0xfd, 0x01, 0x4c, 0x59, 0x14, 0x9b, 0x4c, 0xae, 0x2b, 0x95, 0xb1,
+        0x02, 0x49, 0xc8, 0xf5, 0x0c, 0xac, 0xd6, 0x8a, 0xbd, 0x83, 0x71, 0xbb, 0xe0, 0x87, 0x9a, 0x95,
+    };
+    for (unsigned i = 0; i < 32; i++) {
+        base[i] = (uint8_t)(0x40 + i);
+        owner[i] = (uint8_t)(0x80 + i);
+    }
+    CHECK(sdcrypt_wrap_key(key, base, owner));
+    CHECK_MEM(key, want, sizeof(want));
+    // Another owner (the configuration was erased and set up again): another key. Another board
+    // (another base): another key.
+    owner[31] ^= 1;
+    CHECK(sdcrypt_wrap_key(other, base, owner));
+    CHECK(memcmp(key, other, 32) != 0);
+    owner[31] ^= 1;
+    base[0] ^= 1;
+    CHECK(sdcrypt_wrap_key(other, base, owner));
+    CHECK(memcmp(key, other, 32) != 0);
+}
+
+// A card is locked by a change of owner: a header built under one owner's card key doesn't
+// open under the next owner's.
+TEST(another_owner_does_not_open_the_card) {
+    setup();
+    uint8_t base[32], owner[32], key_a[32], key_b[32], s[512];
+    sdcrypt_info_t info;
+    memset(base, 0x11, sizeof(base));
+    memset(owner, 0x22, sizeof(owner));
+    CHECK(sdcrypt_wrap_key(key_a, base, owner));
+    owner[0] ^= 0x80;
+    CHECK(sdcrypt_wrap_key(key_b, base, owner));
+    CHECK(sdcrypt_header_build(s, key_a, card_id, nonce, data_key));
+    CHECK_EQ(sdcrypt_header_open(s, key_a, &info), SDCRYPT_OK);
+    CHECK_EQ(sdcrypt_header_open(s, key_b, &info), SDCRYPT_WRONG_KEY);
+}
+
+// The header says which key wraps it: 2, the card key. A header with 1 (the device key that
+// firmware before the owner secret kept in flash) is recognised and not opened, with or
+// without a key, from sector 0 or the backup.
+TEST(old_device_key_cards_are_not_opened) {
+    setup();
+    uint8_t s[512], junk[512];
+    sdcrypt_info_t info;
+    bool from_backup;
+    CHECK(sdcrypt_header_build(s, devkey, card_id, nonce, data_key));
+    CHECK_EQ(s[18], 2);
+    s[18] = 1;
+    CHECK_EQ(sdcrypt_header_open(s, devkey, &info), SDCRYPT_OLD_WRAP);
+    uint8_t zero[sizeof(info)] = {0};
+    CHECK_MEM(&info, zero, sizeof(info));
+    CHECK_EQ(sdcrypt_card_open(s, s, devkey, &info, &from_backup), SDCRYPT_OLD_WRAP);
+    CHECK_EQ(sdcrypt_card_open(s, s, NULL, &info, &from_backup), SDCRYPT_OLD_WRAP);
+    memset(junk, 0xa5, sizeof(junk));
+    CHECK_EQ(sdcrypt_card_open(junk, s, devkey, &info, &from_backup), SDCRYPT_OLD_WRAP);
+    CHECK(!from_backup);
+}
+
 TEST_MAIN(
+    RUN(wrap_key_known_answer);
+    RUN(another_owner_does_not_open_the_card);
+    RUN(old_device_key_cards_are_not_opened);
     RUN(header_round_trip);
     RUN(header_rejected);
     RUN(card_open_rules);

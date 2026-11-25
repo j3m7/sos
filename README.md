@@ -116,8 +116,8 @@ cmake --build --preset debug --target flash
 
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
-plugging it in first. Flashing leaves the board's saved configuration, SSH host key and SD
-device key alone; a new board has neither a network nor a trusted key until it's set up
+plugging it in first. Flashing leaves the board's saved configuration and SSH host key
+alone; a new board has neither a network nor a trusted key until it's set up
 (`setup` on the console, or [provisioning](#provisioning)).
 
 The image can be signed as part of the build (`SOS_SIGN_KEY`; see
@@ -216,7 +216,9 @@ machine, with the same code the device uses, and loads it into the two configura
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
 everything saved on the board; the firmware and the SSH host key stay as they are. The record it
 writes is not sealed (this machine doesn't have the board's key): the board seals it at its
-first boot and erases the unsealed copy.
+first boot and erases the unsealed copy. **Provisioning makes the board a new owner:** like
+`config reset`, it locks the SD cards the board encrypted before (see
+[Encrypted cards](#encrypted-cards)); `provision.sh` says so when it finishes.
 
 - `ninja flash` doesn't touch the configuration, so provisioning is needed once per board, and
   again after `config reset`, a full flash erase, or to put a board into a known state for a
@@ -261,7 +263,7 @@ ssh <device-ip>
   matter: any name logs in with a trusted key, and the name is only shown (`ssh`, `who`, the
   log). The keys are what decide who gets in.
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
-  flash sector (the key sector, which also holds the SD cards' device key), sealed like the
+  flash sector (the key sector), sealed like the
   configuration; it survives reflashing. The private key never leaves the device.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
@@ -409,7 +411,6 @@ working directory:
 | `echo <text> [> file \| >> file]` | print, or write/append a line |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
-| `sd devkey [forget]` | the device key's state; console only: clear it |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
 
@@ -436,26 +437,29 @@ overwrites them, so a card that held private files unencrypted is best replaced 
 Cards formatted elsewhere, or with `sd format plain`, still work unencrypted; `sd` shows which
 kind is in.
 
-- **The key:** each card has a random data key, stored on the card encrypted with this device's
-  key. The device key is made when the first card is encrypted and kept in flash next to the
-  SSH host key, so it survives reflashing, `config reset` and provisioning, and the card
-  unlocks at boot with nobody logged in. A card made by another device is refused (`sd format`
-  erases it for use here). The card holds two copies of its header; a damaged first copy is
-  rewritten from the second.
-- **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
-  flash, which can be read out.
+- **The key:** each card has a random data key, stored on the card encrypted with this board's
+  card key. The card key is made from two things: the board's root secret, and the **owner
+  secret**, 32 random bytes kept in the sealed configuration. So a card unlocks at boot with
+  nobody logged in, and survives reflashing. A card made by another board is refused (`sd
+  format` erases it for use here). The card holds two copies of its header; a damaged first
+  copy is rewritten from the second.
+- **Erasing the configuration locks the cards.** `config reset`, erasing the configuration
+  over USB, and provisioning the board again all destroy the owner secret: the board that
+  comes back is a new owner, and cards the old one encrypted can only be read with the key
+  shown when each was formatted. This is deliberate: otherwise someone who has the board
+  could erase its configuration, set it up as their own, and have it unlock the cards.
+  `config reset` warns before it does this.
+- **What it protects:** a lost or removed card. Not yet a stolen board: on a board without
+  secure boot the root secret is in flash, which can be read out (issue #64).
 - **Recovery:** an encrypted `sd format` prints the card's id and data key when it finishes, and
-  only then: no command shows it later. (The device key that unlocks the card is still in the
-  device's flash, which anyone with the device can read out.) Store it offline: it's the only
-  way to read the card if the device is lost. With it, a Linux PC reads the card
+  only then: no command shows it later. Store it offline: it's the only way to read the card
+  if the board is lost or its configuration erased. With it, a Linux PC reads the card
   (`tools/host/sdcrypt.c` decrypts an image of it with the key in a file, and `sdcrypt info`
   prints the `cryptsetup` line to open the card directly). A card whose key wasn't saved can't
   have it shown again; formatting it anew shows a new key (and erases the card).
-- **The device key is never replaced on its own.** If its flash record is damaged (or was
-  written by newer firmware), encrypted cards stay locked and `sd devkey` says so; `sd devkey
-  forget` clears it, after which only the keys shown at format read the old cards. Firmware
-  from before encryption erases the whole key sector if it ever has to make a new SSH host key,
-  which would take the device key with it.
+- **Cards from older firmware** were encrypted under a device key kept in flash, which this
+  firmware no longer uses. They are refused with a message: format them again, or read them
+  on a PC with their saved key.
 - **Speed:** the encryption is software AES (the RP2350 has no AES hardware), using wolfSSL's
   Thumb-2 assembly: about 1.1 MB/s write and 1.0 MB/s read on the card, against 2.0 / 1.7 MB/s
   unencrypted. Copying on the card slows down by about as much; SFTP is limited by SSH's own
@@ -729,7 +733,7 @@ nobody else is using the board.
 | Main RAM (512 KB) | data, heap, and the core 0 stack (top 8 KB, `SOS_CORE0_STACK_SIZE`) |
 | SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default; while Lua runs, core 1 uses a 32 KB stack from the heap instead |
 | SCRATCH_Y (4 KB) | free |
-| Flash, last 4 KB sector | keys: SSH host key (page 0), SD cards' device key (page 1) |
+| Flash, last 4 KB sector | keys: SSH host key (page 0); page 1 held the SD cards' device key of older firmware and is left as it is |
 | Flash, 2 sectors below it | configuration (A/B records) |
 | Flash, the sector below those | the board's root secret (open boards; nothing is stored under it yet), see [`src/core/README.md`](src/core/README.md) |
 

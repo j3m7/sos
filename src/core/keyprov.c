@@ -16,7 +16,6 @@ static const char *const labels[KEYPROV_PURPOSES] = {
     [KEYPROV_CONFIG_SEAL]      = "SOS v1 config seal",
     [KEYPROV_HOSTKEY_SEAL]     = "SOS v1 host key seal",
     [KEYPROV_CONSOLE_PASSWORD] = "SOS v1 console password",
-    [KEYPROV_SD_DEVICE]        = "SOS v1 sd device key",
     [KEYPROV_SD_WRAP_BASE]     = "SOS v1 sd card wrap base",
 };
 

@@ -108,7 +108,6 @@ set(SOS_SOURCES
     src/core/config.c
     src/core/settings.c
     src/core/keysector.c
-    src/core/devkey.c
     src/core/rootsecret.c
     src/core/rootflash.c
     src/core/keyprov.c
@@ -138,6 +137,7 @@ set(SOS_SOURCES
     src/files/files.c
     src/files/path.c
     src/files/sdcrypt.c
+    src/files/cardkey.c
     src/time/rtc.c
     src/time/timeconv.c
     src/time/timesync.c

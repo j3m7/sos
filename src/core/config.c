@@ -20,12 +20,15 @@ _Static_assert(CONFIG_V2_LENGTH == 1606, "fields before certs_hash must not move
 _Static_assert(CONFIG_V3_LENGTH == 1638, "fields before wifi_powersave must not move");
 #define CONFIG_V4_LENGTH offsetof(sos_config_t, wifi_country)      // + wifi_powersave, rtc_offset
 _Static_assert(CONFIG_V4_LENGTH == 1640, "fields before wifi_country must not move");
+#define CONFIG_V5_LENGTH offsetof(sos_config_t, owner_secret)      // + wifi_country
+_Static_assert(CONFIG_V5_LENGTH == 1644, "fields before owner_secret must not move");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
     CONFIG_V3_LENGTH,
     CONFIG_V4_LENGTH,
-    sizeof(sos_config_t),   // + wifi_country
+    CONFIG_V5_LENGTH,
+    sizeof(sos_config_t),   // + owner_secret
 };
 
 static bool known_length(uint16_t length) {
@@ -151,9 +154,11 @@ static int slot_read(const config_store_t *store, unsigned slot, record_header_t
 
     bool ok = true;
     memset(&tmp, 0, sizeof(tmp));
-    if (kind == CONFIG_STORED_PLAIN)
+    if (kind == CONFIG_STORED_PLAIN) {
         memcpy(&tmp, record + HEADER_LEN, h.length);
-    else
+        // A plain record doesn't carry an owner secret, whatever its bytes say.
+        memset(tmp.owner_secret, 0, sizeof(tmp.owner_secret));
+    } else
         ok = store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
                                  stored, (uint8_t *)&tmp);
     ok = ok && contents_valid(&tmp, h.length);
@@ -298,6 +303,9 @@ bool config_save(const config_store_t *store, const sos_config_t *cfg) {
         stored += SEALER_OVERHEAD;
     } else {
         memcpy(rec + HEADER_LEN, cfg, sizeof(*cfg));
+        // The owner secret is never written plain.
+        memset(rec + HEADER_LEN + offsetof(sos_config_t, owner_secret), 0,
+               sizeof(cfg->owner_secret));
     }
     h.crc = record_crc(rec, stored);
     memcpy(rec, &h, HEADER_LEN);

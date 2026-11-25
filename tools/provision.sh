@@ -63,3 +63,5 @@ command -v picotool >/dev/null || { echo "picotool not found" >&2; exit 1; }
 # -f: reboot a running board into BOOTSEL for the load, and back afterwards.
 picotool load -f -v --ignore-partitions -t bin "$work/config.bin" -o "$addr"
 echo "provisioned from $conf; the board restarts with this configuration"
+echo "note: this made the board a new owner: SD cards it encrypted before are now locked"
+echo "      (readable only with the key shown when each was formatted)"

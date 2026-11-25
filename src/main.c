@@ -13,7 +13,6 @@
 #include <wolfssh/ssh.h>
 
 #include "chat/chat.h"
-#include "core/devkey.h"
 #include "core/fault.h"
 #include "core/keyprov.h"
 #include "core/log.h"
@@ -21,6 +20,7 @@
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
+#include "files/cardkey.h"
 #include "lua/lua_host.h"
 #include "net/wifi.h"
 #include "shell/shell.h"
@@ -131,7 +131,7 @@ int main(void) {
     const uint8_t *hostkey;
     uint32_t hostkey_len;
     bool have_hostkey = hostkey_get(&hostkey, &hostkey_len);
-    devkey_check();                     // the key for encrypted SD cards (made by sd format)
+    cardkey_init();                     // the base of the key for encrypted SD cards
 
     if (cyw43_arch_init_with_country(wifi_country_code())) {
         log_msg(SOS_LOG_ERR, "cyw43 init failed");

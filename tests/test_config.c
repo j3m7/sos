@@ -1225,6 +1225,116 @@ TEST(secured_board_no_fallback_to_plain_when_sealed_fails) {
     CHECK(config_sealed_unopened(&secured_store));
 }
 
+// --- the owner secret ------------------------------------------------------------------------------
+
+static void set_owner(sos_config_t *c, uint8_t first) {
+    for (unsigned i = 0; i < sizeof(c->owner_secret); i++)
+        c->owner_secret[i] = (uint8_t)(first ^ (i * 37));
+}
+
+static bool owner_is_zero(const sos_config_t *c) {
+    for (unsigned i = 0; i < sizeof(c->owner_secret); i++)
+        if (c->owner_secret[i])
+            return false;
+    return true;
+}
+
+// Is the owner secret (first, first+1, ...) readable anywhere in the fake flash?
+static bool flash_has_owner(uint8_t first) {
+    uint8_t want[CONFIG_OWNER_SECRET_LEN];
+    for (unsigned i = 0; i < sizeof(want); i++)
+        want[i] = (uint8_t)(first ^ (i * 37));
+    for (unsigned slot = 0; slot < 2; slot++)
+        for (size_t i = 0; i + sizeof(want) <= CONFIG_SLOT_SIZE; i++)
+            if (!memcmp(flash.slot[slot] + i, want, sizeof(want)))
+                return true;
+    return false;
+}
+
+// Released layouts: the owner secret is the last field, after everything saved before it.
+TEST(owner_secret_is_appended) {
+    CHECK_EQ(offsetof(sos_config_t, owner_secret), 1644);
+    CHECK_EQ(sizeof(sos_config_t), 1644 + CONFIG_OWNER_SECRET_LEN);
+}
+
+TEST(owner_secret_round_trips_sealed) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    set_owner(&a, 0xc0);
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(!flash_has_owner(0xc0));                  // not readable in the sealed record
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_MEM(a.owner_secret, b.owner_secret, sizeof(a.owner_secret));
+}
+
+// A plain save never writes it, even if the configuration in memory has one.
+TEST(plain_save_never_writes_the_owner_secret) {
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "HomeNet");
+    set_owner(&a, 0xc0);
+    CHECK(config_save(&store, &a));
+    CHECK(!flash_has_owner(0xc0));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK(owner_is_zero(&b));
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));         // the rest is there
+}
+
+// A plain record that does hold bytes there (someone built one by hand) loads without them: an
+// owner secret can't be planted, or carried over, in a plain record.
+TEST(plain_record_cannot_carry_an_owner_secret) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_save(&store, &a));                 // plain, slot 0
+    for (unsigned i = 0; i < CONFIG_OWNER_SECRET_LEN; i++)
+        flash.slot[0][16 + offsetof(sos_config_t, owner_secret) + i] = (uint8_t)(0xc0 ^ (i * 37));
+    fix_crc(0);
+    CHECK(flash_has_owner(0xc0));
+    CHECK(config_load(&store, &b, NULL));           // the provisioning tool's view
+    CHECK(owner_is_zero(&b));
+    CHECK(config_load(&sealed_store, &b, NULL));    // the board's view
+    CHECK(owner_is_zero(&b));
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    // The board gives it a new owner and seals it; the planted bytes are erased with the slot.
+    set_owner(&b, 0x30);
+    CHECK(config_save(&sealed_store, &b));
+    CHECK(!flash_has_owner(0xc0));
+    CHECK(config_load(&sealed_store, &a, NULL));
+    CHECK_EQ(a.owner_secret[0], 0x30);
+}
+
+// Records from before the owner secret, plain or sealed, load with none.
+TEST(records_from_before_the_owner_secret_load_with_none) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    strcpy(a.wifi_country, "US");
+    CHECK(config_save(&store, &a));
+    set_length(0, 1644);                            // plain, as the release before it wrote
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(owner_is_zero(&b));
+    CHECK(!strcmp(b.wifi_country, "US"));
+
+    // Sealed with the shorter length, as the first sealing firmware wrote it: built by hand
+    // with the same sealer (header, then nonce, ciphertext and tag over 1644 bytes).
+    sealed_start();
+    uint8_t *r = flash.slot[0];
+    memset(r, 0xff, CONFIG_SLOT_SIZE);
+    static const uint8_t header[12] = { 'S', 'O', 'S', 'C', 2, 0, 0x6c, 0x06, 7, 0, 0, 0 };
+    memcpy(r, header, sizeof(header));
+    CHECK(fake_seal(&fake, r, 12, (const uint8_t *)&a, 1644, r + 16));
+    fix_sealed_crc(0);
+    uint32_t seq = 0;
+    memset(&b, 0x55, sizeof(b));
+    CHECK(config_load(&sealed_store, &b, &seq));
+    CHECK_EQ(seq, 7);
+    CHECK(owner_is_zero(&b));
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    CHECK(!strcmp(b.wifi_country, "US"));
+}
+
 TEST_MAIN(
     RUN(blank_flash_loads_defaults);
     RUN(save_and_load_round_trip);
@@ -1263,6 +1373,11 @@ TEST_MAIN(
     RUN(remove_keeps_order);
     RUN(key_list_capacity);
     RUN(crc32_known_value);
+    RUN(owner_secret_is_appended);
+    RUN(owner_secret_round_trips_sealed);
+    RUN(plain_save_never_writes_the_owner_secret);
+    RUN(plain_record_cannot_carry_an_owner_secret);
+    RUN(records_from_before_the_owner_secret_load_with_none);
     RUN(sealed_save_and_load_round_trip);
     RUN(sealed_record_layout);
     RUN(sealed_saves_alternate_slots_with_fresh_nonces);

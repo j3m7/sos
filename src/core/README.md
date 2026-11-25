@@ -65,6 +65,11 @@ Two layers:
   - **A secured board** (`refuse_plain`, not set anywhere yet) doesn't see plain records at
     all: they take no part in choosing the newest record, so a planted one can't hide the sealed
     configuration.
+  - **The owner secret** (`owner_secret`, the last field) ties the board's encrypted SD cards
+    to this configuration (`files/cardkey.h`). It exists only in sealed records: `config.c`
+    zeroes it when it loads a plain record and never writes it in one, so a configuration that
+    arrives plain (provisioning, older firmware) can't carry or plant one. `settings.c` makes a
+    new one whenever it saves a configuration that has none. `config reset` destroys it.
   - **A sealed record that doesn't open** (another root secret, or changed) counts as no
     record. It isn't erased automatically; the log says it's there
     (`config_sealed_unopened()`). Later saves take its slot in their turn.
@@ -93,7 +98,8 @@ Only the console may change the configuration; see `require_admin()` in `shell/s
 
 The base for protecting what the board stores (issue #64). The saved configuration and the SSH
 host key are sealed under keys from it (`seal.c`: AES-256-GCM, a random nonce per seal, the
-record's header as associated data). SD cards still use the device key in the key sector.
+record's header as associated data). The key for encrypted SD cards comes from it too, together
+with the configuration's owner secret (`files/cardkey.c`).
 
 - **Root secret:** 32 random bytes, made from the TRNG at the first boot. Every other key is
   derived from it. On an open board (no secure boot) it's kept in flash, which protects nothing
@@ -127,25 +133,15 @@ record's header as associated data). SD cards still use the device key in the ke
   - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
     root secret; changing a label would lock everything sealed under it.
 
-## Key sector and device key (`keysector.c`, `devkey.c`)
+## Key sector (`keysector.c`)
 
-The last 4 KB flash sector holds the device's keys, one 256-byte flash page each: page 0 the SSH
-host key (`ssh/hostkey.c`), page 1 the device key. It's above the configuration sectors, so
-`picotool load`, `config reset` and provisioning don't touch it. `keysector_write()` replaces
-one page and keeps the others; it erases and rewrites the whole sector, so a power cut during a
-write can lose every key in it. Writes happen only when a key is created (the host key at first
-boot, the device key at the first encrypted `sd format`) or cleared on request.
-
-The **device key** (32 random bytes from the TRNG) wraps each encrypted SD card's data key
-(`files/sdcrypt.h`). `devkey_create()` makes it only when the page holds no key record, so a
-board that never encrypts a card never rewrites the sector for it. A page with the record's
-magic is never overwritten automatically, even when it isn't valid: one flipped bit leaves the
-key recoverable by hand, and a record from newer firmware must survive a downgrade. Such a
-record leaves the device without a key (encrypted cards locked, `sd devkey` explains) until
-`sd devkey forget` clears it.
-
-**Downgrades:** firmware from before the device key writes the host key by erasing the whole
-sector. It only does that when it has no valid host key, but then the device key goes too.
+The last 4 KB flash sector holds keys, one 256-byte flash page each: page 0 the SSH host key
+(`ssh/hostkey.c`). Page 1 held the SD cards' device key of firmware from before the owner
+secret; nothing reads or writes it now, and it's left as it is. The sector is above the
+configuration sectors, so `picotool load`, `config reset` and provisioning don't touch it.
+`keysector_write()` replaces one page and keeps the others; it erases and rewrites the whole
+sector, so a power cut during a write can lose what's in it. Writes happen only when the host
+key is made or sealed.
 
 ## Watchdog (`wdog.c`)
 
