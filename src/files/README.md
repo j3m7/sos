@@ -46,9 +46,11 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
 - **`sd format`** writes a new header (both copies) and turns the layer on before `f_mkfs`, so
   the volume is written encrypted. `sd format plain` also clears the backup header, which
   `f_mkfs` doesn't overwrite, so the card can't look encrypted again.
-- **Speed:** wolfCrypt's AES and SHA-256 tables are in SRAM (8.7 KB; `FLASH_QUALIFIER` in
-  `config/user_settings.h`, for `aes.c` and `sha256.c` only, set in `CMakeLists.txt`): from
-  flash, varied data misses the XIP cache and encrypted writes ran at a third of the speed.
+- **Speed:** AES is wolfSSL's Thumb-2 assembly (the inline version, `thumb2-aes-asm_c.c`,
+  enabled for `aes.c` in `CMakeLists.txt`; issue #59): about 1.1 / 1.0 MB/s encrypted write and
+  read. Its two 1 KB tables stay in flash, and the XIP cache holds them. wolfCrypt's C AES
+  managed about 690 / 650 KB/s with its 8.4 KB of tables in SRAM, and a third of that with them
+  in flash, where varied data kept missing the XIP cache.
 - **Old data:** `f_mkfs` writes only the filesystem's structures, so formatting a used plain
   card encrypted leaves its old files readable in the clear until they're overwritten.
 - **Host tool** `tools/host/sdcrypt.c` (OpenSSL's libcrypto) reads a card or image on a PC with

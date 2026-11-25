@@ -157,10 +157,13 @@ add_custom_target(sos_version
 add_executable(sos ${SOS_SOURCES}
     ${SOS_VERSION_C}
     src/ssh/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
-    ${SOS_AES_ASM_SRC}          # wolfSSL's Thumb-2 AES (see above)
     ${LUA_SOURCES}
 )
 add_dependencies(sos sos_version)
+# wolfSSL's Thumb-2 AES (see above), linked last. Where its code lands in flash matters: listed
+# before the Lua sources, encrypted SD card reads ran 16% slower (841 vs 1000 KB/s), from code
+# competing for the same XIP cache lines. Re-measure with `sd test` after moving it.
+target_sources(sos PRIVATE ${SOS_AES_ASM_SRC})
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
