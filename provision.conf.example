@@ -19,7 +19,7 @@ ssh_key = ssh-ed25519 AAAA... user@host
 
 # The console password: asked for before the serial console takes any command. It travels in
 # the provisioning image in the clear (the board turns it into a verifier and erases the image's
-# copy at its first boot), so keep this file private. Without this line the board asks for a
+# copy at its first boot), and it stays in this file on this machine: keep the file private. Without this line the board asks for a
 # new password the first time someone uses its console. 8 to 64 characters.
 # console_password = choose-a-password
 

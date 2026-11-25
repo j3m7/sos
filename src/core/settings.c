@@ -99,9 +99,13 @@ const char *settings_console_set_password(const char *password) {
     if (!have_pw_key)
         return "this board has no key to protect a password with (see `rootsecret`)";
     uint8_t salt[PWV_SALT_LEN], verifier[PWV_LEN];
+    uint64_t t0 = time_us_64();
     if (!random_bytes(NULL, salt, sizeof(salt)) ||
         !pwv_compute(password, strlen(password), salt, SOS_CONSOLE_PW_ITERATIONS, pw_key, verifier))
         return "making the password's verifier failed";
+    // How long one check of this password costs (the same derivation), for tuning the count.
+    log_msg(SOS_LOG_INFO, "config: password verifier made in %lu ms (%u iterations)",
+            (unsigned long)((time_us_64() - t0) / 1000), (unsigned)SOS_CONSOLE_PW_ITERATIONS);
     live.console_iterations = SOS_CONSOLE_PW_ITERATIONS;
     memcpy(live.console_salt, salt, sizeof(salt));
     memcpy(live.console_verifier, verifier, sizeof(verifier));

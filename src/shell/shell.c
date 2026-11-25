@@ -643,6 +643,9 @@ static const login_hooks_t console_login = {
 };
 
 void shell_console_start(shell_t *console) {
+    if (!console_no_keys() && !settings_console_has_password())
+        log_msg(SOS_LOG_WARNING, "console: no console password is set: the console is open to "
+                                 "anyone at the port (`passwd` sets one)");
     login_start(console, &console_login);
 }
 

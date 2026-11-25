@@ -176,8 +176,11 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   the current one. `logout` (or Ctrl-D) locks the console again. SSH sessions aren't
   affected: they log in with their keys.
 - **Wrong passwords:** each check takes about 0.3 s by design, and after a wrong answer the
-  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot.
-  Wrong attempts are logged (`dmesg`).
+  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot, so
+  what limits guessing in the end is the cost of each check; choose a password that isn't
+  guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
+- **It stays open after a login** until `logout`: unplugging the cable or closing the terminal
+  does not lock it yet (planned: issue #64).
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
   of the password, then keyed with a key from the board's root secret. A copy of the flash
   isn't enough to try passwords against.

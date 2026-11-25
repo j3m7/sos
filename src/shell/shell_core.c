@@ -355,7 +355,13 @@ void shell_poll(shell_t *sh) {
         size_t len = sh->ahead_len;
         memcpy(ahead, sh->ahead, len);
         sh->ahead_len = 0;
+        // Typed-ahead input can be a password (typed while a check was running): don't leave
+        // copies of it behind.
+        memset(sh->ahead, 0, len);
         process_input(sh, ahead, len);
+        volatile char *v = ahead;
+        for (size_t i = 0; i < len; i++)
+            v[i] = 0;
         if (sh->job)
             return;
     }
