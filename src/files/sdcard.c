@@ -499,6 +499,10 @@ static bool format_plain;                   // no encryption
 
 // Start an encrypted card: a new random data key and card id in a header at sector 0 and its
 // backup, then turn the layer on, so f_mkfs writes the volume encrypted.
+// The data key of a card being formatted, from start_encrypted() until show_new_key() shows and
+// wipes it.
+static uint8_t new_key[SDCRYPT_KEY_LEN];
+
 static bool start_encrypted(shell_t *sh) {
     uint8_t id[SDCRYPT_ID_LEN], nonce[SDCRYPT_NONCE_LEN], key[SDCRYPT_KEY_LEN];
     if (!devkey_create()) {     // the first encrypted card makes the device key
@@ -518,6 +522,8 @@ static bool start_encrypted(shell_t *sh) {
          write_blocks_fed(&card, header, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
          write_blocks_fed(&card, header, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
          sdcrypt_start(&crypt, key);
+    if (ok)
+        memcpy(new_key, key, sizeof(new_key));
     sdcrypt_wipe(key, sizeof(key));
     if (!ok) {
         shell_printf(sh, "format failed: couldn't write the encryption header\n");
@@ -538,6 +544,29 @@ static bool start_plain(shell_t *sh) {
     }
     card_kind = KIND_PLAIN;
     return true;
+}
+
+// After an encrypted format, the one time the card's data key is shown: it's what a PC needs to
+// read the card (or a replacement board, later) if this device is lost. Formatting is console
+// only, so the key never goes to an SSH session. Shown once the header and file system are
+// written, whether or not the mount that follows works, so a formatted card always had its key
+// shown.
+static void show_new_key(shell_t *sh) {
+    char line[16 + 2 * SDCRYPT_KEY_LEN];
+    shell_printf(sh, "\nStore this key for recovery. It's shown only now, and it's the only\n");
+    shell_printf(sh, "way to read the card if this device is lost. Anyone with it can read\n");
+    shell_printf(sh, "the card: keep it offline. On a PC: tools/host/sdcrypt.c, or cryptsetup.\n");
+    hex(line, card_id, SDCRYPT_ID_LEN);
+    shell_printf(sh, "card id:  %s\n", line);
+    // The key is formatted here, not by shell_printf, so no copy is left in its stack buffer.
+    memcpy(line, "data key: ", 10);
+    hex(line + 10, new_key, SDCRYPT_KEY_LEN);
+    size_t n = strlen(line);
+    line[n++] = '\n';
+    shell_write(sh, line, n);
+    sdcrypt_wipe(line, sizeof(line));
+    sdcrypt_wipe(new_key, sizeof(new_key));
+    log_msg(SOS_LOG_NOTICE, "sd: the new card's key was shown on the console");
 }
 
 static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
@@ -584,17 +613,20 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
             (unsigned long)io_stats.last_count);
     crypt_off();                            // mount() finds the card's kind again
     if (fr != FR_OK) {
+        sdcrypt_wipe(new_key, sizeof(new_key));
         log_msg(SOS_LOG_ERR, "sd: format failed: %s (%d) after %lu ms", FRESULT_str(fr), fr,
                 (unsigned long)ms);
         shell_printf(sh, "format failed: %s\n", FRESULT_str(fr));
         return;
     }
     log_msg(SOS_LOG_NOTICE, "sd: formatted as %s in %lu ms", name, (unsigned long)ms);
-    if (!mount(sh))
-        return;
-    shell_printf(sh, "formatted in %lu.%lu s\n", (unsigned long)(ms / 1000),
-                 (unsigned long)(ms % 1000 / 100));
-    cmd_info(sh);
+    if (mount(sh)) {
+        shell_printf(sh, "formatted in %lu.%lu s\n", (unsigned long)(ms / 1000),
+                     (unsigned long)(ms % 1000 / 100));
+        cmd_info(sh);
+    }
+    if (!format_plain)
+        show_new_key(sh);
 }
 
 static void cmd_format(shell_t *sh, const char *type, const char *mode) {
@@ -632,53 +664,24 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
         shell_printf(sh, "no card\n");
         return;
     }
-    // One-line prompt: log lines redraw only the input line.
-    if (format_plain)
-        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s, not\n"
-                     "encrypted: anyone with the card can read it.\n",
-                     format_type == FM_EXFAT ? "exFAT" : "FAT32");
-    else
-        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s,\n"
-                     "encrypted with a new key that this device keeps. A PC can't read it;\n"
-                     "`sd key` shows the key, to keep somewhere safe for recovery. Files from\n"
-                     "before stay on the card unencrypted until new data overwrites them: for\n"
-                     "a card that held private files unencrypted, use a new card instead.\n",
-                     format_type == FM_EXFAT ? "exFAT" : "FAT32");
+    // One line per shell_printf (its buffer is 256 bytes). One-line prompt: log lines redraw
+    // only the input line.
+    const char *name = format_type == FM_EXFAT ? "exFAT" : "FAT32";
+    if (format_plain) {
+        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s, not\n",
+                     name);
+        shell_printf(sh, "encrypted: anyone with the card can read it.\n");
+    } else {
+        shell_printf(sh, "This erases the whole card (all partitions) and formats it as %s,\n",
+                     name);
+        shell_printf(sh, "encrypted with a new key that this device keeps. A PC can't read it.\n");
+        shell_printf(sh, "The card's key is shown once, when the format finishes: store it\n");
+        shell_printf(sh, "offline for recovery. Files from before stay on the card unencrypted\n");
+        shell_printf(sh, "until new data overwrites them: for a card that held private files\n");
+        shell_printf(sh, "unencrypted, use a new card instead.\n");
+    }
     shell_printf(sh, "SSH sessions pause until it's done.\n");
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
-}
-
-// --- key ---------------------------------------------------------------------------------------
-
-// Show the card's data key, to keep offline: it's what a PC needs to read the card (or a
-// replacement board, later) if this device is lost.
-static void cmd_key(shell_t *sh) {
-    if (!sh->io->admin) {
-        shell_printf(sh, "the card's key can only be shown on the serial console\n");
-        return;
-    }
-    if (!mount(sh))
-        return;
-    if (card_kind != KIND_ENCRYPTED) {
-        shell_printf(sh, "the card isn't encrypted\n");
-        return;
-    }
-    sdcrypt_info_t info;
-    bool from_backup;
-    if (open_card(&info, &from_backup) != SDCRYPT_OK) {
-        shell_printf(sh, "can't read the card's header\n");
-        return;
-    }
-    char id[2 * SDCRYPT_ID_LEN + 1], key[2 * SDCRYPT_KEY_LEN + 1];
-    hex(id, info.card_id, SDCRYPT_ID_LEN);
-    hex(key, info.data_key, SDCRYPT_KEY_LEN);
-    sdcrypt_wipe(&info, sizeof(info));
-    shell_printf(sh, "card id:  %s\n", id);
-    shell_printf(sh, "data key: %s\n", key);
-    sdcrypt_wipe(key, sizeof(key));
-    shell_printf(sh, "Anyone with this key can read the card: keep it offline. To read the card on\n"
-                     "a PC: tools/host/sdcrypt.c, or cryptsetup (`sdcrypt info` prints the line).\n");
-    log_msg(SOS_LOG_NOTICE, "sd: the card's key was shown on the console");
 }
 
 // --- device key --------------------------------------------------------------------------------
@@ -713,7 +716,7 @@ static void cmd_devkey(shell_t *sh, const char *arg) {
         default:
             shell_printf(sh, "device key: present but unusable (damaged, or written by newer "
                              "firmware). It's kept as it is: newer firmware may read it, and its\n"
-                             "cards' saved keys (sd key) still work on a PC. `sd devkey forget` "
+                             "cards' keys saved at format still work on a PC. `sd devkey forget` "
                              "clears it.\n");
         }
         return;
@@ -730,7 +733,8 @@ static void cmd_devkey(shell_t *sh, const char *arg) {
         shell_printf(sh, "there's no device key\n");
         return;
     }
-    shell_printf(sh, "Cards this device encrypted can then only be read with their saved key (sd key).\n");
+    shell_printf(sh, "Cards this device encrypted can then only be read with the key shown when\n");
+    shell_printf(sh, "they were formatted.\n");
     shell_ask(sh, "Clear the device key? Type 'yes': ", false, on_forget_confirm, NULL);
 }
 
@@ -752,8 +756,6 @@ void sdcard_command(shell_t *sh, char *args) {
         cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg, arg2);
-    else if (!strcmp(sub, "key"))
-        cmd_key(sh);
     else if (!strcmp(sub, "devkey"))
         cmd_devkey(sh, arg);
     else if (!strcmp(sub, "unmount")) {
@@ -771,5 +773,6 @@ void sdcard_command(shell_t *sh, char *args) {
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
-        shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|key|devkey [forget]|unmount]\n");
+        shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
+                         "devkey [forget]|unmount]\n");
 }
