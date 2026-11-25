@@ -234,10 +234,14 @@ static void detect(void) {
 static DSTATUS (*lib_init)(sd_card_t *);
 
 static DSTATUS init_layer(sd_card_t *c) {
+    // The library calls init on every disk_initialize(), also when the card is already up:
+    // detect only on a real initialization (or if the kind was forgotten), so a locked card is
+    // logged once per insertion rather than at every try.
+    bool was_up = !(c->state.m_Status & STA_NOINIT);
     DSTATUS st = lib_init(c);
     if (st & STA_NOINIT)
         crypt_off();
-    else
+    else if (!was_up || card_kind == KIND_UNKNOWN)
         detect();
     return st;
 }
