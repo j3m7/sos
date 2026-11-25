@@ -99,6 +99,7 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/shell/shell.c
+    src/shell/keys.c
     src/shell/shell_core.c
     src/shell/termtext.c
     src/net/wifi.c

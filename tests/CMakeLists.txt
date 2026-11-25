@@ -23,9 +23,14 @@ target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell/shell_core.c)
+add_executable(test_shell_line test_shell_line.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
+
+# src/shell/keys.c: terminal key decoding (escape sequences to key codes).
+add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
+target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)
+add_test(NAME keys COMMAND test_keys)
 
 # src/files/path.c: path resolution for the file commands.
 add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
