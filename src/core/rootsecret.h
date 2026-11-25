@@ -28,6 +28,8 @@
 //   cut short, or a complete record of a version it doesn't know), on the strength of that rule.
 // - Using it: either valid copy will do. If the other page is blank it's filled in; if it's
 //   damaged it's left alone and reported (rootsecret_degraded).
+//   The two copies share one erase sector, so a damaged copy can't be rewritten without
+//   erasing the good one too: the second copy covers a damaged page, not a lost sector.
 // - Anything else is never replaced automatically: page 0 not blank and no valid copy (damaged,
 //   or a record from newer firmware), or two valid copies that differ. Replacing it would
 //   silently make a board that can't open its own configuration or cards. Only
