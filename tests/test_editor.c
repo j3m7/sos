@@ -16,10 +16,42 @@
 #define T_ROWS EDITOR_ROWS_MAX
 #define T_COLS EDITOR_COLS_MAX
 
-static char screen[T_ROWS][T_COLS][5];      // one UTF-8 character per cell
 static int t_row, t_col, t_rows, t_cols;
 static bool t_cursor_on;
 static size_t t_bytes;                      // output received in total
+
+// One character per cell, plus up to 3 combining marks; the right half of a wide character is
+// WIDE_RIGHT.
+#define CELL 17
+#define WIDE_RIGHT "\x01"
+static char screen[T_ROWS][T_COLS][CELL];
+
+// The test terminal's own idea of width, independent of charwidth.c: a few well-known ranges.
+static int t_width(uint32_t cp) {
+    if ((cp >= 0x300 && cp <= 0x36F) || cp == 0x200D)
+        return 0;
+    if ((cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3) ||
+        (cp >= 0xFF01 && cp <= 0xFF60) || (cp >= 0x1F300 && cp <= 0x1F64F))
+        return 2;
+    return 1;
+}
+
+static uint32_t t_decode(const unsigned char *s, size_t l) {
+    if (l == 1)
+        return s[0];
+    uint32_t v = s[0] & (0x7f >> l);
+    for (size_t k = 1; k < l; k++)
+        v = v << 6 | (s[k] & 0x3f);
+    return v;
+}
+
+// Overwriting either half of a wide character blanks the other half, as terminals do.
+static void t_clear_partner(int r, int c) {
+    if (!strcmp(screen[r][c], WIDE_RIGHT) && c > 0)
+        strcpy(screen[r][c - 1], " ");
+    else if (c + 1 < t_cols && !strcmp(screen[r][c + 1], WIDE_RIGHT))
+        strcpy(screen[r][c + 1], " ");
+}
 
 static void t_reset(int rows, int cols) {
     memset(screen, 0, sizeof(screen));
@@ -57,6 +89,7 @@ static void t_feed(const char *s, size_t n) {
                 t_col = (p[1] ? p[1] : 1) - 1;
                 CHECK(t_row < t_rows && t_col < t_cols);
             } else if (f == 'K') {
+                t_clear_partner(t_row, t_col);
                 for (int k = t_col; k < t_cols; k++)
                     screen[t_row][k][0] = '\0';
             } else if (f == 'J') {
@@ -73,21 +106,44 @@ static void t_feed(const char *s, size_t n) {
         CHECK(!(c >= 0x80 && c <= 0x9f) || i > 0);
         size_t l = c < 0x80 ? 1 : c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
         CHECK(i + l <= n);
+        int w = t_width(t_decode((const unsigned char *)s + i, l));
+        static bool last_col_full;          // the character before was written in the last column
+        if (w == 0) {                       // joins the cell before (the cursor's, at the edge)
+            int c = t_col == t_cols - 1 && last_col_full ? t_col : t_col - 1;
+            if (c >= 0 && !strcmp(screen[t_row][c], WIDE_RIGHT))
+                c--;
+            CHECK(c >= 0 && screen[t_row][c][0]);      // there's a character to join
+            if (c >= 0 && strlen(screen[t_row][c]) + l < CELL)
+                strncat(screen[t_row][c], s + i, l);
+            i += l;
+            continue;
+        }
+        // A wide character must fit: the editor never sends one to the last column.
+        CHECK(w == 1 || t_col + 1 < t_cols);
         // Autowrap off (as edit.c sets it): the cursor stays in the last column, and what's
         // written there overwrites it, as on a real terminal.
+        t_clear_partner(t_row, t_col);
         memcpy(screen[t_row][t_col], s + i, l);
         screen[t_row][t_col][l] = '\0';
-        if (t_col < t_cols - 1)
-            t_col++;
+        if (w == 2 && t_col + 1 < t_cols) {
+            t_clear_partner(t_row, t_col + 1);
+            strcpy(screen[t_row][t_col + 1], WIDE_RIGHT);
+        }
+        last_col_full = t_col + w >= t_cols;
+        t_col += w;
+        if (t_col > t_cols - 1)
+            t_col = t_cols - 1;
         i += l;
     }
 }
 
 // Row r (0-based) as a string, trailing blanks dropped.
 static const char *t_line(int r) {
-    static char buf[T_COLS * 4 + 1];
+    static char buf[T_COLS * CELL + 1];
     size_t n = 0;
     for (int k = 0; k < t_cols; k++) {
+        if (!strcmp(screen[r][k], WIDE_RIGHT))
+            continue;
         const char *cell = screen[r][k][0] ? screen[r][k] : " ";
         size_t l = strlen(cell);
         memcpy(buf + n, cell, l);
@@ -493,11 +549,145 @@ TEST(log_messages_waiting_show_in_status) {
     editor_free(&ed);
 }
 
+// --- wide characters and combining marks ---------------------------------------------------------
+
+#define HAN "\xe6\xbc\xa2"                    // U+6F22, two columns
+#define JI  "\xe5\xad\x97"                    // U+5B57, two columns
+#define ACUTE "\xcc\x81"                    // U+0301 combining acute accent, no column
+
+TEST(wide_characters_take_two_columns) {
+    open_text(HAN JI "ab\n", 5, 30);
+    draw();
+    CHECK_LINE(0, HAN JI "ab");
+    key(KEY_RIGHT);
+    draw();
+    CHECK_EQ(t_col, 2);
+    key(KEY_END);
+    draw();
+    CHECK_EQ(t_col, 6);
+    CHECK(strstr(t_line(3), "col 7") != NULL);
+    editor_free(&ed);
+}
+
+TEST(up_and_down_across_wide_characters) {
+    open_text(HAN JI HAN JI "\nabcdefgh", 5, 30);
+    key(KEY_RIGHT);
+    key(KEY_RIGHT);                         // column 4
+    key(KEY_DOWN);
+    CHECK_EQ(ed.cursor, 12 + 1 + 4);        // 'e'
+    key(KEY_LEFT);                          // column 3 ('d')
+    key(KEY_UP);                            // inside the second wide character: before it
+    CHECK_EQ(ed.cursor, 3);
+    editor_free(&ed);
+}
+
+TEST(wide_character_cut_by_the_right_edge) {
+    open_text("abcdefghijklmnopqrs" HAN "z\nnext", 5, 20);    // the wide one at column 19
+    draw();                                 // (the test terminal CHECKs it isn't sent there)
+    CHECK_LINE(0, "abcdefghijklmnopqrs");
+    CHECK_LINE(1, "next");
+    editor_free(&ed);
+}
+
+TEST(cursor_on_a_wide_character_at_the_edge_scrolls_it_in) {
+    open_text("abcdefghijklmnopqrs" HAN "z", 5, 20);
+    for (int i = 0; i < 19; i++)
+        key(KEY_RIGHT);                     // onto the wide character at columns 19-20
+    draw();
+    CHECK_LINE(0, "bcdefghijklmnopqrs" HAN);
+    CHECK_EQ(t_col, 18);
+    editor_free(&ed);
+}
+
+TEST(wide_character_cut_by_the_left_edge) {
+    char text[200] = "";
+    for (int i = 0; i < 30; i++)
+        strcat(text, HAN);                  // 60 columns
+    open_text(text, 5, 20);
+    key(KEY_END);                           // column 60: col_off 41 cuts the one at 40-41
+    draw();
+    const char *row = t_line(0);
+    CHECK(row[0] == ' ');
+    CHECK(!strncmp(row + 1, HAN, 3));
+    CHECK_EQ(t_col, 19);
+    editor_free(&ed);
+}
+
+TEST(scrolling_back_left_shows_the_line_start) {
+    open_text("0123456789012345678901234567890123456789\nabcdefgh", 5, 20);
+    key(KEY_END);                           // column 40: scrolled right
+    draw();
+    key(KEY_DOWN);                          // end of "abcdefgh", column 8: fits on screen
+    draw();
+    CHECK_LINE(1, "abcdefgh");              // from the start, not from column 8
+    CHECK_EQ(t_col, 8);
+    editor_free(&ed);
+}
+
+TEST(combining_marks_go_with_their_letter) {
+    open_text("e" ACUTE "x", 5, 30);
+    draw();
+    CHECK_LINE(0, "e" ACUTE "x");
+    key(KEY_RIGHT);                         // over e and its accent
+    CHECK_EQ(ed.cursor, 3);
+    draw();
+    CHECK_EQ(t_col, 1);
+    key(KEY_LEFT);
+    CHECK_EQ(ed.cursor, 0);
+    key(KEY_DELETE);                        // both go
+    CHECK(!strcmp(saved(), "x"));
+    editor_free(&ed);
+
+    open_text("ab" "e" ACUTE ACUTE, 5, 30);
+    key(KEY_END);
+    keys("\x7f");                           // backspace takes the letter and both marks
+    CHECK(!strcmp(saved(), "ab"));
+    editor_free(&ed);
+}
+
+TEST(combining_mark_at_line_start_stands_alone) {
+    open_text("x\n" ACUTE "ab", 5, 30);
+    key(KEY_DOWN);                          // column 0: the mark takes none, so after it
+    CHECK_EQ(ed.cursor, 2 + 2);
+    key(KEY_HOME);
+    CHECK_EQ(ed.cursor, 2);
+    key(KEY_RIGHT);                         // over the lone mark only
+    CHECK_EQ(ed.cursor, 2 + 2);
+    key(KEY_LEFT);
+    CHECK_EQ(ed.cursor, 2);                 // not back into the line above
+    draw();
+    CHECK_LINE(1, "ab");                    // nothing to join, so not sent
+    editor_free(&ed);
+}
+
+TEST(wide_characters_in_the_status_and_search) {
+    CHECK(editor_init(&ed, HAN JI ".txt", "", 0));
+    t_reset(5, 40);
+    editor_resize(&ed, 5, 40);
+    draw();
+    CHECK(strstr(t_line(3), HAN JI ".txt") != NULL);
+    keys("\x06" HAN);
+    draw();
+    CHECK_LINE(4, "Search: " HAN);
+    CHECK_EQ(t_col, 10);
+    editor_free(&ed);
+
+    char name[64] = "";
+    for (int i = 0; i < 12; i++)
+        strcat(name, HAN);                  // 24 columns: cut to fit, never half a character
+    CHECK(editor_init(&ed, name, "", 0));
+    t_reset(5, 20);
+    editor_resize(&ed, 5, 20);
+    draw();
+    editor_free(&ed);
+}
+
 TEST(random_keys_keep_invariants) {
     srand(1234);
     open_text("start\n\tof\xc3\xa9 text\n", 8, 30);
     static const int pool[] = {
         'a', 'z', ' ', '\r', '\t', 0x7f, 0x04, 0xc3, 0xa9, 0xe2, 0x80, 0xae, 0x1b,
+        0xe6, 0xbc, 0xa2, 0xcc, 0x81,       // pieces of a wide character and a combining mark
         KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_HOME, KEY_END, KEY_PGUP, KEY_PGDN, KEY_DELETE,
     };
     static char out[600];
@@ -533,5 +723,14 @@ TEST_MAIN(
     RUN(size_limit);
     RUN(grows_while_typing);
     RUN(log_messages_waiting_show_in_status);
+    RUN(wide_characters_take_two_columns);
+    RUN(up_and_down_across_wide_characters);
+    RUN(wide_character_cut_by_the_right_edge);
+    RUN(cursor_on_a_wide_character_at_the_edge_scrolls_it_in);
+    RUN(wide_character_cut_by_the_left_edge);
+    RUN(scrolling_back_left_shows_the_line_start);
+    RUN(combining_marks_go_with_their_letter);
+    RUN(combining_mark_at_line_start_stands_alone);
+    RUN(wide_characters_in_the_status_and_search);
     RUN(random_keys_keep_invariants);
 )

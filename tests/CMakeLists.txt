@@ -32,8 +32,13 @@ add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)
 add_test(NAME keys COMMAND test_keys)
 
+# src/shell/charwidth.c: terminal column widths (generated tables).
+add_executable(test_charwidth test_charwidth.c ${SOS_ROOT}/src/shell/charwidth.c)
+target_include_directories(test_charwidth PRIVATE ${SOS_ROOT}/src)
+add_test(NAME charwidth COMMAND test_charwidth)
+
 # src/edit/editor.c: the full-screen editor's text, keys and screen.
-add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/shell/termtext.c)
+add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
 target_include_directories(test_editor PRIVATE ${SOS_ROOT}/src)
 add_test(NAME editor COMMAND test_editor)
 

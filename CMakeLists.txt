@@ -103,6 +103,7 @@ set(SOS_SOURCES
     src/shell/keys.c
     src/shell/shell_core.c
     src/shell/termtext.c
+    src/shell/charwidth.c
     src/edit/edit.c
     src/edit/editor.c
     src/chat/chat.c

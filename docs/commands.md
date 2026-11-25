@@ -171,8 +171,10 @@ and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 
   never leaves half a file. If the power goes in the middle, `edit <file>` picks the text up from
   `<file>.~edit` and tells you. If two people edit the same file, the last save wins.
 - **Files with CRLF line ends** keep them. Control characters, invalid UTF-8 and invisible or
-  bidi characters show as `?` (they're kept as they are). Wide (CJK) characters push the rest
-  of their line one column out. Long lines scroll sideways instead of wrapping.
+  bidi characters show as `?` (they're kept as they are). Wide characters (CJK, most emoji) take
+  two columns and accents written as combining marks none, as on the terminal; the cursor moves
+  over a letter and its accents as one. A terminal built on an older Unicode than the editor's
+  (16.0) can disagree about recent emoji. Long lines scroll sideways instead of wrapping.
 - **Ctrl-C** doesn't stop the editor; Ctrl-Q does. If the SSH session drops, unsaved changes
   are lost.
 - **Log messages** aren't printed on the console while the editor runs there. The status bar

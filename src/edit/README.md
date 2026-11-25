@@ -10,7 +10,9 @@ of up to 32 KB on the console or over SSH.
   CRLF again (`editor_export()`).
 - **Keys** come from `keys.h`; `editor_key()` returns what the caller must do: save, quit, or ask
   the terminal for its size.
-- **Screen:** each character is one column, a tab up to the next multiple of 8. Controls, invalid
+- **Screen:** each character takes the columns `charwidth()` gives (two for CJK and most emoji,
+  none for combining marks), a tab up to the next multiple of 8; a letter and its combining marks
+  move and delete as one. A wide character cut by either edge of the screen shows as a space. Controls, invalid
   UTF-8 and the code points `termtext_hidden()` names show as `?`, so nothing in a file can send
   the terminal a sequence or hide what its bytes are. Lines don't wrap; the view scrolls
   sideways.
