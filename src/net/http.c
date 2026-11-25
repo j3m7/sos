@@ -11,6 +11,7 @@
 #include "pico/time.h"
 
 #include "core/log.h"
+#include "shell/termtext.h"
 
 #define RX_SIZE 1024            // decrypted bytes waiting for the parser
 
@@ -294,33 +295,42 @@ typedef struct {
     bool head;
     bool shown;                 // status line printed
     char last;                  // last body character printed
+    termtext_t body_text;       // UTF-8 state across body pieces
     char buf[512];
-    char text[512];
+    char text[512 + 3];
 } http_job_t;
+
+// Write server-supplied text through the terminal filter (shell/termtext.h): no escape
+// sequences, raw or UTF-8-encoded C1 controls included. In pieces, and with shell_write
+// rather than shell_printf, whose 256-byte buffer would cut long values short
+// (Content-Security-Policy, say).
+static void write_text(shell_t *sh, const char *s, size_t len) {
+    termtext_t t = TERMTEXT_INIT;
+    char out[128 + 3];
+    while (len) {
+        size_t n = len < 128 ? len : 128;
+        shell_write(sh, out, termtext_filter(&t, (const uint8_t *)s, n, out));
+        s += n;
+        len -= n;
+    }
+    shell_write(sh, out, termtext_flush(&t, out));
+}
 
 static void print_headers(shell_t *sh, const http_resp_t *p) {
     const char *s = p->hdr, *end = p->hdr + p->hdr_len;
     while (s < end) {
         const char *nl = memchr(s, '\n', (size_t)(end - s));
         const char *colon = memchr(s, ':', (size_t)(nl - s));
-        // shell_write, not shell_printf: a value can be longer than shell_printf's 256 bytes
-        // (Content-Security-Policy, say). The parser let no control characters through.
-        shell_write(sh, s, (size_t)(colon - s));
+        shell_write(sh, s, (size_t)(colon - s));            // a token: plain ASCII
         shell_write(sh, ": ", 2);
-        shell_write(sh, colon + 1, (size_t)(nl - colon));      // the value and its '\n'
+        write_text(sh, colon + 1, (size_t)(nl - colon));    // the value and its '\n'
         s = nl + 1;
     }
 }
 
-// Body text for the terminal: no control characters (escape sequences) besides newline and tab.
+// Body text for the terminal (shell/termtext.h); a UTF-8 character may span two pieces.
 static size_t printable(http_job_t *j, size_t n) {
-    size_t out = 0;
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)j->buf[i];
-        if (c == '\r')
-            continue;
-        j->text[out++] = (c == '\n' || c == '\t' || (c >= 0x20 && c != 0x7f)) ? (char)c : '.';
-    }
+    size_t out = termtext_filter(&j->body_text, (const uint8_t *)j->buf, n, j->text);
     if (out)
         j->last = j->text[out - 1];
     return out;
@@ -328,6 +338,11 @@ static size_t printable(http_job_t *j, size_t n) {
 
 static bool http_job_end(shell_t *sh, http_job_t *j) {
     http_req_t *r = j->req;
+    size_t t = termtext_flush(&j->body_text, j->text);     // a UTF-8 character cut off
+    if (t) {
+        shell_write(sh, j->text, t);
+        j->last = j->text[t - 1];
+    }
     if (j->shown && j->last && j->last != '\n')
         shell_printf(sh, "\n");
     if (r->state == HTTP_FAILED) {
@@ -362,7 +377,9 @@ static bool http_step(shell_t *sh, void *arg, bool cancel) {
             return true;
         if (!j->shown) {
             const http_resp_t *p = http_response(j->req);
-            shell_printf(sh, "HTTP/1.%d %d %s\n", p->minor, p->status, p->reason);
+            shell_printf(sh, "HTTP/1.%d %d ", p->minor, p->status);
+            write_text(sh, p->reason, strlen(p->reason));
+            shell_write(sh, "\n", 1);
             if (j->head)
                 print_headers(sh, p);
             j->shown = true;

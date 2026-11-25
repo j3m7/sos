@@ -86,7 +86,7 @@ built-in root or one in the approved `/certs/roots.pem`. Redirects aren't follow
 
 | Command | Where | What it does |
 |---|---|---|
-| `http get <url>` | console only | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body show as `.` |
+| `http get <url>` | console only | Print the status line and the response body (job: Ctrl-C stops), then the size and timings. Control characters in the body, headers and reason phrase show as `.`, including the C1 range (raw or UTF-8-encoded); other UTF-8 text shows as itself |
 | `http head <url>` | console only | Print the status line and the response headers |
 | `http post <url> <text>` | console only | Send the text as `text/plain; charset=utf-8`, then print the response as `get` does |
 
