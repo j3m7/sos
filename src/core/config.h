@@ -49,6 +49,10 @@ typedef struct {
     // SHA-256 of the approved /certs/roots.pem (extra TLS roots on the SD card); all zero = none.
     uint8_t certs_hash[CONFIG_CERTS_HASH_LEN];
     uint8_t wifi_powersave;                     // 1 = Wi-Fi power saving on; 0 = off (default)
+    uint8_t reserved_;                          // was padding in records up to this point
+    // Two capital letters (ISO 3166, e.g. "US"): the radio rules to follow. Empty = the chip's
+    // worldwide set, which is allowed everywhere but may perform worse.
+    char wifi_country[4];
 } sos_config_t;
 
 // --- storage ------------------------------------------------------------------------------------
@@ -84,6 +88,8 @@ const char *config_check_ssid(const char *ssid);
 const char *config_check_password(const char *password);
 const char *config_check_hostname(const char *hostname);
 const char *config_check_user(const char *user);
+// Empty (worldwide) or two capital letters.
+const char *config_check_country(const char *country);
 // A DNS name or IPv4 address: letters, digits, '-' and '.', no empty labels.
 const char *config_check_ntp_server(const char *server);
 

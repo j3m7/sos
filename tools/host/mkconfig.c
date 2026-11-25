@@ -46,6 +46,8 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         const char *err = config_key_parse(value, &key);
         return err ? err : config_key_add(cfg, &key);
     }
+    if (!strcmp(name, "wifi_country"))
+        return set_text(cfg->wifi_country, sizeof(cfg->wifi_country), value, config_check_country);
     if (!strcmp(name, "wifi_powersave")) {
         if (strcmp(value, "on") && strcmp(value, "off"))
             return "must be on or off";
