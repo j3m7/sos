@@ -7,3 +7,7 @@
 # (they must be at the versions pinned by the submodules).
 # set(WOLFSSL_ROOT "/path/to/wolfssl")
 # set(WOLFSSH_ROOT "/path/to/wolfssh")
+
+# Optional: sign the firmware image with this key (a secp256k1 private key, PEM), kept outside
+# the repository. Unset: the image is not signed. See "Signed builds" in docs/development.md.
+# set(SOS_SIGN_KEY "/path/to/sos-sign.pem")
