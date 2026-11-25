@@ -8,8 +8,8 @@
 
 #include "shell/shell.h"
 
-// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|key|unmount]`; format and key
-// need an admin channel.
+// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|key|devkey [forget]|unmount]`;
+// format, key and devkey forget need an admin channel.
 void sdcard_command(shell_t *sh, char *args);
 
 // Mount the card if it isn't yet (initializing the driver first). Says why on failure: to `sh`,

@@ -148,8 +148,10 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `sd speed <MHz>` | console only | Set the SPI clock (1 to 75 MHz) and reinitialize the card. Not saved |
 | `sd unmount` | console only | Unmount the card before removing it. Refused while a file is open |
 | `sd test [<KB> [keep]]` | console only | Write and read benchmark: 4 to 65536 KB, default 256. Everything else waits until it finishes. `keep` leaves `/sos-test.txt` on the card |
-| `sd format [exfat\|fat32] [plain]` | console only | Erase the whole card (all partitions) and format it with one partition, exFAT by default, after you type `yes`. The card is **encrypted** (XTS-AES-128, with a new key that this device keeps) unless `plain` is given; a PC can't read an encrypted card. SSH sessions pause until it finishes |
+| `sd format [exfat\|fat32] [plain]` | console only | Erase the whole card (all partitions) and format it with one partition, exFAT by default, after you type `yes`. The card is **encrypted** (XTS-AES-128, with a new key that this device keeps) unless `plain` is given; a PC can't read an encrypted card. Old files on the card aren't erased: what was written unencrypted before stays readable until overwritten. SSH sessions pause until it finishes |
 | `sd key` | console only | Show an encrypted card's id and data key. Keep it offline: it's what a PC needs to read the card if the device is lost (`tools/host/sdcrypt.c`, or cryptsetup) |
+| `sd devkey` | any | The device key's state: none yet (the first encrypted `sd format` makes it), present, or present but unusable (damaged, or from newer firmware; kept as it is) |
+| `sd devkey forget` | console only | Clear the device key after you type `yes`. Cards this device encrypted can then only be read with their saved key |
 
 ## Editor
 

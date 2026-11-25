@@ -70,12 +70,19 @@ The last 4 KB flash sector holds the device's keys, one 256-byte flash page each
 host key (`ssh/hostkey.c`), page 1 the device key. It's above the configuration sectors, so
 `picotool load`, `config reset` and provisioning don't touch it. `keysector_write()` replaces
 one page and keeps the others; it erases and rewrites the whole sector, so a power cut during a
-write can lose the keys in it. Writes happen only when a key is created (first boot) or erased.
+write can lose every key in it. Writes happen only when a key is created (the host key at first
+boot, the device key at the first encrypted `sd format`) or cleared on request.
 
-The **device key** (32 random bytes from the TRNG, made at first boot by `devkey_init()`)
-wraps each encrypted SD card's data key (`files/sdcrypt.h`). A valid key is never replaced:
-cards made with it can't be opened by any other key. If the page is damaged, a new key is made
-and the log says that older cards need their saved key (`sd key`).
+The **device key** (32 random bytes from the TRNG) wraps each encrypted SD card's data key
+(`files/sdcrypt.h`). `devkey_create()` makes it only when the page holds no key record, so a
+board that never encrypts a card never rewrites the sector for it. A page with the record's
+magic is never overwritten automatically, even when it isn't valid: one flipped bit leaves the
+key recoverable by hand, and a record from newer firmware must survive a downgrade. Such a
+record leaves the device without a key (encrypted cards locked, `sd devkey` explains) until
+`sd devkey forget` clears it.
+
+**Downgrades:** firmware from before the device key writes the host key by erasing the whole
+sector. It only does that when it has no valid host key, but then the device key goes too.
 
 ## Watchdog (`wdog.c`)
 

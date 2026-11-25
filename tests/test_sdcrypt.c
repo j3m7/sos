@@ -6,6 +6,8 @@
 
 #define _GNU_SOURCE            // memmem
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "files/sdcrypt.h"
@@ -88,6 +90,63 @@ TEST(header_rejected) {
     }
 }
 
+// Which copy of the header a card is opened from (sdcard.c reads sector 0 and the backup).
+TEST(card_open_rules) {
+    setup();
+    static uint8_t good[512], other[512], damaged[512], mbr[512], junk[512];
+    sdcrypt_info_t info;
+    bool from_backup;
+    sdcrypt_header_build(good, devkey, card_id, nonce, data_key);
+    sdcrypt_header_build(other, other_devkey, card_id, nonce, data_key);
+    memcpy(damaged, good, 512);
+    damaged[90] ^= 0x10;                        // a bit in the tag: magic still there
+    memset(mbr, 0, 512);
+    mbr[510] = 0x55; mbr[511] = 0xaa;
+    fill(junk, 512, 77);
+
+    // Sector 0 opens: the backup isn't needed.
+    CHECK_EQ(sdcrypt_card_open(good, good, devkey, &info, &from_backup), SDCRYPT_OK);
+    CHECK(!from_backup);
+    CHECK_MEM(info.data_key, data_key, 32);
+    CHECK_EQ(sdcrypt_card_open(good, NULL, devkey, &info, &from_backup), SDCRYPT_OK);
+
+    // Sector 0 damaged but still a header: the backup opens the card (the review's case).
+    CHECK_EQ(sdcrypt_card_open(damaged, good, devkey, &info, &from_backup), SDCRYPT_OK);
+    CHECK(from_backup);
+    CHECK_MEM(info.data_key, data_key, 32);
+    // ...unsupported version in sector 0: same.
+    memcpy(damaged, good, 512);
+    damaged[16] = 9;
+    CHECK_EQ(sdcrypt_card_open(damaged, good, devkey, &info, &from_backup), SDCRYPT_OK);
+    CHECK(from_backup);
+    // Sector 0 overwritten with junk (not a boot sector): the backup.
+    CHECK_EQ(sdcrypt_card_open(junk, good, devkey, &info, &from_backup), SDCRYPT_OK);
+    CHECK(from_backup);
+
+    // Sector 0 a boot sector/MBR: plain, whatever the backup says (a PC formatted the card, or a
+    // plain card with an old header copy).
+    CHECK_EQ(sdcrypt_card_open(mbr, good, devkey, &info, &from_backup), SDCRYPT_PLAIN);
+    CHECK(!from_backup);
+    CHECK_EQ(sdcrypt_card_open(junk, mbr, devkey, &info, &from_backup), SDCRYPT_PLAIN);
+    CHECK_EQ(sdcrypt_card_open(junk, NULL, devkey, &info, &from_backup), SDCRYPT_PLAIN);
+
+    // Neither copy opens: sector 0's reason, info wiped.
+    uint8_t zero[sizeof(info)] = {0};
+    memcpy(damaged, good, 512);
+    damaged[90] ^= 0x10;
+    CHECK_EQ(sdcrypt_card_open(damaged, damaged, devkey, &info, &from_backup), SDCRYPT_WRONG_KEY);
+    CHECK_MEM(&info, zero, sizeof(info));
+    CHECK_EQ(sdcrypt_card_open(other, other, devkey, &info, &from_backup), SDCRYPT_WRONG_KEY);
+    CHECK_EQ(sdcrypt_card_open(damaged, NULL, devkey, &info, &from_backup), SDCRYPT_WRONG_KEY);
+    // Sector 0 junk, backup another device's: the backup's reason.
+    CHECK_EQ(sdcrypt_card_open(junk, other, devkey, &info, &from_backup), SDCRYPT_WRONG_KEY);
+    CHECK(!from_backup);
+
+    // No device key: a header can't be opened, a plain card is still plain.
+    CHECK_EQ(sdcrypt_card_open(good, good, NULL, &info, &from_backup), SDCRYPT_NO_DEVKEY);
+    CHECK_EQ(sdcrypt_card_open(mbr, NULL, NULL, &info, &from_backup), SDCRYPT_PLAIN);
+}
+
 TEST(sectors_round_trip) {
     setup();
     static sdcrypt_t c;
@@ -155,6 +214,62 @@ TEST(unaligned_buffers) {
     sdcrypt_stop(&c);
 }
 
+#ifdef SDCRYPT_TOOL_PATH
+// The whole recovery path: an image of an encrypted card as the device lays it out (header,
+// backup, volume from sector 8192), decrypted by the sdcrypt tool with a key file.
+TEST(tool_decrypts_image) {
+    setup();
+    static sdcrypt_t c;
+    static uint8_t sector[512], plain[512], out[512];
+    const unsigned volume = 64;                 // sectors of volume in the test image
+    FILE *f = fopen("sdcrypt-test.img", "wb");
+    CHECK(f != NULL);
+    if (!f)
+        return;
+    sdcrypt_header_build(sector, devkey, card_id, nonce, data_key);
+    for (unsigned s = 0; s < SDCRYPT_OFFSET; s++) {
+        static const uint8_t zero[512];
+        fwrite(s == 0 || s == SDCRYPT_BACKUP ? sector : zero, 1, 512, f);
+    }
+    CHECK(sdcrypt_start(&c, data_key));
+    for (unsigned s = 0; s < volume; s++) {
+        fill(plain, 512, (uint8_t)s);
+        sdcrypt_encrypt(&c, sector, plain, s, 1);
+        fwrite(sector, 1, 512, f);
+    }
+    sdcrypt_stop(&c);
+    fclose(f);
+    f = fopen("sdcrypt-test.key", "w");
+    for (int i = 0; i < 32; i++)
+        fprintf(f, "%02x", data_key[i]);
+    fprintf(f, "\n");
+    fclose(f);
+
+    CHECK_EQ(system(SDCRYPT_TOOL_PATH " decrypt sdcrypt-test.img sdcrypt-test.key "
+                    "sdcrypt-test.out >/dev/null 2>&1"), 0);
+    f = fopen("sdcrypt-test.out", "rb");
+    CHECK(f != NULL);
+    unsigned n = 0;
+    while (f && fread(out, 1, 512, f) == 512) {
+        fill(plain, 512, (uint8_t)n);
+        CHECK_MEM(out, plain, 512);
+        n++;
+    }
+    if (f)
+        fclose(f);
+    CHECK_EQ(n, volume);
+    // A wrong-length key is refused.
+    f = fopen("sdcrypt-test.key", "w");
+    fprintf(f, "abcd\n");
+    fclose(f);
+    CHECK(system(SDCRYPT_TOOL_PATH " decrypt sdcrypt-test.img sdcrypt-test.key "
+                 "sdcrypt-test.out >/dev/null 2>&1") != 0);
+    remove("sdcrypt-test.img");
+    remove("sdcrypt-test.key");
+    remove("sdcrypt-test.out");
+}
+#endif
+
 TEST(wipe) {
     uint8_t k[32];
     memset(k, 0xaa, sizeof(k));
@@ -166,8 +281,12 @@ TEST(wipe) {
 TEST_MAIN(
     RUN(header_round_trip);
     RUN(header_rejected);
+    RUN(card_open_rules);
     RUN(sectors_round_trip);
     RUN(matches_openssl);
     RUN(unaligned_buffers);
+#ifdef SDCRYPT_TOOL_PATH
+    RUN(tool_decrypts_image);
+#endif
     RUN(wipe);
 )

@@ -49,6 +49,7 @@ enum {
     SDCRYPT_PLAIN,              // not a header: a plain card (or not this sector)
     SDCRYPT_UNSUPPORTED,        // a header of a version or cipher this firmware doesn't know
     SDCRYPT_WRONG_KEY,          // a header the device key doesn't open (another device, or damaged)
+    SDCRYPT_NO_DEVKEY,          // a header, but there's no device key to open it with
 };
 
 typedef struct {
@@ -70,6 +71,16 @@ bool sdcrypt_is_header(const uint8_t sector[SDCRYPT_SECTOR]);
 // Read a header sector and unwrap its data key into `info` (SDCRYPT_OK only; wiped otherwise).
 int sdcrypt_header_open(const uint8_t sector[SDCRYPT_SECTOR],
                         const uint8_t devkey[SDCRYPT_DEVKEY_LEN], sdcrypt_info_t *info);
+
+// Open a card from its sector 0 (`primary`) and the backup copy at SDCRYPT_BACKUP (`backup`,
+// NULL if it couldn't be read), with the device key (NULL if there is none):
+// - sector 0 is a header that opens: SDCRYPT_OK.
+// - otherwise the backup, if it's a header, unless sector 0 is a plain card's boot sector or
+//   MBR (ends in 0x55AA: a plain card, or one a PC formatted over an encrypted one). If the
+//   backup opens, SDCRYPT_OK with *from_backup set (sector 0 should then be rewritten from it).
+// - no header anywhere: SDCRYPT_PLAIN; else why it didn't open (sector 0's reason first).
+int sdcrypt_card_open(const uint8_t primary[SDCRYPT_SECTOR], const uint8_t *backup,
+                      const uint8_t *devkey, sdcrypt_info_t *info, bool *from_backup);
 
 // Sector encryption with a card's data key.
 typedef struct {

@@ -126,10 +126,12 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c AND OpenSSL_FOUND)
 
     add_executable(test_sdcrypt test_sdcrypt.c ${SOS_ROOT}/src/files/sdcrypt.c
         ${SOS_ROOT}/tools/host/sdcrypt.c)
-    target_compile_definitions(test_sdcrypt PRIVATE SDCRYPT_TOOL_NO_MAIN)
+    target_compile_definitions(test_sdcrypt PRIVATE SDCRYPT_TOOL_NO_MAIN
+        SDCRYPT_TOOL_PATH="$<TARGET_FILE:sdcrypt>")
     target_include_directories(test_sdcrypt PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_sdcrypt PRIVATE wolfcrypt_host OpenSSL::Crypto)
     add_test(NAME sdcrypt COMMAND test_sdcrypt)
+    add_dependencies(test_sdcrypt sdcrypt)
 
     add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)

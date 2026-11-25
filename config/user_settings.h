@@ -55,7 +55,11 @@ extern "C"
 #define WOLFSSL_AES_COUNTER
 #define WOLFSSL_AES_DIRECT
 #define WOLFSSL_AES_XTS         /* SD card encryption (src/files/sdcrypt.c) */
-#define FLASH_QUALIFIER __attribute__((section(".time_critical.aes_tables")))  /* AES tables in SRAM */
+/* Lookup tables in SRAM for the files CMakeLists.txt marks (aes.c, sha256.c): read from flash,
+   varied data misses the XIP cache, and encrypted SD card writes ran at a third of the speed. */
+#ifdef SOS_WOLFCRYPT_TABLES_IN_RAM
+#define FLASH_QUALIFIER __attribute__((section(".time_critical.wolfcrypt_tables")))
+#endif
 #define WOLFSSL_NO_SOCK
 //#define WOLFSSL_SP_NO_DYNSTACK
 

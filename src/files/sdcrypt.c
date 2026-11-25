@@ -91,6 +91,35 @@ int sdcrypt_header_open(const uint8_t sector[SDCRYPT_SECTOR],
     return SDCRYPT_OK;
 }
 
+static int open_one(const uint8_t *sector, const uint8_t *devkey, sdcrypt_info_t *info) {
+    if (!sdcrypt_is_header(sector)) {
+        memset(info, 0, sizeof(*info));
+        return SDCRYPT_PLAIN;
+    }
+    if (!devkey) {
+        memset(info, 0, sizeof(*info));
+        return SDCRYPT_NO_DEVKEY;
+    }
+    return sdcrypt_header_open(sector, devkey, info);
+}
+
+int sdcrypt_card_open(const uint8_t primary[SDCRYPT_SECTOR], const uint8_t *backup,
+                      const uint8_t *devkey, sdcrypt_info_t *info, bool *from_backup) {
+    *from_backup = false;
+    int r = open_one(primary, devkey, info);
+    if (r == SDCRYPT_OK)
+        return r;
+    bool boot_sector = r == SDCRYPT_PLAIN && primary[510] == 0x55 && primary[511] == 0xaa;
+    if (boot_sector || !backup || !sdcrypt_is_header(backup))
+        return r;
+    int rb = open_one(backup, devkey, info);
+    if (rb == SDCRYPT_OK) {
+        *from_backup = true;
+        return rb;
+    }
+    return r == SDCRYPT_PLAIN ? rb : r;
+}
+
 bool sdcrypt_start(sdcrypt_t *c, const uint8_t data_key[SDCRYPT_KEY_LEN]) {
     sdcrypt_stop(c);
     if (wc_AesXtsSetKey(&c->enc, data_key, SDCRYPT_KEY_LEN, AES_ENCRYPTION, NULL, INVALID_DEVID) ||

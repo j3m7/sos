@@ -350,6 +350,7 @@ working directory:
 | `sd` | card and volume information, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain` |
 | `sd key` | console only: show an encrypted card's data key, for offline recovery |
+| `sd devkey [forget]` | the device key's state; console only: clear it |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
 
@@ -369,20 +370,28 @@ working directory:
 ### Encrypted cards
 
 `sd format` encrypts the card by default, so a card taken out of the device can't be read
-without it. Everything on the card is encrypted, file names included; FatFs, the file commands,
-SFTP and Lua work as before. Cards formatted elsewhere, or with `sd format plain`, still work
+without it. Everything written to the card from then on is encrypted, file names included;
+FatFs, the file commands, SFTP and Lua work as before. Formatting doesn't erase the card's old
+contents, though: files from earlier, unencrypted use stay readable on it until new data
+overwrites them, so a card that held private files unencrypted is best replaced by a new one. Cards formatted elsewhere, or with `sd format plain`, still work
 unencrypted; `sd` shows which kind is in.
 
 - **The key:** each card has a random data key, stored on the card encrypted with this device's
-  key. The device key is made on first boot and kept in flash next to the SSH host key, so it
-  survives reflashing, `config reset` and provisioning, and the card unlocks at boot with
-  nobody logged in. A card made by another device is refused (`sd format` erases it for use
-  here).
+  key. The device key is made when the first card is encrypted and kept in flash next to the
+  SSH host key, so it survives reflashing, `config reset` and provisioning, and the card
+  unlocks at boot with nobody logged in. A card made by another device is refused (`sd format`
+  erases it for use here). The card holds two copies of its header; a damaged first copy is
+  rewritten from the second.
 - **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
   flash, which can be read out.
 - **Recovery:** `sd key` on the console prints the card's data key. Store it offline: with it,
-  a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it, and `sdcrypt info`
-  prints the `cryptsetup` line to open the card directly).
+  a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it with the key in a
+  file, and `sdcrypt info` prints the `cryptsetup` line to open the card directly).
+- **The device key is never replaced on its own.** If its flash record is damaged (or was
+  written by newer firmware), encrypted cards stay locked and `sd devkey` says so; `sd devkey
+  forget` clears it, after which only the saved keys read the old cards. Firmware from before
+  encryption erases the whole key sector if it ever has to make a new SSH host key, which would
+  take the device key with it.
 - **Speed:** the encryption is software AES (the RP2350 has no AES hardware): about 690 KB/s
   write and 650 KB/s read on the card, against 2.0 / 1.7 MB/s unencrypted. Copying on the card
   slows down by about as much; SFTP is limited by SSH's own encryption and barely changes.

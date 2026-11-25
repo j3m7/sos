@@ -33,17 +33,25 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
   and everything above it don't change. Reads are decrypted in place; writes are encrypted into
   a 4 KB buffer a chunk at a time, since the caller's buffer must stay as it is. The sector
   count FatFs sees is 8192 smaller.
-- **Detection** at every mount (`detect()`): sector 0 a header → open it with the device key; a
-  boot sector (0x55AA) → a plain card; otherwise the backup header at 4096. A header the key
-  doesn't open, or of an unknown version, makes the card *locked*: every read and write is
-  refused and `sd format` is the way out. `sd unmount` forgets the key.
+- **Detection** (`detect()`) runs after every card initialization (`init_layer` wraps the
+  driver's `init`), so the layer always matches the card that's in, and again at mount if the
+  kind was forgotten. The rules are in `sdcrypt_card_open()` (host tested): sector 0 a header
+  that opens → encrypted; otherwise the backup at 4096 if it's a header, unless sector 0 is a
+  boot sector or MBR (0x55AA: a plain card, or a PC formatted it), and a backup that opens is
+  copied back over sector 0. A header the key doesn't open, or of an unknown version, makes the
+  card *locked*: every read and write is refused (logged once per initialization, told to the
+  shell at each try) and `sd format` is the way out. `sd unmount` forgets the key.
 - **`sd format`** writes a new header (both copies) and turns the layer on before `f_mkfs`, so
   the volume is written encrypted. `sd format plain` also clears the backup header, which
   `f_mkfs` doesn't overwrite, so the card can't look encrypted again.
-- **Speed:** the AES tables are in SRAM (`FLASH_QUALIFIER` in `config/user_settings.h`): from
+- **Speed:** wolfCrypt's AES and SHA-256 tables are in SRAM (8.7 KB; `FLASH_QUALIFIER` in
+  `config/user_settings.h`, for `aes.c` and `sha256.c` only, set in `CMakeLists.txt`): from
   flash, varied data misses the XIP cache and encrypted writes ran at a third of the speed.
+- **Old data:** `f_mkfs` writes only the filesystem's structures, so formatting a used plain
+  card encrypted leaves its old files readable in the clear until they're overwritten.
 - **Host tool** `tools/host/sdcrypt.c` (OpenSSL's libcrypto) reads a card or image on a PC with
-  the key from `sd key`; `tests/test_sdcrypt.c` checks the device code against it.
+  the key from `sd key`, kept in a file; `tests/test_sdcrypt.c` checks the device code against
+  it and decrypts a test image with it.
 
 ## `files.c`: the file commands
 

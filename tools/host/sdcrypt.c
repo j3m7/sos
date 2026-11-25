@@ -7,7 +7,10 @@
 //
 //   cc -O2 -o sdcrypt tools/host/sdcrypt.c -lcrypto
 //   sdcrypt info <card-or-image>
-//   sdcrypt decrypt <card-or-image> <hex-key> <out-image>
+//   sdcrypt decrypt <card-or-image> <key-file> <out-image>
+//
+// The key file holds the 64 hex digits `sd key` printed (`-` reads them from stdin), so the key
+// doesn't end up in the shell history or the process list.
 //
 // `decrypt` writes the plain volume: a partition table and one FAT/exFAT partition, as `sd
 // format` made it. `fdisk -l out-image` shows where the partition starts; Linux mounts it with
@@ -111,7 +114,7 @@ int main(int argc, char **argv) {
             return 1;
         printf("cipher:  XTS-AES-128, volume from sector %u\n", offset);
         printf("open on Linux (key: 32 bytes, from the hex `sd key` prints):\n"
-               "  echo <hex-key> | xxd -r -p > key.bin\n"
+               "  xxd -r -p key.txt > key.bin          # key.txt: the hex from `sd key`\n"
                "  sudo cryptsetup open --type plain --cipher aes-xts-plain64 --key-size 256 \\\n"
                "       --offset %u --key-file key.bin %s sos\n"
                "  sudo fdisk -l /dev/mapper/sos      # the partition's start sector\n"
@@ -121,12 +124,22 @@ int main(int argc, char **argv) {
     }
     if (argc != 5 || strcmp(argv[1], "decrypt")) {
         fprintf(stderr, "usage: sdcrypt info <card-or-image>\n"
-                        "       sdcrypt decrypt <card-or-image> <hex-key> <out-image>\n");
+                        "       sdcrypt decrypt <card-or-image> <key-file|-> <out-image>\n");
         return 2;
     }
     uint8_t key[KEY_LEN];
-    if (parse_key(argv[3], key)) {
-        fprintf(stderr, "the key must be 64 hex digits, as `sd key` prints it\n");
+    char hex[2 * KEY_LEN + 2] = "";
+    FILE *kf = strcmp(argv[3], "-") ? fopen(argv[3], "r") : stdin;
+    if (!kf) {
+        fprintf(stderr, "%s: %s\n", argv[3], strerror(errno));
+        return 1;
+    }
+    if (fscanf(kf, "%65s", hex) != 1)
+        hex[0] = '\0';
+    if (kf != stdin)
+        fclose(kf);
+    if (parse_key(hex, key)) {
+        fprintf(stderr, "the key file must hold the 64 hex digits `sd key` prints\n");
         return 2;
     }
     FILE *in = fopen(argv[2], "rb");
