@@ -64,6 +64,8 @@
      full) and ssh_session_send_output() sends it once the shell has run, so a burst of small
      writes becomes a few large packets. ssh_session_write_space() reports the free room.
    - Nagle's algorithm is disabled on client connections (like TCP_NODELAY elsewhere).
+   - tcp_poll() intervals are given in milliseconds (SSH_POLL_TICKS), so they don't change with
+     lwIP's TCP_TMR_INTERVAL.
    - Connections that don't log in can't hold the server: when every slot is in use, ones
      older than SSH_LOGIN_GRACE_BUSY_US are dropped, and an address with SSH_PENALTY_FAILS such
      connections within SSH_PENALTY_WINDOW_US is refused until it has been quiet that long.
@@ -90,7 +92,15 @@
 
 
 #define SSH_DEFAULT_PORT 22
-#define SSH_CLIENT_POLL_TIME 1
+
+/* tcp_poll() intervals count lwIP's coarse TCP timer, which ticks every 2 * TCP_TMR_INTERVAL
+   ms (SOS sets 50 ms in lwipopts.h, lwIP's default is 250): convert from milliseconds so the
+   times don't depend on it. */
+#ifndef TCP_TMR_INTERVAL
+#define TCP_TMR_INTERVAL 250
+#endif
+#define SSH_POLL_TICKS(ms) ((ms) / (2 * TCP_TMR_INTERVAL) > 0 ? (ms) / (2 * TCP_TMR_INTERVAL) : 1)
+#define SSH_CLIENT_POLL_TIME SSH_POLL_TICKS(500)
 
 #define LOG_MAX_MSG_LEN 256
 #define SSH_CLOSING_TIMEOUT_US (2 * 1000 * 1000)
@@ -125,10 +135,9 @@
 #define SSH_PROTO_ID_STR "SSH-2.0-picoSSH wolfSSHv" LIBWOLFSSH_VERSION_STRING "\r\n"
 
 /* Refused ("server busy") connections: at most this many are kept open at once to deliver the
-   disconnect message (beyond that they are reset), each for at most SSH_BUSY_POLL_TIME
-   tcp_poll intervals (500 ms each). */
+   disconnect message (beyond that they are reset), each for at most about 2 s. */
 #define SSH_BUSY_MAX_PENDING 2
-#define SSH_BUSY_POLL_TIME 4
+#define SSH_BUSY_POLL_TIME SSH_POLL_TICKS(2000)
 #define SSH_MSG_DISCONNECT_ID 1                     /* RFC 4253 section 11.1 */
 #define SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE 4
 
