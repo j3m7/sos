@@ -21,6 +21,12 @@ Downloaded 2026-11-23.
 | pico-2-w-pinout.pdf | Pinout diagram | https://datasheets.raspberrypi.com/picow/pico-2-w-pinout.pdf |
 | connecting-to-the-internet-with-pico-w.pdf | Wi-Fi and Bluetooth with the CYW43 driver, lwIP and BTstack | https://datasheets.raspberrypi.com/picow/connecting-to-the-internet-with-pico-w.pdf |
 
+## boards/ — other boards (candidates, not the current hardware)
+| File | Description | Source |
+|---|---|---|
+| pimoroni_pico_plus2/Pimoroni_Pico_Plus_2_W_Schematic.pdf | Pimoroni Pico Plus 2 W schematic (title block reads "Pico Plus 2 (PIM726)", dated 2024-09-26, but shows the RM2 Wi-Fi module): RP2350B, 16 MB flash, 8 MB PSRAM on GPIO 47, AP7366 LDO for 3V3, VBUS→VSYS Schottky diode, VBUS sense on the Wi-Fi chip's GPIO 2, VSYS sense on GPIO 43, SWD connector. Evaluated 2026-11-25 as a production candidate; Pimoroni's stock was then A2 silicon | https://cdn-shop.adafruit.com/product-files/6243/Pimoroni_Pico_Plus_2_W_Schematic.pdf (Adafruit's product files, downloaded 2026-11-25) |
+| pimoroni_lipo_shim/lipo_shim_for_pico_schematic.pdf | Pimoroni LiPo SHIM for Pico (PIM557) schematic, dated 2021-04-16: uses only VBUS, VSYS, 3V3_EN, 3V3 and GND (no GPIO, so no clash with the Adalogger); MCP73831 charger at about 220 mA, XB6096I2S battery protection, P-FETs that switch VSYS to the battery when USB goes, a toggle power button on 3V3_EN, an always-on white power LED | https://cdn.shopify.com/s/files/1/0174/1800/files/lipo_shim_for_pico_schematic.pdf?v=1618573454 (downloaded 2026-11-25) |
+
 ## sdk/ — software
 | File | Description | Source |
 |---|---|---|
