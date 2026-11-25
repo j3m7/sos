@@ -46,6 +46,10 @@ chip's worldwide set, which is allowed everywhere; the SDK notes it may perform 
 `US`, measured against worldwide on one network, nothing changed that could be told from
 run-to-run variation.
 
+The driver doesn't check that the chip accepted the country. A code the chip doesn't know (`UK`
+for `GB`, say) is ignored and the chip stays on its default (`US` here), so `wifi_start()` reads
+the chip's country back and logs a warning when it differs from the saved one.
+
 ## Power saving
 
 `wifi_apply_power()` sets the radio's power mode from the configuration (`wifi_powersave`):

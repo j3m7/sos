@@ -56,6 +56,7 @@ typedef enum { W_OFF, W_SCANNING, W_CONNECTING, W_VERIFY, W_UP, W_WAIT } wifi_st
 
 static wifi_st_t state = W_OFF;
 static absolute_time_t deadline;        // W_CONNECTING: give up; W_WAIT: retry
+static absolute_time_t scan_deadline;   // W_SCANNING, W_VERIFY: stop waiting for the scan
 static absolute_time_t next_rejoin;
 static absolute_time_t badauth_until;   // W_CONNECTING: BADAUTH still showing then = wrong password
 static bool badauth_seen;
@@ -134,11 +135,14 @@ static void start_join(void) {
     if (n) {
         char list[SCAN_MAX_APS * 28 + 1];
         size_t used = 0;
-        for (unsigned i = 0; i < n; i++) {
+        for (unsigned i = 0; i < n && used < sizeof(list) - 1; i++) {
             const uint8_t *b = scan_aps[i].bssid;
-            used += (size_t)snprintf(list + used, sizeof(list) - used,
-                                     "%s%02x:%02x:%02x:%02x:%02x:%02x %d dBm", i ? ", " : "",
-                                     b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[i].rssi);
+            int len = snprintf(list + used, sizeof(list) - used,
+                               "%s%02x:%02x:%02x:%02x:%02x:%02x %d dBm", i ? ", " : "",
+                               b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[i].rssi);
+            // Cut short (an odd signal value takes more room): stop, don't run past the end.
+            used = len < 0 || (size_t)len >= sizeof(list) - used ? sizeof(list) - 1
+                                                                 : used + (size_t)len;
         }
         log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", c->wifi_ssid, list);
     } else if (!prefer_bssid) {
@@ -176,7 +180,7 @@ static void begin_attempt(void) {
         return;
     }
     state = W_SCANNING;
-    deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
+    scan_deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
 }
 
 // Connected: if the scan saw a clearly stronger access point than the one the chip joined,
@@ -255,8 +259,23 @@ uint32_t wifi_country_code(void) {
     return c[0] ? CYW43_COUNTRY(c[0], c[1], 0) : CYW43_COUNTRY_WORLDWIDE;
 }
 
+// The driver doesn't check that the chip took the country: one it doesn't know (UK for GB, say)
+// is ignored without a word, and the chip stays on its own default. Say so.
+static void check_country(void) {
+    const char *want = settings()->wifi_country;
+    uint32_t got = 0;
+    if (!want[0] || wifi_iovar_get("country", &got) != 0)
+        return;
+    if ((got & 0xffff) != (wifi_country_code() & 0xffff))
+        log_msg(SOS_LOG_WARNING, "wifi: the chip doesn't know country %s and uses %c%c; "
+                "change it with 'wifi country'", want,
+                (got & 0x7f) >= 0x20 ? (int)(got & 0x7f) : '?',
+                (got >> 8 & 0x7f) >= 0x20 ? (int)(got >> 8 & 0x7f) : '?');
+}
+
 void wifi_start(void) {
     cyw43_arch_enable_sta_mode();   // sets the SDK's default power mode
+    check_country();
     wifi_apply_power();
     attempt = 0;
     begin_attempt();
@@ -279,7 +298,7 @@ void wifi_poll(void) {
     case W_OFF:
         break;
     case W_SCANNING:
-        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(deadline))
+        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline))
             start_join();
         break;
     case W_CONNECTING:
@@ -296,8 +315,8 @@ void wifi_poll(void) {
             if (scan_count < 2 && !verified &&
                 cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result) == 0) {
                 verified = true;
-                state = W_VERIFY;
-                deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
+                state = W_VERIFY;       // the attempt's own deadline stays as it is
+                scan_deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
             } else if (!move_to_strongest()) {
                 connected();
             }
@@ -314,7 +333,7 @@ void wifi_poll(void) {
         }
         break;
     case W_VERIFY:
-        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(deadline)) {
+        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline)) {
             state = W_CONNECTING;       // the link is checked again there
             if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP &&
                 !move_to_strongest())
