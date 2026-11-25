@@ -27,6 +27,15 @@ timings and heap use.
     connection.
   - The handshake keys are kept (`wolfSSL_KeepArrays`) so `time/nts.c` can use the keying
     material exporter.
+- **Server time limits:** servers drop clients that stall; `time.cloudflare.com` closes a key
+  exchange after 2 s without progress. So:
+  - The session and its roots (including the SD card read) are set up before the TCP connect,
+    and the ClientHello follows the connect at once.
+  - `LWIP_TCP_RTO_TIME` is 1 s (`config/lwipopts.h`), so a packet lost early in a connection
+    is resent in time. With lwIP's default of 3 s, about 3% of key exchanges failed.
+  - Nagle is off, so a record never waits for the previous one to be acknowledged.
+  - When a server closes during the handshake or a read, the log says how long after
+    accepting the connection it did so.
 - **Certificate checks:** the chain must end at a trusted root (below), and match the host
   name. While the clock isn't set, `verify_cb()` accepts a chain whose only fault is its
   dates, and roots load without checking their own dates (`tls_load_root()`); the connection
