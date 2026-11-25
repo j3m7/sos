@@ -10,6 +10,13 @@
 //   nonce (12) | ciphertext (same length as the plain data) | tag (16)
 // The associated data (a record's header) isn't stored in the blob, but opening fails unless
 // it's the same as when the blob was sealed.
+//
+// The buffers must not overlap: not the data and the blob, nor either with the associated data.
+//
+// What sealing does not give: freshness. An older blob sealed by the same board still opens, so
+// someone who can rewrite the flash can put back an earlier sealed record (an old password, a
+// trusted key that was since removed). Stopping that needs a counter the flash can't roll back
+// (OTP); issue #64 accepts it for now.
 
 #ifndef SOS_SEALER_H
 #define SOS_SEALER_H
