@@ -139,6 +139,12 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_include_directories(test_keyprov PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_keyprov PRIVATE wolfcrypt_host)
     add_test(NAME keyprov COMMAND test_keyprov)
+
+    # src/core/pwverify.c: the console password's verifier (PBKDF2-HMAC-SHA256, then keyed).
+    add_executable(test_pwverify test_pwverify.c ${SOS_ROOT}/src/core/pwverify.c)
+    target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_pwverify PRIVATE wolfcrypt_host)
+    add_test(NAME pwverify COMMAND test_pwverify)
 else()
     message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
 endif()
