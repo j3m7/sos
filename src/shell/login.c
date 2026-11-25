@@ -142,8 +142,9 @@ void login_lock(shell_t *console) {
                               "(`passwd` sets one)\n");
         return;
     }
+    if (!locked)
+        shell_printf(console, "console locked\n");
     locked = true;
-    shell_printf(console, "console locked\n");
     ask(console);
 }
 

@@ -6,6 +6,7 @@
 
 #include "hardware/sync.h"
 #include "pico/cyw43_arch.h"
+#include "pico/stdio/driver.h"
 #include "pico/stdlib.h"
 
 #include <wolfssl/wolfcrypt/settings.h>
@@ -34,19 +35,36 @@
 // --- console -------------------------------------------------------------------------------------
 
 // The USB/UART console shell. stdio already translates "\n" to "\r\n".
+// The gate. The console is stdio (USB and UART), and so is every printf in the libraries this
+// firmware is built from: the Wi-Fi driver, for one, prints its firmware banner and the MAC
+// address at boot. A locked console must show none of that (issue #64), and the log's hold
+// only covers what goes through the log. So while the console is locked, stdio as a whole is
+// closed: the SDK sends output only to the driver selected with stdio_filter_driver(), and this
+// one is never registered, so nothing is sent anywhere and nothing is read. The shell's own
+// reads and writes below open the gate for just as long as they take.
+static stdio_driver_t console_gate;
+
+static void console_gate_set(bool closed) {
+    stdio_filter_driver(closed ? &console_gate : NULL);
+}
+
 static int console_read(void *ctx, char *buf, int len) {
     (void)ctx;
     int n = 0;
     int c;
+    console_gate_set(false);
     while (n < len && (c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT)
         buf[n++] = (char)c;
+    console_gate_set(login_locked());
     return n;
 }
 
 static void console_write(void *ctx, const char *buf, int len) {
     (void)ctx;
+    console_gate_set(false);
     fwrite(buf, 1, (size_t)len, stdout);
     fflush(stdout);
+    console_gate_set(login_locked());
 }
 
 static void console_logout(void *ctx);
@@ -111,6 +129,7 @@ static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 int main(void) {
     stackmon_paint();
     stdio_init_all();
+    console_gate_set(true);             // the console is locked until shell/login.c says otherwise
 
     // Give a USB serial console a moment to attach so boot messages aren't lost.
     for (int i = 0; i < 20 && !stdio_usb_connected(); i++)
@@ -176,6 +195,7 @@ int main(void) {
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
+        console_gate_set(login_locked());   // follows a login or a logout in this pass
         if (!login_locked())            // a locked console shows nothing
             chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
         sshd_poll();

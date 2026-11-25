@@ -68,11 +68,12 @@ static const config_store_t store = { flash_slot_read, flash_slot_write, NULL, &
 
 // --- console password --------------------------------------------------------------------------------
 
-// PBKDF2 iterations for a newly set password. The target is about 300 ms per check on the
-// RP2350; this count is an estimate that has NOT been measured on the board yet (issue #64).
-// It's stored with each verifier, so changing it doesn't affect a password already set.
+// PBKDF2 iterations for a newly set password: about 0.3 s per check. Measured on the RP2350
+// (a debug build, 150 MHz): 4000 iterations took 634 ms, so about 158 us each. Setting a
+// password logs the time it took (`dmesg`), to check this on other builds. The count is stored
+// with each verifier, so changing it doesn't affect a password already set.
 #ifndef SOS_CONSOLE_PW_ITERATIONS
-#define SOS_CONSOLE_PW_ITERATIONS 4000
+#define SOS_CONSOLE_PW_ITERATIONS 2000
 #endif
 // Iterations per main-loop pass while a password is checked.
 #define CHECK_SLICE 100

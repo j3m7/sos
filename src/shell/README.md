@@ -36,6 +36,10 @@ The console asks for the console password before it takes any command (issue #64
   the console; a wrong one asks again. Nothing else is printed meanwhile: `main.c` starts the
   console with `shell_bind()` (no greeting), holds the log (`log_hooks_t.hold`) and skips
   `chat_deliver()` while `login_locked()`.
+- **Everything else on stdio is closed too.** Libraries print straight to stdout (the Wi-Fi
+  driver's boot banner includes the MAC address). While the console is locked `main.c` selects
+  a stdio driver that is never registered (`stdio_filter_driver()`), so nothing is sent or
+  read; the shell's own reads and writes open that gate for as long as they take.
 - **The gate:** `shell_execute()` calls `login_gate()` for every console command line, and it
   refuses while locked. So the lock doesn't depend on the question staying pending.
 - **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
