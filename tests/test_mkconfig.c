@@ -130,6 +130,11 @@ TEST(glitch_detector_line) {
     CHECK_EQ(cfg.glitch_detector, 4);
     CHECK(!parse("wifi_ssid = net\nglitch_detector = off\n", &cfg));
     CHECK_EQ(cfg.glitch_detector, 0);
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = watch 0\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 5);
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = watch 3\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, 8);
+    CHECK(parse("wifi_ssid = net\nglitch_detector = watch 4\n", &cfg) != NULL);
     CHECK(parse("wifi_ssid = net\nglitch_detector = 4\n", &cfg) != NULL);
     CHECK(parse("wifi_ssid = net\nglitch_detector = on\n", &cfg) != NULL);
 }

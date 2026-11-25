@@ -28,5 +28,6 @@ ssh_key = ssh-ed25519 AAAA... user@host
 # wifi_powersave = on            (default off)
 # nts_server = time.example.org  (default: the firmware's SOS_NTS_SERVER)
 # nts_sync_hours = 24            (periodic clock sync; default 0 = off)
-# glitch_detector = 1            (trial: arm the glitch detector at boot, sensitivity 0-3; default off)
+# glitch_detector = watch 3      (trial: log glitch detector triggers at sensitivity 0-3; without
+#                                 "watch" it is armed and resets the board; default off)
 # rtc_cal_ppm = 92               (how fast the RTC runs, in ppm; negative: slow; default 0)

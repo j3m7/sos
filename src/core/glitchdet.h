@@ -39,8 +39,8 @@
 void glitchdet_boot(void);
 
 // Once the configuration is loaded and the log works: say what the last reset was, and arm the
-// detector if `setting` asks for it (0 = off, 1..4 = sensitivity 0..3, as in sos_config_t) and
-// the guard allows.
+// detector if `setting` asks for it and the guard allows. The setting is sos_config_t's:
+// 0 = off, 1..4 = armed at sensitivity 0..3, 5..8 = watching at sensitivity 0..3.
 void glitchdet_start(unsigned setting);
 
 // From the main loop: keeps the uptime record, and clears the guard's count once the board has
@@ -62,6 +62,15 @@ uint32_t glitchdet_resets(void);
 
 // -1 if not armed now, else the sensitivity 0..3 it is armed at.
 int glitchdet_armed_sensitivity(void);
+
+// Watching: the detectors run at a sensitivity without being armed. A trigger is recorded and
+// logged but resets nothing, so there is no lost fault record and no need for the guard. -1 if
+// not watching, else the sensitivity; which detectors have triggered since boot (bits 0-3; a
+// detector may stay triggered until the next reset, so each is reported once per boot); and the
+// uptime of the first.
+int glitchdet_watching_sensitivity(void);
+uint32_t glitchdet_watch_triggers(void);
+uint32_t glitchdet_watch_first_s(void);
 
 // The guard stopped it being armed at this boot.
 bool glitchdet_guard_tripped(void);

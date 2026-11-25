@@ -72,9 +72,15 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
             cfg->glitch_detector = 0;
             return NULL;
         }
+        // "<n>" arms at sensitivity n; "watch <n>" only logs triggers.
+        unsigned base = 1;
+        if (!strncmp(value, "watch ", 6)) {
+            base = 5;
+            value += 6;
+        }
         if (value[0] < '0' || value[0] > '3' || value[1])
-            return "must be off, or a sensitivity from 0 to 3";
-        cfg->glitch_detector = (uint8_t)(value[0] - '0' + 1);
+            return "must be off, a sensitivity from 0 to 3, or 'watch' and a sensitivity";
+        cfg->glitch_detector = (uint8_t)(value[0] - '0' + base);
         return NULL;
     }
     if (!strcmp(name, "nts_sync_hours")) {

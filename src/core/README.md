@@ -157,6 +157,9 @@ disturbed (datasheet section 10.9). A secured board would arm them for good with
 over days of normal use whether they ever reset a healthy board
 (`docs/securing-a-board.md`).
 
+- **Two modes:** *watching* (`glitch watch <0-3>`) runs the detectors at a sensitivity
+  without arming them, and logs a trigger without resetting anything; *armed* (`glitch on`)
+  resets the board on a trigger, as the OTP flag would.
 - **Not protection:** it is armed after the configuration loads, software can disarm it, and
   the guard below disarms it after repeated resets, which is what deliberate glitching causes.
 - **What survives a detector reset** is kept in POWMAN scratch registers 0 to 2 (that reset

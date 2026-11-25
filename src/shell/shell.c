@@ -106,7 +106,7 @@ static void cmd_help(shell_t *sh) {
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
-        shell_printf(sh, "glitch on <0-3>|off  arm the glitch detector by software (a trial setting)\n");
+        shell_printf(sh, "glitch watch|on <0-3>, glitch off  glitch detector trial: log triggers / reset on them\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
@@ -510,7 +510,17 @@ static void glitch_status(shell_t *sh) {
     int armed = glitchdet_armed_sensitivity();
     if (setting == 0)
         shell_printf(sh, "glitch detector: off\n");
-    else
+    else if (setting >= 5) {
+        shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
+                         "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
+        if (glitchdet_watch_triggers())
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up. Armed, "
+                             "it would have reset the board\n",
+                         (unsigned)glitchdet_watch_triggers(),
+                         (unsigned long)glitchdet_watch_first_s());
+        else
+            shell_printf(sh, "no trigger since boot\n");
+    } else
         shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest), %s\n",
                      setting - 1,
                      armed >= 0 ? "armed" : glitchdet_guard_tripped()
@@ -557,16 +567,31 @@ static void cmd_glitch(shell_t *sh, char *args) {
                              "you can.\n", arg[0], GLITCHDET_GUARD_RESETS);
         else
             shell_printf(sh, "saved, but arming it didn't take (see dmesg)\n");
+    } else if (!strcmp(sub, "watch") && arg && arg[0] >= '0' && arg[0] <= '3' && !arg[1]) {
+        unsigned setting = (unsigned)(arg[0] - '0') + 5;
+        settings()->glitch_detector = (uint8_t)setting;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector watching, sensitivity %c", arg[0]);
+        if (glitchdet_apply(setting))
+            shell_printf(sh, "watching at sensitivity %c, now and at boot: a trigger is logged "
+                             "and shown by `glitch`; the board isn't reset\n", arg[0]);
+        else
+            shell_printf(sh, "saved, but setting the sensitivity didn't take (see dmesg)\n");
     } else if (!strcmp(sub, "trig") && !arg) {
-        if (glitchdet_armed_sensitivity() < 0) {
-            shell_printf(sh, "the detector isn't armed, so nothing would happen\n");
+        if (glitchdet_armed_sensitivity() < 0 && glitchdet_watching_sensitivity() < 0) {
+            shell_printf(sh, "the detector is off, so nothing would be seen\n");
             return;
         }
-        shell_printf(sh, "simulating a detector trigger: the board resets now\n");
-        sleep_ms(50);
+        if (glitchdet_armed_sensitivity() >= 0) {
+            shell_printf(sh, "simulating a detector trigger: the board resets now\n");
+            sleep_ms(50);
+        } else {
+            shell_printf(sh, "simulating a detector trigger: it should be logged within a "
+                             "second\n");
+        }
         glitchdet_simulate();
     } else {
-        shell_printf(sh, "usage: glitch [on <0-3> | off | trig]\n");
+        shell_printf(sh, "usage: glitch [watch <0-3> | on <0-3> | off | trig]\n");
     }
 }
 

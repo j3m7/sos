@@ -6,6 +6,7 @@
 #include "hardware/structs/glitch_detector.h"
 #include "hardware/structs/powman.h"
 #include "hardware/regs/powman.h"
+#include "hardware/structs/watchdog.h"
 #include "pico/stdlib.h"
 
 #include "core/log.h"
@@ -30,7 +31,9 @@
 
 static bool caused_reset, guard_tripped, stable_marked;
 static uint32_t triggers, last_uptime;
-static int armed = -1;
+static int armed = -1, watching = -1;
+static uint32_t watch_seen;             // detectors seen triggering while watching, this boot
+static uint32_t watch_first_s;          // uptime of the first of them
 static uint64_t next_uptime_us;
 
 static uint32_t get16(uint32_t reg, uint32_t magic) {
@@ -38,8 +41,14 @@ static uint32_t get16(uint32_t reg, uint32_t magic) {
 }
 
 void glitchdet_boot(void) {
-    caused_reset = (powman_hw->chip_reset & POWMAN_CHIP_RESET_HAD_GLITCH_DETECT_BITS) != 0;
+    // The chip's "last reset was a glitch detect" flag, and not a watchdog reset: the flag may
+    // still be set after a later reboot or flash (those go through the watchdog, whose reason
+    // register the detector's own reset clears), and such a reboot must not count as another
+    // detector reset.
+    caused_reset = (powman_hw->chip_reset & POWMAN_CHIP_RESET_HAD_GLITCH_DETECT_BITS) != 0 &&
+                   watchdog_hw->reason == 0;
     triggers = glitch_detector_hw->trig_status & 0xf;
+    glitch_detector_hw->trig_status = 0xf;      // write 1 to clear: don't carry them into this run
     uint32_t count = get16(REG_COUNT, MAGIC_COUNT), streak = get16(REG_STREAK, MAGIC_STREAK);
     if (caused_reset) {
         if ((REG_UPTIME & ~LOW24) == MAGIC_UPTIME)
@@ -56,25 +65,36 @@ void glitchdet_boot(void) {
     REG_UPTIME = MAGIC_UPTIME;
 }
 
+static void disarm(void) {
+    glitch_detector_hw->arm = ARM_NO;
+    glitch_detector_hw->disarm = DISARM_YES;
+}
+
 bool glitchdet_apply(unsigned setting) {
-    if (setting == 0 || setting > 4) {
-        if (armed >= 0) {
-            glitch_detector_hw->arm = ARM_NO;
-            glitch_detector_hw->disarm = DISARM_YES;
-            glitch_detector_hw->sensitivity = 0;
-        }
-        armed = -1;
+    bool arm = setting >= 1 && setting <= 4, watch = setting >= 5 && setting <= 8;
+    armed = watching = -1;
+    watch_seen = 0;
+    if (!arm && !watch) {
+        disarm();
+        glitch_detector_hw->sensitivity = 0;
         return true;
     }
-    uint32_t s = setting - 1, field = 0;
+    uint32_t s = (setting - 1) & 3u, field = 0;
     for (unsigned det = 0; det < 4; det++)
         field |= s << (2 * det) | (~s & 3u) << (8 + 2 * det);
-    glitch_detector_hw->disarm = 0;
+    if (watch)
+        disarm();                       // before the detectors get more sensitive
     glitch_detector_hw->sensitivity = SENS_USE_REGISTER | field;
-    glitch_detector_hw->arm = 0;        // anything but ARM_NO arms
-    bool ok = glitch_detector_hw->sensitivity == (SENS_USE_REGISTER | field) &&
-              (glitch_detector_hw->arm & LOW16) != ARM_NO;
-    armed = ok ? (int)s : -1;
+    glitch_detector_hw->trig_status = 0xf;
+    bool ok = glitch_detector_hw->sensitivity == (SENS_USE_REGISTER | field);
+    if (arm) {
+        glitch_detector_hw->disarm = 0;
+        glitch_detector_hw->arm = 0;    // anything but ARM_NO arms
+        ok = ok && (glitch_detector_hw->arm & LOW16) != ARM_NO;
+        armed = ok ? (int)s : -1;
+    } else {
+        watching = ok ? (int)s : -1;
+    }
     return ok;
 }
 
@@ -85,8 +105,17 @@ void glitchdet_start(unsigned setting) {
                              "that reset",
                 (unsigned)triggers, (unsigned long)last_uptime, (unsigned long)glitchdet_resets(),
                 glitchdet_resets() == 1 ? "" : "s");
-    if (setting == 0 || setting > 4)
+    if (setting == 0 || setting > 8)
         return;
+    if (setting >= 5) {                 // watching resets nothing, so it needs no guard
+        if (glitchdet_apply(setting))
+            log_msg(SOS_LOG_NOTICE, "glitch detector: watching at sensitivity %d, not armed (a "
+                                    "trigger is logged, the board isn't reset)", watching);
+        else
+            log_msg(SOS_LOG_ERR, "glitch detector: setting sensitivity %u didn't take",
+                    (setting - 1) & 3u);
+        return;
+    }
     if (get16(REG_STREAK, MAGIC_STREAK) >= GLITCHDET_GUARD_RESETS) {
         guard_tripped = true;
         log_msg(SOS_LOG_ERR, "glitch detector: NOT armed at this boot: it reset the board %u "
@@ -115,6 +144,20 @@ void glitchdet_poll(void) {
         stable_marked = true;
         REG_STREAK = MAGIC_STREAK;      // up long enough: the next detector reset starts a new row
     }
+    if (watching >= 0) {
+        // A detector that has fired may stay set until the chip resets, so each detector is
+        // reported once per boot: "it would have reset the board at this point".
+        uint32_t now_set = glitch_detector_hw->trig_status & 0xf, fresh = now_set & ~watch_seen;
+        if (fresh) {
+            if (!watch_seen)
+                watch_first_s = up;
+            watch_seen |= fresh;
+            log_msg(SOS_LOG_WARNING, "glitch detector (watching, sensitivity %d): detectors 0x%x "
+                                     "triggered after %lu s up; armed, this would have reset the "
+                                     "board", watching, (unsigned)fresh, (unsigned long)up);
+            glitch_detector_hw->trig_status = fresh;
+        }
+    }
 }
 
 bool glitchdet_caused_reset(void) { return caused_reset; }
@@ -122,6 +165,9 @@ uint32_t glitchdet_last_triggers(void) { return triggers; }
 uint32_t glitchdet_last_uptime_s(void) { return last_uptime; }
 uint32_t glitchdet_resets(void) { return get16(REG_COUNT, MAGIC_COUNT); }
 int glitchdet_armed_sensitivity(void) { return armed; }
+int glitchdet_watching_sensitivity(void) { return watching; }
+uint32_t glitchdet_watch_triggers(void) { return watch_seen; }
+uint32_t glitchdet_watch_first_s(void) { return watch_first_s; }
 bool glitchdet_guard_tripped(void) { return guard_tripped; }
 
 void glitchdet_simulate(void) {
