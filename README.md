@@ -115,9 +115,9 @@ cmake --build --preset debug --target flash
 
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
-plugging it in first. Flashing leaves the board's saved configuration and SSH host key alone;
-a new board has neither a network nor a trusted key until it's set up (`setup` on the
-console, or [provisioning](#provisioning)).
+plugging it in first. Flashing leaves the board's saved configuration, SSH host key and SD
+device key alone; a new board has neither a network nor a trusted key until it's set up
+(`setup` on the console, or [provisioning](#provisioning)).
 
 Developing inside a VM? See [`docs/development.md`](docs/development.md) for forwarding the
 Pico's USB connection so flashing works unattended.
@@ -131,7 +131,9 @@ picocom -b 115200 /dev/ttyACM0
 ```
 
 `help` lists the commands. [docs/commands.md](docs/commands.md) is the full reference, and marks
-which commands work only on the console.
+which commands work only on the console. The greeting above the first prompt (and after each SSH
+login) names the commit the firmware was built from, e.g. `SOS 9332d0364fb3`; `version` shows it
+too, with `-dirty` if the build had uncommitted changes.
 
 ## Configuration
 
@@ -177,7 +179,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
   power saving on or off), so after the router forgets it (~20 minutes here) clients get
   "no route to host". `net` shows ARP packets received and sent; `wifi keepalive off` turns
   the announcement off until the next reboot, for testing.
-- Storage: one record in two alternating flash sectors below the host key, with a sequence
+- Storage: one record in two alternating flash sectors below the key sector, with a sequence
   number and CRC, so a power cut while saving keeps the previous version. It survives
   reflashing. The Wi-Fi password and keys are stored unencrypted.
   The record format only grows at the end: a record saved by older firmware still loads, with
@@ -244,7 +246,8 @@ ssh <user>@<device-ip>
 
 - Only public-key login is accepted: the configured user with one of the trusted keys.
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
-  flash sector; it survives reflashing. The private key never leaves the device.
+  flash sector (the key sector, which also holds the SD cards' device key); it survives
+  reflashing. The private key never leaves the device.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
   ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets
@@ -255,8 +258,25 @@ ssh <user>@<device-ip>
   minute; successful logins don't count. `ssh` shows how often either happened.
 - Keys and nonces come from wolfCrypt's Hash-DRBG, seeded from the RP2350's hardware random
   number generator through the SDK.
-- `help` lists commands; `ssh` shows the active sessions (yours marked `*`); `logout` or
-  Ctrl-D ends the session.
+- `help` lists commands; `ssh` shows the active sessions (yours marked `*`) and `who` who is
+  logged in; `logout` or Ctrl-D ends the session.
+
+## Messages between sessions
+
+The people logged in (the console and each SSH shell) can message each other:
+
+- `wall <message>` shows a message in every other shell at once.
+- `chat` joins a chat room: each line typed at the `chat> ` prompt goes to everyone else in it.
+  `/who` lists the room; `/quit`, Ctrl-C, or Ctrl-D on an empty line leaves.
+- `who` lists each shell: slot, name, where it's connected from, whether it's in the chat.
+
+Each person is named after the comment of the trusted key they logged in with (`alice@laptop`;
+`key <n>` without one), the console is `console`, and a second login with the same key gets its
+slot added (`alice@laptop/2`). A message arrives between keystrokes: the line being typed is
+redrawn after it, and a full-screen `edit` holds messages until it quits. Messages are kept only
+in memory (the last 16), never in the log or on the card. A client that stops reading holds
+a sender up for at most 2 seconds; after that it misses messages, and is told how many. See
+[docs/commands.md](docs/commands.md#messages) and [`src/chat/`](src/chat/README.md).
 
 ## Watchdog
 
@@ -372,7 +392,7 @@ working directory:
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
 | `echo <text> [> file \| >> file]` | print, or write/append a line |
-| `sd` | card and volume information, SPI clock |
+| `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd devkey [forget]` | the device key's state; console only: clear it |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
@@ -382,7 +402,7 @@ working directory:
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
   `cp` removes its partial copy). Commands typed meanwhile run afterwards.
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
-  at about 130 KB/s (encryption-bound); copying on the card at about 580 KB/s.
+  at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **Open files are protected:** a file that a running command has open can't be deleted or
   renamed, and the card can't be formatted or unmounted meanwhile.
 - File names with spaces aren't supported by the commands yet. Files are dated with the system
@@ -397,8 +417,9 @@ working directory:
 without it. Everything written to the card from then on is encrypted, file names included;
 FatFs, the file commands, SFTP and Lua work as before. Formatting doesn't erase the card's old
 contents, though: files from earlier, unencrypted use stay readable on it until new data
-overwrites them, so a card that held private files unencrypted is best replaced by a new one. Cards formatted elsewhere, or with `sd format plain`, still work
-unencrypted; `sd` shows which kind is in.
+overwrites them, so a card that held private files unencrypted is best replaced by a new one.
+Cards formatted elsewhere, or with `sd format plain`, still work unencrypted; `sd` shows which
+kind is in.
 
 - **The key:** each card has a random data key, stored on the card encrypted with this device's
   key. The device key is made when the first card is encrypted and kept in flash next to the
@@ -449,10 +470,10 @@ sftp> get notes.txt
 
 ### Trusted root certificates
 
-TLS (used by NTS) trusts the built-in roots and, optionally, extra ones from the card in
-`/certs/roots.pem`: a PEM bundle (text between the certificates, as in system CA files, is fine)
-or DER certificates, up to 64 KB and 32 certificates. The file is used only while it's exactly the
-file approved on the console:
+TLS (used by NTS and the HTTPS client) trusts the built-in roots and, optionally, extra ones
+from the card in `/certs/roots.pem`: a PEM bundle (text between the certificates, as in system
+CA files, is fine) or DER certificates, up to 64 KB and 32 certificates. The file is used only
+while it's exactly the file approved on the console:
 
 1. Upload it anywhere with SFTP, e.g. `put roots.pem incoming/roots.pem`.
 2. On the console: `mkdir /certs` (once), then `mv /incoming/roots.pem /certs/roots.pem`.
@@ -468,6 +489,38 @@ file approved on the console:
   working without the card.
 - `tls roots` shows the built-in roots and the file's state; `tls roots forget` (console) stops
   trusting it. A private key, or any PEM block other than a certificate, makes the file invalid.
+
+## Editor
+
+`edit <file>` opens a file of up to 32 KB in a full-screen editor, on the console or over SSH
+(a VT100/xterm-compatible terminal; it uses the alternate screen, so the shell's output is back
+afterwards). Ctrl-S saves, Ctrl-Q quits (twice with unsaved changes), Ctrl-F finds, Ctrl-L
+redraws and asks the terminal for its size again. UTF-8 is fine, wide characters take two
+columns, and CRLF line ends are kept.
+
+- **Saving** writes `<file>.~edit` and then replaces the file, so an interrupted save never
+  leaves half a file; after a power cut, `edit <file>` picks the text up from the `.~edit` copy.
+- While the editor runs on the console, log messages wait (the status bar counts them) and appear
+  when it quits; `wall` and `chat` messages wait too.
+- `/certs` can be opened from SSH but saved only from the console.
+
+The keys and details are in [docs/commands.md](docs/commands.md#editor) and
+[`src/edit/`](src/edit/README.md).
+
+## HTTPS client
+
+The device can make HTTPS requests: from Lua scripts with `sos.http` (below), and from any shell
+with `http get|head <url>` and `http post <url> <text>`, mostly for testing. Every request uses
+TLS 1.3 with the server certificate checked against the trusted roots
+([above](#trusted-root-certificates)), and redirects aren't followed. The `http` command
+filters what the server sends before it reaches the terminal (no escape sequences, invisible or
+bidi characters); `sos.http` gives a script the bytes as they are.
+
+- Two HTTPS requests can run at once; a third is refused ("too many HTTPS requests at once")
+  until one finishes. One more TLS connection is always kept free for time sync (NTS).
+- A request is refused while the heap is too low for a TLS handshake (about 64 KB free).
+
+See [docs/commands.md](docs/commands.md#https) and [`src/net/`](src/net/README.md).
 
 ## Lua scripts (prototype)
 
@@ -603,20 +656,30 @@ under AddressSanitizer and UndefinedBehaviorSanitizer:
 cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests
 ```
 
-They cover the SSH I/O ring buffer (`src/ssh/pico-sshd/ringbuffer.c`, including a randomized comparison
-against a reference model), the shell's line editing, questions and output (`src/shell/shell_core.c`,
-with the commands faked), the configuration store (`src/core/config.c`, with a fake flash that can
-fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC register conversions
-(`src/time/timeconv.c`, compared against the host C library), path handling for the file commands
-(`src/files/path.c`), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
-`src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`), the HTTPS
-client's URLs, requests and response parser (`src/net/http_msg.c`, including corrupted responses fed
-in random pieces), the filter that keeps outside text from sending the terminal escape sequences
-(`src/shell/termtext.c`), the provisioning tool (`tools/host/mkconfig.c`) and SD card encryption
-(`src/files/sdcrypt.c`, with wolfCrypt built for the host and cross-checked against
-`tools/host/sdcrypt.c`, which uses OpenSSL's libcrypto: that suite needs the wolfSSL source and
-OpenSSL's development files, and is skipped with a warning without them). `tests/test.h` is
-a minimal harness; add a suite as `tests/test_<name>.c` and register it in
+They cover:
+
+- **Shell:** line editing, questions and output (`src/shell/shell_core.c`, with the commands
+  faked), terminal key decoding (`src/shell/keys.c`), character widths (`src/shell/charwidth.c`),
+  and the filter that keeps outside text from sending the terminal escape sequences
+  (`src/shell/termtext.c`).
+- **Editor:** its text, keys and screen (`src/edit/editor.c`).
+- **Messages:** `wall`, `chat` and `who` between shells (`src/chat/chat.c`).
+- **SSH:** the session I/O ring buffer (`src/ssh/pico-sshd/ringbuffer.c`, including a randomized
+  comparison against a reference model).
+- **Storage:** the configuration store (`src/core/config.c`, with a fake flash that can fail or
+  lose power mid-write), path handling for the file commands (`src/files/path.c`), and SD card
+  encryption (`src/files/sdcrypt.c`, with wolfCrypt built for the host and cross-checked against
+  `tools/host/sdcrypt.c`, which uses OpenSSL's libcrypto; that suite needs the wolfSSL source and
+  OpenSSL's development files, and is skipped with a warning without them).
+- **Time:** date and RTC register conversions (`src/time/timeconv.c`, compared against the host C
+  library), the NTS key-exchange messages and NTS-protected NTP packets (`src/time/nts_ke.c`,
+  `src/time/nts_ntp.c`).
+- **TLS and HTTPS:** the root certificate bundle parser (`src/tls/certbundle.c`), which new TLS
+  connections may open (`src/tls/tls_admit.c`), and the HTTPS client's URLs, requests and
+  response parser (`src/net/http_msg.c`, including corrupted responses fed in random pieces).
+- **Other:** the log (`src/core/log.c`) and the provisioning tool (`tools/host/mkconfig.c`).
+
+`tests/test.h` is a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 
 **Hardware tests** run against a board that is flashed with SOS and on the network:
@@ -647,7 +710,7 @@ nobody else is using the board.
 | Main RAM (512 KB) | data, heap, and the core 0 stack (top 8 KB, `SOS_CORE0_STACK_SIZE`) |
 | SCRATCH_X (4 KB) | core 1 stack (`PICO_CORE1_STACK_SIZE`), as in the SDK default; while Lua runs, core 1 uses a 32 KB stack from the heap instead |
 | SCRATCH_Y (4 KB) | free |
-| Flash, last 4 KB sector | SSH host key |
+| Flash, last 4 KB sector | keys: SSH host key (page 0), SD cards' device key (page 1) |
 | Flash, 2 sectors below it | configuration (A/B records) |
 
 The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
