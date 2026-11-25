@@ -8,8 +8,6 @@
 #include "shell/shell.h"
 #include "test.h"
 
-const char sos_version[] = "0123456789ab";   // normally generated at build time
-
 // --- fake channel ----------------------------------------------------------------------------
 
 typedef struct {

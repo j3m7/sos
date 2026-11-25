@@ -6,7 +6,11 @@
 #   cmake -DSRC=<source dir> -DOUT=<file> -P version.cmake
 #
 # The version is a 12-digit commit hash, with "-dirty" when tracked files (or submodules) differ
-# from that commit, or "unknown" outside a git checkout.
+# from that commit, or "unknown" outside a git checkout. It names the SOS commit only:
+#   - Untracked files don't count (a new source file is only built once a tracked CMakeLists.txt
+#     lists it, which makes the tree dirty anyway).
+#   - In-tree submodules count, with untracked content in them, even when local.cmake takes that
+#     library from elsewhere; libraries taken from outside the tree (*_ROOT) are not covered.
 
 find_package(Git QUIET)
 set(version "unknown")
