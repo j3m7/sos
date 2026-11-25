@@ -137,10 +137,21 @@ set(SOS_SOURCES
     src/lua/lua_host.c
     src/lua/lua_core1.c
 )
+# The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
+# Regenerated at every build rather than at configure time, so it follows checkouts and commits.
+set(SOS_VERSION_C ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_version.c)
+add_custom_target(sos_version
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${SOS_VERSION_C}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+    BYPRODUCTS ${SOS_VERSION_C}
+    COMMENT "Recording the commit hash"
+)
 add_executable(sos ${SOS_SOURCES}
+    ${SOS_VERSION_C}
     src/ssh/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
     ${LUA_SOURCES}
 )
+add_dependencies(sos sos_version)
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
 set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")

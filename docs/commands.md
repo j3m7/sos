@@ -23,6 +23,7 @@ this page is the reference.
 |---|---|---|
 | `help` (or `?`) | any | List the commands this channel may use |
 | `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset, or a `last reset:` line if a hard fault or panic did |
+| `version` | any | The commit the firmware was built from (12 hex digits, `-dirty` if the build had uncommitted changes, `unknown` if not built from a git checkout). It names the SOS commit only, not libraries a build takes from outside the tree through `local.cmake`. Also shown above the first prompt on the console and after each SSH login |
 | `mem` | any | Heap in use, peak and total, and core 0's peak stack use. After a Lua script has run, also how much of core 1's 32 KB stack the last script used |
 | `net` | any | Wi-Fi link state and signal strength (RSSI), IP address, gateway, hostname, and ARP packet counts with the keepalive state |
 | `ssh` | any | Host key fingerprint; sessions in use and connections refused because all were busy; connections refused from a penalized address or dropped before login; logins; and each session (user and address, state, shell or SFTP, how long), yours marked `*` |
