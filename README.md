@@ -348,7 +348,8 @@ working directory:
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
 | `echo <text> [> file \| >> file]` | print, or write/append a line |
 | `sd` | card and volume information, SPI clock |
-| `sd format [exfat\|fat32]` | console only: erase the card and format it (one partition) |
+| `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain` |
+| `sd key` | console only: show an encrypted card's data key, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
 
@@ -364,6 +365,28 @@ working directory:
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
+
+### Encrypted cards
+
+`sd format` encrypts the card by default, so a card taken out of the device can't be read
+without it. Everything on the card is encrypted, file names included; FatFs, the file commands,
+SFTP and Lua work as before. Cards formatted elsewhere, or with `sd format plain`, still work
+unencrypted; `sd` shows which kind is in.
+
+- **The key:** each card has a random data key, stored on the card encrypted with this device's
+  key. The device key is made on first boot and kept in flash next to the SSH host key, so it
+  survives reflashing, `config reset` and provisioning, and the card unlocks at boot with
+  nobody logged in. A card made by another device is refused (`sd format` erases it for use
+  here).
+- **What it protects:** a lost or removed card. Not a stolen device: the device key is in its
+  flash, which can be read out.
+- **Recovery:** `sd key` on the console prints the card's data key. Store it offline: with it,
+  a Linux PC reads the card (`tools/host/sdcrypt.c` decrypts an image of it, and `sdcrypt info`
+  prints the `cryptsetup` line to open the card directly).
+- **Speed:** the encryption is software AES (the RP2350 has no AES hardware): about 690 KB/s
+  write and 650 KB/s read on the card, against 2.0 / 1.7 MB/s unencrypted. Copying on the card
+  slows down by about as much; SFTP is limited by SSH's own encryption and barely changes.
+- A PC sees an encrypted card as unformatted. Don't let it format the card.
 
 ### File transfer (SFTP)
 
@@ -552,7 +575,10 @@ fail or lose power mid-write), the log (`src/core/log.c`), the date and RTC regi
 `src/time/nts_ntp.c`), the root certificate bundle parser (`src/tls/certbundle.c`), the HTTPS
 client's URLs, requests and response parser (`src/net/http_msg.c`, including corrupted responses fed
 in random pieces), the filter that keeps outside text from sending the terminal escape sequences
-(`src/shell/termtext.c`) and the provisioning tool (`tools/host/mkconfig.c`). `tests/test.h` is
+(`src/shell/termtext.c`), the provisioning tool (`tools/host/mkconfig.c`) and SD card encryption
+(`src/files/sdcrypt.c`, with wolfCrypt built for the host and cross-checked against
+`tools/host/sdcrypt.c`, which uses OpenSSL's libcrypto: that suite needs the wolfSSL source and
+OpenSSL's development files, and is skipped with a warning without them). `tests/test.h` is
 a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 

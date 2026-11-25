@@ -47,9 +47,10 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 
 ## Host key (`hostkey.c`)
 
-The Ed25519 host key lives in the last 4 KB flash sector. It's generated on the device at first
-boot (`hostkey_get()`, before Wi-Fi starts) and survives reflashing; the private key never
-leaves the device. The flash write goes through `flash_safe_execute()`.
+The Ed25519 host key is the first page of the key sector, the last 4 KB of flash
+(`core/keysector.c`; the second page holds the device key, `core/devkey.c`). It's generated on
+the device at first boot (`hostkey_get()`, before Wi-Fi starts) and survives reflashing; the
+private key never leaves the device. The flash write goes through `flash_safe_execute()`.
 
 ## SFTP (`sftp_wolf.c`, `sftp_fs.c`)
 

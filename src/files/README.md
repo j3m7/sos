@@ -10,10 +10,40 @@ The SD card library ([no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk
 - **Mounting:** `sdcard_mount()` mounts the card the first time something needs it: a file
   command, SFTP, or the TLS root certificates.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
-- **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock and
-  formatting.
+- **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
+  formatting (encrypted unless `plain`) and an encrypted card's key (`sd key`).
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
+
+## `sdcrypt.c` and the encryption layer: encrypted cards (pure C, host tested)
+
+```
+FatFs ──► sdcard.c layer ──► driver          physical sector 0     header (plain)
+          (sector n = card sector n + 8192;  physical sector 4096  header backup
+           XTS-AES-128 on the way through)   physical 8192 ...     the encrypted volume
+```
+
+- **Format** (`files/sdcrypt.h` has the byte layout): each logical sector is encrypted with
+  XTS-AES-128 under the card's data key, tweak = the logical sector number, little-endian
+  (dm-crypt's `plain64`, so `cryptsetup --type plain --cipher aes-xts-plain64 --key-size 256
+  --offset 8192` opens it). The header holds a random card id and the data key encrypted with
+  AES-256-GCM under the device key (`core/devkey.c`); the GCM associated data covers the fields
+  before the nonce.
+- **The layer** sits in `sdcard.c`'s existing block hooks (`card.read_blocks` etc.), so FatFs
+  and everything above it don't change. Reads are decrypted in place; writes are encrypted into
+  a 4 KB buffer a chunk at a time, since the caller's buffer must stay as it is. The sector
+  count FatFs sees is 8192 smaller.
+- **Detection** at every mount (`detect()`): sector 0 a header → open it with the device key; a
+  boot sector (0x55AA) → a plain card; otherwise the backup header at 4096. A header the key
+  doesn't open, or of an unknown version, makes the card *locked*: every read and write is
+  refused and `sd format` is the way out. `sd unmount` forgets the key.
+- **`sd format`** writes a new header (both copies) and turns the layer on before `f_mkfs`, so
+  the volume is written encrypted. `sd format plain` also clears the backup header, which
+  `f_mkfs` doesn't overwrite, so the card can't look encrypted again.
+- **Speed:** the AES tables are in SRAM (`FLASH_QUALIFIER` in `config/user_settings.h`): from
+  flash, varied data misses the XIP cache and encrypted writes ran at a third of the speed.
+- **Host tool** `tools/host/sdcrypt.c` (OpenSSL's libcrypto) reads a card or image on a PC with
+  the key from `sd key`; `tests/test_sdcrypt.c` checks the device code against it.
 
 ## `files.c`: the file commands
 

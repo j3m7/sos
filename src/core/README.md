@@ -64,6 +64,19 @@ Two layers:
 
 Only the console may change the configuration; see `require_admin()` in `shell/shell.c`.
 
+## Key sector and device key (`keysector.c`, `devkey.c`)
+
+The last 4 KB flash sector holds the device's keys, one 256-byte flash page each: page 0 the SSH
+host key (`ssh/hostkey.c`), page 1 the device key. It's above the configuration sectors, so
+`picotool load`, `config reset` and provisioning don't touch it. `keysector_write()` replaces
+one page and keeps the others; it erases and rewrites the whole sector, so a power cut during a
+write can lose the keys in it. Writes happen only when a key is created (first boot) or erased.
+
+The **device key** (32 random bytes from the TRNG, made at first boot by `devkey_init()`)
+wraps each encrypted SD card's data key (`files/sdcrypt.h`). A valid key is never replaced:
+cards made with it can't be opened by any other key. If the page is damaged, a new key is made
+and the log says that older cards need their saved key (`sd key`).
+
 ## Watchdog (`wdog.c`)
 
 `wdog_start()` runs early in `main()`: it records whether the last reset was a watchdog
