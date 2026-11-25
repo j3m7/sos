@@ -141,7 +141,10 @@ static void edit_key(shell_t *sh, int key, void *arg) {
 static bool edit_step(shell_t *sh, void *arg, bool cancel) {
     edit_t *e = arg;
     if (cancel || e->quit) {
-        if (!cancel) {
+        // A cancel means the session is gone, except on the console, which cancels the editor
+        // when it locks itself (shell/login.h) with the terminal possibly still there: give
+        // that terminal its screen back too, for the password prompt.
+        if (!cancel || sh->io->admin) {
             // Bottom row, erased, for a terminal without an alternate screen (the prompt goes
             // there); autowrap back on; back to the shell's screen.
             char bye[48];

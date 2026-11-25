@@ -74,6 +74,19 @@ void shell_ask_eof(shell_t *sh, const char *ask_prompt, shell_answer_fn answer, 
     sh->ask_eof = true;
 }
 
+void shell_discard_input(shell_t *sh) {
+    volatile char *v = sh->line;
+    for (size_t i = 0; i < sizeof(sh->line); i++)
+        v[i] = 0;
+    v = sh->ahead;
+    for (size_t i = 0; i < sizeof(sh->ahead); i++)
+        v[i] = 0;
+    sh->line_len = 0;
+    sh->ahead_len = 0;
+    sh->last_was_cr = false;
+    sh->keys = (keys_t)KEYS_INIT;
+}
+
 void shell_cancel_question(shell_t *sh) {
     sh->answer = NULL;
     sh->secret = false;

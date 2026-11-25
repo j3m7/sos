@@ -184,8 +184,20 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot, so
   what limits guessing in the end is the cost of each check; choose a password that isn't
   guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
-- **It stays open after a login** until `logout`: unplugging the cable or closing the terminal
-  does not lock it yet (planned: issue #64).
+- **It locks itself** when the USB terminal goes away (the cable is unplugged or the terminal
+  program closes the port) and after 10 minutes with nothing typed
+  (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off).
+  - **Whatever the console was running is ended** by either lock: a copy (its partial file is
+    removed), `sd test`, a Lua script started there, the chat, the editor. **Unsaved text in
+    the editor is lost**, so save before leaving the console, and mind a loose cable.
+  - **"Goes away" means the terminal program drops the DTR line** when it exits (a hang-up on
+    close) or the cable is unplugged. A program that closes the port without hanging up leaves
+    the console open until the idle lock. Check what yours does: log in, quit the program,
+    start it again, and see whether the console asks for the password.
+  - On the UART console there is no connection to watch, so only the idle lock applies.
+  - Tools that open the port for each command (test scripts) are locked out at every close
+    once a password is set: use a board without a console password for those, or log in each
+    time.
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
   of the password, then keyed with a key from the board's root secret. A copy of the flash
   isn't enough to try passwords against.

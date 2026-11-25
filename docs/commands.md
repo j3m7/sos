@@ -30,7 +30,7 @@ this page is the reference.
 | `dmesg` | any | The system log kept in memory |
 | `log` | any | Show the log levels: `console` (printed on the serial console) and `history` (kept for `dmesg`) |
 | `log console\|history <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug` |
-| `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set) |
+| `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set). The console also locks itself when the USB terminal disconnects and after 10 minutes with nothing typed; a running command is ended |
 | `reboot` | any | Restart the device |
 | `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |
 

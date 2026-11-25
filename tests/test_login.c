@@ -78,9 +78,14 @@ static void h_opened(shell_t *s) { opens++; shell_greet(s); }
 static void h_first(shell_t *s) { first_uses++; shell_printf(s, "set a password first\n"); }
 static unsigned failed_calls, failed_last;
 static void h_failed(unsigned n) { failed_calls++; failed_last = n; }
+static int auto_locks;
+static bool connected;            // what main.c would pass to login_poll()
+static uint32_t idle_limit;
+static char auto_why[64];
+static void h_auto(const char *why) { auto_locks++; snprintf(auto_why, sizeof(auto_why), "%s", why); }
 
 static const login_hooks_t hooks = {
-    h_now, h_has, h_begin, h_step, h_abort, h_no_keys, h_rescue, h_opened, h_first, h_failed,
+    h_now, h_has, h_begin, h_step, h_abort, h_no_keys, h_rescue, h_opened, h_first, h_failed, h_auto,
 };
 
 // --- fake command module ----------------------------------------------------------------------------
@@ -88,9 +93,22 @@ static const login_hooks_t hooks = {
 static char executed[16][SHELL_LINE_MAX + 1];
 static int n_executed;
 
+// "job": a command that runs until cancelled.
+static int job_cancels;
+static bool endless_job(shell_t *s, void *arg, bool cancel) {
+    (void)s; (void)arg;
+    if (cancel)
+        job_cancels++;
+    return !cancel;
+}
+
 void shell_execute(shell_t *s, char *cmd) {
     if (login_gate(s, cmd))             // as shell.c does for the console
         return;
+    if (!strcmp(cmd, "job")) {
+        shell_run_job(s, endless_job, NULL);
+        return;
+    }
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
     n_executed++;
@@ -111,6 +129,10 @@ static void boot(const char *pw) {
     no_keys_why = NULL;
     begins = steps = aborts = opens = first_uses = n_executed = 0;
     failed_calls = failed_last = 0;
+    auto_locks = 0;
+    connected = true;
+    idle_limit = 0;
+    job_cancels = 0;
     steps_needed = 3;
     begin_fails = false;
     shell_bind(&sh, &console_io, NULL);
@@ -124,10 +146,18 @@ static void type(const char *text) {
     in_len += n;
 }
 
-// Run the main loop for a while (each pass 5 ms, as on the device).
+// Run the main loop for a while (each pass 5 ms, as on the device): the shell, then the
+// console's own lock, as main.c does.
+static bool connected;
+static uint32_t idle_limit;
+
 static void run_ms(unsigned ms) {
     for (unsigned t = 0; t < ms; t += 5) {
+        size_t before = in_pos;
         shell_poll(&sh);
+        if (in_pos != before)
+            login_activity();
+        login_poll(&sh, connected, idle_limit);
         now += 5;
     }
 }
@@ -404,6 +434,129 @@ TEST(no_keys_locks_with_rescue_commands_only) {
     CHECK(login_locked());
 }
 
+// --- the console locking itself ----------------------------------------------------------------------
+
+static void open_console(void) {
+    boot("open sesame");
+    type("open sesame\r");
+    run_ms(100);
+    CHECK(!login_locked());
+    clear_out();
+}
+
+TEST(disconnecting_the_terminal_locks) {
+    open_console();
+    run_ms(1000);
+    CHECK(!login_locked());                     // connected and no idle limit: stays open
+    connected = false;
+    run_ms(10);
+    CHECK(login_locked());
+    CHECK_EQ(auto_locks, 1);
+    CHECK(strstr(auto_why, "disconnected") != NULL);
+    // The next terminal finds the password prompt, and commands don't run.
+    connected = true;
+    type("config\r");
+    run_ms(100);
+    CHECK_EQ(n_executed, 0);
+    type("open sesame\r");
+    run_ms(1500);
+    CHECK(!login_locked());
+    CHECK_EQ(auto_locks, 1);                    // reconnecting doesn't lock again
+}
+
+TEST(idle_console_locks) {
+    open_console();
+    idle_limit = 60000;
+    run_ms(59000);
+    CHECK(!login_locked());
+    run_ms(1500);
+    CHECK(login_locked());
+    CHECK(!strcmp(auto_why, "idle"));
+    CHECK(shown("console locked (idle)"));
+    CHECK(shown("Password: "));
+}
+
+TEST(typing_restarts_the_idle_time) {
+    open_console();
+    idle_limit = 60000;
+    for (int i = 0; i < 5; i++) {
+        run_ms(50000);
+        type("x");                              // not even a whole command
+    }
+    CHECK(!login_locked());
+    run_ms(61000);
+    CHECK(login_locked());
+}
+
+// What was typed and not entered doesn't become part of the next person's first answer, and a
+// running command is ended.
+TEST(auto_lock_discards_input_and_ends_a_job) {
+    open_console();
+    type("key add ssh-ed25519 AAAA");           // half a command line
+    run_ms(20);
+    connected = false;
+    run_ms(10);
+    CHECK(login_locked());
+    CHECK_EQ(sh.line_len, 0);
+    for (size_t i = 0; i < sizeof(sh.line); i++)
+        CHECK_EQ(sh.line[i], 0);
+    connected = true;
+    type("open sesame\r");
+    run_ms(200);
+    CHECK(!login_locked());                     // the password alone was the answer
+
+    type("job\r");
+    run_ms(20);
+    CHECK(shell_job_running(&sh));
+    idle_limit = 1000;
+    run_ms(1200);
+    CHECK(login_locked());
+    CHECK_EQ(job_cancels, 1);
+    CHECK(!shell_job_running(&sh));
+    idle_limit = 0;
+    type("open sesame\r");
+    run_ms(200);
+    CHECK(!login_locked());
+}
+
+// A pending question (say, the middle of `setup`) is dropped too: its answer would otherwise be
+// taken from the next person.
+static int answers;
+static void on_answer(shell_t *s, char *answer, void *arg) { (void)s; (void)answer; (void)arg; answers++; }
+
+TEST(auto_lock_drops_a_pending_question) {
+    open_console();
+    answers = 0;
+    shell_ask(&sh, "Wi-Fi network: ", false, on_answer, NULL);
+    connected = false;
+    run_ms(10);
+    connected = true;
+    type("open sesame\r");
+    run_ms(200);
+    CHECK_EQ(answers, 0);
+    CHECK(!login_locked());
+}
+
+// Nothing to lock with: no password set. And a locked console isn't locked again.
+TEST(no_auto_lock_without_a_password_or_when_locked) {
+    boot(NULL);
+    idle_limit = 1000;
+    run_ms(3000);
+    connected = false;
+    run_ms(10);
+    CHECK(!login_locked());
+    CHECK_EQ(auto_locks, 0);
+    boot("open sesame");
+    idle_limit = 1000;
+    clear_out();
+    run_ms(5000);
+    connected = false;
+    run_ms(10);
+    CHECK(login_locked());
+    CHECK_EQ(auto_locks, 0);
+    CHECK(!shown("console locked"));
+}
+
 TEST_MAIN(
     RUN(locked_console_shows_only_the_prompt);
     RUN(right_password_opens_and_greets);
@@ -420,4 +573,10 @@ TEST_MAIN(
     RUN(logout_without_a_password_does_not_lock);
     RUN(gate_holds_without_the_question);
     RUN(no_keys_locks_with_rescue_commands_only);
+    RUN(disconnecting_the_terminal_locks);
+    RUN(idle_console_locks);
+    RUN(typing_restarts_the_idle_time);
+    RUN(auto_lock_discards_input_and_ends_a_job);
+    RUN(auto_lock_drops_a_pending_question);
+    RUN(no_auto_lock_without_a_password_or_when_locked);
 )

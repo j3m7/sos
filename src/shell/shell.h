@@ -111,6 +111,11 @@ void shell_ask_eof(shell_t *sh, const char *prompt, shell_answer_fn answer, void
 extern char shell_eof[];
 #define SHELL_EOF shell_eof
 
+// Throw away what has been typed and not yet used: the line being edited and input typed ahead
+// during a job (wiped, since it may be a password). For when the person at the channel is no
+// longer the one who typed it (the console locking itself, shell/login.h).
+void shell_discard_input(shell_t *sh);
+
 // Drop a pending question without answering it (its owner has gone away); the next line is a
 // command again. For output around it, use shell_hide_input() / shell_show_input().
 void shell_cancel_question(shell_t *sh);

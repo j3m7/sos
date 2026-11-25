@@ -18,7 +18,10 @@
 // - No usable root secret: no password can be checked, and the console must not be open for
 //   that reason. It stays locked and takes only the commands that deal with it
 //   (login_hooks_t.rescue_allowed).
-// - `logout` on the console locks it again.
+// - `logout` on the console locks it again. So does the console itself (login_poll): when the
+//   USB connection to the terminal drops, and after a time with nothing typed. Whoever plugs in
+//   next, or walks up later, finds a locked console. A command that was still running (a long
+//   listing, the editor) is ended, and text typed but not entered is thrown away.
 //
 // Depends only on shell.h and its hooks, so it's unit tested on the host with the real shell
 // line editor. SSH sessions are not involved: they log in with their keys.
@@ -57,6 +60,8 @@ typedef struct {
     // A wrong answer was given (`failures` since boot, this one included): for the log. May be
     // NULL.
     void (*failed)(unsigned failures);
+    // The console locked itself (`why`: a few words): for the log. May be NULL.
+    void (*auto_locked)(const char *why);
 } login_hooks_t;
 
 // At boot, on the console's shell, bound but with nothing printed yet (shell_bind): lock it
@@ -69,6 +74,15 @@ bool login_locked(void);
 // Lock the console again and ask for the password (`logout` on the console). Says so instead
 // if no password is set.
 void login_lock(shell_t *console);
+
+// Something was typed on the console (any byte): restarts the idle time.
+void login_activity(void);
+
+// From the main loop. `connected`: a terminal is connected (USB: the host has the port open; a
+// channel that can't tell says true). Locks an open console that has a password when
+// `connected` goes from true to false, or when nothing was typed for `idle_limit_ms` (0: no
+// idle lock).
+void login_poll(shell_t *console, bool connected, uint32_t idle_limit_ms);
 
 // For every command line of the console, before it runs: true if it must not run (locked).
 // Not for other shells.

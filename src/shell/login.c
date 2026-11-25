@@ -13,6 +13,8 @@ static unsigned failures;               // wrong answers since boot
 static uint64_t not_before;             // no check starts before this time (ms)
 static char pending[LOGIN_PASSWORD_MAX + 1];    // the answer, from typed until its check starts
 static bool have_pending, checking;
+static uint64_t last_activity;          // when something was last typed (ms)
+static bool was_connected;
 
 static void wipe(void *p, size_t len) {
     volatile char *v = p;
@@ -76,6 +78,7 @@ static bool check_job(shell_t *sh, void *arg, bool cancel) {
     locked = false;
     failures = 0;
     not_before = 0;
+    last_activity = hooks->now_ms();
     hooks->opened(sh);
     return false;
 }
@@ -105,6 +108,8 @@ void login_start(shell_t *console, const login_hooks_t *h) {
     failures = 0;
     not_before = 0;
     have_pending = checking = false;
+    last_activity = hooks->now_ms();
+    was_connected = false;
     const char *why = hooks->no_keys();
     if (why) {
         locked = true;
@@ -146,6 +151,35 @@ void login_lock(shell_t *console) {
         shell_printf(console, "console locked\n");
     locked = true;
     ask(console);
+}
+
+void login_activity(void) {
+    if (hooks)
+        last_activity = hooks->now_ms();
+}
+
+// The console locks itself: end whatever is running, throw away what was typed, ask again.
+static void auto_lock(shell_t *console, const char *why) {
+    shell_end(console);                 // a running job is cancelled (it frees what it holds)
+    shell_discard_input(console);
+    locked = true;
+    if (hooks->auto_locked)
+        hooks->auto_locked(why);
+    shell_hide_input(console);
+    shell_printf(console, "console locked (%s)\n", why);
+    ask(console);
+    shell_show_input(console);
+}
+
+void login_poll(shell_t *console, bool connected, uint32_t idle_limit_ms) {
+    bool dropped = was_connected && !connected;
+    was_connected = connected;
+    if (!hooks || locked || !hooks->has_password() || hooks->no_keys())
+        return;
+    if (dropped)
+        auto_lock(console, "the terminal was disconnected");
+    else if (idle_limit_ms && hooks->now_ms() - last_activity >= idle_limit_ms)
+        auto_lock(console, "idle");
 }
 
 bool login_gate(shell_t *console, const char *cmd) {

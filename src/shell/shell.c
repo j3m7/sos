@@ -636,10 +636,14 @@ static void console_failed(unsigned failures) {
     log_msg(SOS_LOG_WARNING, "console: wrong password (%u since boot)", failures);
 }
 
+static void console_auto_locked(const char *why) {
+    log_msg(SOS_LOG_NOTICE, "console: locked (%s)", why);
+}
+
 static const login_hooks_t console_login = {
     console_now_ms, settings_console_has_password, settings_console_check_begin,
     console_check_step, settings_console_check_abort, console_no_keys, console_rescue_allowed,
-    console_opened, console_first_use, console_failed,
+    console_opened, console_first_use, console_failed, console_auto_locked,
 };
 
 void shell_console_start(shell_t *console) {
