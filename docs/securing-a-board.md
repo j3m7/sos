@@ -5,8 +5,10 @@ nothing in it may be run until the owner approves it.** It covers steps 3 and 4 
 [issue #64](https://github.com/j3m7/sos/issues/64): the root secret in one-time-programmable
 (OTP) memory, secure boot, and debug off. Every OTP write is permanent.
 
-Sources: the RP2350 datasheet in `docs/rp2350/` (sections 10.5, 13.4, 13.5, 13.8 and appendix
-D), and `picotool otp list` from picotool 2.3.1 for the field names. Items I could not confirm
+Sources: the RP2350 datasheet in `docs/rp2350/` (sections 10.5, 10.9, 13.4, 13.5, 13.8 and
+appendix D), `picotool otp list` from picotool 2.3.1 for the field names, and Raspberry Pi's
+post ["Security through transparency: RP2350 Hacking Challenge results are
+in"](https://www.raspberrypi.com/news/security-through-transparency-rp2350-hacking-challenge-results-are-in/). Items I could not confirm
 from those are marked *to confirm* and collected at the end.
 
 ## What a secured board gives, and what it doesn't
@@ -56,7 +58,10 @@ section 10.9.)
   it can't be turned off.
 - `CRIT1.GLITCH_DETECTOR_SENS`, 0 to 3, sets how easily it fires. Each step makes the detectors
   react to a smaller disturbance (the delay they measure against goes from 75% to 120% of the
-  clock period in steps of 15%). The setting can only be raised later, never lowered.
+  clock period in steps of 15%). It is a two-bit OTP field, and OTP bits only go from 0 to
+  1: from 0 any setting can still be reached, from 1 only 3, from 2 only 3, and nothing can be
+  lowered. So "start low and raise it later" works from 0, but from 1 the only step left is
+  straight to the highest.
 
 **What it costs.** A detector that is too sensitive for the board resets a healthy board:
 spurious restarts under load, when the Wi-Fi radio transmits, or on a marginal USB supply. A
@@ -64,11 +69,26 @@ reset from the detector also clears the watchdog scratch registers, where SOS ke
 of the last fault, so that record would be lost for such a reset. And it is permanent: a board
 that turns out to reset itself can't have the detector switched off.
 
-**What it buys on this board.** It makes voltage and clock glitching harder. It does not make
-it impossible: Raspberry Pi's own write-ups of the published A2 attacks describe attacks that
-got past it, and a laser or electromagnetic pulse aimed at one spot of the chip need not disturb
-the detectors at all. (I have not re-read those write-ups for this document; *to confirm*.) It
-does nothing against the flash swap or against reading the chip in a lab.
+**What it buys on this board.** It makes voltage glitching harder. It does not make it
+impossible, and it doesn't cover the other methods. From Raspberry Pi's write-up of the hacking
+challenge results (January 2025):
+
+- On voltage glitches, reporting Hextree's tests: "at the highest sensitivity setting, the
+  glitch detectors can detect many voltage glitches; however, the rate of undetected glitches
+  is still high enough to make attacks feasible with some effort."
+- Raspberry Pi's own conclusion: "we've revised downward our estimate of the effectiveness of
+  our glitch detection scheme".
+- The same post describes attacks the detectors don't see at all: electromagnetic pulses from a
+  small coil on top of the chip (the E21 attack) and a laser (E24) act on one spot and don't
+  disturb the detectors; the E16 attack disturbs the OTP supply, not the core supply.
+
+It does nothing against the flash swap or against reading the chip in a lab. So on an A2 the
+detector removes none of the published attacks; it makes the voltage-glitch ones (E20) take
+more attempts.
+
+**Software can disarm it.** The detector block has a `DISARM` register. A secured board's
+firmware should lock the detector's registers at boot (its `LOCK` register), so a bug can't be
+used to switch the detector off (*to confirm* against the register description).
 
 **It can be tried without burning anything.** The detector can also be armed by software, with
 its `ARM` register, and its sensitivity set with the `SENSITIVITY` register. So a test build for
@@ -76,11 +96,12 @@ the development board can arm it at each sensitivity in turn and run the board's
 (Wi-Fi traffic, SSH, SFTP, the card, a Lua script) for hours, counting detector resets. That
 tells us which settings this board design tolerates before any OTP bit is spent.
 
-**What I'd do.** Run that soak test on dev-1 at all four sensitivities. Then burn "enabled" on
-the production board at the highest sensitivity that showed no reset over the soak, leaving at
-least one step of margin if the top one was only just clean. If even the lowest setting resets
-a healthy board, leave it off. Since the sensitivity can be raised later but not lowered,
-starting one step low is the safe direction. The firmware should report a detector reset in the
+**What I'd do.** Run that soak test on dev-1 at all four sensitivities, for days, not hours.
+It is one board, at room temperature, on one power supply, so the most it justifies is "the
+highest setting that stayed clean, minus one". Then burn "enabled" on the production board at
+that setting; if even the lowest setting resets a healthy board, leave it off. Given how the
+OTP field can change (above), the choice of starting value matters more than "we can raise it
+later" suggests. The firmware should report a detector reset in the
 log and in `uptime`, as it does for a watchdog reset.
 
 **The decision this needs:** approve the soak test (reversible, development board only), and
@@ -181,7 +202,9 @@ and merged before anything is burned.
    running image's own signature block, compares it with the `BOOTKEY0` (and `BOOTKEY1`) rows
    in OTP, and says "match" or "no match". Step 4.7 depends on it.
 5. **A wrong-password count that survives reboots** (decision 7), kept in flash, so the delay
-   after wrong console passwords doesn't start again at every boot.
+   after wrong console passwords doesn't start again at every boot. The count is stored
+   *before* the password is checked and cleared after a right one: otherwise cutting the power
+   after a wrong answer would give free guesses.
 6. **A soak-test build for the glitch detector** (decision 5), for the development board only:
    arms the detector by software at a chosen sensitivity and reports detector resets. No OTP.
    Also, in everyday firmware, reporting a detector reset in the log and `uptime`.
@@ -301,8 +324,8 @@ This list is a gate: the document is not final, and nothing is burned, while any
    bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
 4. Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
    row write and read, used for the chaff rows.
-5. Glitch detector: the soak test's results on dev-1, and whether the published A2 attacks were
-   carried out with the detector enabled.
+5. Glitch detector: the soak test's results on dev-1; and that the detector's `LOCK` register
+   stops software from disarming it.
 6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
 7. Which free OTP page to use (pages 3 to 60 are free for user data), and that a failed write
    leaves the next page usable.
