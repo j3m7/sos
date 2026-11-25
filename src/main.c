@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 
 #include <stdio.h>
+#include <time.h>
 
 #include "hardware/sync.h"
 #include "pico/cyw43_arch.h"
@@ -11,6 +12,7 @@
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssh/ssh.h>
 
+#include "chat/chat.h"
 #include "core/fault.h"
 #include "core/log.h"
 #include "core/settings.h"
@@ -69,6 +71,26 @@ static const log_hooks_t log_hooks = {
     log_now, log_in_irq, log_lock, log_unlock, log_write, log_hide, log_show, log_hold,
 };
 
+// --- chat hooks ----------------------------------------------------------------------------------
+
+static uint64_t chat_now(void) { return time_us_64(); }
+
+// Message times: UTC hours and minutes, as `time` shows, or time since boot before the clock
+// is set.
+static void chat_stamp(char *buf, size_t len) {
+    if (timesync_clock_set()) {
+        time_t t = time(NULL);
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        snprintf(buf, len, "%02d:%02d", tm.tm_hour, tm.tm_min);
+    } else {
+        uint64_t m = time_us_64() / 60000000;
+        snprintf(buf, len, "+%lluh%02llum", m / 60, m % 60);
+    }
+}
+
+static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
+
 // --- main ----------------------------------------------------------------------------------------
 
 int main(void) {
@@ -111,6 +133,8 @@ int main(void) {
     wifi_start();                       // connects in the background; the console works meanwhile
 
     shell_init(&console_shell, &console_io, NULL);
+    chat_init(&chat_hooks);
+    chat_register(&console_shell, 0, "console", "console");
     // From here on, log lines are printed by log_flush() in the loop, between commands.
     log_set_deferred(true);
 
@@ -128,6 +152,7 @@ int main(void) {
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
+        chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
         sshd_poll();
         lua_host_poll(true);            // requests from a Lua script on core 1
         log_flush();                    // messages logged in interrupt context

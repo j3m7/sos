@@ -104,6 +104,7 @@ set(SOS_SOURCES
     src/shell/termtext.c
     src/edit/edit.c
     src/edit/editor.c
+    src/chat/chat.c
     src/net/wifi.c
     src/net/http.c
     src/net/http_msg.c

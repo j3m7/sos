@@ -35,6 +35,10 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
   needs the configured user and one of the trusted keys from the settings.
 - **`sshd_poll()`** calls `ssh_server_service()` and serves each session. A new login gets a
   fresh `shell_t` whose `shell_io_t` reads and writes the session channel (`admin` is false).
+  The shell is registered with `chat/` under the comment of the trusted key the login was
+  signed with (pico-sshd keeps that key in `ssh_session_t.auth_key`), or `key <n>` if the
+  key has no comment; after each `shell_poll()`, `chat_deliver()` prints messages from the
+  others.
   An SFTP session gets no shell: wolfSSH serves it directly.
 - **Output** is batched into few packets (`ssh_session_send_output()`). `write_space()` lets
   long jobs such as `cat` slow down for a slow client instead of losing output.

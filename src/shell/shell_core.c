@@ -54,7 +54,7 @@ void shell_printf(shell_t *sh, const char *fmt, ...) {
 }
 
 static void prompt(shell_t *sh) {
-    shell_printf(sh, "%s", sh->answer ? sh->ask_prompt : "sos> ");
+    shell_printf(sh, "%s", sh->answer ? sh->ask_prompt : SHELL_PROMPT);
 }
 
 void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn answer, void *arg) {

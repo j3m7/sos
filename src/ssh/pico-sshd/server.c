@@ -66,6 +66,9 @@
    - Connections that don't log in can't hold the server: when every slot is in use, ones
      older than SSH_LOGIN_GRACE_BUSY_US are dropped, and an address with SSH_PENALTY_FAILS such
      connections within SSH_PENALTY_WINDOW_US is refused until it has been quiet that long.
+   - The public key a login was signed with is kept in ssh_session_t (auth_key), recorded by a
+     user-auth result callback (after wolfSSH has verified the signature), so the application
+     can tell which of its trusted keys a session uses.
 */
 
 #include <stdio.h>
@@ -466,6 +469,7 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	bool penalized = ss->cstate == CS_ACCEPT && penalty_note_failure(st, &ss->remote_ip);
 	ss->cstate = CS_NONE;
 	ss->login[0] = 0;
+	ss->auth_key_len = 0;
 	ss->work_pending = false;
 	ss->peer_closed = false;
 	ss->setup_pending = false;
@@ -694,6 +698,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 	ip_addr_set(&ss->remote_ip, &pcb->remote_ip);
 	ss->auth_tries = 0;
 	ss->login[0] = 0;
+	ss->auth_key_len = 0;
 	ss->session_id = 0;
 	ss->handshake_us = 0;
 	ss->accept_start_us = time_us_64();
@@ -792,6 +797,27 @@ static int user_auth_types_cb(WOLFSSH *ssh, void *ctx)
 		ret |= WOLFSSH_USERAUTH_PUBLICKEY;
 
 	return ret;
+}
+
+
+/* Called by wolfSSH after it has verified the signature of a public key request (user_auth_cb
+   runs before that, so it can't tell a good signature from a junk one). Records the key the
+   login is made with, so the application can tell which of its keys a session uses. */
+static int user_auth_result_cb(byte result, WS_UserAuthData *auth_data, void *ctx)
+{
+	ssh_session_t *ss = ctx;
+
+	if (!ss || !auth_data)
+		return WS_SUCCESS;
+	ss->auth_key_len = 0;
+	if (result == WOLFSSH_USERAUTH_SUCCESS && auth_data->type == WOLFSSH_USERAUTH_PUBLICKEY) {
+		word32 klen = auth_data->sf.publicKey.publicKeySz;
+		if (klen <= sizeof(ss->auth_key)) {
+			memcpy(ss->auth_key, auth_data->sf.publicKey.publicKey, klen);
+			ss->auth_key_len = (uint16_t)klen;
+		}
+	}
+	return WS_SUCCESS;
 }
 
 
@@ -1349,6 +1375,7 @@ static bool ssh_server_open(ssh_server_t *st) {
 	wolfSSH_CTX_SetBanner(ctx, st->banner);
 	wolfSSH_CTX_SetSshProtoIdStr(ctx, SSH_PROTO_ID_STR);
 	wolfSSH_SetUserAuth(ctx, user_auth_cb);
+	wolfSSH_SetUserAuthResult(ctx, user_auth_result_cb);
 	wolfSSH_SetUserAuthTypes(ctx, user_auth_types_cb);
 	wolfSSH_SetIORecv(ctx, receive_cb);
 	wolfSSH_SetIOSend(ctx, send_cb);

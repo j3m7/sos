@@ -16,6 +16,7 @@ subsystems is visible at the top of the file.
 | [`time/`](time/README.md) | RTC, system clock, NTS (authenticated NTP) and SNTP |
 | [`tls/`](tls/README.md) | TLS 1.3 client and its trusted root certificates |
 | [`lua/`](lua/README.md) | Lua scripts on core 1 |
+| [`chat/`](chat/README.md) | Messages between the people logged in: `wall`, `chat`, `who` |
 
 `main.c` sets everything up and runs the main loop.
 
@@ -32,7 +33,8 @@ boot:  stack paint, stdio, log, watchdog, clock from RTC, wolfSSL/wolfSSH,
        configuration and host key (both may write flash), CYW43, Wi-Fi, console shell
 
 loop:  wdog_feed        wifi_poll          sshd_start (once Wi-Fi and a trusted key exist)
-       timesync_poll    nts_poll           shell_poll (console)    sshd_poll (SSH sessions)
+       timesync_poll    nts_poll           shell_poll + chat_deliver (console)
+       sshd_poll (SSH sessions, each: shell_poll + chat_deliver)
        lua_host_poll    log_flush          LED blink               sleep 5 ms
 ```
 

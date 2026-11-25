@@ -15,6 +15,7 @@
 
 #define SHELL_LINE_MAX 256     // fits a pasted authorized_keys line (ECDSA P-256 is ~200)
 #define SHELL_PATH_MAX 128     // working directory of the file commands
+#define SHELL_PROMPT "sos> "   // the command prompt (a question replaces it)
 
 typedef struct {
     const char *name;                                   // channel name, e.g. "console", "ssh"

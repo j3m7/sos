@@ -15,6 +15,7 @@
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
+#include "chat/chat.h"
 #include "core/config.h"
 #include "core/fault.h"
 #include "core/log.h"
@@ -62,6 +63,9 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "mem               heap and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
+    shell_printf(sh, "who               who is logged in, and who is in the chat\n");
+    shell_printf(sh, "wall <message>    send a message to every other shell\n");
+    shell_printf(sh, "chat              talk with the others in the chat room (Ctrl-D leaves)\n");
     shell_printf(sh, "dmesg             system log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
@@ -785,6 +789,12 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_net(sh);
     else if (!strcmp(cmd, "ssh"))
         sshd_status(sh);
+    else if (!strcmp(cmd, "who"))
+        chat_cmd_who(sh, args);
+    else if (!strcmp(cmd, "wall"))
+        chat_cmd_wall(sh, args);
+    else if (!strcmp(cmd, "chat"))
+        chat_cmd_chat(sh, args);
     else if (!strcmp(cmd, "dmesg"))
         cmd_dmesg(sh);
     else if (!strcmp(cmd, "log"))
