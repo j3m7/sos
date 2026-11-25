@@ -115,7 +115,8 @@ cmake --build --preset debug --target flash
 
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
 loads, verifies and starts it. For a board running some other firmware, hold BOOTSEL while
-plugging it in first. Flashing leaves the board's saved configuration and SSH host key alone;
+plugging it in first. Flashing leaves the board's saved configuration, SSH host key and SD
+device key alone;
 a new board has neither a network nor a trusted key until it's set up (`setup` on the
 console, or [provisioning](#provisioning)).
 
@@ -267,15 +268,15 @@ The people logged in (the console and each SSH shell) can message each other:
 
 - `wall <message>` shows a message in every other shell at once.
 - `chat` joins a chat room: each line typed at the `chat> ` prompt goes to everyone else in it.
-  `/who` lists the room; `/quit`, Ctrl-C or Ctrl-D leaves.
+  `/who` lists the room; `/quit`, Ctrl-C, or Ctrl-D on an empty line leaves.
 - `who` lists each shell: slot, name, where it's connected from, whether it's in the chat.
 
 Each person is named after the comment of the trusted key they logged in with (`alice@laptop`;
 `key <n>` without one), the console is `console`, and a second login with the same key gets its
 slot added (`alice@laptop/2`). A message arrives between keystrokes: the line being typed is
 redrawn after it, and a full-screen `edit` holds messages until it quits. Messages are kept only
-in memory (the last 16), never in the log or on the card. A client that stops reading doesn't
-hold anyone up; it's told how many messages it missed. See
+in memory (the last 16), never in the log or on the card. A client that stops reading holds
+a sender up for at most 2 seconds; after that it misses messages, and is told how many. See
 [docs/commands.md](docs/commands.md#messages) and [`src/chat/`](src/chat/README.md).
 
 ## Watchdog
