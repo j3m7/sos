@@ -46,7 +46,7 @@ static uint32_t decode(const uint8_t *p, unsigned n) {
 // Tags are the exception on purpose: blocking them breaks the subdivision flags (England,
 // Scotland, Wales), but they can carry hidden ASCII.
 // Keep in step with is_hidden() in tests/test_termtext.c, which the fuzz test checks against.
-static bool hidden(uint32_t cp) {
+bool termtext_hidden(uint32_t cp) {
     return (cp >= 0x80 && cp <= 0x9F)           // C1 controls
         || cp == 0x061C                         // ARABIC LETTER MARK
         || cp == 0x180E                         // MONGOLIAN VOWEL SEPARATOR
@@ -100,7 +100,7 @@ size_t termtext_filter(termtext_t *t, const uint8_t *in, size_t len, char *out) 
         if (t->n < t->need)
             continue;
         // Complete.
-        if (hidden(decode(t->pend, t->n))) {
+        if (termtext_hidden(decode(t->pend, t->n))) {
             out[o++] = '.';
         } else {
             for (unsigned k = 0; k < t->n; k++)

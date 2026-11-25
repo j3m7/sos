@@ -12,6 +12,7 @@ subsystems is visible at the top of the file.
 | [`net/`](net/README.md) | Wi-Fi station connection, HTTPS client |
 | [`ssh/`](ssh/README.md) | SSH server (shell sessions and SFTP), host key; `pico-sshd/` is the adapted upstream server |
 | [`files/`](files/README.md) | SD card, FatFs file commands, path handling and the write check |
+| [`edit/`](edit/README.md) | Full-screen text editor (`edit`) |
 | [`time/`](time/README.md) | RTC, system clock, NTS (authenticated NTP) and SNTP |
 | [`tls/`](tls/README.md) | TLS 1.3 client and its trusted root certificates |
 | [`lua/`](lua/README.md) | Lua scripts on core 1 |
