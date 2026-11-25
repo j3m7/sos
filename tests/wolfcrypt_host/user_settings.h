@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// wolfCrypt built for the host tests: only the AES modes the device code under test uses
-// (XTS and GCM for src/files/sdcrypt.c), with the same AES options as config/user_settings.h.
+// wolfCrypt built for the host tests: only what the device code under test uses (AES-XTS and
+// AES-GCM for src/files/sdcrypt.c, HKDF-SHA256 for src/core/keyprov.c), with the same AES
+// options as config/user_settings.h.
 
 #define WOLFCRYPT_ONLY
 // Align wolfCrypt's internal buffers. Without it, GHASH's 64-bit loads from a local byte array
@@ -25,5 +26,5 @@
 #define NO_ASN
 #define NO_CODING
 #define NO_PWDBASED
-#define NO_HMAC
+#define HAVE_HKDF
 #define NO_SIG_WRAPPER

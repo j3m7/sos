@@ -120,16 +120,30 @@ if (NOT DEFINED WOLFSSL_ROOT)
     set(WOLFSSL_ROOT ${SOS_ROOT}/lib/wolfssl)
 endif()
 find_package(OpenSSL COMPONENTS Crypto)
-if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c AND OpenSSL_FOUND)
+if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     add_library(wolfcrypt_host STATIC
         ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${WOLFSSL_ROOT}/wolfcrypt/src/memory.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/wc_port.c ${WOLFSSL_ROOT}/wolfcrypt/src/error.c
-        ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c)
+        ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c ${WOLFSSL_ROOT}/wolfcrypt/src/hmac.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c)
     target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
     target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
         ${WOLFSSL_ROOT})
     target_compile_options(wolfcrypt_host PRIVATE -w)     # third-party code: its warnings aren't ours
 
+    # src/core/keyprov.c and rootsecret.c: keys derived from the root secret (HKDF-SHA256 from
+    # wolfCrypt), the provider's lock, and the root secret's flash record. Needs only wolfCrypt.
+    add_executable(test_keyprov test_keyprov.c ${SOS_ROOT}/src/core/keyprov.c
+        ${SOS_ROOT}/src/core/rootsecret.c)
+    target_compile_definitions(test_keyprov PRIVATE KEYPROV_TEST)
+    target_include_directories(test_keyprov PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_keyprov PRIVATE wolfcrypt_host)
+    add_test(NAME keyprov COMMAND test_keyprov)
+else()
+    message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
+endif()
+
+if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
     add_executable(test_sdcrypt test_sdcrypt.c ${SOS_ROOT}/src/files/sdcrypt.c
         ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_compile_definitions(test_sdcrypt PRIVATE SDCRYPT_TOOL_NO_MAIN
@@ -141,6 +155,6 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c AND OpenSSL_FOUND)
 
     add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)
-else()
-    message(WARNING "sdcrypt test skipped: needs wolfSSL (WOLFSSL_ROOT) and OpenSSL's libcrypto")
+elseif (TARGET wolfcrypt_host)
+    message(WARNING "sdcrypt test skipped: it also needs OpenSSL's libcrypto")
 endif()

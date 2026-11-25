@@ -723,6 +723,7 @@ nobody else is using the board.
 | SCRATCH_Y (4 KB) | free |
 | Flash, last 4 KB sector | keys: SSH host key (page 0), SD cards' device key (page 1) |
 | Flash, 2 sectors below it | configuration (A/B records) |
+| Flash, the sector below those | the board's root secret (open boards; nothing is stored under it yet), see [`src/core/README.md`](src/core/README.md) |
 
 The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
 Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command

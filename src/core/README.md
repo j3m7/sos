@@ -52,7 +52,7 @@ Two layers:
 - **`settings.c`, the live configuration on the device.** `settings()` returns it; edit it,
   then call `settings_save()`.
   - **Where it lives:** the two slots are the flash sectors just below the SSH host key:
-    `… firmware … | slot A | slot B | host key |` (end of flash).
+    `… firmware … | root secret | slot A | slot B | key sector |` (end of flash).
   - **Nothing saved** (a new board, after `config reset`, or records this firmware can't
     read): the configuration is `config_defaults()`, with no network and no trusted keys. The
     firmware carries no configuration of its own.
@@ -63,6 +63,43 @@ Two layers:
     flash is busy.
 
 Only the console may change the configuration; see `require_admin()` in `shell/shell.c`.
+
+## Root secret and key provider (`rootsecret.c`, `rootflash.c`, `keyprov.c`)
+
+The base for protecting what the board stores (issue #64). **Nothing uses it yet:** the
+configuration, the host key and the SD cards are stored as before.
+
+- **Root secret:** 32 random bytes, made from the TRNG at the first boot. Every other key is
+  derived from it. On an open board (no secure boot) it's kept in flash, which protects nothing
+  from someone who has the board; it's there so the same code and formats run as on a secured
+  board, where it will be in OTP memory.
+  - **Its own sector,** the fourth from the end of flash, below configuration slot A
+    (`rootflash.c`). Not a page of the key sector: firmware from before the root secret rewrites
+    that sector with only the pages it knows whenever it makes a host key, which would erase it.
+    Flashing, provisioning and `config reset` don't touch the sector.
+  - **The record** (`rootsecret.c`, pure C, host tested): magic `SOSR`, version 1, the secret,
+    an FNV-1a check. The sector holds it twice, in its first two flash pages, so one damaged
+    page doesn't lose everything derived from the secret; either valid copy is used, and a
+    damaged one is reported (`rootsecret`, the log).
+  - **Making it** programs page 1 and then page 0, without erasing: blank pages need no erase,
+    and the rest of the sector is never touched. A secret is used only once page 0 holds it, so
+    a first write cut off by a power loss (page 0 still blank) is finished or started over at
+    the next boot, since nothing can have been stored under it.
+  - **Never replaced automatically** otherwise: when page 0 isn't blank and there's no valid
+    copy (damaged, or a record from newer firmware), or the two copies hold different secrets,
+    the board has no keys, the log and `rootsecret` say so, and `rootsecret forget` on the
+    console erases the sector. Only `rootflash.c` can read the secret out
+    (`rootsecret_priv.h`).
+- **Key provider** (`keyprov.c`, pure C over wolfCrypt, host tested):
+  `keyprov_derive(purpose, out)` gives the 32-byte key for a purpose, HKDF-SHA256 of the root
+  secret with a fixed label per purpose as the info and no salt. Callers never see the root
+  secret, and can't supply any part of a label.
+  - **Derive at boot, then lock:** `main.c` calls `keyprov_lock()` once boot is done, after
+    which every derivation fails until reset. On an open board that's a flag; on a secured board
+    the backend will also lock the OTP page. So a key can't depend on anything known only at
+    run time: such a key is made by its user in a second step from a base key derived here.
+  - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
+    root secret; changing a label would lock everything sealed under it.
 
 ## Key sector and device key (`keysector.c`, `devkey.c`)
 

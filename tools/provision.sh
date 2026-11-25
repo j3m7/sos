@@ -47,8 +47,9 @@ ${HOSTCC:-cc} -std=c11 -O1 -Wall -Wextra -I"$root/src" -I"$root/tools/host" \
     "$root/src/time/timeconv.c"
 "$work/sos-mkconfig" "$conf" "$work/config.bin"
 
-# The configuration slots are the two 4 KB sectors below the last one (the SSH host key); see
-# src/core/settings.c. Flash is mapped at 0x10000000.
+# The configuration slots are the two 4 KB sectors below the last one (the key sector: the SSH
+# host key); see src/core/settings.c. The sector below them holds the board's root secret
+# (src/core/rootflash.h) and is not written here. Flash is mapped at 0x10000000.
 addr=$(printf '0x%08x' $((0x10000000 + flash - 3 * 4096)))
 if [[ -n $dry ]]; then
     echo "would load $(stat -c %s "$work/config.bin") bytes at $addr"

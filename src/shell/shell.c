@@ -21,6 +21,8 @@
 #include "core/fault.h"
 #include "core/heap.h"
 #include "core/log.h"
+#include "core/rootflash.h"
+#include "core/rootsecret.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -86,6 +88,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "dmesg             system log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
+    shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
@@ -488,6 +491,59 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     wifi_reconnect();
 }
 
+// --- root secret ---------------------------------------------------------------------------------
+
+static void on_rootsecret_forget(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer || strcmp(answer, "yes")) {
+        shell_printf(sh, "the record is kept\n");
+        return;
+    }
+    shell_printf(sh, rootflash_forget() ? "the record is cleared; `reboot` makes a new root secret\n"
+                                        : "clearing the record failed (see dmesg)\n");
+}
+
+// `rootsecret`: the state of the secret every stored key is derived from (core/keyprov.h);
+// `rootsecret forget` (console): clear a record that can't be used, the explicit way out. A
+// usable secret can't be cleared here: that would silently lock everything sealed with it.
+static void cmd_rootsecret(shell_t *sh, const char *args) {
+    int state = rootflash_state();
+    if (!args || !*args) {
+        if (!rootflash_usable())
+            shell_printf(sh, "root secret: none (the firmware image overlaps its flash sector)\n");
+        else if (state == ROOTSECRET_OK)
+            shell_printf(sh, "root secret: present, in flash (open board: it isn't protected "
+                             "from someone who has the board)%s\n",
+                         rootflash_degraded() ? "\none of its two copies is damaged; the other "
+                                                "is in use" : "");
+        else if (state == ROOTSECRET_NONE)
+            shell_printf(sh, "root secret: none (making it at boot failed, see dmesg; `reboot` "
+                             "tries again)\n");
+        else
+            shell_printf(sh, "root secret: present but unusable (damaged, or written by newer "
+                             "firmware). It's kept as it is:\nnewer firmware may read it. "
+                             "`rootsecret forget` clears it; what was stored under it is then "
+                             "lost.\n");
+        return;
+    }
+    if (strcmp(args, "forget")) {
+        shell_printf(sh, "usage: rootsecret [forget]\n");
+        return;
+    }
+    if (!sh->io->admin) {
+        shell_printf(sh, "the root secret can only be cleared on the serial console\n");
+        return;
+    }
+    if (state != ROOTSECRET_INVALID || !rootflash_usable()) {
+        shell_printf(sh, state == ROOTSECRET_OK ? "the root secret is usable; it isn't cleared\n"
+                                                : "there's no record to clear\n");
+        return;
+    }
+    shell_printf(sh, "This erases the root secret's whole flash sector. Whatever was stored under "
+                     "this root\nsecret can't be read again, by any firmware.\n");
+    shell_ask(sh, "Clear the unusable record? Type 'yes': ", false, on_rootsecret_forget, NULL);
+}
+
 static void cmd_config(shell_t *sh, char *args) {
     if (args && !strcmp(args, "reset")) {
         if (require_admin(sh))
@@ -838,6 +894,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_log(sh, args);
     else if (!strcmp(cmd, "config"))
         cmd_config(sh, args);
+    else if (!strcmp(cmd, "rootsecret"))
+        cmd_rootsecret(sh, args);
     else if (!strcmp(cmd, "key"))
         cmd_key(sh, args);
     else if (!strcmp(cmd, "wifi"))
