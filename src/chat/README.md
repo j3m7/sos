@@ -66,5 +66,5 @@ When a session ends in the room, `chat_unregister()` announces that it left.
 
 ## Memory
 
-About 5.8 KB of BSS (5.1 KB ring, 0.5 KB peers), no heap. Message text exists only in the
+About 7 KB of BSS (5.2 KB ring, 1.6 KB peers with a waiting line each), no heap. Message text exists only in the
 ring: it's never logged or written to the card.
