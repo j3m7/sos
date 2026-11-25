@@ -66,8 +66,9 @@
    - Connections that don't log in can't hold the server: when every slot is in use, ones
      older than SSH_LOGIN_GRACE_BUSY_US are dropped, and an address with SSH_PENALTY_FAILS such
      connections within SSH_PENALTY_WINDOW_US is refused until it has been quiet that long.
-   - The public key a login was signed with is kept in ssh_session_t (auth_key), so the
-     application can tell which of its trusted keys a session uses.
+   - The public key a login was signed with is kept in ssh_session_t (auth_key), recorded by a
+     user-auth result callback (after wolfSSH has verified the signature), so the application
+     can tell which of its trusted keys a session uses.
 */
 
 #include <stdio.h>
@@ -799,6 +800,27 @@ static int user_auth_types_cb(WOLFSSH *ssh, void *ctx)
 }
 
 
+/* Called by wolfSSH after it has verified the signature of a public key request (user_auth_cb
+   runs before that, so it can't tell a good signature from a junk one). Records the key the
+   login is made with, so the application can tell which of its keys a session uses. */
+static int user_auth_result_cb(byte result, WS_UserAuthData *auth_data, void *ctx)
+{
+	ssh_session_t *ss = ctx;
+
+	if (!ss || !auth_data)
+		return WS_SUCCESS;
+	ss->auth_key_len = 0;
+	if (result == WOLFSSH_USERAUTH_SUCCESS && auth_data->type == WOLFSSH_USERAUTH_PUBLICKEY) {
+		word32 klen = auth_data->sf.publicKey.publicKeySz;
+		if (klen <= sizeof(ss->auth_key)) {
+			memcpy(ss->auth_key, auth_data->sf.publicKey.publicKey, klen);
+			ss->auth_key_len = (uint16_t)klen;
+		}
+	}
+	return WS_SUCCESS;
+}
+
+
 static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 {
 	ssh_session_t *ss = ctx;
@@ -823,18 +845,9 @@ static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 					auth_data->sf.publicKey.publicKeySz,
 					hash, sizeof(hash));
 		if (ret == WOLFSSH_USERAUTH_SUCCESS) {
-			if (auth_data->sf.publicKey.hasSignature) {
+			if (auth_data->sf.publicKey.hasSignature)
 				LOG_MSG(LOG_NOTICE, "SSH accepted publickey for %s (SHA256:%s) (session %u)",
 					auth_data->username, hash, ss->index + 1);
-				/* The key this login is made with (not one the client only asked
-				   about, which has no signature), so the app can tell who it is. */
-				word32 klen = auth_data->sf.publicKey.publicKeySz;
-				ss->auth_key_len = 0;
-				if (klen <= sizeof(ss->auth_key)) {
-					memcpy(ss->auth_key, auth_data->sf.publicKey.publicKey, klen);
-					ss->auth_key_len = (uint16_t)klen;
-				}
-			}
 		} else if (ret == WOLFSSH_USERAUTH_INVALID_USER) {
 			LOG_MSG(LOG_INFO, "SSH failed publickey authentication for invalid user"
 				" %s (SHA256:%s)", auth_data->username, hash);
@@ -1362,6 +1375,7 @@ static bool ssh_server_open(ssh_server_t *st) {
 	wolfSSH_CTX_SetBanner(ctx, st->banner);
 	wolfSSH_CTX_SetSshProtoIdStr(ctx, SSH_PROTO_ID_STR);
 	wolfSSH_SetUserAuth(ctx, user_auth_cb);
+	wolfSSH_SetUserAuthResult(ctx, user_auth_result_cb);
 	wolfSSH_SetUserAuthTypes(ctx, user_auth_types_cb);
 	wolfSSH_SetIORecv(ctx, receive_cb);
 	wolfSSH_SetIOSend(ctx, send_cb);

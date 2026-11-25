@@ -130,6 +130,8 @@ static void post(peer_t *from, int kind, const char *text) {
 // CHAT_WAIT_US.
 static bool ring_full(void) {
     const msg_t *m = &ring[head % CHAT_RING];
+    if (!hooks || !hooks->now_us)       // no clock to time out with: never wait
+        return false;
     if (!m->seq || now_us() - m->posted_us >= CHAT_WAIT_US)
         return false;
     for (unsigned i = 0; i < CHAT_MAX_PEERS; i++) {
@@ -156,7 +158,7 @@ static int format(const msg_t *m, char *buf, size_t len) {
 // Output room needed besides the message: clearing the line, then redrawing the prompt and
 // what's typed, with some slack for newline translation.
 static int redraw_cost(const shell_t *sh) {
-    const char *prompt = sh->answer ? sh->ask_prompt : "sos> ";
+    const char *prompt = sh->answer ? sh->ask_prompt : SHELL_PROMPT;
     return 4 + (int)strlen(prompt ? prompt : "") + (int)sh->line_len + 8;
 }
 

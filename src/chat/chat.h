@@ -27,7 +27,7 @@
 #define CHAT_WAIT_US 2000000    // longest a sender waits for a slow reader before overwriting
 #define CHAT_NAME_MAX 47        // display name, including a "/<slot>" suffix
 #define CHAT_FROM_MAX 47        // where a peer is connected from, e.g. "ssh 192.168.1.20"
-#define CHAT_STAMP_MAX 11       // "14:03", or "+12d03h" before the clock is set
+#define CHAT_STAMP_MAX 11       // "14:03", or "+1h02m" before the clock is set
 
 typedef struct {
     uint64_t (*now_us)(void);                   // monotonic time, for `who`
