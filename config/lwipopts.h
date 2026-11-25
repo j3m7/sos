@@ -49,8 +49,13 @@
 // twice this, so a lost packet now waits 100 ms steps instead of 500 ms ones. Wi-Fi here loses
 // a few percent of packets, and with the small windows of an SSH session there are rarely the
 // three duplicate ACKs that would trigger a fast retransmit, so nearly every loss ended in a
-// timeout: SFTP ran at 40-70 KB/s, half of it waiting. The delayed-ACK timer runs on the same
-// tick (50 ms instead of 250). The timer only runs while a TCP connection is open.
+// timeout: SFTP ran at 40-70 KB/s, half of it waiting. With lwIP's variance term the timeout
+// bottoms out at 3 ticks, so a resend comes 200-300 ms after sending (was 0.5-1 s). Also on this
+// tick: the delayed ACK (50 ms instead of 250), tcp_poll() (pico-sshd converts its intervals),
+// and how long unacknowledged data or unanswered zero-window probes are retried before the
+// connection is dropped (about 4-5 and 1.5 minutes instead of about 15 and 7.5). Timeouts given
+// in milliseconds (keepalive, FIN_WAIT, TIME_WAIT, the first RTO) are unchanged. The timer only
+// runs while a TCP connection is open.
 #define TCP_TMR_INTERVAL            50
 
 #define LWIP_NETIF_STATUS_CALLBACK  1
