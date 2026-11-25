@@ -26,6 +26,7 @@
    697e33c65a3a36231e91b0d2d121611110978454 (see THIRD_PARTY.md).
 
    Modified for SOS (Copyright (C) 2026 Julio Martinez, GPL-3.0-or-later):
+   - ssh_user_auth_entry_t removed, with the default authentication callback that used it.
    - Multiple concurrent sessions: per-connection state moved from ssh_server_t into
      ssh_session_t; the server owns an array of sessions.
    - Session API (ssh_session_read/write/disconnect/get_client_ip) replaces the stdio driver.
@@ -151,13 +152,6 @@ struct ssh_server_t {
 	int (*allow_connect_cb)(ip_addr_t *src_ip);
 };
 
-/* Authentication entry used by default authentication callback routine. */
-typedef struct ssh_user_auth_entry_t {
-	int type;              /* Entry type: WOLFSSH_USERAUTH_PUBLICKEY */
-	const char *username;  /* User name (string) */
-	const uint8_t *auth;   /* Public key (binary, SSH wire format) */
-	uint32_t auth_len;
-} ssh_user_auth_entry_t;
 
 
 /* Server */

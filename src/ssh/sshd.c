@@ -48,6 +48,15 @@ static const char banner[] = "\r\nSOS - Small/Secure OS\r\n\r\n";
 
 // --- helpers ---------------------------------------------------------------
 
+// The user name a client gave, for display: any name logs in (the keys decide), so it's the
+// client's text and may hold escape sequences. Only printable ASCII is kept; other bytes
+// become '?'. out has room for strlen(in) + 1.
+static void printable_name(char *out, const char *in) {
+    for (; *in; in++)
+        *out++ = (*in >= 0x20 && *in < 0x7f) ? *in : '?';
+    *out = '\0';
+}
+
 static void put_u32be(uint8_t *p, uint32_t v) {
     p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
 }
@@ -105,19 +114,18 @@ static void log_cb(int priority, const char *format, ...) {
     log_msg(priority, "sshd: %s", msg);
 }
 
-// Public key only: the user name must match the configured one and the key must be in the
-// configured trusted list (checked at each login, so changes apply immediately). wolfSSH
+// Public key only: the key must be in the configured trusted list (checked at each login, so
+// changes apply immediately). Any user name is accepted: there's one user, and the keys are what
+// decide who gets in; the name a client gives is only shown (`ssh`, `who`, the log). wolfSSH
 // verifies the client's signature itself once this returns success.
 static int auth_cb(void *ctx, const byte *login, word32 login_len,
                    const byte *auth, word32 auth_len, int auth_type) {
     (void)ctx;
+    (void)login;
+    (void)login_len;
     const sos_config_t *cfg = settings();
-    if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY)
+    if (auth_type != WOLFSSH_USERAUTH_PUBLICKEY || !auth)
         return WOLFSSH_USERAUTH_FAILURE;
-    if (!login || !auth)
-        return WOLFSSH_USERAUTH_FAILURE;
-    if (login_len != strlen(cfg->ssh_user) || memcmp(login, cfg->ssh_user, login_len) != 0)
-        return WOLFSSH_USERAUTH_INVALID_USER;
     if (!config_key_find(cfg, auth, auth_len))
         return WOLFSSH_USERAUTH_INVALID_PUBLICKEY;
     return WOLFSSH_USERAUTH_SUCCESS;
@@ -310,7 +318,9 @@ void sshd_status(shell_t *sh) {
         if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK) {
             char ipstr[IPADDR_STRLEN_MAX];
             ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
-            snprintf(who, sizeof(who), "%s@%s:%u", ss->login[0] ? ss->login : "?", ipstr, port);
+            char login[sizeof(ss->login)];
+            printable_name(login, ss->login);
+            snprintf(who, sizeof(who), "%s@%s:%u", login[0] ? login : "?", ipstr, port);
         }
         uint64_t secs = (time_us_64() - ss->accept_start_us) / 1000000;
         shell_printf(sh, "  %c %u  %-36s %-10s %-5s %llum%02llus\n",

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Persistent device configuration: Wi-Fi network and power saving, hostname, SSH user and
-// trusted public keys, time sync, approved TLS roots.
+// Persistent device configuration: Wi-Fi network and power saving, hostname, trusted SSH public
+// keys, time sync, approved TLS roots.
 //
 // Stored as one record in two alternating flash slots (A/B). Each save goes to the slot not
 // holding the current record, with a higher sequence number; loading picks the valid record with
@@ -41,6 +41,9 @@ typedef struct {
     char wifi_ssid[CONFIG_SSID_MAX + 1];        // empty = not configured
     char wifi_password[CONFIG_PASSWORD_MAX + 1];// empty = open network
     char hostname[CONFIG_HOSTNAME_MAX + 1];
+    // No longer used: SSH accepts any user name (the trusted keys decide). Kept, still "admin"
+    // by default, so the record's layout doesn't change and older firmware, which requires the
+    // name to match, still has one to match.
     char ssh_user[CONFIG_USER_MAX + 1];
     uint8_t key_count;
     config_key_t keys[CONFIG_MAX_KEYS];

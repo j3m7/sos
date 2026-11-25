@@ -137,14 +137,13 @@ too, with `-dirty` if the build had uncommitted changes.
 
 ## Configuration
 
-The Wi-Fi network, hostname, SSH user and trusted public keys are set on the serial console
+The Wi-Fi network, hostname and trusted public keys are set on the serial console
 (USB or UART) and saved in flash. On a new board, connect to the console and run `setup`:
 
 ```
 sos> setup
 Wi-Fi network (SSID): my-network
 Wi-Fi password (empty for an open network):        (not echoed)
-SSH user name [admin]: julio
 Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pub)
 ```
 
@@ -157,11 +156,11 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `wifi stats` / `wifi stats chip` | signal, noise and packet counters, for chasing packet loss / plus the chip's raw counters |
 | `wifi keepalive on` / `wifi keepalive off` | address announcement (see below); off is for testing and lasts until reboot |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
-| `hostname <name>`, `user <name>` | hostname (applies at the next Wi-Fi connect), SSH user name |
+| `hostname <name>` | hostname (applies at the next Wi-Fi connect) |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
 | `time cal <ppm>` / `time cal off` | RTC calibration: how fast the RTC runs, in ppm (default off; see [Timekeeping](#timekeeping)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
-| `config reset` | erase everything: no Wi-Fi network, no trusted keys, hostname and user back to `sos` and `admin` |
+| `config reset` | erase everything: no Wi-Fi network, no trusted keys, hostname back to `sos` |
 
 - **Changes only on the console.** SSH sessions can view the configuration but not change it,
   so a remote session can't lock itself out; physical access to the console is the trust
@@ -200,7 +199,7 @@ tools/provision.sh other.conf     # the same, from another file; -n only builds 
 ```
 
 `provision.conf` (git-ignored; see `provision.conf.example`) lists the Wi-Fi network, hostname,
-SSH user, trusted keys and the optional settings. The script builds the saved record on this
+trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
 everything saved on the board; the firmware and the SSH host key stay as they are.
@@ -241,10 +240,12 @@ Check that fingerprint (also shown by the `ssh` shell command over USB) against 
 client prints on first connection, then log in:
 
 ```sh
-ssh <user>@<device-ip>
+ssh <device-ip>
 ```
 
-- Only public-key login is accepted: the configured user with one of the trusted keys.
+- Only public-key login is accepted, with one of the trusted keys. The user name doesn't
+  matter: any name logs in with a trusted key, and the name is only shown (`ssh`, `who`, the
+  log). The keys are what decide who gets in.
 - The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
   flash sector (the key sector, which also holds the SD cards' device key); it survives
   reflashing. The private key never leaves the device.
@@ -691,7 +692,8 @@ tools/test/sftp-hw-test.sh -u <user> <device-ip>    # needs a formatted SD card
 ```
 
 `tools/test/ssh-hw-test.sh` checks the SSH server. It covers login and logout, authentication
-(only public key; unknown key, wrong user and password refused), concurrent sessions kept
+(only public key; unknown key and password refused; any user name accepted, shown without
+control characters), concurrent sessions kept
 separate, the "too many connections" message, slot reuse, a large input burst, clients that
 disappear, back-to-back logins, and heap use before and after. It exits with the number of failed checks. It uses every session slot for a few seconds,
 so run it while nobody else is using the board; it warns if the device rebooted mid-run.
