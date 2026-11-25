@@ -45,6 +45,7 @@ static uint32_t decode(const uint8_t *p, unsigned n) {
 // Indic ones, and emoji sequences, need them; so do U+FE00-U+FE0F (emoji and CJK variants).
 // Tags are the exception on purpose: blocking them breaks the subdivision flags (England,
 // Scotland, Wales), but they can carry hidden ASCII.
+// Keep in step with is_hidden() in tests/test_termtext.c, which the fuzz test checks against.
 static bool hidden(uint32_t cp) {
     return (cp >= 0x80 && cp <= 0x9F)           // C1 controls
         || cp == 0x061C                         // ARABIC LETTER MARK

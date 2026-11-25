@@ -10,8 +10,8 @@
 // 0x80-0x9F (0x9B is CSI on 8-bit terminals) and UTF-8-encoded (U+0080-U+009F). So do code
 // points that would make the text on screen differ from its bytes: bidi controls (U+202E and
 // the like), zero-width and other invisible characters, tag characters and the variation
-// selectors supplement (see hidden() in termtext.c). Invalid UTF-8 becomes '.' too. CR is dropped, since the shell turns '\n' into
-// CRLF itself.
+// selectors supplement (see hidden() in termtext.c). Invalid UTF-8 becomes '.' too. CR is
+// dropped, since the shell turns '\n' into CRLF itself.
 //
 // Input can come in pieces: a UTF-8 sequence split between calls is held until it's complete.
 
