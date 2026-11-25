@@ -83,6 +83,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
+        shell_printf(sh, "wifi country <XX>|worldwide  radio rules to follow, e.g. US (after reboot)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
         shell_printf(sh, "wifi iovar <name> [<value>]  debugging: read or set a Wi-Fi chip variable\n");
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
@@ -274,6 +275,7 @@ static void wifi_show(shell_t *sh) {
     shell_printf(sh, "password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
     shell_printf(sh, "state:    %s\n", wifi_state());
     shell_printf(sh, "power:    saving %s\n", c->wifi_powersave ? "on" : "off");
+    shell_printf(sh, "country:  %s\n", c->wifi_country[0] ? c->wifi_country : "worldwide");
 }
 
 static void stats_row(shell_t *sh, const char *name, const struct stats_proto *p) {
@@ -400,6 +402,19 @@ static void cmd_wifi(shell_t *sh, char *args) {
         int r = val ? wifi_iovar_set(name, v) : wifi_iovar_get(name, &v);
         shell_printf(sh, "%s %s: result %d, value %u (0x%x)\n", val ? "set" : "get", name, r,
                      (unsigned)v, (unsigned)v);
+    } else if (!strncmp(args, "country ", 8)) {
+        if (!require_admin(sh))
+            return;
+        const char *v = !strcmp(args + 8, "worldwide") ? "" : args + 8;
+        const char *err = config_check_country(v);
+        if (err) {
+            shell_printf(sh, "not changed: %s\n", err);
+            return;
+        }
+        snprintf(settings()->wifi_country, sizeof(settings()->wifi_country), "%s", v);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: wifi country %s", v[0] ? v : "worldwide");
+        shell_printf(sh, "takes effect at the next boot ('reboot')\n");
     } else if (!strcmp(args, "power")) {
         shell_printf(sh, "power saving: %s\n", settings()->wifi_powersave ? "on" : "off");
     } else if (!strcmp(args, "power on") || !strcmp(args, "power off")) {
@@ -410,7 +425,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_apply_power();
         log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
-        shell_printf(sh, "usage: wifi [set|connect|stats [chip]|power [on|off]|keepalive on|off|iovar <name> [<value>]]\n");
+        shell_printf(sh, "usage: wifi [set|connect|stats [chip]|power [on|off]|country <XX>|worldwide|keepalive on|off|\n            iovar <name> [<value>]]\n");
     }
 }
 

@@ -53,9 +53,10 @@ Changes are saved in flash immediately and survive reflashing (see
 
 | Command | Where | What it does |
 |---|---|---|
-| `wifi` | any | Network name, whether a password is set, connection state, and power saving |
+| `wifi` | any | Network name, whether a password is set, connection state, power saving and country |
 | `wifi set` | console only | Change the network: asks for the SSID and the password (not echoed), saves them and reconnects |
 | `wifi connect` | console only | Reconnect now |
+| `wifi country <XX>\|worldwide` | console only | The country whose radio rules to follow, as two capital letters (e.g. `US`), or the chip's worldwide set (the default). Saved; takes effect at the next boot |
 | `wifi power` | any | Show whether Wi-Fi power saving is on |
 | `wifi power on\|off` | console only | Turn power saving on or off (saved; default off) |
 | `wifi stats` | any | For chasing packet loss: signal, noise floor, channel, access point and transmit rate; packets sent, received and dropped per protocol since boot; TCP segments resent; and how full lwIP's pools got |

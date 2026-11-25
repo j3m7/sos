@@ -75,6 +75,8 @@ static void set_length(unsigned slot, uint16_t length) {
 #define V2_LENGTH 1606
 // ...and by the third (before wifi_powersave existed).
 #define V3_LENGTH 1638
+// ...and by the fourth (before wifi_country existed).
+#define V4_LENGTH 1640
 
 static void sample(sos_config_t *c, const char *ssid) {
     config_defaults(c);
@@ -341,6 +343,42 @@ TEST(record_from_third_release_loads) {
     CHECK(config_save(&store, &b));
     CHECK(config_load(&store, &a, NULL));
     CHECK_EQ(a.wifi_powersave, 1);
+}
+
+TEST(record_from_fourth_release_loads) {
+    // The release with wifi_powersave wrote V4_LENGTH bytes; the country, added after it, must
+    // load as "" (worldwide).
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, wifi_country), V4_LENGTH);
+    blank_flash();
+    sample(&a, "v4");
+    a.wifi_powersave = 1;
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + V4_LENGTH, 0xff, CONFIG_SLOT_SIZE - 16 - V4_LENGTH);
+    set_length(0, V4_LENGTH);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.wifi_powersave, 1);
+    CHECK_EQ(b.wifi_country[0], 0);
+
+    // The setting round-trips in a full-length record.
+    strcpy(b.wifi_country, "US");
+    CHECK(config_save(&store, &b));
+    CHECK(config_load(&store, &a, NULL));
+    CHECK(!strcmp(a.wifi_country, "US"));
+}
+
+TEST(wifi_country_checked) {
+    CHECK(config_check_country("") == NULL);
+    CHECK(config_check_country("US") == NULL);
+    CHECK(config_check_country("us") != NULL);
+    CHECK(config_check_country("U") != NULL);
+    CHECK(config_check_country("USA") != NULL);
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "x");
+    memcpy(a.wifi_country, "u1", 3);
+    CHECK(!config_save(&store, &a));            // doesn't read back as valid
+    CHECK(!config_load(&store, &b, NULL));
 }
 
 TEST(wifi_powersave_out_of_range_rejected) {
@@ -617,6 +655,8 @@ TEST_MAIN(
     RUN(record_length_out_of_range_rejected);
     RUN(record_from_second_release_loads);
     RUN(record_from_third_release_loads);
+    RUN(record_from_fourth_release_loads);
+    RUN(wifi_country_checked);
     RUN(wifi_powersave_out_of_range_rejected);
     RUN(sequence_wraps_around);
     RUN(erase_resets_to_defaults);

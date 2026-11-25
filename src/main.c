@@ -104,7 +104,7 @@ int main(void) {
     uint32_t hostkey_len;
     bool have_hostkey = hostkey_get(&hostkey, &hostkey_len);
 
-    if (cyw43_arch_init()) {
+    if (cyw43_arch_init_with_country(wifi_country_code())) {
         log_msg(SOS_LOG_ERR, "cyw43 init failed");
         return 1;
     }

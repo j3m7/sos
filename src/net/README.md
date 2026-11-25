@@ -6,9 +6,23 @@ processing runs in interrupt context). Their options are in `config/lwipopts.h`.
 
 ## Connection state machine
 
-`wifi_poll()` moves through `W_OFF → W_CONNECTING → W_UP`, or `→ W_WAIT` after a failure, then
-back to `W_CONNECTING`. It logs each change.
+`wifi_poll()` moves through `W_OFF → W_SCANNING → W_CONNECTING → W_UP`, or `→ W_WAIT` after a
+failure, then back to `W_SCANNING`. It logs each change.
 
+- **Strongest access point:** a network may have several (a mesh, repeaters). Joining by name,
+  the chip took one at -66 dBm with another at -34 dBm in reach in 8 of 12 boots. So:
+  - Each attempt scans first (about 0.5 s) and logs the network's access points with their
+    signal. The chip then joins by name.
+  - Once connected, the one it joined is compared with the scan. If another was stronger by
+    10 dB (`SWITCH_MARGIN_DB`), the device leaves and joins that one by address, about 3 s
+    more. At most twice per connection (`SWITCH_TRIES`).
+  - A scan can miss an access point. If it found fewer than two, a second scan runs after
+    connecting, before the comparison (`W_VERIFY`).
+  - Joining by address from the start isn't used: the first such join after boot failed
+    every time (the retry worked). Passing the scan's channel as well made the join never
+    complete.
+  - The choice is made when connecting. A device that is moved while connected stays where
+    it is until the link drops.
 - **Connecting:** each attempt has 30 s. While the network isn't found, the join is re-issued
   every 3 s.
 - **Retries:** the first 2 failed attempts are retried after 1 s, because some access points
@@ -23,6 +37,18 @@ back to `W_CONNECTING`. It logs each change.
 `wifi_up()` (associated, with an IP address) is what the rest of the system waits for: the
 SSH server starts, and NTS syncs, once it's true. `wifi set` and `wifi connect` on the console
 call `wifi_reconnect()`. A changed hostname applies at the next connect.
+
+## Country
+
+`wifi_country_code()` gives the saved country (`wifi_country`, two letters) to
+`cyw43_arch_init_with_country()` in `main()`, so it takes effect at boot. Empty means the
+chip's worldwide set, which is allowed everywhere; the SDK notes it may perform worse. With
+`US`, measured against worldwide on one network, nothing changed that could be told from
+run-to-run variation.
+
+The driver doesn't check that the chip accepted the country. A code the chip doesn't know (`UK`
+for `GB`, say) is ignored and the chip stays on its default (`US` here), so `wifi_start()` reads
+the chip's country back and logs a warning when it differs from the saved one.
 
 ## Power saving
 

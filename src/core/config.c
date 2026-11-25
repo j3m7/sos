@@ -16,11 +16,14 @@ _Static_assert(CONFIG_V1_LENGTH == 1540, "fields before ntp_sync_hours must not 
 _Static_assert(CONFIG_V2_LENGTH == 1606, "fields before certs_hash must not move");
 #define CONFIG_V3_LENGTH offsetof(sos_config_t, wifi_powersave)    // + certs_hash
 _Static_assert(CONFIG_V3_LENGTH == 1638, "fields before wifi_powersave must not move");
+#define CONFIG_V4_LENGTH offsetof(sos_config_t, wifi_country)      // + wifi_powersave, padding
+_Static_assert(CONFIG_V4_LENGTH == 1640, "fields before wifi_country must not move");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
     CONFIG_V3_LENGTH,
-    sizeof(sos_config_t),   // + wifi_powersave
+    CONFIG_V4_LENGTH,
+    sizeof(sos_config_t),   // + wifi_country
 };
 
 static bool known_length(uint16_t length) {
@@ -92,6 +95,10 @@ static bool record_valid(const record_t *r) {
          (c->ntp_server[0] && config_check_ntp_server(c->ntp_server))))
         return false;
     if (HAS_FIELD(r->hdr.length, wifi_powersave) && c->wifi_powersave > 1)
+        return false;
+    if (HAS_FIELD(r->hdr.length, wifi_country) &&
+        (!terminated(c->wifi_country, sizeof(c->wifi_country)) ||
+         config_check_country(c->wifi_country)))
         return false;
     if (!terminated(c->wifi_ssid, sizeof(c->wifi_ssid)) ||
         !terminated(c->wifi_password, sizeof(c->wifi_password)) ||
@@ -203,6 +210,15 @@ const char *config_check_hostname(const char *hostname) {
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'))
             return "hostname may only contain letters, digits and '-'";
     }
+    return NULL;
+}
+
+const char *config_check_country(const char *country) {
+    if (!country[0])
+        return NULL;
+    if (strlen(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' ||
+        country[1] > 'Z')
+        return "country must be two capital letters (e.g. US), or empty for worldwide";
     return NULL;
 }
 

@@ -16,6 +16,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// The saved country as the driver's code, for cyw43_arch_init_with_country().
+uint32_t wifi_country_code(void);
+
 // Enable station mode and start connecting if a network is configured. After cyw43_arch_init().
 void wifi_start(void);
 
