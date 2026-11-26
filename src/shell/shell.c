@@ -236,7 +236,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "bootkey           would this firmware start with secure boot on? (its key vs OTP)\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
-    shell_printf(sh, "wifi              Wi-Fi network\n");
+    shell_printf(sh, "wifi              Wi-Fi networks and state\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
@@ -253,7 +253,8 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
-        shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
+        shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
+        shell_printf(sh, "wifi add|remove <n>|prefer <n>  more networks: the first in reach is used\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi country <XX>|worldwide  radio rules to follow, e.g. US (after reboot)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
@@ -444,8 +445,18 @@ static char pending_ssid[CONFIG_SSID_MAX + 1];
 // saved (never the password itself); the board has no login password, SSH is keys only.
 static void wifi_show(shell_t *sh) {
     const sos_config_t *c = settings();
-    shell_printf(sh, "wifi network:  %s\n", c->wifi_ssid[0] ? c->wifi_ssid : "(not configured)");
-    shell_printf(sh, "wifi password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
+    unsigned n = config_wifi_count(c);
+    const char *now = wifi_ssid();
+    if (!n)
+        shell_printf(sh, "wifi network:  (not configured)\n");
+    for (unsigned i = 0; i < n; i++) {
+        config_wifi_net_t net;
+        config_wifi_get(c, i, &net);
+        shell_printf(sh, "wifi network %u: %s, %s%s\n", i + 1, net.ssid,
+                     net.password[0] ? "password set" : "open network",
+                     now && !strcmp(now, net.ssid) ? " (connected)" : "");
+        memset(&net, 0, sizeof(net));
+    }
     shell_printf(sh, "wifi state:    %s\n", wifi_state());
     shell_printf(sh, "wifi power:    saving %s\n", c->wifi_powersave ? "on" : "off");
     shell_printf(sh, "wifi country:  %s\n", c->wifi_country[0] ? c->wifi_country : "worldwide");
@@ -516,35 +527,57 @@ static void wifi_stats(shell_t *sh, bool chip) {
     shell_printf(sh, "\n");
 }
 
+// `wifi set` (arg NULL) replaces the first network; `wifi add` (arg non-NULL) adds one after
+// the others.
 static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
     if (!answer)
         return;
-    const char *err = config_check_password(answer);
+    sos_config_t *c = settings();
+    bool add = arg != NULL;
+    const char *err = add ? config_wifi_add(c, pending_ssid, answer)
+                          : config_wifi_set_first(c, pending_ssid, answer);
+    memset(answer, 0, strlen(answer));
     if (err) {
         shell_printf(sh, "not changed: %s\n", err);
         return;
     }
-    sos_config_t *c = settings();
-    strcpy(c->wifi_ssid, pending_ssid);
-    strcpy(c->wifi_password, answer);
-    memset(answer, 0, strlen(answer));
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", c->wifi_ssid);
-    wifi_reconnect();
+    if (add) {
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' added", pending_ssid);
+        if (!wifi_up())
+            wifi_reconnect();       // it may be the one in reach
+    } else {
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", pending_ssid);
+        wifi_reconnect();
+    }
 }
 
 static void on_wifi_ssid(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
     if (!answer)
         return;
     const char *err = config_check_ssid(answer);
+    if (!err && arg && config_wifi_find(settings(), answer) >= 0)
+        err = "that network is already saved (remove it first to change its password)";
+    if (!err && arg && config_wifi_count(settings()) == CONFIG_WIFI_NETS)
+        err = "the network list is full (5 networks)";
     if (err) {
         shell_printf(sh, "not changed: %s\n", err);
         return;
     }
     strcpy(pending_ssid, answer);
-    shell_ask(sh, "Password (empty for an open network): ", true, on_wifi_password, NULL);
+    shell_ask(sh, "Password (empty for an open network): ", true, on_wifi_password, arg);
+}
+
+// `wifi remove <n>` and `wifi prefer <n>`: n as `wifi` numbers them. Returns the index, or -1
+// after saying why not.
+static int wifi_number(shell_t *sh, const char *arg) {
+    char *end;
+    long n = strtol(arg, &end, 10);
+    if (*arg == '\0' || *end != '\0' || n < 1 || n > (long)config_wifi_count(settings())) {
+        shell_printf(sh, "no network %s ('wifi' lists them)\n", arg);
+        return -1;
+    }
+    return (int)n - 1;
 }
 
 static void cmd_wifi(shell_t *sh, char *args) {
@@ -553,6 +586,34 @@ static void cmd_wifi(shell_t *sh, char *args) {
     } else if (!strcmp(args, "set")) {
         if (require_admin(sh))
             shell_ask(sh, "SSID: ", false, on_wifi_ssid, NULL);
+    } else if (!strcmp(args, "add")) {
+        if (require_admin(sh))
+            shell_ask(sh, "SSID: ", false, on_wifi_ssid, (void *)1);
+    } else if (!strncmp(args, "remove ", 7)) {
+        int i;
+        if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
+            return;
+        config_wifi_net_t net;
+        config_wifi_get(settings(), (unsigned)i, &net);
+        const char *now = wifi_ssid();
+        bool was_connected = now && !strcmp(now, net.ssid);
+        config_wifi_remove(settings(), (unsigned)i);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' removed", net.ssid);
+        memset(&net, 0, sizeof(net));
+        if (!config_wifi_count(settings()))
+            shell_printf(sh, "warning: no Wi-Fi network left\n");
+        if (was_connected)
+            wifi_reconnect();
+    } else if (!strncmp(args, "prefer ", 7)) {
+        int i;
+        if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
+            return;
+        config_wifi_prefer(settings(), (unsigned)i);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' preferred", settings()->wifi_ssid);
+        if (wifi_up() && strcmp(wifi_ssid(), settings()->wifi_ssid))
+            shell_printf(sh, "takes effect on the next Wi-Fi connect ('wifi connect')\n");
     } else if (!strcmp(args, "connect")) {
         if (require_admin(sh))
             wifi_reconnect();
@@ -598,7 +659,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_apply_power();
         log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
-        shell_printf(sh, "usage: wifi [set|connect|stats [chip]|power [on|off]|country <XX>|worldwide|keepalive on|off|\n            iovar <name> [<value>]]\n");
+        shell_printf(sh, "usage: wifi [set|add|remove <n>|prefer <n>|connect|stats [chip]|power [on|off]|\n            country <XX>|worldwide|keepalive on|off|iovar <name> [<value>]]\n");
     }
 }
 
@@ -942,10 +1003,8 @@ static struct {
 static void setup_finish(shell_t *sh) {
     sos_config_t *c = settings();
     bool wifi_changed = setup_state.wifi_changed;
-    if (wifi_changed) {
-        strcpy(c->wifi_ssid, setup_state.ssid);
-        strcpy(c->wifi_password, setup_state.password);
-    }
+    if (wifi_changed)       // checked as it was typed
+        config_wifi_set_first(c, setup_state.ssid, setup_state.password);
     memset(&setup_state, 0, sizeof(setup_state));
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: setup completed");

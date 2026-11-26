@@ -15,9 +15,11 @@
 #define MKCONFIG_IMAGE_SIZE (2 * CONFIG_SLOT_SIZE)     // both config slots, as they sit in flash
 
 // Parse a provisioning file (`text`, NUL-terminated; it is modified) into *cfg, starting from
-// the defaults. Lines are "name = value"; '#' starts a comment line. Names: wifi_ssid,
-// wifi_password, wifi_powersave (on|off), hostname, ssh_user (only older firmware uses it),
-// ssh_key (an authorized_keys line; may repeat), nts_server, nts_sync_hours.
+// the defaults. Lines are "name = value"; '#' starts a comment line. Names: wifi_ssid and
+// wifi_password (may repeat: up to 5 networks, in the order preferred; each wifi_ssid starts a
+// network and the wifi_password after it, if any, is its password), wifi_powersave (on|off),
+// hostname, ssh_user (only older firmware uses it), ssh_key (an authorized_keys line; may
+// repeat), nts_server, nts_sync_hours.
 // Returns NULL, or a message (in errbuf) naming the line.
 const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t errlen);
 
