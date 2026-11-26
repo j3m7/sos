@@ -29,9 +29,12 @@ roototp_page_t roototp_page(const roototp_reader_t *r, unsigned index) {
     }
     if (blank)
         return ROOTOTP_BLANK;
-    return r->ecc(r->ctx, ROOTOTP_ROW(index, ROOTOTP_MARKER_ROW)) == ROOTOTP_MARKER
-               ? ROOTOTP_COMPLETE
-               : ROOTOTP_SPENT;
+    // The marker row: blank means the write stopped before it; the marker means complete;
+    // anything else is neither, and must not be taken for "spent" and passed over.
+    unsigned marker_row = ROOTOTP_ROW(index, ROOTOTP_MARKER_ROW);
+    if ((r->raw(r->ctx, marker_row) & 0xffffffu) == 0)
+        return ROOTOTP_SPENT;
+    return r->ecc(r->ctx, marker_row) == ROOTOTP_MARKER ? ROOTOTP_COMPLETE : ROOTOTP_DAMAGED;
 }
 
 roototp_find_t roototp_find(const roototp_reader_t *r, unsigned *index) {
@@ -46,6 +49,9 @@ roototp_find_t roototp_find(const roototp_reader_t *r, unsigned *index) {
         case ROOTOTP_UNREADABLE:
             *index = i;
             return ROOTOTP_CANT_READ;
+        case ROOTOTP_DAMAGED:
+            *index = i;
+            return ROOTOTP_BAD_MARKER;
         case ROOTOTP_SPENT:
             break;                      // skipped for good; the next page decides
         }
@@ -102,14 +108,41 @@ bool roototp_read(const roototp_reader_t *r, unsigned index, uint8_t out[ROOTOTP
     return ok;
 }
 
-rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool sealed_only) {
-    if (found == ROOTOTP_FOUND)
+bool roototp_bootloader_can_write(uint32_t lock1_raw) {
+    if (lock1_raw == UNREADABLE)
+        return true;                    // can't tell: treated as not locked
+    // The lock byte is stored three times in the row; each bit by two of three.
+    uint32_t a = lock1_raw & 0xff, b = lock1_raw >> 8 & 0xff, c = lock1_raw >> 16 & 0xff;
+    uint32_t lock = (a & b) | (a & c) | (b & c);
+    return (lock >> 4 & 3u) == 0;       // LOCK_BL: 0 = the bootloader permits reads and writes
+}
+
+bool roototp_locks_ok(const roototp_reader_t *r, unsigned index, unsigned *open_page) {
+    for (unsigned i = 0; i <= index && i < ROOTOTP_PAGES; i++) {
+        unsigned page = ROOTOTP_FIRST_PAGE + i;
+        if (roototp_bootloader_can_write(r->lock1(r->ctx, page))) {
+            if (open_page)
+                *open_page = page;
+            return false;
+        }
+    }
+    return true;
+}
+
+rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool locks_ok,
+                         bool sealed_only) {
+    if (found == ROOTOTP_FOUND) {
         // A secret was written to OTP. If it can't be used, nothing else stands in for it:
         // not on a sealed-only board, and not on an open one either.
-        return otp_secret_ok ? ROOTSRC_OTP : ROOTSRC_NONE;
+        if (!otp_secret_ok)
+            return ROOTSRC_NONE;
+        // With a page of the list still writable from the bootloader, the secret found may be
+        // one somebody completed from a spent page. A sealed-only board doesn't use it.
+        return sealed_only && !locks_ok ? ROOTSRC_NONE : ROOTSRC_OTP;
+    }
     if (sealed_only)
         return ROOTSRC_NONE;            // OTP or not at all
-    if (found == ROOTOTP_CANT_READ)
+    if (found == ROOTOTP_CANT_READ || found == ROOTOTP_BAD_MARKER)
         return ROOTSRC_NONE;
     return ROOTSRC_FLASH;               // an open board with no secret in OTP
 }

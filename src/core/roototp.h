@@ -21,25 +21,37 @@
 //
 // What a page is:
 //   blank        every row reads zero: never written
-//   complete     the marker is there. Its secret is used if the check matches.
-//   spent        anything else: a write that stopped before the marker. Skipped for good.
+//   complete     the marker row reads 0xa55a. Its secret is used if the check matches.
+//   spent        something is written and the marker row is still blank: a write that stopped
+//                before the marker. Skipped for good.
+//   damaged      the marker row holds something that isn't the marker
 //   unreadable   a row can't be read (it comes back as all ones)
 //
 // Finding the secret: the first page of the list that isn't spent decides. Complete: that is
-// the secret. Blank: there is none yet. Unreadable: there is none that can be used. All three
-// spent: there is none and there can't be one.
+// the secret. Blank: there is none yet. Damaged or unreadable: there is none that can be used,
+// and the search stops there. All three spent: there is none and there can't be one.
 //
 // A complete page whose check doesn't match (damage, or a read disturbed on purpose) is not a
 // secret and is not skipped either: the board has no keys until that is looked into.
 //
+// Locks. A spent page holds 32 bytes and no marker. If the USB bootloader could still write
+// it, someone with a cable could read those bytes, add the check and the marker, and make it
+// the board's root secret: one they know. So every page of the list up to and including the
+// secret's must be locked against the bootloader's writes (the page's permanent lock word,
+// LOCK_BL not "read-write"; the burn image sets it). The firmware reads those lock words at
+// boot (roototp_locks_ok). A sealed-only board whose pages aren't locked so has no source; an
+// open board is warned.
+//
 // Which source a board uses (roototp_choose):
-//   - a secret in OTP: OTP, always;
+//   - a secret in OTP: OTP (but not on a sealed-only board whose list pages the bootloader can
+//     still write: see "Locks" above);
 //   - a sealed-only board (core/sealedonly.h) with none: NO source. Never the flash record:
 //     anyone with a cable can write one, with a configuration sealed under it;
 //   - an open board with none (blank, or the list spent): the flash record (core/rootflash.h),
 //     as before;
-//   - an open board whose OTP pages can't be read or hold a damaged secret: no source, said
-//     plainly, instead of quietly becoming a different board with a new flash secret.
+//   - an open board whose OTP pages can't be read, or hold a damaged secret or marker: no
+//     source, said plainly, instead of quietly becoming a different board with a new flash
+//     secret.
 //
 // No hardware in this file: the rows come through roototp_reader_t. Unit tested on the host.
 
@@ -75,9 +87,15 @@ typedef struct {
     // alias, which stops the chip on a failed check instead of returning something). False if
     // it can't.
     bool (*careful)(void *ctx, unsigned row, unsigned count, uint16_t *out);
+
+    // The raw lock word of OTP page `page` (its PAGEn_LOCK1 row: always readable), or
+    // 0xffffffff if it can't be read.
+    uint32_t (*lock1)(void *ctx, unsigned page);
 } roototp_reader_t;
 
-typedef enum { ROOTOTP_BLANK, ROOTOTP_SPENT, ROOTOTP_COMPLETE, ROOTOTP_UNREADABLE } roototp_page_t;
+typedef enum {
+    ROOTOTP_BLANK, ROOTOTP_SPENT, ROOTOTP_COMPLETE, ROOTOTP_DAMAGED, ROOTOTP_UNREADABLE,
+} roototp_page_t;
 
 roototp_page_t roototp_page(const roototp_reader_t *r, unsigned index);
 
@@ -86,6 +104,7 @@ typedef enum {
     ROOTOTP_NONE_YET,       // the next page to use is blank: no secret has been written
     ROOTOTP_EXHAUSTED,      // every page of the list is spent
     ROOTOTP_CANT_READ,      // a page that would decide can't be read
+    ROOTOTP_BAD_MARKER,     // a page's marker row is neither blank nor the marker
 } roototp_find_t;
 
 roototp_find_t roototp_find(const roototp_reader_t *r, unsigned *index);
@@ -103,8 +122,17 @@ typedef enum {
     ROOTSRC_NONE,           // no root secret: no keys
 } rootsrc_t;
 
+// The page lock word's LOCK_BL field says the bootloader may write the page (or the word can't
+// be read, which counts the same).
+bool roototp_bootloader_can_write(uint32_t lock1_raw);
+
+// Are all pages of the list up to and including `index` locked against the bootloader's
+// writes? If not, *open_page (may be NULL) is the first that isn't, as an OTP page number.
+bool roototp_locks_ok(const roototp_reader_t *r, unsigned index, unsigned *open_page);
+
 // Which source this board uses. `otp_secret_ok`: for ROOTOTP_FOUND, whether roototp_read()
-// succeeded.
-rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool sealed_only);
+// succeeded; `locks_ok`: for ROOTOTP_FOUND, roototp_locks_ok() for that page.
+rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool locks_ok,
+                         bool sealed_only);
 
 #endif

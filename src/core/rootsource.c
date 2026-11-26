@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 
+#include "hardware/regs/otp_data.h"
 #include "hardware/structs/otp.h"
 
 #include "core/keyprov.h"
@@ -32,7 +33,12 @@ static bool rd_careful(void *ctx, unsigned row, unsigned count, uint16_t *out) {
         out[i] = otpread_ecc_guarded(row + i);
     return true;
 }
-static const roototp_reader_t reader = { NULL, rd_raw, rd_ecc, rd_careful };
+// PAGEn_LOCK1: the second row of page n's lock word, in the last two OTP pages.
+static uint32_t rd_lock1(void *ctx, unsigned page) {
+    (void)ctx;
+    return otpread_raw(OTP_DATA_PAGE0_LOCK1_ROW + 2 * page);
+}
+static const roototp_reader_t reader = { NULL, rd_raw, rd_ecc, rd_careful, rd_lock1 };
 
 // --- the key provider's backend for a secret in OTP ---------------------------------------------------
 
@@ -75,22 +81,32 @@ static const keyprov_backend_t no_backend = { no_root, NULL, NULL };
 
 void rootsource_init(void) {
     uint8_t probe[ROOTOTP_SECRET_LEN];
-    bool secret_ok = false;
+    bool secret_ok = false, locks_ok = false;
+    unsigned open_page = 0;
     found = roototp_find(&reader, &otp_index);
     if (found == ROOTOTP_FOUND) {
         // Read it once now to know that it can be used; it is read again for each derivation
         // and never kept.
         secret_ok = roototp_read(&reader, otp_index, probe);
         keyprov_wipe(probe, sizeof(probe));
+        locks_ok = roototp_locks_ok(&reader, otp_index, &open_page);
     }
-    source = roototp_choose(found, secret_ok, sealedonly());
+    source = roototp_choose(found, secret_ok, locks_ok, sealedonly());
     unsigned page = ROOTOTP_FIRST_PAGE + otp_index;
 
     switch (source) {
     case ROOTSRC_OTP:
         keyprov_init(&otp_backend);
-        snprintf(why, sizeof(why), "present, in OTP page %u", page);
+        snprintf(why, sizeof(why), "present, in OTP page %u%s", page,
+                 locks_ok ? "" : " (WARNING: an OTP page of its list can still be written "
+                                 "from the USB bootloader)");
         log_msg(SOS_LOG_NOTICE, "rootsecret: the root secret is in OTP page %u", page);
+        if (!locks_ok)
+            log_msg(SOS_LOG_ERR, "rootsecret: OTP page %u is not locked against writes from "
+                                 "the USB bootloader. Someone with a cable could turn a spent "
+                                 "page into a root secret they know. This open board uses the "
+                                 "secret all the same; a sealed-only board would not",
+                    open_page);
         return;
     case ROOTSRC_FLASH: {
         if (found == ROOTOTP_EXHAUSTED)
@@ -112,9 +128,16 @@ void rootsource_init(void) {
     }
 
     keyprov_init(&no_backend);
-    if (found == ROOTOTP_FOUND)
+    if (found == ROOTOTP_FOUND && secret_ok)
+        snprintf(why, sizeof(why), "none: the root secret in OTP page %u isn't used, because "
+                                   "OTP page %u can still be written from the USB bootloader",
+                 page, open_page);
+    else if (found == ROOTOTP_FOUND)
         snprintf(why, sizeof(why), "none: OTP page %u holds a root secret that fails its check "
                                    "(damaged, or the read was disturbed)", page);
+    else if (found == ROOTOTP_BAD_MARKER)
+        snprintf(why, sizeof(why), "none: OTP page %u's marker row is neither blank nor the "
+                                   "marker", page);
     else if (found == ROOTOTP_CANT_READ)
         snprintf(why, sizeof(why), "none: OTP page %u, where it would be, can't be read", page);
     else if (found == ROOTOTP_EXHAUSTED)

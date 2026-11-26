@@ -148,8 +148,15 @@ firmware reads it there; a separate image, used once per board, writes it.
   the 32-byte secret in rows 0 to 15, a 4-byte check over it in rows 16 and 17
   (HMAC-SHA256 keyed with the secret), the marker 0xa55a in row 18, written last, and the
   complement of the secret's raw rows in rows 32 to 47 against imaging the chip.
-- **What a page is:** blank; complete (the marker is there); spent (written but no marker: a
-  burn that stopped, skipped for good); or unreadable. The first page that isn't spent decides.
+- **What a page is:** blank; complete (the marker row reads 0xa55a); spent (something written,
+  the marker row still blank: a burn that stopped, skipped for good); damaged (the marker row
+  holds something else); or unreadable. The first page that isn't spent decides, and a
+  damaged or unreadable one means no secret, not "try the next".
+- **Locks:** a spent page holds 32 bytes and no marker. If the USB bootloader could write it,
+  someone with a cable could add the check and the marker and make it the board's root
+  secret, one they know. So every list page up to the secret's must be locked against the
+  bootloader's writes (the burn image does it). The firmware reads those lock words at boot:
+  an open board warns, a sealed-only board refuses the secret.
 - **Reading it:** what a page holds is decided with reads that can't fault. The secret itself
   is read through the chip's guarded alias, which faults instead of returning a wrong value,
   and then verified against its check. A complete page that fails its check is not a secret

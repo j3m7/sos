@@ -35,13 +35,22 @@ static bool f_careful(void *ctx, unsigned row, unsigned count, uint16_t *out) {
         out[i] = careful_zeros ? 0 : (uint16_t)otp[row + i];
     return true;
 }
-static const roototp_reader_t reader = { NULL, f_raw, f_ecc, f_careful };
+// Page lock words (PAGEn_LOCK1), as raw rows: the lock byte three times over.
+static uint32_t lock1[64];
+static uint32_t f_lock1(void *ctx, unsigned page) { (void)ctx; return lock1[page]; }
+#define LOCK(byte) ((uint32_t)(byte) | (uint32_t)(byte) << 8 | (uint32_t)(byte) << 16)
+#define BL_READ_WRITE 0x00
+#define BL_READ_ONLY  0x10
+#define BL_NO_ACCESS  0x30
+#define AS_BURNED     0x3d              // bootloader none, Non-secure none, Secure read-only
+static const roototp_reader_t reader = { NULL, f_raw, f_ecc, f_careful, f_lock1 };
 
 static void write_row(unsigned row, uint16_t value) { otp[row] = 0x150000u | value; }
 
 static void fresh(void) {
     memset(otp, 0, sizeof(otp));
     memset(unreadable_page, 0, sizeof(unreadable_page));
+    memset(lock1, 0, sizeof(lock1));
     careful_fails = careful_zeros = false;
     careful_calls = 0;
 }
@@ -224,24 +233,106 @@ TEST(the_check_depends_on_every_byte) {
 // Where the root secret comes from. The rule that matters most: on a sealed-only board it is
 // OTP or nothing, whatever is in OTP and whatever is in flash.
 TEST(source) {
-    // A secret in OTP is used, sealed-only or not.
-    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, false), ROOTSRC_OTP);
-    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, true), ROOTSRC_OTP);
+    // A secret in OTP, with its pages locked, is used, sealed-only or not.
+    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, true, false), ROOTSRC_OTP);
+    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, true, true), ROOTSRC_OTP);
+    // With a list page the bootloader can still write: an open board uses it (and warns); a
+    // sealed-only board does not.
+    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, false, false), ROOTSRC_OTP);
+    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, false, true), ROOTSRC_NONE);
     // A secret in OTP that can't be used is replaced by nothing.
-    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, false, false), ROOTSRC_NONE);
-    CHECK_EQ(roototp_choose(ROOTOTP_FOUND, false, true), ROOTSRC_NONE);
+    for (int locks = 0; locks <= 1; locks++) {
+        CHECK_EQ(roototp_choose(ROOTOTP_FOUND, false, locks, false), ROOTSRC_NONE);
+        CHECK_EQ(roototp_choose(ROOTOTP_FOUND, false, locks, true), ROOTSRC_NONE);
+    }
     // An open board with nothing in OTP uses its flash record, as before.
-    CHECK_EQ(roototp_choose(ROOTOTP_NONE_YET, false, false), ROOTSRC_FLASH);
-    CHECK_EQ(roototp_choose(ROOTOTP_EXHAUSTED, false, false), ROOTSRC_FLASH);
-    CHECK_EQ(roototp_choose(ROOTOTP_CANT_READ, false, false), ROOTSRC_NONE);
-    // A sealed-only board never uses the flash record.
-    static const roototp_find_t all[] = { ROOTOTP_NONE_YET, ROOTOTP_EXHAUSTED, ROOTOTP_CANT_READ };
-    for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++)
+    CHECK_EQ(roototp_choose(ROOTOTP_NONE_YET, false, false, false), ROOTSRC_FLASH);
+    CHECK_EQ(roototp_choose(ROOTOTP_EXHAUSTED, false, false, false), ROOTSRC_FLASH);
+    // ... but not if what is there can't be read or made sense of.
+    CHECK_EQ(roototp_choose(ROOTOTP_CANT_READ, false, false, false), ROOTSRC_NONE);
+    CHECK_EQ(roototp_choose(ROOTOTP_BAD_MARKER, false, false, false), ROOTSRC_NONE);
+    // A sealed-only board never uses the flash record, whatever else is true.
+    for (int found = ROOTOTP_FOUND; found <= ROOTOTP_BAD_MARKER; found++)
         for (int ok = 0; ok <= 1; ok++)
-            CHECK_EQ(roototp_choose(all[i], ok, true), ROOTSRC_NONE);
-    for (int found = ROOTOTP_FOUND; found <= ROOTOTP_CANT_READ; found++)
-        for (int ok = 0; ok <= 1; ok++)
-            CHECK(roototp_choose((roototp_find_t)found, ok, true) != ROOTSRC_FLASH);
+            for (int locks = 0; locks <= 1; locks++) {
+                rootsrc_t src = roototp_choose((roototp_find_t)found, ok, locks, true);
+                CHECK(src != ROOTSRC_FLASH);
+                if (found != ROOTOTP_FOUND)
+                    CHECK_EQ(src, ROOTSRC_NONE);
+            }
+}
+
+// The marker row decides between spent and complete, and anything else stops the search: a
+// row that isn't blank and doesn't read as the marker must not be passed over as "spent".
+TEST(a_damaged_marker_stops_the_search) {
+    uint8_t a[ROOTOTP_SECRET_LEN], b[ROOTOTP_SECRET_LEN];
+    unsigned index;
+    fresh();
+    secret_for(1, a);
+    secret_for(2, b);
+    burn(0, a, 3);
+    write_row(ROOTOTP_ROW(0, ROOTOTP_MARKER_ROW), ROOTOTP_MARKER ^ 0x0100);    // not the marker
+    CHECK_EQ(roototp_page(&reader, 0), ROOTOTP_DAMAGED);
+    CHECK_EQ(roototp_find(&reader, &index), ROOTOTP_BAD_MARKER);
+    CHECK_EQ(index, 0);
+    burn(1, b, 4);                              // a complete page further on is not reached
+    CHECK_EQ(roototp_find(&reader, &index), ROOTOTP_BAD_MARKER);
+    fresh();
+    burn(0, a, 3);
+    otp[ROOTOTP_ROW(0, ROOTOTP_MARKER_ROW)] = 0x400000;     // one stray bit, data bits zero
+    CHECK_EQ(roototp_page(&reader, 0), ROOTOTP_DAMAGED);
+    fresh();                                    // the marker row alone, on an otherwise blank page
+    write_row(ROOTOTP_ROW(0, ROOTOTP_MARKER_ROW), 0x1234);
+    CHECK_EQ(roototp_find(&reader, &index), ROOTOTP_BAD_MARKER);
+}
+
+// The lock word: LOCK_BL is bits 5:4 of a byte stored three times, each bit by two of three.
+TEST(lock_word) {
+    CHECK(roototp_bootloader_can_write(LOCK(BL_READ_WRITE)));       // a blank lock word
+    CHECK(!roototp_bootloader_can_write(LOCK(BL_READ_ONLY)));
+    CHECK(!roototp_bootloader_can_write(LOCK(BL_NO_ACCESS)));
+    CHECK(!roototp_bootloader_can_write(LOCK(AS_BURNED)));
+    CHECK(!roototp_bootloader_can_write(LOCK(0x20)));               // the reserved value: locked
+    CHECK(roototp_bootloader_can_write(LOCK(0x0f)));                // only the other fields set
+    CHECK(roototp_bootloader_can_write(0xffffffffu));               // can't be read: not trusted
+    // One copy out of three doesn't decide, either way.
+    CHECK(roototp_bootloader_can_write(0x000010));                  // a write that stopped early
+    CHECK(roototp_bootloader_can_write(0x100000));
+    CHECK(!roototp_bootloader_can_write(0x001010));
+    CHECK(!roototp_bootloader_can_write(0x3d3d00));
+    CHECK(!roototp_bootloader_can_write(0x3d003d));
+}
+
+// Every page of the list up to the secret's must be locked against the bootloader's writes,
+// the spent ones included: an unlocked spent page can be completed by someone with a cable.
+TEST(pages_up_to_the_secret_must_be_locked) {
+    unsigned open_page = 0;
+    fresh();
+    for (unsigned i = 0; i < ROOTOTP_PAGES; i++) {
+        CHECK(!roototp_locks_ok(&reader, i, &open_page));           // nothing locked
+        CHECK_EQ(open_page, ROOTOTP_FIRST_PAGE);
+    }
+    lock1[ROOTOTP_FIRST_PAGE] = LOCK(AS_BURNED);
+    CHECK(roototp_locks_ok(&reader, 0, &open_page));                // the secret in the first page
+    CHECK(!roototp_locks_ok(&reader, 1, &open_page));               // in the second: it isn't locked
+    CHECK_EQ(open_page, ROOTOTP_FIRST_PAGE + 1);
+    lock1[ROOTOTP_FIRST_PAGE + 1] = LOCK(AS_BURNED);
+    CHECK(roototp_locks_ok(&reader, 1, NULL));
+    // dev-1 as planned: the first page spent, the secret in the second. The spent page
+    // unlocked is exactly the case to catch.
+    lock1[ROOTOTP_FIRST_PAGE] = LOCK(BL_READ_WRITE);
+    CHECK(!roototp_locks_ok(&reader, 1, &open_page));
+    CHECK_EQ(open_page, ROOTOTP_FIRST_PAGE);
+    lock1[ROOTOTP_FIRST_PAGE] = LOCK(BL_READ_ONLY);                 // read-only is enough
+    CHECK(roototp_locks_ok(&reader, 1, NULL));
+    // Pages after the secret's don't matter: the search never reaches them.
+    CHECK_EQ(lock1[ROOTOTP_FIRST_PAGE + 2], 0);
+    CHECK(roototp_locks_ok(&reader, 1, NULL));
+    CHECK(!roototp_locks_ok(&reader, 2, &open_page));
+    CHECK_EQ(open_page, ROOTOTP_FIRST_PAGE + 2);
+    lock1[ROOTOTP_FIRST_PAGE + 1] = 0xffffffffu;                    // a lock word that can't be read
+    CHECK(!roototp_locks_ok(&reader, 1, &open_page));
+    CHECK_EQ(open_page, ROOTOTP_FIRST_PAGE + 1);
 }
 
 TEST_MAIN(
@@ -255,4 +346,7 @@ TEST_MAIN(
     RUN(a_secret_that_fails_its_check_is_not_used);
     RUN(the_check_depends_on_every_byte);
     RUN(source);
+    RUN(a_damaged_marker_stops_the_search);
+    RUN(lock_word);
+    RUN(pages_up_to_the_secret_must_be_locked);
 )
