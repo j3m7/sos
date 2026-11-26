@@ -198,6 +198,14 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     return ok;
 }
 
+void hostkey_owner_gone(void) {
+    wipe(key_der, sizeof(key_der));
+    key_len = 0;
+    have_key = false;
+    gave_up = false;                    // what failed for the old owner may not for the next
+    said_no_owner = false;
+}
+
 bool hostkey_erase(void) {
     return keysector_write(KEYSECTOR_HOSTKEY, NULL);      // keeps the device key
 }

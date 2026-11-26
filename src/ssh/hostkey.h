@@ -20,6 +20,13 @@ void hostkey_init(void);
 // next reboot. The first call should come before Wi-Fi starts, when a flash write is simplest.
 bool hostkey_get(const uint8_t **der, uint32_t *len);
 
+// The owner secret was just destroyed (`config reset`): the host key in RAM belonged to that
+// owner and must not be used again. Forgets it, so that the next hostkey_get() decides afresh
+// (none while the board isn't set up; then a new key for the new owner, since the stored
+// record no longer opens). THE SSH SERVER MUST BE STOPPED FIRST (sshd_stop): it holds a
+// pointer to the key.
+void hostkey_owner_gone(void);
+
 // Erase the stored host key; a new one is generated on next boot.
 bool hostkey_erase(void);
 

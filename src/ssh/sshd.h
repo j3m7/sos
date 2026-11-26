@@ -18,6 +18,11 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len);
 
 bool sshd_running(void);
 
+// Stop serving: every session is ended and the listener closed. sshd_start() starts it again,
+// with whatever host key it is then given. For when the host key in use must not be used any
+// more (the board's owner secret was destroyed).
+void sshd_stop(void);
+
 // The host key's fingerprint ("SHA256:..."), once started.
 const char *sshd_host_fingerprint(void);
 

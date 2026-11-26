@@ -208,6 +208,15 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
     target_link_libraries(test_seal PRIVATE wolfcrypt_host OpenSSL::Crypto)
     add_test(NAME seal COMMAND test_seal)
 
+    # src/ssh/hostkey.c: the host key and its owner, with the real record and seal code and
+    # stand-ins for flash, the key provider, the settings and key generation (tests/stubs).
+    add_executable(test_hostkey test_hostkey.c ${SOS_ROOT}/src/ssh/hostkey.c
+        ${SOS_ROOT}/src/ssh/hostkey_record.c ${SOS_ROOT}/src/core/seal.c)
+    target_include_directories(test_hostkey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+        ${SOS_ROOT}/src)
+    target_link_libraries(test_hostkey PRIVATE wolfcrypt_host)
+    add_test(NAME hostkey COMMAND test_hostkey)
+
     add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)
 elseif (TARGET wolfcrypt_host)

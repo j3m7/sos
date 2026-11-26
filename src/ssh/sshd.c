@@ -250,6 +250,20 @@ static const shell_io_t session_io = {
     .write_space = session_write_space,
 };
 
+void sshd_stop(void) {
+    if (!server)
+        return;
+    for (unsigned i = 0; i < server->max_sessions; i++) {
+        if (session_shell_ids[i])
+            session_end(i);
+        session_shell_ids[i] = 0;
+    }
+    ssh_server_destroy(server);         // closes the connections and the listener
+    server = NULL;
+    hostkey_fingerprint[0] = '\0';
+    log_msg(SOS_LOG_NOTICE, "sshd: stopped");
+}
+
 void sshd_poll(void) {
     if (!server)
         return;
