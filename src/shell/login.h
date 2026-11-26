@@ -100,6 +100,11 @@ void login_poll(shell_t *console, bool connected, uint32_t idle_limit_ms);
 // Not for other shells.
 bool login_gate(shell_t *console, const char *cmd);
 
+// A console password was just set at the open console. Wrong answers counted before that were
+// against an earlier password, or against none: the count and the wait they earned start
+// again, here and in what is kept across reboots (the clear_count hook).
+void login_password_set(void);
+
 // Wrong answers since the last right one, as counted now (for reporting and tests).
 unsigned login_failures(void);
 

@@ -717,6 +717,36 @@ TEST(kept_count_without_a_password) {
     CHECK_EQ(kept, 4);
 }
 
+// A board that boots with a kept count and no password (the configuration was erased, say):
+// the console is open, a password is set, the console is locked. The old count must not make
+// the first wrong answer against the new password wait as if it were the fifth.
+TEST(setting_a_password_starts_the_count_again) {
+    kept = 4;
+    boot_kept(NULL);                            // no password: open, 4 wrong answers kept
+    CHECK(!login_locked());
+    CHECK_EQ(login_failures(), 4);
+    password = "new password";                  // `passwd` at the open console
+    login_password_set();
+    CHECK_EQ(login_failures(), 0);
+    CHECK_EQ(kept, 0);                          // and in what is kept across reboots
+    CHECK_EQ(clear_calls, 1);
+    type("logout\r");
+    run_ms(50);
+    CHECK(login_locked());
+    type("wrong\r");
+    run_ms(100);
+    CHECK_EQ(login_failures(), 1);
+    type("new password\r");
+    run_ms(900);
+    CHECK(login_locked());                      // the first wrong answer's 1 s, no more
+    run_ms(300);
+    CHECK(!login_locked());
+    // Without a kept count (the hooks absent) it is harmless.
+    boot("pw");
+    login_password_set();
+    CHECK_EQ(login_failures(), 0);
+}
+
 TEST_MAIN(
     RUN(locked_console_shows_only_the_prompt);
     RUN(right_password_opens_and_greets);
@@ -746,4 +776,5 @@ TEST_MAIN(
     RUN(kept_count_includes_interrupted_and_unchecked_answers);
     RUN(kept_count_ignores_what_never_reached_a_check);
     RUN(kept_count_without_a_password);
+    RUN(setting_a_password_starts_the_count_again);
 )
