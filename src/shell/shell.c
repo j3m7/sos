@@ -23,6 +23,7 @@
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
 #include "core/config.h"
+#include "core/failflash.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
@@ -857,7 +858,7 @@ static void console_first_use(shell_t *sh) {
 // Not printed on the console while it's locked (the log is held); `dmesg` in an SSH session and
 // the console after the next login show it.
 static void console_failed(unsigned failures) {
-    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since boot)", failures);
+    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since the last right one)", failures);
 }
 
 static void console_auto_locked(const char *why) {
@@ -868,12 +869,19 @@ static const login_hooks_t console_login = {
     console_now_ms, settings_console_has_password, settings_console_check_begin,
     console_check_step, settings_console_check_abort, console_no_keys, console_rescue_allowed,
     console_opened, console_first_use, console_failed, console_auto_locked,
+    failflash_count, failflash_attempt, failflash_clear,    // the count is kept across reboots
 };
 
 void shell_console_start(shell_t *console) {
     if (!console_no_keys() && !settings_console_has_password())
         log_msg(SOS_LOG_WARNING, "console: no console password is set: the console is open to "
                                  "anyone at the port (`passwd` sets one)");
+    // Wrong answers from before this boot still count: say so, since the first check will wait.
+    unsigned kept = failflash_count();
+    if (kept && settings_console_has_password())
+        log_msg(SOS_LOG_WARNING, "console: %u wrong password%s since the last right one, "
+                                 "counted across reboots; the next check waits for it",
+                kept, kept == 1 ? "" : "s");
     login_start(console, &console_login);
 }
 

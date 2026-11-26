@@ -139,6 +139,26 @@ with the configuration's owner secret (`files/cardkey.c`).
   - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
     root secret; changing a label would lock everything sealed under it.
 
+## Wrong-password count (`failcount.c`, `failflash.c`)
+
+The console delays the next password check after each wrong answer (`shell/login.c`). The
+count behind that delay is kept in flash so that a reboot doesn't reset it.
+
+- **Counted before, cleared after:** `failcount_attempt()` runs before a check starts and
+  `failcount_clear()` after a right answer. A check that never finished (power pulled, reset,
+  Ctrl-C) therefore stays counted.
+- **Its own sector,** the fifth from the end, below the root secret's. Flashing, provisioning,
+  `config reset` and `rootsecret forget` don't touch it.
+- **No erase per answer:** flash bits can be cleared one at a time. One track has a bit cleared
+  per check started; a second track is cleared up to the same point by a right answer; the
+  count is the difference. The sector is erased once when first used, and again only when
+  the first track is full, after 14336 checks; what is outstanding is carried over (capped
+  at 64, far beyond the longest delay). A power cut during that one erase loses the count.
+- **If flash can't be written** the count goes up in RAM until the next reboot, and the log
+  says so once.
+- **Limit:** someone with a cable and the USB bootloader can erase the sector. `failcount.c`
+  has no hardware in it and is unit tested on the host.
+
 ## Key sector (`keysector.c`)
 
 The last 4 KB flash sector holds keys, one 256-byte flash page each: page 0 the SSH host key

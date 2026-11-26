@@ -110,6 +110,8 @@ set(SOS_SOURCES
     src/core/keysector.c
     src/core/rootsecret.c
     src/core/rootflash.c
+    src/core/failcount.c
+    src/core/failflash.c
     src/core/keyprov.c
     src/core/seal.c
     src/core/pwverify.c
