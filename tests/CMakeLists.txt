@@ -170,6 +170,12 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_link_libraries(test_keyprov PRIVATE wolfcrypt_host)
     add_test(NAME keyprov COMMAND test_keyprov)
 
+    # src/core/roototp.c: the root secret's OTP pages, and which source a board uses.
+    add_executable(test_roototp test_roototp.c ${SOS_ROOT}/src/core/roototp.c)
+    target_include_directories(test_roototp PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_roototp PRIVATE wolfcrypt_host)
+    add_test(NAME roototp COMMAND test_roototp)
+
     # src/core/pwverify.c: the console password's verifier (PBKDF2-HMAC-SHA256, then keyed).
     add_executable(test_pwverify test_pwverify.c ${SOS_ROOT}/src/core/pwverify.c)
     target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)

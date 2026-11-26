@@ -25,6 +25,12 @@ uint16_t otpread_ecc(unsigned row) {
     return (uint16_t)(row & 1u ? pair >> 16 : pair);
 }
 
+uint16_t otpread_ecc_guarded(unsigned row) {
+    row &= 0xfffu;
+    uint32_t pair = *(io_ro_32 *)(OTP_DATA_GUARDED_BASE + 4u * (row >> 1));
+    return (uint16_t)(row & 1u ? pair >> 16 : pair);
+}
+
 // A raw row has 24 bits, so all 32 set can only be the "not readable" answer.
 #define UNREADABLE 0xffffffffu
 
