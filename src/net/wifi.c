@@ -398,6 +398,7 @@ void wifi_reconnect(void) {
     attempt = 0;
     prefer_bssid = false;
     switch_tries = 0;
+    reset_failures();               // every network gets its chance again, the first one first
     begin_attempt();
 }
 

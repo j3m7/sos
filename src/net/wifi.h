@@ -26,7 +26,9 @@ void wifi_start(void);
 // Advance the connection: call from the main loop. Logs state changes.
 void wifi_poll(void);
 
-// Drop the current connection and connect again with the (possibly changed) configuration.
+// Drop the current connection and connect again with the (possibly changed) configuration,
+// starting from the first saved network. While connected, a network preferred over the one in
+// use that comes into reach isn't noticed: only a new attempt (this, or a dropped link) looks.
 void wifi_reconnect(void);
 
 // Apply the power-saving setting (settings()->wifi_powersave) to the radio: takes effect at once.

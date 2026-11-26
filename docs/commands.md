@@ -86,10 +86,10 @@ Changes are saved in flash immediately and survive reflashing (see
 |---|---|---|
 | `wifi` | any | The saved networks, numbered in the order they are preferred, each with whether a password is set and the connected one marked; connection state, power saving and country |
 | `wifi set` | console only | Change the first network: asks for the SSID and the password (not echoed), saves them and reconnects |
-| `wifi add` | console only | Save another network (up to 5 in all), after the others: asks for the SSID and the password. The board joins the first saved network in reach. Reconnects only if not connected |
+| `wifi add` | console only | Save another network (up to 5 in all), after the others: asks for the SSID and the password. The board joins the first saved network in reach when it connects; while connected it doesn't notice a preferred network coming into reach until the link drops or `wifi connect`. Reconnects only if not connected |
 | `wifi remove <n>` | console only | Forget network *n* (as numbered by `wifi`). Reconnects if it was the network in use |
 | `wifi prefer <n>` | console only | Move network *n* to the front. Takes effect at the next connect |
-| `wifi connect` | console only | Reconnect now |
+| `wifi connect` | console only | Reconnect now, trying the saved networks from the first again |
 | `wifi country <XX>\|worldwide` | console only | The country whose radio rules to follow, as two capital letters (e.g. `US`), or the chip's worldwide set (the default). Saved; takes effect at the next boot |
 | `wifi power` | any | Show whether Wi-Fi power saving is on |
 | `wifi power on\|off` | console only | Turn power saving on or off (saved; default off) |
