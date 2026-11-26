@@ -34,6 +34,11 @@ add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/logi
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
 
+# src/net/wifi_pick.c: which saved Wi-Fi network to try.
+add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
+target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
+add_test(NAME wifi_pick COMMAND test_wifi_pick)
+
 # src/shell/keys.c: terminal key decoding (escape sequences to key codes).
 add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)
