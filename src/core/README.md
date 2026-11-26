@@ -173,6 +173,35 @@ firmware reads it there; a separate image, used once per board, writes it.
 - `roototp.c` has no hardware in it and is unit tested on the host. No board has a secret in
   OTP yet: on the board only the paths with blank pages have run.
 
+## The burn image (`rootburn.c`, `rootburn_board.c`)
+
+Writing a board's root secret into OTP is permanent and is not something everyday firmware can
+do: the code is compiled only with `-DSOS_BURN_IMAGE=ON`, into an image flashed for that one
+job (`docs/securing-a-board.md`, step 3). `rootburn_board.c` refuses to compile otherwise.
+
+- **`rootsecret burn`** (console only): asks for the board's serial, then a typed word, then
+  waits for the BOOTSEL button to be held. `rootsecret burn plan` says which page it would
+  use and writes nothing. `rootsecret burn rehearse` stops on purpose before the secret is
+  complete, spending one page, to try the interrupted case.
+- **The order** (`rootburn_run`): lock earlier spent pages; take 32 random bytes; write them a
+  row at a time with read-back; write the chaff; write the check; read everything back and
+  verify; write the marker last; lock the page. A failure after something was written leaves
+  a spent page with no marker, locked, and the next run uses the next page.
+- **A page that still reads blank is never locked.** If the first write fails and nothing
+  landed, the page stays blank and unlocked and is the next run's page. A locked blank page
+  could be neither written nor passed over, and would block all three pages for good.
+  (`roototp.c` passes over a blank page the firmware can't write, should one ever exist.)
+- **Stopping:** a run that ends in an error (other than nobody holding the button) makes the
+  image refuse further runs until a restart, and says to find the cause first. A run on a
+  board that already has its secret only locks pages an earlier run couldn't.
+- **Nothing resets the board mid-burn:** the watchdog is fed before every write and the
+  software glitch detector is off for the duration.
+- **The only place OTP is programmed** is `program()` in `rootburn_board.c`, and it refuses
+  any row outside the root secret's three pages and their lock words.
+- `rootburn.c` has no hardware in it and is tested on the host against a model of OTP whose
+  bits can only be set: every single write failing, every write silently not taking, and
+  power lost after every write. **It has never been run on a chip.**
+
 ## Wrong-password count (`failcount.c`, `failflash.c`)
 
 The console delays the next password check after each wrong answer (`shell/login.c`). The

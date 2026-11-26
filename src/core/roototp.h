@@ -21,6 +21,10 @@
 //
 // What a page is:
 //   blank        every row reads zero: never written
+//   (a blank page that the firmware can't write, because its lock word says so, counts as
+//   spent: it can never hold a secret, and treating it as blank would stop the search at a
+//   page nothing can fill. The burn image never makes one; this is so that a lock alone can't
+//   block the list.)
 //   complete     the marker row reads 0xa55a. Its secret is used if the check matches.
 //   spent        something is written and the marker row is still blank: a write that stopped
 //                before the marker. Skipped for good.
@@ -131,6 +135,10 @@ typedef enum {
 // The page lock word's LOCK_BL field says the bootloader may write the page (or the word can't
 // be read, which counts the same).
 bool roototp_bootloader_can_write(uint32_t lock1_raw);
+
+// The lock word's LOCK_S field says Secure code (the firmware) may write the page. A word that
+// can't be read counts as "may not".
+bool roototp_secure_can_write(uint32_t lock1_raw);
 
 // Are all pages of the list up to and including `index` locked against the bootloader's
 // writes? If not, *open_page (may be NULL) is the first that isn't, as an OTP page number.

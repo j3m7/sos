@@ -181,6 +181,13 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_link_libraries(test_roototp PRIVATE wolfcrypt_host)
     add_test(NAME roototp COMMAND test_roototp)
 
+    # src/core/rootburn.c: writing the root secret into OTP (the burn image only).
+    add_executable(test_rootburn test_rootburn.c ${SOS_ROOT}/src/core/rootburn.c
+        ${SOS_ROOT}/src/core/roototp.c)
+    target_include_directories(test_rootburn PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_rootburn PRIVATE wolfcrypt_host)
+    add_test(NAME rootburn COMMAND test_rootburn)
+
     # src/core/pwverify.c: the console password's verifier (PBKDF2-HMAC-SHA256, then keyed).
     add_executable(test_pwverify test_pwverify.c ${SOS_ROOT}/src/core/pwverify.c)
     target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
