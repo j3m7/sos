@@ -238,7 +238,7 @@ static void begin_attempt(void) {
         return;
     }
     attempt++;
-    config_wifi_net_t now[CONFIG_WIFI_NETS];
+    static config_wifi_net_t now[CONFIG_WIFI_NETS];     // 485 bytes: not on the stack
     memset(now, 0, sizeof(now));
     for (unsigned i = 0; i < count; i++)
         config_wifi_get(c, i, &now[i]);
