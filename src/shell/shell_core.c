@@ -267,9 +267,11 @@ static bool last_char_partial(const shell_t *sh) {
 // Take a byte of a printable character into the line, echoing it unless secret.
 static void line_add(shell_t *sh, unsigned char c) {
     unsigned need = utf8_len(c);
-    if (need == 0) {                    // continuation: only of a character under way
+    if ((c & 0xc0) == 0x80) {           // continuation: only of a character under way
         if (!last_char_partial(sh))
             return;
+    } else if (need == 0) {             // 0xc0, 0xc1, 0xf5-0xff: never in UTF-8
+        return;
     } else {
         if (last_char_partial(sh)) {    // a new character before the last one ended: drop that
             unsigned want;

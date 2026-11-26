@@ -880,6 +880,12 @@ TEST(broken_utf8_is_dropped) {
     start(&io_plain);
     type("a\xb6" "b\xc3" "c\xc0\xaf" "d\xf8" "e\xc3\r");     // stray, cut short, overlong, invalid
     CHECK(!strcmp(executed[0], "abcde"));
+    start(&io_plain);
+    type("x\xc3\xff\xc3\xc1\xc3\xf5\r");                 // invalid bytes can't continue one
+    CHECK(!strcmp(executed[0], "x"));
+    start(&io_plain);
+    type("y\xc3\xff\xb6\r");                              // ...nor end it: the ö still completes
+    CHECK(!strcmp(executed[0], "y\xc3\xb6"));
 }
 
 TEST(utf8_character_must_fit_the_line) {
