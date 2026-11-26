@@ -407,11 +407,25 @@ from BOOTSEL and one burn interrupted on purpose, as preparation for a productio
 dev-1 now getting a real root secret, the rehearsal and the real thing can be the same run.
 **Proposed, for the owner to confirm, since it goes beyond the words of decision 6:**
 
-1. The first run of the burn command on dev-1 is **interrupted on purpose** (power removed
-   after the data rows, before the marker). That spends the first page of the firmware's list.
-2. The firmware must then report that page as spent and not use it. The burn is run again and
-   lands in the second page. That is dev-1's root secret.
+1. The first run of the burn command on dev-1 is **interrupted on purpose**, by a stop point
+   in the burn command, not by pulling the cable: the command is given an explicit rehearsal
+   argument and stops after the data rows and their chaff are written and read back, before
+   the marker and the locks. A power cut lands wherever it lands and would test a different
+   state each time; the stop point gives the one state the skip logic is written for, and it
+   can be repeated. The stop point exists only in a burn image built with a rehearsal option;
+   the image used on a production board is built without it. (A real power cut partway
+   through a row is a different case and is not covered by this run: said here so that nobody
+   takes it as tested.)
+2. The firmware must then report that page as spent and not use it. The burn is run again,
+   without the rehearsal argument, and lands in the second page. That is dev-1's root secret.
 3. The read attempt from BOOTSEL is step 3.4 on that page.
+
+**What the spent page then holds:** 32 random bytes with their chaff, complete, with no marker
+and **no locks**, so `picotool otp get` reads them for good. They were never a root secret:
+nothing was ever derived from or sealed under them, and the second run takes fresh bytes from
+the TRNG. It is worth one check, that the second page's secret differs from the first page's
+contents, and one line in the board registry so that nobody later takes a readable 32-byte
+block in dev-1's OTP for a leak.
 
 This exercises the skip logic on the real page list instead of a parallel one, and leaves dev-1
 one page of the list unused. The alternative is a rehearsal build with its own list of spare
@@ -444,6 +458,11 @@ pages, which keeps all three real pages but tests code the production board won'
       the development machine** (the owner's answer 4: "get back to me and confirm the backup
       exists when we are about to turn all of this on").
 - [ ] The checks marked "before the last bit" in the list below have passed.
+- [ ] **The recovery path has been walked on the board while it is still open:** unplug, hold
+      the BOOTSEL button, plug in, and `picotool info --ser` sees the board in BOOTSEL; then
+      `picotool load --ser` of the dev-signed image, by hand and without `-f`, and the board
+      runs it. After D4.7 this is the only way back from a bad flash, and it uses the button
+      and a cable that the everyday `picotool load -f` path never exercises.
 - [ ] `bootkey` says `MATCH` for the image on the board at that moment, and `picotool info -a`
       of the image read back from the board says `signature: verified`.
 
@@ -472,6 +491,7 @@ None of these has run on a real chip. dev-1 is where each runs first.
 | The slot byte order on a chip; `bootkey` saying `NOT YET` | D4.1 | yes |
 | `bootkey` saying `MATCH`, for each of the two keys | D4.2 | yes |
 | `picotool load -f` of a signed image on a board with valid boot keys | D4.2 | yes |
+| BOOTSEL by the button, then `picotool load --ser` by hand (the recovery path) | gate before D4.7 | yes, on the open board; on the secured board only after D4.7 |
 | `version` warning between an OTP write and the reset | D4.7 | no: it is the last bit |
 | The boot ROM starting a signed image with secure boot on | D4.7 | **no** |
 | The boot ROM refusing an unsigned image and one signed with an unknown key, and the board coming back to BOOTSEL afterwards so that a good image can be loaded | after D4.7 | **no, and it can't be:** an open board runs anything |
@@ -495,10 +515,11 @@ probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is ex
 
 - **A guard on flashing.** `ninja flash` (and `tools/provision.sh`, where it flashes) refuses
   an image that isn't signed with the expected key, so a session with a missing build setting
-  can't leave dev-1 in BOOTSEL by accident. Built and merged before D4.7. The expected key is
-  named by its public hash in the build settings, not by the private key file, so the guard
-  also works where the key isn't present. It guards our own tools only: `picotool load` typed
-  by hand goes around it.
+  can't leave dev-1 in BOOTSEL by accident. Built and merged before D4.7. The expected keys
+  are a **list** of public key hashes in the build settings, not the private key file: a list,
+  because dev-1 accepts two keys and step D4.2 flashes an image signed with the second; hashes,
+  so that the guard also works where no private key is present. It guards our own tools only:
+  `picotool load` typed by hand goes around it.
 - **A separate marker for "sealed-only".** Secure boot alone does not make a board refuse
   unsealed records or `rootsecret forget`. Firmware item 3 above has the proposal for the
   marker; dev-1 never gets it.
