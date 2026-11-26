@@ -369,6 +369,24 @@ the attack that needs only a cable and `picotool`.
 Exactly which rows, the values, and whether the firmware (Secure code) should also be denied
 writes to pages 0 to 2 are for the reviewed OTP files ("to confirm" item 1).
 
+**It closes doors the earlier decisions left open, and that is for the owner to weigh.**
+Page 1 holds `CRIT1` and the boot flags. Once it is locked against the bootloader, no later
+`picotool` write reaches them, and three decisions count on such a write:
+
+- decision 2: disabling the USB bootloader later (`BOOT_FLAGS0.DISABLE_BOOTSEL_*`);
+- decision 5: the glitch detector bit, after the week-long test (`CRIT1`);
+- decision 8: rollback protection later (`BOOT_FLAGS0.ROLLBACK_REQUIRED`).
+
+So either page 1 is locked only once those three are settled, and stays exposed to a cable
+until then; or it is locked now and each of them later needs a signed image written for the
+purpose, which writes the bit as Secure code (if the page's Secure lock is left open for
+that). The same goes for page 2 and a later change of boot keys. The lock check in the
+firmware (#86) is also no proof of history: lock words can be written from the bootloader, so
+a board that was ever out of its owner's hands unlocked can't be shown clean by reading them.
+
+Not decided. Until it is, 4.8 covers what loses nothing: page 3, the root secret's list
+pages, and nothing else.
+
 ## Afterwards: trying the attacks
 
 The table at the top of the issue, run against the secured board, with results recorded on the
@@ -561,14 +579,18 @@ room to add a key later". While page 2 and the boot flags stay writable from the
 anyone with a cable can use that room too: write their own key into slot 2, mark it valid, and
 dev-1 runs their firmware. And they can mark the dev keys invalid and end dev-1's life.
 
-- **Lock them on dev-1 as well** (recommended): after it, no key can be added over USB by
-  anyone, the owner included. A later key change would have to be done by signed firmware
-  written for the purpose, if the Secure-side lock is left open for that, or not at all.
-- **Leave them open on dev-1:** the board then demonstrates the mechanism against someone
-  without `picotool`, and nothing more. Since dev-1 is the only board, the "end its life with
-  one command" case is the one to weigh.
+- **Lock them on dev-1 as well:** after it, no key can be added over USB by anyone, the owner
+  included, and no cable-holder can mark the dev keys invalid. A later key change would have
+  to be done by signed firmware written for the purpose, if the Secure-side lock is left open
+  for that, or not at all.
+- **Leave pages 1, 2 and the lock pages open on dev-1, and lock only page 3 and the list
+  pages** (the reviewer's view): debug stays on on dev-1, so locking these pages protects no
+  secret there; it only costs flexibility on the one board where things are still being
+  tried.
 
-Not decided. Nothing in 4.8 is written on dev-1 until it is.
+The two views differ on one point: whether "anyone with a cable can end dev-1's life with one
+command" is worth closing on the only board. It protects nothing secret either way. Not
+decided. Nothing in 4.8 beyond page 3 and the list pages is written on dev-1 until it is.
 
 ### Living with it afterwards
 
