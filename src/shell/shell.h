@@ -68,8 +68,10 @@ struct shell {
     size_t ahead_len;
     char cwd[SHELL_PATH_MAX];   // working directory for file commands ("/" after init)
     // Command history for Up/Down: the commands run in this session, oldest first, each ending
-    // in '\0'. Only commands: never answers to questions (passwords). Wiped when the session
-    // starts (shell_bind) and by shell_discard_input (the console locking itself).
+    // in '\0'. Only commands: never answers to questions (passwords). Wiped when a session
+    // starts (shell_bind) or ends (shell_end), when the console locks itself
+    // (shell_discard_input) or is logged out of (`logout`), and at login (shell_clear_history
+    // from login.c, which also covers lines the gate refused while locked).
     char history[SHELL_HISTORY_BYTES];
     size_t history_len;
     int history_pos;            // entry shown, counted back from the newest (0); -1 = none
@@ -125,7 +127,7 @@ extern char shell_eof[];
 // no longer the one who typed it (the console locking itself, shell/login.h).
 void shell_discard_input(shell_t *sh);
 
-// Wipe the command history only (`logout` on the console, from inside a command).
+// Wipe the command history only (from login.c: `logout` on the console, and at login).
 void shell_clear_history(shell_t *sh);
 
 // Drop a pending question without answering it (its owner has gone away); the next line is a
@@ -160,7 +162,8 @@ bool shell_busy(const shell_t *sh);
 // Bytes of output the channel takes now without waiting (jobs size their output by it).
 int shell_write_space(shell_t *sh);
 
-// The channel is gone (session ended): cancel a running job so it frees its resources.
+// The channel is gone (session ended): cancel a running job so it frees its resources, and
+// wipe the command history.
 void shell_end(shell_t *sh);
 
 #endif

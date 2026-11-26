@@ -1065,6 +1065,38 @@ TEST(oldest_commands_make_room) {
     CHECK(!memcmp(oldest, "c10", 3));
 }
 
+TEST(shell_end_wipes_the_history) {
+    start(&io_plain);
+    type("one\r");
+    shell_end(&sh);                                  // the SSH session ended
+    CHECK_EQ(sh.history_len, 0);
+    CHECK(!history_has("one"));
+}
+
+TEST(keys_that_change_nothing_keep_the_recall) {
+    start(&io_plain);
+    type("one\rtwo\rthree\r" UP UP);
+    CHECK(line_is("two"));
+    type("\t" "\x04" "\x01");                         // Tab, Ctrl-D on a line, Ctrl-A: ignored
+    type(UP);
+    CHECK(line_is("one"));                           // still going back, not from the newest
+    type("x" UP);                                    // a real edit: Up starts again
+    CHECK(line_is("three"));
+}
+
+TEST(cancelling_a_secret_question_wipes_the_half_typed_answer) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    type("hunt");
+    shell_cancel_question(&sh);
+    CHECK_EQ(sh.line_len, 0);
+    for (size_t i = 0; i < sizeof(sh.line); i++)
+        CHECK(sh.line[i] == 0);
+    type("\r");
+    CHECK_EQ(n_executed, 0);                         // nothing ran as a command
+    CHECK(!history_has("hunt"));
+}
+
 TEST(history_on_a_crlf_channel) {
     start(&io_crlf);
     type("one\r");
@@ -1147,5 +1179,8 @@ TEST_MAIN(
     RUN(answers_are_not_in_the_history);
     RUN(history_is_per_session_and_wiped);
     RUN(oldest_commands_make_room);
+    RUN(shell_end_wipes_the_history);
+    RUN(keys_that_change_nothing_keep_the_recall);
+    RUN(cancelling_a_secret_question_wipes_the_half_typed_answer);
     RUN(history_on_a_crlf_channel);
 )

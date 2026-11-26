@@ -101,6 +101,10 @@ void shell_discard_input(shell_t *sh) {
 }
 
 void shell_cancel_question(shell_t *sh) {
+    if (sh->secret) {                   // a half-typed secret must not become a command
+        wipe(sh->line, sizeof(sh->line));
+        sh->line_len = 0;
+    }
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
@@ -185,6 +189,16 @@ static const char *history_entry(const shell_t *sh, int back) {
     while (index-- > 0)
         p += strlen(p) + 1;
     return p;
+}
+
+// The line is being changed by hand (or entered): a recalled line becomes ordinary input, and
+// the next Up starts again from the newest command.
+static void history_edited(shell_t *sh) {
+    if (sh->history_pos < 0)
+        return;
+    sh->history_pos = -1;
+    wipe(sh->draft, sh->draft_len);
+    sh->draft_len = 0;
 }
 
 // Put text in place of the line being typed, and redraw it.
@@ -305,6 +319,7 @@ void shell_end(shell_t *sh) {
         step(sh, sh->job_arg, true);
     }
     sh->answer = NULL;
+    shell_clear_history(sh);    // the session's commands don't wait in RAM for the next one
 }
 
 // While a job runs: only Ctrl-C counts; then one step.
@@ -374,6 +389,7 @@ static void line_add(shell_t *sh, unsigned char c) {
         if (sh->line_len + need > SHELL_LINE_MAX)   // the whole character must fit
             return;
     }
+    history_edited(sh);
     sh->line[sh->line_len++] = (char)c;
     if (!sh->secret)
         write_out(sh, (const char *)&c, 1);
@@ -383,6 +399,7 @@ static void line_add(shell_t *sh, unsigned char c) {
 static void line_backspace(shell_t *sh) {
     if (!sh->line_len)
         return;
+    history_edited(sh);
     unsigned want;
     size_t start = last_char(sh, &want);
     size_t len = sh->line_len - start;
@@ -419,12 +436,8 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         }
         if (k == KEYS_NONE || k > 0xff)         // other special keys: no editing with them (yet)
             continue;
-        if (sh->history_pos >= 0) {             // a recalled line, now edited or entered: the
-            sh->history_pos = -1;               // next Up starts again from the newest command
-            wipe(sh->draft, sh->draft_len);
-            sh->draft_len = 0;
-        }
         if (c == '\r' || c == '\n') {
+            history_edited(sh);
             shell_printf(sh, "\n");
             if (last_char_partial(sh)) {        // a character cut short: not part of the line
                 unsigned want;
@@ -442,6 +455,7 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         } else if (c == 0x7f || c == '\b') {
             line_backspace(sh);
         } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
+            history_edited(sh);
             shell_printf(sh, "^C\n");
             sh->line_len = 0;
             answer_question(sh, NULL);
