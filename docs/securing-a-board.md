@@ -227,9 +227,12 @@ and merged before anything is burned.
    is set the firmware refuses unsealed configuration and host-key records (`refuse_plain`,
    already implemented and off) and refuses `rootsecret forget`. `version` shows both facts:
    where the root secret is, and whether secure boot is on.
-4. **Checking the boot key on the board.** A command that hashes the public key from the
-   running image's own signature block, compares it with the `BOOTKEY0` (and `BOOTKEY1`) rows
-   in OTP, and says "match" or "no match". Step 4.7 depends on it.
+4. **Checking the boot key on the board:** the `bootkey` command (#79). It hashes the public
+   key from the running image's own signature block, compares it with the boot key slots in
+   OTP, and says `MATCH`, `NOT YET` (slot written, not marked valid), `NO MATCH` or
+   `NO VERDICT`. It reads OTP only through the read aliases. Step 4.7 depends on it. Its
+   `MATCH` path can't be run before a slot is written, so step 4.2 is its first real run; a
+   mistake in it would show as `NO MATCH` with the board still open.
 5. **A wrong-password count that survives reboots** (decision 7), kept in flash, so the delay
    after wrong console passwords doesn't start again at every boot. The count is stored
    *before* the password is checked and cleared after a right one: otherwise cutting the power
@@ -299,7 +302,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | # | Write | Check before going on | If it's wrong |
 |---|---|---|---|
 | 4.1 | The hash of the signing key into `BOOTKEY0_0` to `_15`; the spare key's hash into `BOOTKEY1_0` to `_15` | Read the rows back and compare with the two independently computed hashes | A wrong hash in a slot can be abandoned by marking that slot invalid in 4.3, as long as the other slot is right |
-| 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check: it must say "match" for the image that is on the board now** | A "no match" stops the procedure here, with the board still open |
+| 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check (`bootkey`, #79): it must say `MATCH` for the image that is on the board now.** `MATCH` compares the key's hash only, so also confirm the signature itself: `picotool info -a` on the image read back from the board must say `signature: verified`. `NOT YET`, `NO MATCH` and `NO VERDICT` all stop the procedure | A "no match" stops the procedure here, with the board still open |
 | 4.3 | `BOOT_FLAGS1.KEY_INVALID` for slots 2 and 3 | Read back | |
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
 | 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
