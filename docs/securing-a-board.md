@@ -608,7 +608,7 @@ OTP tests. The list pages are locked by the burn itself; page 3 by the owner wit
 
 | # | Write (the owner runs it) | Check |
 |---|---|---|
-| D4.8 | Page 3's lock word: bootloader read-only | Read it back. From BOOTSEL, `picotool otp set` of a row in page 3 or in a list page is **refused**; `picotool otp get` of a row in page 1 or 2 is **answered**, showing those pages were left open as intended |
+| D4.8 | Page 3's lock word: bootloader read-only | Read it back. From BOOTSEL, a raw write of the value 0 to row 0x0ff (the exact command is in `docs/otp/dev-1/README.md`: it changes no bit even if the lock didn't take, and is nowhere near the sealed-only marker's rows) is **refused**; `picotool otp get` of a row in page 1 or 2 is **answered**, showing those pages were left open as intended. No other value or row is used to test a lock |
 
 What stays possible on dev-1 as a result, knowingly: anyone with a cable can add a boot key to
 a blank slot and run their own firmware, or mark the dev keys invalid and end the board's
