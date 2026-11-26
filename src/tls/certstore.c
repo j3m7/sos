@@ -16,6 +16,7 @@
 #include <wolfssl/wolfcrypt/hash.h>
 
 #include "core/config.h"
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "files/sdcard.h"
@@ -70,10 +71,10 @@ static certs_state_t read_file(uint8_t **buf, size_t *len, const char **why) {
         *why = size ? "larger than 64 KB" : "empty";
         return ST_UNREADABLE;
     }
-    uint8_t *b = malloc((size_t)size);
+    uint8_t *b = heap_alloc(HEAP_NET, (size_t)size);
     UINT got = 0;
     if (!b || f_read(&f, b, (UINT)size, &got) != FR_OK || got != size) {
-        free(b);
+        heap_release(HEAP_NET, b);
         f_close(&f);
         *why = b ? "read error" : "out of memory";
         return ST_UNREADABLE;
@@ -100,7 +101,7 @@ static certs_state_t read_checked(uint8_t **buf, size_t *len, const char **why) 
     uint8_t h[32];
     sha256(*buf, *len, h);
     if (memcmp(h, settings()->certs_hash, sizeof(h))) {
-        free(*buf);
+        heap_release(HEAP_NET, *buf);
         *buf = NULL;
         *why = "SHA-256 differs; re-approve it on the console";
         return ST_CHANGED;
@@ -124,14 +125,14 @@ static void note(certs_state_t st, const char *why, unsigned loaded) {
 // Parse the file into DER certificates: returns the buffer to free (NULL on error).
 static uint8_t *parse(const uint8_t *file, size_t len, certbundle_cert_t *certs, size_t *count,
                       const char **why) {
-    uint8_t *der = malloc(len);
+    uint8_t *der = heap_alloc(HEAP_NET, len);
     if (!der) {
         *why = "out of memory";
         return NULL;
     }
     *count = certbundle_parse(file, len, der, len, certs, CERTBUNDLE_MAX_CERTS, why);
     if (!*count) {
-        free(der);
+        heap_release(HEAP_NET, der);
         return NULL;
     }
     return der;
@@ -149,12 +150,12 @@ unsigned certstore_load(struct WOLFSSL_CTX *ctx) {
     static certbundle_cert_t certs[CERTBUNDLE_MAX_CERTS];
     size_t count = 0;
     uint8_t *der = parse(file, len, certs, &count, &why);
-    free(file);
+    heap_release(HEAP_NET, file);
     unsigned loaded = 0;
     for (size_t i = 0; der && i < count; i++)
         if (tls_load_root(ctx, der + certs[i].off, certs[i].len) == WOLFSSL_SUCCESS)
             loaded++;
-    free(der);
+    heap_release(HEAP_NET, der);
     if (!der && !why)
         why = "no certificates";
     note(der ? ST_OK : ST_UNREADABLE, why, loaded);
@@ -200,7 +201,7 @@ static bool cert_expiry(const uint8_t *d, int n, int64_t *t) {
 
 // Print one certificate; returns false if wolfSSL can't parse it.
 static bool describe(shell_t *sh, unsigned n, const uint8_t *der, size_t len) {
-    DecodedCert *dc = malloc(sizeof(*dc));
+    DecodedCert *dc = heap_alloc(HEAP_NET, sizeof(*dc));
     if (!dc)
         return false;
     wc_InitDecodedCert(dc, der, (word32)len, NULL);
@@ -243,7 +244,7 @@ static bool describe(shell_t *sh, unsigned n, const uint8_t *der, size_t len) {
     print_hex(sh, fp, sizeof(fp));
     shell_printf(sh, "\n");
     wc_FreeDecodedCert(dc);
-    free(dc);
+    heap_release(HEAP_NET, dc);
     return ok;
 }
 
@@ -274,7 +275,7 @@ static void cmd_approve(shell_t *sh) {
     size_t count = 0;
     uint8_t *der = parse(file, len, certs, &count, &why);
     sha256(file, len, pending_hash);            // exactly the bytes listed here
-    free(file);
+    heap_release(HEAP_NET, file);
     if (!der) {
         shell_printf(sh, "%s: %s\n", CERTSTORE_FILE, why);
         return;
@@ -296,7 +297,7 @@ static void cmd_approve(shell_t *sh) {
     }
     if (ctx)
         wolfSSL_CTX_free(ctx);
-    free(der);
+    heap_release(HEAP_NET, der);
     if (!usable) {
         shell_printf(sh, "none of them can be used by TLS: not approved\n");
         return;
@@ -324,8 +325,8 @@ static void cmd_status(shell_t *sh) {
         static certbundle_cert_t certs[CERTBUNDLE_MAX_CERTS];
         size_t count = 0;
         uint8_t *der = parse(file, len, certs, &count, &why);
-        free(file);
-        free(der);
+        heap_release(HEAP_NET, file);
+        heap_release(HEAP_NET, der);
         shell_printf(sh, ", %u certificate(s)\n", (unsigned)count);
     } else {
         shell_printf(sh, why ? " (%s)\n" : "\n", why);

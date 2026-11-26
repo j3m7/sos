@@ -11,6 +11,7 @@
 
 #include "ff.h"
 
+#include "core/heaptag.h"
 #include "files/files.h"
 
 #include <wolfssl/wolfcrypt/settings.h>
@@ -43,11 +44,11 @@ int sftp_fs_open(const char *path, int flags) {
     for (int fd = 0; fd < SFTP_MAX_OPEN; fd++) {
         if (open_files[fd])
             continue;
-        FIL *f = malloc(sizeof(FIL));
+        FIL *f = heap_alloc(HEAP_NET, sizeof(FIL));
         if (!f)
             return -1;
         if (f_open(f, path, fatfs_mode(flags)) != FR_OK) {
-            free(f);
+            heap_release(HEAP_NET, f);
             return -1;
         }
         open_files[fd] = f;
@@ -124,7 +125,7 @@ int sftp_fs_close(int fd) {
     if (!f)
         return -1;
     FRESULT fr = f_close(f);
-    free(f);
+    heap_release(HEAP_NET, f);
     open_files[fd] = NULL;
     files_release();
     return fr == FR_OK ? 0 : -1;

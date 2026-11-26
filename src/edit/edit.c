@@ -15,13 +15,14 @@
 #include "edit/edit.h"
 
 #include <stdio.h>
-#include <stdlib.h>         // calloc, free
+#include <stdlib.h>
 #include <string.h>
 
 #include "pico/stdlib.h"
 
 #include "ff.h"
 
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "edit/editor.h"
 #include "files/files.h"
@@ -152,7 +153,7 @@ static bool edit_step(shell_t *sh, void *arg, bool cancel) {
             put(sh, bye);
         }
         editor_free(&e->ed);
-        free(e);
+        heap_release(HEAP_EDIT, e);
         return false;
     }
     uint64_t now = time_us_64();
@@ -206,7 +207,7 @@ static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len
                      (unsigned long)fi.fsize, EDITOR_MAX_TEXT / 1024);
         return false;
     }
-    *text = malloc(fi.fsize ? (size_t)fi.fsize : 1);
+    *text = heap_alloc(HEAP_EDIT, fi.fsize ? (size_t)fi.fsize : 1);
     if (!*text) {
         shell_printf(sh, "edit: out of memory\n");
         return false;
@@ -218,7 +219,7 @@ static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len
     }
     if (fr != FR_OK || got != fi.fsize) {
         shell_printf(sh, "edit: %s: %s\n", path, fr != FR_OK ? files_error(fr) : "short read");
-        free(*text);
+        heap_release(HEAP_EDIT, *text);
         *text = NULL;
         return false;
     }
@@ -231,25 +232,25 @@ void edit_command(shell_t *sh, char *args) {
         shell_printf(sh, "usage: edit <file>\n");
         return;
     }
-    edit_t *e = calloc(1, sizeof(*e));
+    edit_t *e = heap_zalloc(HEAP_EDIT, sizeof(*e));
     if (!e) {
         shell_printf(sh, "edit: out of memory\n");
         return;
     }
     if (!path_resolve(sh->cwd, args, e->path, sizeof(e->path))) {
         shell_printf(sh, "path too long\n");
-        free(e);
+        heap_release(HEAP_EDIT, e);
         return;
     }
     if (strlen(e->path) + sizeof(TMP_SUFFIX) > PATH_LEN) {
         shell_printf(sh, "edit: path too long\n");
-        free(e);
+        heap_release(HEAP_EDIT, e);
         return;
     }
     char *text;
     size_t len;
     if (!sdcard_mount(sh) || !load(sh, e->path, &e->file, &text, &len, true)) {
-        free(e);
+        heap_release(HEAP_EDIT, e);
         return;
     }
     // A save interrupted (power lost) between removing the old file and renaming the new one
@@ -262,7 +263,7 @@ void edit_command(shell_t *sh, char *args) {
     bool recovered = false;
     if (tmp_left && !text) {
         if (!load(sh, tmp, &e->file, &text, &len, false)) {
-            free(e);
+            heap_release(HEAP_EDIT, e);
             return;
         }
         recovered = true;
@@ -271,11 +272,11 @@ void edit_command(shell_t *sh, char *args) {
     bool is_new = text == NULL;
     if (recovered)
         e->ed.modified = true;              // saving puts it under the real name
-    free(text);
+    heap_release(HEAP_EDIT, text);
     if (!ok) {
         shell_printf(sh, "edit: out of memory\n");
         editor_free(&e->ed);
-        free(e);
+        heap_release(HEAP_EDIT, e);
         return;
     }
     if (!files_write_allowed(sh, e->path))

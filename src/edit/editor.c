@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/heaptag.h"
 #include "shell/charwidth.h"
 #include "shell/keys.h"
 #include "shell/termtext.h"
@@ -69,7 +70,7 @@ static bool reserve(editor_t *ed, size_t n) {
         cap *= 2;
     if (cap > EDITOR_MAX_TEXT)
         cap = EDITOR_MAX_TEXT;              // still enough: len + n <= EDITOR_MAX_TEXT
-    char *b = realloc(ed->buf, cap);
+    char *b = heap_realloc(HEAP_EDIT, ed->buf, cap);
     if (!b)
         return false;
     size_t tail = ed->cap - ed->gap_end;
@@ -309,7 +310,7 @@ bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
         return false;
 
     size_t cap = n + 1024 > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : n + 1024;
-    ed->buf = malloc(cap ? cap : 1);
+    ed->buf = heap_alloc(HEAP_EDIT, cap ? cap : 1);
     if (!ed->buf)
         return false;
     ed->cap = cap;
@@ -325,7 +326,7 @@ bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
 }
 
 void editor_free(editor_t *ed) {
-    free(ed->buf);
+    heap_release(HEAP_EDIT, ed->buf);
     ed->buf = NULL;
     ed->cap = ed->gap = ed->gap_end = 0;
 }

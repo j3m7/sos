@@ -105,7 +105,8 @@ set_source_files_properties(${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c
 
 # --- SSH server (src/ssh/pico-sshd: copied from pico-sshd, see THIRD_PARTY.md) ---
 add_library(sos-ssh INTERFACE)
-target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/include)
+target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)       # core/heaptag.h
 target_sources(sos-ssh INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
@@ -134,6 +135,7 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/core/heap.c
+    src/core/heaptag.c
     src/core/glitchdet.c
     src/core/chipinfo.c
     src/core/bootkey.c

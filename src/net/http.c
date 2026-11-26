@@ -10,6 +10,7 @@
 
 #include "pico/time.h"
 
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "shell/termtext.h"
 
@@ -67,35 +68,35 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
         *err = "no request body";
         return NULL;
     }
-    http_req_t *r = calloc(1, sizeof(*r));
+    http_req_t *r = heap_zalloc(HEAP_HTTP, sizeof(*r));
     if (!r) {
         *err = "out of memory";
         return NULL;
     }
     *err = http_url_parse(o->url, &r->url);
     if (*err) {
-        free(r);
+        heap_release(HEAP_HTTP, r);
         return NULL;
     }
     snprintf(r->method, sizeof(r->method), "%s", o->method ? o->method : "");
     http_request_t req = {o->method, &r->url, o->content_type, o->headers, o->body_len};
     // Built straight into the heap buffer, not on the caller's stack, then trimmed to size.
-    r->out = malloc(HTTP_HEAD_MAX + o->body_len);
+    r->out = heap_alloc(HEAP_HTTP, HTTP_HEAD_MAX + o->body_len);
     if (!r->out) {
-        free(r);
+        heap_release(HEAP_HTTP, r);
         *err = "out of memory";
         return NULL;
     }
     size_t head_len = http_request_build(&req, r->out, HTTP_HEAD_MAX, err);
     if (!head_len) {
-        free(r->out);
-        free(r);
+        heap_release(HEAP_HTTP, r->out);
+        heap_release(HEAP_HTTP, r);
         return NULL;
     }
     if (o->body_len)
         memcpy(r->out + head_len, o->body, o->body_len);
     r->out_len = head_len + o->body_len;
-    char *trimmed = realloc(r->out, r->out_len);
+    char *trimmed = heap_realloc(HEAP_HTTP, r->out, r->out_len);
     if (trimmed)
         r->out = trimmed;
 
@@ -108,8 +109,8 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
     // doesn't do ALPN at all.
     r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
     if (!r->tls) {
-        free(r->out);
-        free(r);
+        heap_release(HEAP_HTTP, r->out);
+        heap_release(HEAP_HTTP, r);
         *err = "out of memory";
         return NULL;
     }
@@ -156,7 +157,7 @@ static void send_request(http_req_t *r) {
         r->out_sent += (size_t)n;
     }
     if (r->out_sent == r->out_len) {
-        free(r->out);
+        heap_release(HEAP_HTTP, r->out);
         r->out = NULL;
         r->state = HTTP_WAITING;
     }
@@ -285,8 +286,8 @@ void http_close(http_req_t *r) {
     if (!r)
         return;
     tls_close(r->tls);
-    free(r->out);
-    free(r);
+    heap_release(HEAP_HTTP, r->out);
+    heap_release(HEAP_HTTP, r);
 }
 
 // --- the `http` command -----------------------------------------------------------------------------
@@ -360,7 +361,7 @@ static bool http_job_end(shell_t *sh, http_job_t *j) {
                      ts ? (unsigned)((ts->heap_peak + 1023) / 1024) : 0);
     }
     http_close(r);
-    free(j);
+    heap_release(HEAP_HTTP, j);
     return false;
 }
 
@@ -368,7 +369,7 @@ static bool http_step(shell_t *sh, void *arg, bool cancel) {
     http_job_t *j = arg;
     if (cancel) {
         http_close(j->req);
-        free(j);
+        heap_release(HEAP_HTTP, j);
         return false;
     }
     uint64_t t0 = time_us_64();
@@ -420,7 +421,7 @@ void http_command(shell_t *sh, char *args) {
     }
     // Any shell, SSH included: SSH users are the device's trusted owners, and Lua scripts they
     // start can make the same requests (sos.http).
-    http_job_t *j = calloc(1, sizeof(*j));
+    http_job_t *j = heap_zalloc(HEAP_HTTP, sizeof(*j));
     if (!j) {
         shell_printf(sh, "http: out of memory\n");
         return;
@@ -436,7 +437,7 @@ void http_command(shell_t *sh, char *args) {
     j->req = http_start(&o, &err);
     if (!j->req) {
         shell_printf(sh, "http: %s\n", err);
-        free(j);
+        heap_release(HEAP_HTTP, j);
         return;
     }
     j->head = !strcmp(method, "HEAD");

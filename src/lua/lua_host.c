@@ -21,6 +21,7 @@
 #include "lua.h"
 
 #include "core/fault.h"
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/wdog.h"
 #include "files/files.h"
@@ -304,7 +305,7 @@ static void repl_answer(shell_t *sh, char *answer, void *arg);
 static void finish(void) {
     http_drop();
     http_started = false;
-    free(owner_code);
+    heap_release(HEAP_LUA, owner_code);
     owner_code = NULL;
     lua_job.code = NULL;
     owner = NULL;
@@ -616,7 +617,7 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
         return "out of memory starting core 1";
     memset(&lua_job, 0, sizeof(lua_job));
     if (code) {
-        owner_code = strdup(code);
+        owner_code = heap_strdup(HEAP_LUA, code);
         if (!owner_code)
             return "out of memory";
         lua_job.code = owner_code;

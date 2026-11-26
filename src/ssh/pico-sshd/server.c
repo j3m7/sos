@@ -87,6 +87,7 @@
 #include <wolfssh/ssh.h>
 #include <wolfssh/wolfsftp.h>
 
+#include "core/heaptag.h"
 #include "pico-sshd.h"
 #include "pico-sshd/log.h"
 
@@ -174,7 +175,7 @@ static void ssh_server_log_msg(int priority, const char *format, ...)
 	if (priority > global_log_level)
 		return;
 
-	if (!(buf = malloc(LOG_MAX_MSG_LEN)))
+	if (!(buf = heap_alloc(HEAP_NET, LOG_MAX_MSG_LEN)))
 		return;
 
 	va_start(ap, format);
@@ -193,7 +194,7 @@ static void ssh_server_log_msg(int priority, const char *format, ...)
 		(t / 1000000), (t % 1000000), core);
 	printf("%s %s %s\n", tstamp, "pico-sshd:", buf);
 
-	free(buf);
+	heap_release(HEAP_NET, buf);
 }
 
 
@@ -205,10 +206,10 @@ ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t tx
 
 	if (max_sessions < 1)
 		return NULL;
-	if (!(st = calloc(1, sizeof(ssh_server_t))))
+	if (!(st = heap_zalloc(HEAP_NET, sizeof(ssh_server_t))))
 		return NULL;
-	if (!(st->sessions = calloc(max_sessions, sizeof(ssh_session_t)))) {
-		free(st);
+	if (!(st->sessions = heap_zalloc(HEAP_NET, max_sessions * sizeof(ssh_session_t)))) {
+		heap_release(HEAP_NET, st);
 		return NULL;
 	}
 
@@ -230,7 +231,7 @@ ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t tx
 
 	/* Session buffers (about tcp_in_size + rxbuf_size + txbuf_size per session) are allocated
 	   when a connection is set up and freed when it closes, so idle slots cost no heap. The
-	   zeroed ring buffers from calloc() are valid empty buffers until then. */
+	   zeroed ring buffers from heap_zalloc() are valid empty buffers until then. */
 	for (unsigned i = 0; i < max_sessions; i++) {
 		ssh_session_t *ss = &st->sessions[i];
 		ss->server = st;
@@ -1456,8 +1457,8 @@ void ssh_server_destroy(ssh_server_t *st)
 		ssh_ringbuffer_destroy(&st->sessions[i].rb_in);
 		ssh_ringbuffer_destroy(&st->sessions[i].rb_out);
 	}
-	free(st->sessions);
-	free(st);
+	heap_release(HEAP_NET, st->sessions);
+	heap_release(HEAP_NET, st);
 }
 
 

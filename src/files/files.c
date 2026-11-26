@@ -20,6 +20,7 @@
 #include "ff.h"
 #include "f_util.h"
 
+#include "core/heaptag.h"
 #include "files/path.h"
 #include "files/sdcard.h"
 
@@ -121,7 +122,7 @@ static void job_start(shell_t *sh, shell_job_fn step, void *arg) {
 }
 
 static bool job_done(void *arg) {
-    free(arg);
+    heap_release(HEAP_FILES, arg);
     files_release();
     return false;
 }
@@ -190,7 +191,7 @@ static void cmd_ls(shell_t *sh, const char *arg) {
             shell_printf(sh, "%12llu  %s\n", (unsigned long long)fi.fsize, printable(fi.fname));
         return;
     }
-    ls_job_t *j = calloc(1, sizeof(*j));
+    ls_job_t *j = heap_zalloc(HEAP_FILES, sizeof(*j));
     if (!j) {
         shell_printf(sh, "ls: out of memory\n");
         return;
@@ -198,7 +199,7 @@ static void cmd_ls(shell_t *sh, const char *arg) {
     FRESULT fr = f_opendir(&j->dir, path);
     if (fr != FR_OK) {
         shell_printf(sh, "ls: %s\n", files_error(fr));
-        free(j);
+        heap_release(HEAP_FILES, j);
         return;
     }
     job_start(sh, ls_step, j);
@@ -348,7 +349,7 @@ static void cmd_cat(shell_t *sh, const char *arg) {
     }
     if (!resolve(sh, arg, path))
         return;
-    cat_job_t *j = malloc(sizeof(*j));
+    cat_job_t *j = heap_alloc(HEAP_FILES, sizeof(*j));
     if (!j) {
         shell_printf(sh, "cat: out of memory\n");
         return;
@@ -356,7 +357,7 @@ static void cmd_cat(shell_t *sh, const char *arg) {
     FRESULT fr = f_open(&j->f, path, FA_READ);
     if (fr != FR_OK) {
         shell_printf(sh, "cat: %s: %s\n", arg, files_error(fr));
-        free(j);
+        heap_release(HEAP_FILES, j);
         return;
     }
     job_start(sh, cat_step, j);
@@ -418,7 +419,7 @@ static void cmd_cp(shell_t *sh, char *args) {
     char *a, *b, src[PATH_LEN];
     if (!two_args(sh, args, &a, &b, "cp <from> <to>"))
         return;
-    cp_job_t *j = malloc(sizeof(*j));
+    cp_job_t *j = heap_alloc(HEAP_FILES, sizeof(*j));
     if (!j) {
         shell_printf(sh, "cp: out of memory\n");
         return;
@@ -448,7 +449,7 @@ static void cmd_cp(shell_t *sh, char *args) {
     job_start(sh, cp_step, j);
     return;
 fail:
-    free(j);
+    heap_release(HEAP_FILES, j);
 }
 
 // --- dispatch ----------------------------------------------------------------------------------

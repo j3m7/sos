@@ -18,6 +18,7 @@
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/aes.h>
 
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/stackmon.h"
 #include "time/nts_ke.h"
@@ -119,7 +120,7 @@ static void finish(bool ok) {
         tls_close(ke.tls);
         ke.tls = NULL;
     }
-    free(ke.response);
+    heap_release(HEAP_TIME, ke.response);
     ke.response = NULL;
     ke.finished_us = time_us_64();
     ke.state = ok ? KE_DONE : KE_FAILED;
@@ -174,7 +175,7 @@ static bool ke_begin(const char *host) {
     ke.started_us = time_us_64();
     ke.state = KE_RUNNING;
     ke.request_len = nts_ke_build_request(ke.request, sizeof(ke.request));
-    ke.response = malloc(NTS_KE_RESPONSE_MAX);
+    ke.response = heap_alloc(HEAP_TIME, NTS_KE_RESPONSE_MAX);
     ke.tls = tls_open(ke.host, NTS_KE_PORT, NTS_KE_ALPN, KE_TIMEOUT_MS, TLS_SYSTEM);
     if (!ke.response || !ke.tls) {
         fail("out of memory");
@@ -375,7 +376,7 @@ static void q_send(void) {
 static void q_check_reply(void) {
     // T4: the clock now, minus the time since the reply arrived.
     int64_t t4 = clock_now_us() - (int64_t)(time_us_64() - q.rx_boot_us);
-    nts_ntp_reply_t *r = malloc(sizeof(*r));
+    nts_ntp_reply_t *r = heap_alloc(HEAP_TIME, sizeof(*r));
     if (!r) {
         q_finish(false, "out of memory");
         return;
@@ -389,7 +390,7 @@ static void q_check_reply(void) {
         q.last_reason = why;
         log_msg(SOS_LOG_INFO, "nts: ignored a reply from %s: %s", q.server, why);
         q.got = false;
-        free(r);
+        heap_release(HEAP_TIME, r);
         return;
     }
     if (st == NTS_NTP_NAK) {
@@ -397,7 +398,7 @@ static void q_check_reply(void) {
         // for an authentic reply (RFC 8915 5.7); q_poll() acts on the NAK at the timeout.
         q.nak = true;
         q.got = false;
-        free(r);
+        heap_release(HEAP_TIME, r);
         return;
     }
 
@@ -417,7 +418,7 @@ static void q_check_reply(void) {
     else if (!r->receive || !r->transmit || t3 < t2)
         bad = "bad server timestamps";
     q.stratum = r->stratum;
-    free(r);
+    heap_release(HEAP_TIME, r);
     if (bad) {
         q_finish(false, bad);
         return;
