@@ -62,13 +62,30 @@ static absolute_time_t badauth_until;   // W_CONNECTING: BADAUTH still showing t
 static bool badauth_seen;
 static unsigned attempt;
 
-// Scan results for our network. Written by scan_result() in the driver's context (interrupt),
-// read by the main loop once the scan has ended.
+// The network of the current attempt: a copy of the configuration taken when the attempt
+// begins. The scan callback runs in the driver's context (a low-priority interrupt with the
+// threadsafe_background architecture), and the console edits the live configuration in place,
+// so neither the callback nor a join in progress reads settings() directly. An edit takes effect
+// at the next attempt; the console calls wifi_reconnect() after one.
 static struct {
+    char ssid[CONFIG_SSID_MAX + 1];
+    char password[CONFIG_PASSWORD_MAX + 1];
+} net;
+
+// Access points of our network, as scanned. scan_rx is written by scan_result() in the driver's
+// context; the main loop changes it, and copies it to scan_aps, only while holding the driver's
+// lock (cyw43_arch_lwip_begin), so a scan still running (past its deadline) can't write it
+// halfway through. The driver keeps one callback argument for all scans, not one per scan, so
+// results arriving late from a scan started earlier can't be told apart; they are matched
+// against the current network all the same, and an access point heard is one in reach.
+typedef struct {
     uint8_t bssid[6];
     int16_t rssi;
-} scan_aps[SCAN_MAX_APS];
-static volatile unsigned scan_count;
+} scan_ap_t;
+static scan_ap_t scan_rx[SCAN_MAX_APS];
+static unsigned scan_rx_count;
+static scan_ap_t scan_aps[SCAN_MAX_APS];    // main loop only: taken by take_scan()
+static unsigned scan_count;
 static bool prefer_bssid;               // join the scan's strongest by address (see above)
 static unsigned switch_tries;
 static bool verified;                   // the second scan (W_VERIFY) has run this attempt
@@ -82,42 +99,57 @@ static struct netif *sta(void) {
 }
 
 static uint32_t auth_mode(void) {
-    return settings()->wifi_password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN;
+    return net.password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN;
 }
 
 // A scan result: remember it if it's one of our network's access points (the strongest reading
-// of each). Runs in the driver's context.
+// of each). Runs in the driver's context, which holds the driver's lock meanwhile; it reads
+// only net, which the main loop changes only while no attempt is under way (begin_attempt()).
 static int scan_result(void *env, const cyw43_ev_scan_result_t *r) {
     (void)env;
-    const char *ssid = settings()->wifi_ssid;
-    size_t len = strlen(ssid);
-    if (!r || r->ssid_len != len || memcmp(r->ssid, ssid, len))
+    size_t len = strlen(net.ssid);
+    if (!r || r->ssid_len != len || memcmp(r->ssid, net.ssid, len))
         return 0;
     unsigned i;
-    for (i = 0; i < scan_count; i++)
-        if (!memcmp(scan_aps[i].bssid, r->bssid, 6))
+    for (i = 0; i < scan_rx_count; i++)
+        if (!memcmp(scan_rx[i].bssid, r->bssid, 6))
             break;
     if (i == SCAN_MAX_APS)
         return 0;
-    if (i == scan_count) {
-        memcpy(scan_aps[i].bssid, r->bssid, 6);
-        scan_aps[i].rssi = r->rssi;
-        scan_count = i + 1;
-    } else if (r->rssi > scan_aps[i].rssi) {
-        scan_aps[i].rssi = r->rssi;
+    if (i == scan_rx_count) {
+        memcpy(scan_rx[i].bssid, r->bssid, 6);
+        scan_rx[i].rssi = r->rssi;
+        scan_rx_count = i + 1;
+    } else if (r->rssi > scan_rx[i].rssi) {
+        scan_rx[i].rssi = r->rssi;
     }
     return 0;
 }
 
+// Forget the scan results (before a new attempt's scan).
+static void clear_scan(void) {
+    cyw43_arch_lwip_begin();
+    scan_rx_count = 0;
+    cyw43_arch_lwip_end();
+    scan_count = 0;
+}
+
+// Copy the results so far for the main loop to use.
+static void take_scan(void) {
+    cyw43_arch_lwip_begin();
+    scan_count = scan_rx_count;
+    memcpy(scan_aps, scan_rx, scan_count * sizeof(scan_aps[0]));
+    cyw43_arch_lwip_end();
+}
+
 // Ask the chip to join: the access point chosen by the scan, or any with the network's name.
 static int join(void) {
-    const sos_config_t *c = settings();
     // No channel is passed: with the scan's channel (cyw43_wifi_join's last argument) the join
     // never completed on this chip firmware.
     if (join_bssid_set)
-        return cyw43_arch_wifi_connect_bssid_async(c->wifi_ssid, join_bssid, c->wifi_password,
+        return cyw43_arch_wifi_connect_bssid_async(net.ssid, join_bssid, net.password,
                                                    auth_mode());
-    return cyw43_arch_wifi_connect_async(c->wifi_ssid, c->wifi_password, auth_mode());
+    return cyw43_arch_wifi_connect_async(net.ssid, net.password, auth_mode());
 }
 
 static unsigned strongest(void) {
@@ -129,7 +161,6 @@ static unsigned strongest(void) {
 }
 
 static void start_join(void) {
-    const sos_config_t *c = settings();
     join_bssid_set = prefer_bssid;      // move_to_strongest() chose join_bssid
     unsigned n = scan_count;
     if (n) {
@@ -144,10 +175,10 @@ static void start_join(void) {
             used = len < 0 || (size_t)len >= sizeof(list) - used ? sizeof(list) - 1
                                                                  : used + (size_t)len;
         }
-        log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", c->wifi_ssid, list);
+        log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", net.ssid, list);
     } else if (!prefer_bssid) {
         // Not seen (out of reach, or a hidden network): the chip looks for it by name.
-        log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", c->wifi_ssid);
+        log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", net.ssid);
     }
     int err = join();
     if (err) {
@@ -169,10 +200,16 @@ static void begin_attempt(void) {
         return;
     }
     attempt++;
+    // No scan or join of ours is running now (a scan past its deadline may be, so under the
+    // driver's lock).
+    cyw43_arch_lwip_begin();
+    strcpy(net.ssid, c->wifi_ssid);
+    strcpy(net.password, c->wifi_password);
+    cyw43_arch_lwip_end();
     // The hostname is sent with DHCP requests; the string must stay valid (it's in settings).
     netif_set_hostname(sta(), c->hostname);
-    log_msg(SOS_LOG_NOTICE, "wifi: connecting to '%s' (attempt %u)", c->wifi_ssid, attempt);
-    scan_count = 0;
+    log_msg(SOS_LOG_NOTICE, "wifi: connecting to '%s' (attempt %u)", net.ssid, attempt);
+    clear_scan();
     verified = false;
     cyw43_wifi_scan_options_t opts = {0};
     if (cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result) != 0) {
@@ -210,7 +247,7 @@ static bool move_to_strongest(void) {
     if (moving) {
         // Straight to the join: the target is known, and a new scan might miss it.
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-        scan_count = 0;
+        clear_scan();
         verified = true;
         start_join();
     }
@@ -298,8 +335,10 @@ void wifi_poll(void) {
     case W_OFF:
         break;
     case W_SCANNING:
-        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline))
+        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline)) {
+            take_scan();
             start_join();
+        }
         break;
     case W_CONNECTING:
         link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
@@ -334,6 +373,7 @@ void wifi_poll(void) {
         break;
     case W_VERIFY:
         if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline)) {
+            take_scan();
             state = W_CONNECTING;       // the link is checked again there
             if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP &&
                 !move_to_strongest())
