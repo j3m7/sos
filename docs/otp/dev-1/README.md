@@ -8,7 +8,7 @@ can read.
 **To run them, follow [`RUNBOOK.md`](RUNBOOK.md).** This page describes the files and how they
 were checked.
 
-They belong to the dev-board variant of [`docs/securing-a-board.md`](../../securing-a-board.md),
+They belong to Part 2 (dev-1) of [`docs/securing-a-board.md`](../../securing-a-board.md),
 which says when each is loaded, what must be true first, and who loads it: the board's owner,
 one file at a time, each named. Nothing here replaces that document's gates.
 

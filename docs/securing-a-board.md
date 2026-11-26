@@ -10,16 +10,19 @@ what you follow at the board. For that:
 "The owner" in this document is the person the boards belong to, who made the decisions
 recorded here and who runs every command that writes one-time-programmable memory.
 
-**Status: not yet approved by the owner, and nothing in it has been run. No OTP write has been
-made on any board.** The owner confirmed the decisions below on 2026-11-25. The firmware it
-lists is merged and the part for the development board ("Variant for the development board",
-with its files in `docs/otp/dev-1/`) has been reviewed; that part waits for the owner's approval
-and is what is run first. The production board's part is not final: it waits for dev-1 to be
-tested and working, by the owner's word, and has questions deferred until then. **Nothing in
-this document may be run until the owner approves it and names each write.** It covers steps 3
-and 4 of
+**Status.** Nothing in this document has been run, and no OTP write has been made on any
+board. The dev-1 part is reviewed and waits for the owner's approval; the production part is a
+draft. Nothing here may be run until the owner approves it and names each write. Every OTP
+write is permanent. It covers steps 3 and 4 of
 [issue #64](https://github.com/j3m7/sos/issues/64): the root secret in one-time-programmable
-(OTP) memory, secure boot, and debug off. Every OTP write is permanent.
+(OTP) memory, secure boot, and (on a production board) debug off.
+
+**How it is laid out.**
+
+1. **Both boards:** the decisions, the glitch detector, and what the firmware does.
+2. **dev-1 (now):** what its run proves and doesn't, and the reasoning behind its runbook.
+3. **Production board (draft, not final, nothing to run yet):** the steps for a board that is
+   meant to keep its secrets. Every heading in that part names the board.
 
 Sources: the RP2350 datasheet in `docs/rp2350/` (sections 10.5, 10.9, 13.4, 13.5, 13.8 and
 appendix D), `picotool otp list` from picotool 2.3.1 for the field names, and Raspberry Pi's
@@ -27,26 +30,9 @@ post ["Security through transparency: RP2350 Hacking Challenge results are
 in"](https://www.raspberrypi.com/news/security-through-transparency-rp2350-hacking-challenge-results-are-in/). Items I could not confirm
 from those are marked *to confirm* and collected at the end.
 
-## What a secured board gives, and what it doesn't
+## Part 1: both boards
 
-The production board will be an RP2350 **A2**, because A4 boards can't be bought at the moment.
-That limits what this buys.
-
-| Attacker | A secured A2 board |
-|---|---|
-| A PC and a USB cable | Stopped: only signed firmware runs, the flash holds sealed records, the root secret can't be read over USB |
-| A debug probe (SWD) | Stopped: debug is disabled |
-| A flash reader, or rewriting the flash chip | Reads only sealed records; can erase or roll back the configuration, which locks the cards (erase) or restores an older state (rollback, accepted in #64) |
-| Glitching equipment (voltage or laser fault injection) | **Not stopped.** Four published attacks apply to A2: reading OTP through a disrupted supply (E16, no workaround), running unsigned code through the bootloader's reboot call (E20), reading locked OTP pages in BOOTSEL (E21), and swapping the flash contents during the signature check (E24, no workaround, also on A3) |
-| Someone who can solder a second flash chip behind a switch | **Not stopped, on any chip revision.** SOS runs from external flash. After the bootrom has checked the signature, the flash the chip reads from can be switched to another one, with no glitching at all. The attacker's code then runs as Secure code and can read the root secret. Raspberry Pi's security white paper warns of this and says secure code should run from RAM; SOS is too large for that. Closing it is the "Later" section of #64 |
-| A lab that can decapsulate the chip | Not stopped (OTP imaging); storing the secret with chaff makes it harder |
-
-E20 and E21 have workarounds that cost features; they are decisions 2 and 3 below (the first deferred, the second taken). E16 and E24
-have none on A2. So a secured A2 raises the bar from "anyone with a cable" to "someone with a
-soldering iron and a second flash chip, or with fault-injection equipment", and no further.
-Moving to an A4 board later removes the four glitch attacks. It does not remove the flash swap.
-
-## Decisions
+### Decisions
 
 One table for both boards. **The dev-1 column was confirmed by the owner on 2026-11-25** and
 is what the dev-1 runbook does. The production column is what was recorded earlier; it is
@@ -66,7 +52,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 10 | The board's SSH host key after its settings are wiped | A new one is made at the next setup (in the firmware, merged) | Same |
 | 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page | Deferred until dev-1 is done |
 
-### The reasons, and what each costs
+#### The reasons, and what each costs
 
 **1. Debug port.** With debug on, anyone with a probe reads the root secret out of the
 running chip. On dev-1 it stays on because the board is for development and what is being
@@ -135,9 +121,9 @@ still write any unlocked OTP page on a secured board: mark the boot keys invalid
 to a blank slot. On dev-1 only the root secret's pages (locked by the burn) and SOS's flag
 page are locked; the boot-flag and boot-key pages stay open for later OTP tests, knowingly. For
 a production board the question is deferred: locking the boot-flag page also blocks the later
-writes that decisions 2, 5 and 8 leave for "later". See "Step 4.8".
+writes that decisions 2, 5 and 8 leave for "later". See "Production board, step 4.8".
 
-## The glitch detector
+### The glitch detector
 
 **What it is.** Four small circuits spread over the chip that notice when the processor's clock
 or core voltage is disturbed enough for logic to misbehave, which is what a voltage or clock
@@ -245,59 +231,7 @@ the decision:
 **The decision this needs:** after the week-long test, whether to enable the detector in OTP
 and at which sensitivity. Until then step 4.5 is not done.
 
-## Signing keys: how to make them
-
-The boot key is a secp256k1 key pair. The private half signs firmware; a hash of the public
-half goes into the board's OTP. Whoever holds a private key can make firmware a secured board
-will run, and if both private keys are lost the board keeps its last firmware for ever.
-
-Do this on a machine that is not the development machine, ideally one that is offline, and not
-in a session with an AI assistant: the private keys should never be on a machine where agents
-run.
-
-1. Make the two keys, readable only by you:
-
-   ```sh
-   umask 077
-   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot0.pem    # the key in use
-   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot1.pem    # the spare
-   ```
-
-2. Export the public halves. These are not secret, and are what the procedure needs from you:
-
-   ```sh
-   openssl ec -in sos-boot0.pem -pubout -out sos-boot0.pub.pem
-   openssl ec -in sos-boot1.pem -pubout -out sos-boot1.pub.pem
-   ```
-
-3. Compute each key's OTP hash: the SHA-256 of the public key's 64 raw bytes (X then Y).
-
-   ```sh
-   openssl ec -in sos-boot0.pem -pubout -outform DER | tail -c 64 | sha256sum
-   openssl ec -in sos-boot1.pem -pubout -outform DER | tail -c 64 | sha256sum
-   ```
-
-   Write both hashes down. This is the first of the two independent computations the checklist
-   asks for. The second is `picotool`'s: the `bootkey0` values it writes when asked to sign
-   with that key (that file also carries the bit that enables secure boot, so it is read for
-   the comparison and then deleted, never loaded). I checked with a throwaway key that the two
-   methods give the same 32 bytes.
-
-4. Back up each private key offline, on two separate media kept in different places (a USB
-   stick and a printed copy, for example), and read each backup back once to see that it is
-   complete. Keep the spare key's copies apart from the first key's.
-
-5. Signing a build needs `sos-boot0.pem` on the machine that builds it, as `SOS_SIGN_KEY`
-   (`docs/development.md`, "Signed builds"). Decide where that happens. The simplest safe
-   arrangement: release builds for the secured board are built and signed on the machine that
-   holds the key, and the development machine never has it. `sos-boot1.pem` stays offline
-   until the first key is lost or has to be retired.
-
-6. If a private key leaks: sign new firmware with the other key, and write
-   `BOOT_FLAGS1.KEY_INVALID` for the leaked key's slot on the board. That is permanent, and
-   leaves the board with one key.
-
-## What has to be built first (reversible, ordinary pull requests)
+### What the firmware does (built first, in ordinary pull requests)
 
 None of this exists yet. Each item is firmware or tooling work with host tests and review, done
 and merged before anything is burned.
@@ -394,143 +328,7 @@ Moving a board's root secret from flash to OTP changes every derived key. The bo
 configuration and SSH host key become unreadable and its cards locked. So the production board is
 set up fresh after step 3, never before.
 
-## Before touching the production board
-
-- [ ] The owner has approved this document. Decision 5 is settled only after the week-long
-      test; until then step 4.5 is left out.
-- [ ] All firmware in the previous section is merged, and the build that will be burned is
-      tagged.
-- [ ] The rehearsal (decision 6) has been done and written up, if chosen.
-- [ ] The board's serial and chip revision are recorded from `version`, and added to the board
-      registry as the production board.
-- [ ] `picotool otp dump` of the blank board is saved, as the record of its state before.
-- [ ] The signing keys exist, each has an offline backup that has been read back once, and
-      the hash that will go into `BOOTKEY0` has been computed twice, independently, from the
-      public key, and the two agree.
-- [ ] The tagged firmware, signed with the `BOOTKEY0` key, **boots and works on this board
-      while it is still open** (`picotool info -a` shows the signature verified; `version`,
-      Wi-Fi and SSH work).
-- [ ] Only this board is connected over USB. Every `picotool` command names its serial with
-      `--ser`.
-- [ ] The owner runs every OTP write themselves, or names each one for the session to run. The
-      deny rule on `picotool otp set`, `load`, `permissions` and `white-label` stays in place
-      otherwise.
-- [ ] Stable power; nobody else is using the board.
-
-## Step 3: the root secret into OTP
-
-| # | Action | Check before going on | Can it be undone? |
-|---|---|---|---|
-| 3.1 | Flash the signed image that has the burn command (built from the same tag) | `version` shows the tag; no root secret in OTP; secure boot off | yes |
-| 3.2 | Run the burn command on the console, with the physical action | It reports the page written, read back, marked and locked | **no** |
-| 3.3 | Flash the everyday signed firmware (same tag, no burn command) and reboot | `rootsecret` reports the secret present in OTP. The log shows the key provider locked the page at the end of boot | yes |
-| 3.4 | From BOOTSEL, try to read the page with `picotool otp get` | It is refused or returns nothing. `picotool otp dump` shows no secret in that page | |
-| 3.5 | `setup` on the console (password, network, trusted key), then format the card | Configuration saves and loads across a reboot; the card mounts | yes |
-
-If 3.2 fails partway (power lost, a read-back mismatch), that page is spent: it has no marker,
-so the firmware skips it. With the list used up the board can't be given a root secret by this
-firmware.
-
-**A burn that ends in an error is a full stop, not a cue to run it again.** The command says
-"STOP HERE" and the image refuses further runs until the board is restarted. The cause is
-found first: a fault in how OTP is written (the boot ROM call, the read-back) would spend the
-second and third page exactly as it spent the first. The one error that isn't a stop is
-"the button wasn't held". If the very first write fails and nothing landed, the page is left
-blank and unlocked, and is the page the next run uses; that is still a stop.
-
-If the board restarts during a burn while the BOOTSEL button is held, it comes up in the USB
-bootloader. That is the button, not damage: `picotool reboot` brings the firmware back, and
-`rootsecret burn plan` then says what state the pages are in.
-
-At the end of step 3 the board still boots anything and still has debug: the secret can be read
-by loading other firmware. It is protected only once step 4 is done. **Steps 3 and 4 are done in
-one sitting, and the board is not left unattended between them.**
-
-## Step 4: secure boot and debug off
-
-The order is the datasheet's (section 10.5), with a check after each write. `SECURE_BOOT_ENABLE`
-is last, because with it set and a wrong key the board can never run code again.
-
-| # | Write | Check before going on | If it's wrong |
-|---|---|---|---|
-| 4.1 | The hash of the signing key into `BOOTKEY0_0` to `_15`; the spare key's hash into `BOOTKEY1_0` to `_15` | Read the rows back and compare with the two independently computed hashes | A wrong hash in a slot can be abandoned by marking that slot invalid in 4.3, as long as the other slot is right |
-| 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check (`bootkey`, #79): it must say `MATCH` for the image that is on the board now.** `MATCH` compares the key's hash only, so also confirm the signature itself: `picotool info -a` on the image read back from the board must say `signature: verified`. `NOT YET`, `NO MATCH` and `NO VERDICT` all stop the procedure | A "no match" stops the procedure here, with the board still open |
-| 4.3 | `BOOT_FLAGS1.KEY_INVALID` for slots 2 and 3 | Read back | |
-| 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
-| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
-| 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
-| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only. **Never before the firmware on the board has the OTP key provider with the "OTP or not at all" rule (item 1), and `rootsecret` reports the secret in OTP:** with older firmware a sealed-only board still takes its root secret from flash, which an attacker can write | Read the three rows back. **If `version` still says `sealed-only: no` after the write and a reboot, stop: do not go on to 4.7.** Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
-| 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
-
-After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
-
-### Step 4.8: lock the OTP pages that matter against the bootloader
-
-Found in review of #86. With the USB bootloader kept (decision 2), `picotool otp set` and
-`otp load` still work on a secured board for every page whose lock word allows the bootloader
-to write. Secure boot doesn't stop that: the bootloader is the boot ROM's own code. Someone
-with a cable could then, without opening the case:
-
-- mark both boot keys invalid (`BOOT_FLAGS1.KEY_INVALID`), after which the board never starts
-  any firmware again;
-- on a board with blank key slots, write a key of their own into one and mark it valid, after
-  which the board runs their firmware, and their firmware reads the root secret;
-- set further bits in `CRIT1` or the boot flags (disable the bootloader, change the boot
-  path), or lock pages away from the firmware.
-
-| # | Write | Check before going on | If it's wrong |
-|---|---|---|---|
-| 4.8 | The lock words of pages 0, 1 and 2 (chip configuration, boot flags, boot keys), page 3 (SOS's flags), the root secret's list pages not locked by the burn, and the two lock pages 62 and 63: bootloader read-only | Read the lock words back. From BOOTSEL, `picotool otp set` of a harmless row in one of those pages is **refused**. `version`, `bootkey` and `rootsecret` still read what they did | **After this, nothing in those pages can be changed over USB, by anyone.** A wrong key hash or flag is then permanent. So it comes last, after 4.7 has been seen to work and the board has been through "Afterwards: trying the attacks" |
-
-It is not a full stop: on an A2 the bootloader's own lock check is the one erratum E21
-defeats by glitching, and the remedy for that is disabling the bootloader. What it removes is
-the attack that needs only a cable and `picotool`.
-
-Exactly which rows, the values, and whether the firmware (Secure code) should also be denied
-writes to pages 0 to 2 are for the reviewed OTP files ("to confirm" item 1).
-
-**It closes doors the earlier decisions left open, and that is for the owner to weigh.**
-Page 1 holds `CRIT1` and the boot flags. Once it is locked against the bootloader, no later
-`picotool` write reaches them, and three decisions count on such a write:
-
-- decision 2: disabling the USB bootloader later (`BOOT_FLAGS0.DISABLE_BOOTSEL_*`);
-- decision 5: the glitch detector bit, after the week-long test (`CRIT1`);
-- decision 8: rollback protection later (`BOOT_FLAGS0.ROLLBACK_REQUIRED`).
-
-So either page 1 is locked only once those three are settled, and stays exposed to a cable
-until then; or it is locked now and each of them later needs a signed image written for the
-purpose, which writes the bit as Secure code (if the page's Secure lock is left open for
-that). The same goes for page 2 and a later change of boot keys. The lock check in the
-firmware (#86) is also no proof of history: lock words can be written from the bootloader, so
-a board that was ever out of its owner's hands unlocked can't be shown clean by reading them.
-
-**Deferred, by the owner's word (2026-11-25): "We are not working with a production board
-until dev-1 is tested and working."** This is a question for the production board, to be
-taken up then. It blocks nothing now. On dev-1, 4.8 covers page 3 and the root secret's list
-pages only (see the dev variant).
-
-## Afterwards: trying the attacks
-
-The table at the top of the issue, run against the secured board, with results recorded on the
-issue.
-
-| Attempt | Expected |
-|---|---|
-| Attach a debug probe | Refused |
-| Load an unsigned build over USB (if the bootloader was kept). Through our own tools this needs `SOS_FLASH_UNGUARDED=1` for that one flash: the flash guard refuses an unsigned image before it reaches the board | The bootrom won't run it |
-| Load a build signed with another key | The bootrom won't run it |
-| Load the signed build | Runs |
-| `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
-| `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no SSH host key |
-| Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
-| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. Its old SSH host key can no longer be opened (decision 10): the board set up again by whoever is at the console gets a new one, and SSH clients warn that it changed |
-| Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
-| `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
-| Console without the password | Nothing but the prompt |
-
-Not possible to try here: the glitch attacks, the flash swap and chip imaging.
-
-## Variant for the development board (dev-1)
+## Part 2: dev-1 (now)
 
 **What dev-1 is for, in the owner's words:** "what we are testing on dev-1 is that the
 mechanisms work. We don't really care about protecting the data on the board." And: "We are
@@ -546,14 +344,7 @@ approval of this document, the gates below, and the owner naming and running eac
 dev-1 is the only board all sessions develop on (serial F94525FD61D9A1CC, RP2350 A2). A mistake
 at the last step leaves the project without a board until another arrives.
 
-### Running it
-
-The steps to follow at the board are in **[`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md)**:
-what to type, what you should see, and when to stop, in order, and nothing else. This section
-is the reasoning behind that runbook. If the two ever disagree, the runbook is wrong and must
-be corrected before anyone runs it.
-
-### What it is for, and what it does not prove
+### dev-1: what the run is for, and what it does not prove
 
 It runs the real procedure, in order, on real hardware before a production board is spent: the
 burn, the key provider reading OTP, the boot key slots, the boot ROM refusing other firmware,
@@ -568,14 +359,21 @@ It does not make dev-1 secret-keeping, and nobody should treat it as such:
 - So what is sealed on dev-1 is protected from someone with only a USB cable and no key, and
   from nobody else. dev-1 tests the mechanism.
 
-### What dev-1 gets, and what it leaves out
+### dev-1: running it
 
-The dev-1 column of the Decisions table at the top of this document. In short: the root secret
+The steps to follow at the board are in **[`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md)**:
+what to type, what you should see, and when to stop, in order, and nothing else. This section
+is the reasoning behind that runbook. If the two ever disagree, the runbook is wrong and must
+be corrected before anyone runs it.
+
+### dev-1: what it gets, and what it leaves out
+
+The dev-1 column of the Decisions table in Part 1. In short: the root secret
 in OTP, the two dev boot keys, and secure boot; not debug off, not the watchdog-scratch flag,
 not the glitch detector bit, not the sealed-only marker, and no lock on the boot-flag and
 boot-key pages. After the root secret is written the board is set up afresh, as below.
 
-### Moving the root secret re-keys dev-1
+### dev-1: moving the root secret re-keys the board
 
 The root secret in OTP is a new one, so every key derived from it changes. On dev-1 that means:
 the sealed configuration no longer opens (set up again with `setup` or `ninja provision`), the
@@ -584,7 +382,7 @@ console password is gone with the configuration, and the encrypted card no longe
 formatted again. dev-1's contents are disposable, so nothing is saved first. Whoever does it
 says so to the other sessions before and after.
 
-### How the rehearsal (decision 6) fits
+### dev-1: how the rehearsal (decision 6) fits
 
 Decision 6 approved a rehearsal of the burn on dev-1 "in spare OTP pages", with a read attempt
 from BOOTSEL and one burn interrupted on purpose, as preparation for a production board. With
@@ -631,7 +429,7 @@ This exercises the skip logic on the real page list instead of a parallel one, a
 one page of the list unused. The alternative is a rehearsal build with its own list of spare
 pages, which keeps all three real pages but tests code the production board won't run.
 
-### Gates
+### dev-1: gates
 
 **Before any OTP write on dev-1:**
 
@@ -676,9 +474,9 @@ pages, which keeps all three real pages but tests code the production board won'
 - [ ] `bootkey` says `MATCH` for the image on the board at that moment, and `picotool info -a`
       of the image read back from the board says `signature: verified`.
 
-### The run
+### dev-1: the run
 
-Steps 3.1 to 3.5 as written above, with the interrupted burn first.
+Steps 3.1 to 3.5 as written in Part 3 ("Production board, step 3"), with the interrupted burn first.
 Then:
 
 | # | Write (the owner runs it) | Check before going on |
@@ -688,7 +486,7 @@ Then:
 | | *4.3 to 4.6a are not done on dev-1* | |
 | D4.7 | `CRIT1.SECURE_BOOT_ENABLE`, after the gate above | Before the reset, `version` says `secure boot: off` with the "OTP rows say otherwise" warning. After it: the signed firmware boots, `version` says `secure boot: on` with no warning, and what was set up in 3.5 still loads |
 
-### What runs on hardware for the first time
+### dev-1: what runs on hardware for the first time
 
 None of these has run on a real chip. dev-1 is where each runs first.
 
@@ -714,7 +512,7 @@ signature verified by `picotool`, and both keys shown to match.
 After D4.7 the checks of "Afterwards: trying the attacks" are run on dev-1 except the debug
 probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is expected to work).
 
-### dev-1 and step 4.8
+### dev-1: locking OTP pages against the bootloader (D4.8)
 
 Decision 11: on dev-1 only page 3 and the root secret's list pages are locked against writes
 from the bootloader. The list pages are locked by the burn itself; page 3 with `picotool`.
@@ -727,14 +525,14 @@ What stays possible on dev-1 as a result, knowingly: anyone with a cable can add
 a blank slot and run their own firmware, or mark the dev keys invalid and end the board's
 life. Neither loses anything the owner cares about on this board.
 
-### Living with it afterwards
+### dev-1: living with it afterwards
 
 - Every image flashed to dev-1 is signed with one of the two dev keys, for good. An unsigned
   image doesn't start; the expected recovery is loading a signed one over USB.
 - If both dev keys are lost, dev-1 keeps its last firmware for ever.
 - The board registry records what was written to dev-1's OTP, with the date.
 
-### The flash guard
+### dev-1: the flash guard
 
 `ninja flash` (and `tools/flash.sh`) refuses an image that isn't signed with an accepted key
 (#80, #81), so that a checkout with a missing build setting can't leave dev-1 in the
@@ -742,7 +540,219 @@ bootloader by accident. The accepted keys are a list of public key hashes kept p
 list, because dev-1 accepts two keys; hashes, so that the guard works where no private key is
 present. It guards our own tools only: `picotool load` typed by hand goes around it.
 
-## What can't be undone, in one place
+## Part 3: production board (draft, not final, nothing to run yet)
+
+**This part is a draft.** It waits for dev-1 to be tested and working, by the owner's word, and
+has questions deferred until then. There is no runbook for a production board yet.
+
+### Production board: what a secured board gives, and what it doesn't
+
+The production board will be an RP2350 **A2**, because A4 boards can't be bought at the moment.
+That limits what this buys.
+
+| Attacker | A secured A2 board |
+|---|---|
+| A PC and a USB cable | Stopped: only signed firmware runs, the flash holds sealed records, the root secret can't be read over USB |
+| A debug probe (SWD) | Stopped: debug is disabled |
+| A flash reader, or rewriting the flash chip | Reads only sealed records; can erase or roll back the configuration, which locks the cards (erase) or restores an older state (rollback, accepted in #64) |
+| Glitching equipment (voltage or laser fault injection) | **Not stopped.** Four published attacks apply to A2: reading OTP through a disrupted supply (E16, no workaround), running unsigned code through the bootloader's reboot call (E20), reading locked OTP pages in BOOTSEL (E21), and swapping the flash contents during the signature check (E24, no workaround, also on A3) |
+| Someone who can solder a second flash chip behind a switch | **Not stopped, on any chip revision.** SOS runs from external flash. After the bootrom has checked the signature, the flash the chip reads from can be switched to another one, with no glitching at all. The attacker's code then runs as Secure code and can read the root secret. Raspberry Pi's security white paper warns of this and says secure code should run from RAM; SOS is too large for that. Closing it is the "Later" section of #64 |
+| A lab that can decapsulate the chip | Not stopped (OTP imaging); storing the secret with chaff makes it harder |
+
+E20 and E21 have workarounds that cost features; they are decisions 2 and 3 in Part 1 (the first deferred, the second taken). E16 and E24
+have none on A2. So a secured A2 raises the bar from "anyone with a cable" to "someone with a
+soldering iron and a second flash chip, or with fault-injection equipment", and no further.
+Moving to an A4 board later removes the four glitch attacks. It does not remove the flash swap.
+
+### Production board: making the signing keys
+
+The boot key is a secp256k1 key pair. The private half signs firmware; a hash of the public
+half goes into the board's OTP. Whoever holds a private key can make firmware a secured board
+will run, and if both private keys are lost the board keeps its last firmware for ever.
+
+Do this on a machine that is not the development machine, ideally one that is offline, and not
+in a session with an AI assistant: the private keys should never be on a machine where agents
+run.
+
+1. Make the two keys, readable only by you:
+
+   ```sh
+   umask 077
+   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot0.pem    # the key in use
+   openssl ecparam -name secp256k1 -genkey -noout -out sos-boot1.pem    # the spare
+   ```
+
+2. Export the public halves. These are not secret, and are what the procedure needs from you:
+
+   ```sh
+   openssl ec -in sos-boot0.pem -pubout -out sos-boot0.pub.pem
+   openssl ec -in sos-boot1.pem -pubout -out sos-boot1.pub.pem
+   ```
+
+3. Compute each key's OTP hash: the SHA-256 of the public key's 64 raw bytes (X then Y).
+
+   ```sh
+   openssl ec -in sos-boot0.pem -pubout -outform DER | tail -c 64 | sha256sum
+   openssl ec -in sos-boot1.pem -pubout -outform DER | tail -c 64 | sha256sum
+   ```
+
+   Write both hashes down. This is the first of the two independent computations the checklist
+   asks for. The second is `picotool`'s: the `bootkey0` values it writes when asked to sign
+   with that key (that file also carries the bit that enables secure boot, so it is read for
+   the comparison and then deleted, never loaded). I checked with a throwaway key that the two
+   methods give the same 32 bytes.
+
+4. Back up each private key offline, on two separate media kept in different places (a USB
+   stick and a printed copy, for example), and read each backup back once to see that it is
+   complete. Keep the spare key's copies apart from the first key's.
+
+5. Signing a build needs `sos-boot0.pem` on the machine that builds it, as `SOS_SIGN_KEY`
+   (`docs/development.md`, "Signed builds"). Decide where that happens. The simplest safe
+   arrangement: release builds for the secured board are built and signed on the machine that
+   holds the key, and the development machine never has it. `sos-boot1.pem` stays offline
+   until the first key is lost or has to be retired.
+
+6. If a private key leaks: sign new firmware with the other key, and write
+   `BOOT_FLAGS1.KEY_INVALID` for the leaked key's slot on the board. That is permanent, and
+   leaves the board with one key.
+
+### Production board: before touching it
+
+- [ ] The owner has approved this document. Decision 5 is settled only after the week-long
+      test; until then step 4.5 is left out.
+- [ ] All firmware in the previous section is merged, and the build that will be burned is
+      tagged.
+- [ ] The rehearsal (decision 6) has been done and written up, if chosen.
+- [ ] The board's serial and chip revision are recorded from `version`, and added to the board
+      registry as the production board.
+- [ ] `picotool otp dump` of the blank board is saved, as the record of its state before.
+- [ ] The signing keys exist, each has an offline backup that has been read back once, and
+      the hash that will go into `BOOTKEY0` has been computed twice, independently, from the
+      public key, and the two agree.
+- [ ] The tagged firmware, signed with the `BOOTKEY0` key, **boots and works on this board
+      while it is still open** (`picotool info -a` shows the signature verified; `version`,
+      Wi-Fi and SSH work).
+- [ ] Only this board is connected over USB. Every `picotool` command names its serial with
+      `--ser`.
+- [ ] The owner runs every OTP write themselves, or names each one for the session to run. The
+      deny rule on `picotool otp set`, `load`, `permissions` and `white-label` stays in place
+      otherwise.
+- [ ] Stable power; nobody else is using the board.
+
+### Production board, step 3: the root secret into OTP
+
+| # | Action | Check before going on | Can it be undone? |
+|---|---|---|---|
+| 3.1 | Flash the signed image that has the burn command (built from the same tag) | `version` shows the tag; no root secret in OTP; secure boot off | yes |
+| 3.2 | Run the burn command on the console, with the physical action | It reports the page written, read back, marked and locked | **no** |
+| 3.3 | Flash the everyday signed firmware (same tag, no burn command) and reboot | `rootsecret` reports the secret present in OTP. The log shows the key provider locked the page at the end of boot | yes |
+| 3.4 | From BOOTSEL, try to read the page with `picotool otp get` | It is refused or returns nothing. `picotool otp dump` shows no secret in that page | |
+| 3.5 | `setup` on the console (password, network, trusted key), then format the card | Configuration saves and loads across a reboot; the card mounts | yes |
+
+If 3.2 fails partway (power lost, a read-back mismatch), that page is spent: it has no marker,
+so the firmware skips it. With the list used up the board can't be given a root secret by this
+firmware.
+
+**A burn that ends in an error is a full stop, not a cue to run it again.** The command says
+"STOP HERE" and the image refuses further runs until the board is restarted. The cause is
+found first: a fault in how OTP is written (the boot ROM call, the read-back) would spend the
+second and third page exactly as it spent the first. The one error that isn't a stop is
+"the button wasn't held". If the very first write fails and nothing landed, the page is left
+blank and unlocked, and is the page the next run uses; that is still a stop.
+
+If the board restarts during a burn while the BOOTSEL button is held, it comes up in the USB
+bootloader. That is the button, not damage: `picotool reboot` brings the firmware back, and
+`rootsecret burn plan` then says what state the pages are in.
+
+At the end of step 3 the board still boots anything and still has debug: the secret can be read
+by loading other firmware. It is protected only once step 4 is done. **Steps 3 and 4 are done in
+one sitting, and the board is not left unattended between them.**
+
+### Production board, step 4: secure boot and debug off
+
+The order is the datasheet's (section 10.5), with a check after each write. `SECURE_BOOT_ENABLE`
+is last, because with it set and a wrong key the board can never run code again.
+
+| # | Write | Check before going on | If it's wrong |
+|---|---|---|---|
+| 4.1 | The hash of the signing key into `BOOTKEY0_0` to `_15`; the spare key's hash into `BOOTKEY1_0` to `_15` | Read the rows back and compare with the two independently computed hashes | A wrong hash in a slot can be abandoned by marking that slot invalid in 4.3, as long as the other slot is right |
+| 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check (`bootkey`, #79): it must say `MATCH` for the image that is on the board now.** `MATCH` compares the key's hash only, so also confirm the signature itself: `picotool info -a` on the image read back from the board must say `signature: verified`. `NOT YET`, `NO MATCH` and `NO VERDICT` all stop the procedure | A "no match" stops the procedure here, with the board still open |
+| 4.3 | `BOOT_FLAGS1.KEY_INVALID` for slots 2 and 3 | Read back | |
+| 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
+| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
+| 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
+| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only. **Never before the firmware on the board has the OTP key provider with the "OTP or not at all" rule (item 1), and `rootsecret` reports the secret in OTP:** with older firmware a sealed-only board still takes its root secret from flash, which an attacker can write | Read the three rows back. **If `version` still says `sealed-only: no` after the write and a reboot, stop: do not go on to 4.7.** Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
+| 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
+
+After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
+
+#### Production board, step 4.8: lock the OTP pages that matter against the bootloader
+
+Found in review of #86. With the USB bootloader kept (decision 2), `picotool otp set` and
+`otp load` still work on a secured board for every page whose lock word allows the bootloader
+to write. Secure boot doesn't stop that: the bootloader is the boot ROM's own code. Someone
+with a cable could then, without opening the case:
+
+- mark both boot keys invalid (`BOOT_FLAGS1.KEY_INVALID`), after which the board never starts
+  any firmware again;
+- on a board with blank key slots, write a key of their own into one and mark it valid, after
+  which the board runs their firmware, and their firmware reads the root secret;
+- set further bits in `CRIT1` or the boot flags (disable the bootloader, change the boot
+  path), or lock pages away from the firmware.
+
+| # | Write | Check before going on | If it's wrong |
+|---|---|---|---|
+| 4.8 | The lock words of pages 0, 1 and 2 (chip configuration, boot flags, boot keys), page 3 (SOS's flags), the root secret's list pages not locked by the burn, and the two lock pages 62 and 63: bootloader read-only | Read the lock words back. From BOOTSEL, `picotool otp set` of a harmless row in one of those pages is **refused**. `version`, `bootkey` and `rootsecret` still read what they did | **After this, nothing in those pages can be changed over USB, by anyone.** A wrong key hash or flag is then permanent. So it comes last, after 4.7 has been seen to work and the board has been through "Afterwards: trying the attacks" |
+
+It is not a full stop: on an A2 the bootloader's own lock check is the one erratum E21
+defeats by glitching, and the remedy for that is disabling the bootloader. What it removes is
+the attack that needs only a cable and `picotool`.
+
+Exactly which rows, the values, and whether the firmware (Secure code) should also be denied
+writes to pages 0 to 2 are for the reviewed OTP files ("to confirm" item 1).
+
+**It closes doors the earlier decisions left open, and that is for the owner to weigh.**
+Page 1 holds `CRIT1` and the boot flags. Once it is locked against the bootloader, no later
+`picotool` write reaches them, and three decisions count on such a write:
+
+- decision 2: disabling the USB bootloader later (`BOOT_FLAGS0.DISABLE_BOOTSEL_*`);
+- decision 5: the glitch detector bit, after the week-long test (`CRIT1`);
+- decision 8: rollback protection later (`BOOT_FLAGS0.ROLLBACK_REQUIRED`).
+
+So either page 1 is locked only once those three are settled, and stays exposed to a cable
+until then; or it is locked now and each of them later needs a signed image written for the
+purpose, which writes the bit as Secure code (if the page's Secure lock is left open for
+that). The same goes for page 2 and a later change of boot keys. The lock check in the
+firmware (#86) is also no proof of history: lock words can be written from the bootloader, so
+a board that was ever out of its owner's hands unlocked can't be shown clean by reading them.
+
+**Deferred, by the owner's word (2026-11-25): "We are not working with a production board
+until dev-1 is tested and working."** This is a question for the production board, to be
+taken up then. It blocks nothing now. On dev-1, 4.8 covers page 3 and the root secret's list
+pages only (see Part 2).
+
+### Production board: afterwards, trying the attacks
+
+The table at the top of the issue, run against the secured board, with results recorded on the
+issue.
+
+| Attempt | Expected |
+|---|---|
+| Attach a debug probe | Refused |
+| Load an unsigned build over USB (if the bootloader was kept). Through our own tools this needs `SOS_FLASH_UNGUARDED=1` for that one flash: the flash guard refuses an unsigned image before it reaches the board | The bootrom won't run it |
+| Load a build signed with another key | The bootrom won't run it |
+| Load the signed build | Runs |
+| `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
+| `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no SSH host key |
+| Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
+| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. Its old SSH host key can no longer be opened (decision 10): the board set up again by whoever is at the console gets a new one, and SSH clients warn that it changed |
+| Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
+| `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
+| Console without the password | Nothing but the prompt |
+
+Not possible to try here: the glitch attacks, the flash swap and chip imaging.
+
+### Production board: what can't be undone, in one place
 
 - Every OTP bit written. In particular: the root-secret page and its locks, the boot key
   hashes, the disabled boot paths, the glitch detector, debug off, secure boot on.
@@ -758,32 +768,32 @@ present. It guards our own tools only: `picotool load` typed by hand goes around
 
 This list is a gate: the document is not final, and nothing is burned, while any item is open.
 
-1. The exact `picotool` commands and file contents for each write. **For dev-1 they are in
+1. *(dev-1: done; production: to write.)* The exact `picotool` commands and file contents for each write. **For dev-1 they are in
    [`docs/otp/dev-1/`](otp/dev-1/README.md), for review:** one file per write, the read-back
    command after each, and what the blank board answers to each read today. The read commands
    have been run on dev-1; no file has been loaded, and that page lists what can only be
    confirmed by loading (that `picotool` accepts each file as written, the lock word's form in
    particular). Files for a production board are written when there is one: other keys, and
    the rows dev-1 leaves out.
-2. That `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` leaves SOS's fault record and watchdog reset
+2. *(Production only.)* That `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` leaves SOS's fault record and watchdog reset
    detection working. They use the watchdog scratch registers 0 to 3 and the watchdog's reason
    register; the datasheet says the flag makes the bootrom ignore the scratch registers at boot.
-3. How Secure code reads and soft-locks an OTP page in the SDK version we use, and that the
+3. *(Both; first seen on a chip in the dev-1 run.)* How Secure code reads and soft-locks an OTP page in the SDK version we use, and that the
    bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
    *The first half is done: #86, with the soft lock and the guarded read tried on dev-1 on a
    blank page. The second half is first seen on a chip in the dev-1 run, when a read of the
    locked pages from BOOTSEL is refused.*
-4. Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
+4. *(Both; first run on a chip in the dev-1 rehearsal.)* Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
    row write and read, used for the chaff rows. *Written and host tested (#87) against the
    SDK's description of the call; first run on a chip in the dev-1 rehearsal.*
-5. Glitch detector: the week-long test's results; and that the detector's `LOCK` register
+5. *(Production only.)* Glitch detector: the week-long test's results; and that the detector's `LOCK` register
    stops software from disarming it.
-6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
-7. Which free OTP pages the root secret uses (pages 3 to 60 are free for user data), and that
+6. *(Production only.)* Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
+7. *(Both; settled: pages 4 to 6.)* Which free OTP pages the root secret uses (pages 3 to 60 are free for user data), and that
    a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
    sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
    the root secret's list starts at page 4 or later.
-8. **The SSH host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
+8. *(Both; done.)* **The SSH host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
    key is sealed under a key made from the root secret and the owner secret, the way an
    encrypted card's key is. Erasing or provisioning a board's configuration makes its host
    key unreadable, `config reset` also stops SSH at once, and the next setup makes a new
