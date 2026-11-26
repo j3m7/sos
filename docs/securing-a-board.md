@@ -230,9 +230,9 @@ and merged before anything is burned.
    boot can still be provisioned from a file. `version` shows the three facts: where the root
    secret is, whether secure boot is on (#79), and whether the board is sealed-only.
 
-   **Proposed marker: one OTP row that SOS defines,** in a free page of its own, written on a
-   production board as step 4.6a and never on a development board. Why OTP and not the
-   alternatives:
+   **The marker is one OTP row that SOS defines** (agreed by the owner, 2026-11-25), in a free
+   page of its own, written on a production board as step 4.6a and never on a development
+   board. Why OTP and not the alternatives:
    - *A build option* would make "sealed-only" a property of the image. Any image without it
      that the board's key has ever signed (an older one, a development one) would then accept
      an unsealed record again.
@@ -404,8 +404,10 @@ says so to the other sessions before and after.
 
 Decision 6 approved a rehearsal of the burn on dev-1 "in spare OTP pages", with a read attempt
 from BOOTSEL and one burn interrupted on purpose, as preparation for a production board. With
-dev-1 now getting a real root secret, the rehearsal and the real thing can be the same run.
-**Proposed, for the owner to confirm, since it goes beyond the words of decision 6:**
+dev-1 now getting a real root secret, the rehearsal and the real thing are the same run.
+**Agreed by the owner on 2026-11-25** (it goes beyond the words of decision 6, which spoke of
+spare pages). It is a decision about how the run goes, not the go-ahead for it: the gates
+below still apply and the owner names each write.
 
 1. The first run of the burn command on dev-1 is **interrupted on purpose**, by a stop point
    in the burn command, not by pulling the cable: the command is given an explicit rehearsal
@@ -468,7 +470,7 @@ pages, which keeps all three real pages but tests code the production board won'
 
 ### The run
 
-Steps 3.1 to 3.5 as written above, with the interrupted burn first if the proposal is accepted.
+Steps 3.1 to 3.5 as written above, with the interrupted burn first.
 Then:
 
 | # | Write (the owner runs it) | Check before going on |
@@ -524,10 +526,12 @@ probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is ex
   unsealed records or `rootsecret forget`. Firmware item 3 above has the proposal for the
   marker; dev-1 never gets it.
 
-### Open, not decided by the owner
+- **The sealed-only marker is an OTP row,** and **the interrupted burn is the first run on
+  the real page list** (both agreed 2026-11-25; see firmware item 3 and "How the rehearsal
+  fits").
 
-- **The rehearsal proposal above** (the interrupted burn on the real page list, which goes
-  beyond the words of decision 6).
+Nothing in this variant is left open for the owner. What remains is the firmware, the "to
+confirm" items named in the gates, and the owner's word for each write.
 
 ## What can't be undone, in one place
 
