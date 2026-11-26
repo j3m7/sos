@@ -46,7 +46,11 @@ The build can sign the firmware image, which is what a board with secure boot wi
 (issue #64). A board without secure boot runs a signed image like any other, so signing can be
 on in everyday builds.
 
-Make a key once, outside the repository, and keep it private (it is a secp256k1 private key in
+For a development board, use the public dev keys in [`keys/`](../keys/README.md)
+(`-DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-1.pem`). They are not secret, so never put their
+hashes into a production board's OTP.
+
+For any other board, make a key once, outside the repository, and keep it private (it is a secp256k1 private key in
 PEM form):
 
 ```sh

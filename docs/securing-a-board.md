@@ -43,7 +43,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 1 | Debug port | Stays on | Off for good |
 | 2 | USB bootloader | Kept | Kept for now |
 | 3 | Reboot into bootloader on command | Kept | Removed (the watchdog-scratch flag) |
-| 4 | Signing keys | The two dev keys on this machine; slots 2 and 3 left blank | Two keys made off this machine; slots 2 and 3 marked invalid |
+| 4 | Signing keys | The two public dev keys in `keys/`; slots 2 and 3 left blank | Two keys made off this machine; slots 2 and 3 marked invalid |
 | 5 | Glitch detector | Turned on by the firmware at boot (highest sensitivity); not set in OTP | Turned on by the firmware the same way; the OTP bit is open until the week-long test |
 | 6 | Rehearsal burn | First burn is the rehearsal, then the real one | Not applicable; dev-1 is the rehearsal |
 | 7 | Wrong-password count across reboots | In the firmware, merged | Same |
@@ -71,8 +71,9 @@ it (`picotool load -f`), and on dev-1 the sessions flash with nobody at the butt
 kept. On a production board `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` removes it, as the other
 workaround for E20; flashing then needs someone to hold BOOTSEL while plugging the board in.
 
-**4. Signing keys.** dev-1 uses two development keys that are files on the development
-machine, readable by every session, so they prove the mechanism and nothing more. Its slots 2
+**4. Signing keys.** dev-1 uses two development keys that are published in the repository
+(`keys/dev-INSECURE-1.pem` and `-2.pem`), so they prove the mechanism and nothing more. Being
+public is also their backup: a lost disk can't leave dev-1 unflashable. Its slots 2
 and 3 stay blank, which leaves room to add a key and equally lets anyone with a cable add
 theirs. A production board gets two keys made away from the development machine, each with an
 offline backup, and its unused slots marked invalid. How to make them is below.
@@ -328,10 +329,11 @@ and merged before anything is burned.
    the test itself (load, power and temperature conditions, and what counts as a pass).
 7. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build
    deliberately produces no OTP file.
-8. **The OTP settings as files we write by hand,** one per stage below, in the form
-   `picotool otp load` takes, checked into the repository without any key material and reviewed
-   like code. Not the single file `picotool seal` can produce, which enables secure boot in the
-   same load as the key hash.
+8. **The boot key hashes as a file we write by hand** (`docs/otp/dev-1/boot-keys.json`), in
+   the form `picotool otp load` takes, checked into the repository without any key material and
+   reviewed like code. Not the single file `picotool seal` can produce, which enables secure
+   boot in the same load as the key hash. The other OTP writes are one field or one row each,
+   made with `picotool otp set`.
 
 Moving a board's root secret from flash to OTP changes every derived key. The board's sealed
 configuration and SSH host key become unreadable and its cards locked. So the production board is
@@ -471,9 +473,8 @@ pages, which keeps all three real pages but tests code the production board won'
 
 **Before `SECURE_BOOT_ENABLE`, in addition:**
 
-- [ ] **The owner has been asked, and has confirmed, that a backup of both dev keys exists off
-      the development machine** (the owner's answer 4: "get back to me and confirm the backup
-      exists when we are about to turn all of this on").
+- [ ] Both dev keys are in the repository (`keys/`), which is their backup off the
+      development machine. This replaces the confirmation asked for earlier.
 - [ ] The checks marked "before the last bit" in the list below have passed.
 - [ ] **The recovery path has been walked on the board while it is still open:** unplug, hold
       the BOOTSEL button, plug in, and `picotool info --ser` sees the board in BOOTSEL; then
@@ -504,7 +505,7 @@ None of these has run on a real chip. dev-1 is where each runs first.
 | The burn command, its chaff, marker and locks; an interrupted burn; the firmware skipping a spent page | 3.2 | yes |
 | The key provider reading the root secret from OTP and locking the page at the end of boot | 3.3 | yes |
 | `picotool otp get` refused on the locked page, from BOOTSEL | 3.4 | yes |
-| `picotool otp load` of our hand-written files | D4.1 | yes |
+| `picotool otp load` of the boot key file; `picotool otp set` of a field | D4.1, D4.2 | yes |
 | The slot byte order on a chip; `bootkey` saying `NOT YET` | D4.1 | yes |
 | `bootkey` saying `MATCH`, for each of the two keys | D4.2 | yes |
 | `picotool load -f` of a signed image on a board with valid boot keys | D4.2 | yes |
