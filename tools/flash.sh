@@ -36,6 +36,10 @@
 # No list: no guard, and the image is flashed as before (this says so). SOS_FLASH_UNGUARDED=1
 # flashes without the check.
 #
+# An image signed with one of the public development keys (keys/dev-INSECURE-*.pem) and going
+# to a board that isn't listed below as a development board gets a warning: anyone can sign
+# with those keys.
+#
 # It guards this script only. `picotool load` typed by hand goes around it.
 #
 #   -n  check only: say what would happen, send nothing to the board
@@ -178,6 +182,25 @@ else
         exit 3
     fi
     echo "flash guard: signed with a key accepted for $whose ($hash)"
+
+    # The public development keys (keys/dev-INSECURE-*.pem): anyone can sign with them, so a
+    # board whose OTP holds one of these hashes runs anyone's firmware. Fine on a development
+    # board; on any other it is a mistake, most likely in the key list, and worth saying
+    # loudly before it is copied into a board's OTP. The development boards are listed here.
+    public_dev_keys=(
+        e2f7cff033600f5ab00e33b6f891a0ff6e635ad0f2088613ca8b71b5f56d0d51   # dev-INSECURE-1
+        b97c0fd7efb68937e733c4916b44ce4f940141c4e6ecc90994c941f396d7c910   # dev-INSECURE-2
+    )
+    development_boards=(
+        F94525FD61D9A1CC    # dev-1
+    )
+    if [[ " ${public_dev_keys[*]} " == *" $hash "* && " ${development_boards[*]} " != *" $serial "* ]]; then
+        echo "flash guard: WARNING. $image is signed with a PUBLIC development key," >&2
+        echo "  and board $serial is not a development board. Anyone can sign with that key:" >&2
+        echo "  a board whose OTP holds its hash runs anyone's firmware. Take it out of" >&2
+        echo "  $keys for this board unless the board is meant to be open;" >&2
+        echo "  a new development board goes in development_boards in tools/flash.sh." >&2
+    fi
 fi
 
 if [[ -n $dry ]]; then

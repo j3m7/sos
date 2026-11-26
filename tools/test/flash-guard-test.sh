@@ -146,6 +146,40 @@ run 1 "line 2 is not a key hash" "a section that isn't a serial" SOS_FLASH_KEYS=
 list "[$board]" "$hash1" "[$other]" "nonsense"
 run 1 "line 4 is not a key hash" "a bad line in another board's section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
 
+# An image signed with a public development key: a warning for any board that isn't a
+# development board, still flashed; nothing extra for dev-1. The keys here are the public
+# halves of keys/dev-INSECURE-1.pem and -2.pem.
+dev1=F94525FD61D9A1CC
+devkey1=0c66c643cee65d14a55fd8cf2142a1fab2a769d555238f551b4836af46d61d1779efb62425ec5d3586fe42a473bdc5bd24b16df92d074d127b7301651b867124
+devkey2=7c8778fd06d7f8faaaf4912910b441397aba3f9af7ba6f5fd05a819b4a2d03bba5c3a916fd26ccf8d92a44d11d170f30ba142997583df93ab0223710ecf8ea5d
+bytes $start $imagedef "09210001" "$devkey1" "$(rep ee 64)" "ff220000" $end > "$tmp/dev1.bin"
+bytes $start $imagedef "09210001" "$devkey2" "$(rep ee 64)" "ff220000" $end > "$tmp/dev2.bin"
+devhash1=e2f7cff033600f5ab00e33b6f891a0ff6e635ad0f2088613ca8b71b5f56d0d51
+devhash2=b97c0fd7efb68937e733c4916b44ce4f940141c4e6ecc90994c941f396d7c910
+list "$devhash1" "$devhash2" "$hash1"
+run 0 "WARNING. $tmp/dev1.bin is signed with a PUBLIC" "dev key, another board" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/dev1.bin"
+run 0 "and board $board is not a development board" "second dev key, another board" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/dev2.bin"
+run 0 "would flash" "dev key, another board: still flashed" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/dev1.bin"
+run 0 "($devhash1)" "dev key on dev-1" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$dev1 -- "$tmp/dev1.bin"
+run 0 "($devhash2)" "second dev key on dev-1, lower-case serial" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=${dev1,,} -- "$tmp/dev2.bin"
+# no_warning <description> [VAR=value...] -- <image> : accepted, and no warning in the output.
+no_warning() {
+    local what=$1 out
+    shift
+    local env=()
+    while [[ $1 != -- ]]; do env+=("$1"); shift; done
+    shift
+    out=$(env -u SOS_FLASH_UNGUARDED XDG_CONFIG_HOME="$tmp/noconfig" SOS_FLASH_SERIAL=$board \
+          "${env[@]}" "$flash" -n -w "$tmp/work" "$1" 2>&1)
+    if [[ $? -ne 0 || $out == *WARNING* ]]; then
+        echo "FAIL: $what: warned or refused:"
+        echo "$out" | sed 's/^/    /'
+        failed=$((failed + 1))
+    fi
+}
+no_warning "no warning on dev-1" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$dev1 -- "$tmp/dev1.bin"
+no_warning "no warning for another key" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
+
 # With -n nothing is flashed, and it says what it would do.
 list "$hash1"
 run 0 "would flash" "dry run" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
