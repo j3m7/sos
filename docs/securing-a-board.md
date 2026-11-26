@@ -223,7 +223,14 @@ and merged before anything is burned.
    - the marker row and check, last;
    - the page's locks: bootloader inaccessible, Non-secure inaccessible, Secure read-only
      (which also stops a later bug from rewriting the page). On an A2 the bootloader lock is
-     the one erratum E21 defeats by glitching; its workaround is disabling the USB bootloader, which decision 2 leaves for later.
+     the one erratum E21 defeats by glitching; its workaround is disabling the USB bootloader, which decision 2 leaves for later;
+   - **the locks of every list page before it,** which are spent pages: at least "bootloader
+     read-only", and Secure read-only. A spent page holds 32 bytes and no marker. Left
+     writable from the bootloader, someone with a cable could read those bytes, write the
+     check rows and the marker, and so make it the board's root secret, one they know; on a
+     sealed-only board they could then load a configuration sealed under it. The firmware
+     checks these locks at every boot (#86): an open board warns, a sealed-only board refuses
+     the secret.
 
    **It is not part of everyday firmware.** It is built only into a separate image for step 3
    (a CMake option, off by default), flashed for the burn and replaced afterwards, so boards in
@@ -337,6 +344,31 @@ is last, because with it set and a wrong key the board can never run code again.
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
 
+### Step 4.8: lock the OTP pages that matter against the bootloader
+
+Found in review of #86. With the USB bootloader kept (decision 2), `picotool otp set` and
+`otp load` still work on a secured board for every page whose lock word allows the bootloader
+to write. Secure boot doesn't stop that: the bootloader is the boot ROM's own code. Someone
+with a cable could then, without opening the case:
+
+- mark both boot keys invalid (`BOOT_FLAGS1.KEY_INVALID`), after which the board never starts
+  any firmware again;
+- on a board with blank key slots, write a key of their own into one and mark it valid, after
+  which the board runs their firmware, and their firmware reads the root secret;
+- set further bits in `CRIT1` or the boot flags (disable the bootloader, change the boot
+  path), or lock pages away from the firmware.
+
+| # | Write | Check before going on | If it's wrong |
+|---|---|---|---|
+| 4.8 | The lock words of pages 0, 1 and 2 (chip configuration, boot flags, boot keys), page 3 (SOS's flags), the root secret's list pages not locked by the burn, and the two lock pages 62 and 63: bootloader read-only | Read the lock words back. From BOOTSEL, `picotool otp set` of a harmless row in one of those pages is **refused**. `version`, `bootkey` and `rootsecret` still read what they did | **After this, nothing in those pages can be changed over USB, by anyone.** A wrong key hash or flag is then permanent. So it comes last, after 4.7 has been seen to work and the board has been through "Afterwards: trying the attacks" |
+
+It is not a full stop: on an A2 the bootloader's own lock check is the one erratum E21
+defeats by glitching, and the remedy for that is disabling the bootloader. What it removes is
+the attack that needs only a cable and `picotool`.
+
+Exactly which rows, the values, and whether the firmware (Secure code) should also be denied
+writes to pages 0 to 2 are for the reviewed OTP files ("to confirm" item 1).
+
 ## Afterwards: trying the attacks
 
 The table at the top of the issue, run against the secured board, with results recorded on the
@@ -430,12 +462,16 @@ below still apply and the owner names each write.
    without the rehearsal argument, and lands in the second page. That is dev-1's root secret.
 3. The read attempt from BOOTSEL is step 3.4 on that page.
 
-**What the spent page then holds:** 32 random bytes with their chaff, complete, with no marker
-and **no locks**, so `picotool otp get` reads them for good. They were never a root secret:
-nothing was ever derived from or sealed under them, and the second run takes fresh bytes from
-the TRNG. It is worth one check, that the second page's secret differs from the first page's
-contents, and one line in the board registry so that nobody later takes a readable 32-byte
-block in dev-1's OTP for a leak.
+**What the spent page then holds:** 32 random bytes with their chaff, complete, with no marker.
+They were never a root secret: nothing was ever derived from or sealed under them, and the
+second run takes fresh bytes from the TRNG. **Between the two runs the page has no locks, and
+it must not stay that way:** the second run, which writes the real secret, also locks the
+spent page against writes from the bootloader (see the burn's steps above). Until it has, a
+cable-holder could complete the spent page into a root secret of their choosing, so the two
+runs are done in one sitting. Afterwards the bytes can still be read with `picotool otp get`
+if the lock is "read-only"; that is harmless and gets one line in the board registry, so that
+nobody later takes a readable 32-byte block in dev-1's OTP for a leak. One more check: the
+second page's secret differs from the first page's contents.
 
 This exercises the skip logic on the real page list instead of a parallel one, and leaves dev-1
 one page of the list unused. The alternative is a rehearsal build with its own list of spare
@@ -517,6 +553,22 @@ signature verified by `picotool`, and both keys shown to match.
 
 After D4.7 the checks of "Afterwards: trying the attacks" are run on dev-1 except the debug
 probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is expected to work).
+
+### dev-1 and step 4.8: a decision for the owner
+
+Step 4.8 collides with what was decided for dev-1. Key slots 2 and 3 are left blank there "for
+room to add a key later". While page 2 and the boot flags stay writable from the bootloader,
+anyone with a cable can use that room too: write their own key into slot 2, mark it valid, and
+dev-1 runs their firmware. And they can mark the dev keys invalid and end dev-1's life.
+
+- **Lock them on dev-1 as well** (recommended): after it, no key can be added over USB by
+  anyone, the owner included. A later key change would have to be done by signed firmware
+  written for the purpose, if the Secure-side lock is left open for that, or not at all.
+- **Leave them open on dev-1:** the board then demonstrates the mechanism against someone
+  without `picotool`, and nothing more. Since dev-1 is the only board, the "end its life with
+  one command" case is the one to weigh.
+
+Not decided. Nothing in 4.8 is written on dev-1 until it is.
 
 ### Living with it afterwards
 
