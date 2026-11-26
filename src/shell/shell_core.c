@@ -76,13 +76,24 @@ void shell_ask_eof(shell_t *sh, const char *ask_prompt, shell_answer_fn answer, 
     sh->ask_eof = true;
 }
 
+static void wipe(void *p, size_t n) {
+    volatile char *v = p;
+    for (size_t i = 0; i < n; i++)
+        v[i] = 0;
+}
+
+void shell_clear_history(shell_t *sh) {
+    wipe(sh->history, sizeof(sh->history));
+    wipe(sh->draft, sizeof(sh->draft));
+    sh->history_len = 0;
+    sh->history_pos = -1;
+    sh->draft_len = 0;
+}
+
 void shell_discard_input(shell_t *sh) {
-    volatile char *v = sh->line;
-    for (size_t i = 0; i < sizeof(sh->line); i++)
-        v[i] = 0;
-    v = sh->ahead;
-    for (size_t i = 0; i < sizeof(sh->ahead); i++)
-        v[i] = 0;
+    wipe(sh->line, sizeof(sh->line));
+    wipe(sh->ahead, sizeof(sh->ahead));
+    shell_clear_history(sh);
     sh->line_len = 0;
     sh->ahead_len = 0;
     sh->last_was_cr = false;
@@ -90,6 +101,10 @@ void shell_discard_input(shell_t *sh) {
 }
 
 void shell_cancel_question(shell_t *sh) {
+    if (sh->secret) {                   // a half-typed secret must not become a command
+        wipe(sh->line, sizeof(sh->line));
+        sh->line_len = 0;
+    }
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
@@ -134,6 +149,96 @@ void shell_logout(shell_t *sh) {
         shell_printf(sh, "logout: the %s session can't be ended\n", sh->io->name);
 }
 
+// --- command history (Up/Down) ----------------------------------------------------------------
+
+// Remember a command, unless it repeats the newest one. The oldest entries make room.
+static void history_add(shell_t *sh, const char *cmd) {
+    size_t n = strlen(cmd) + 1;
+    if (n > sizeof(sh->history))
+        return;                         // can't happen: a line is shorter than the history
+    if (sh->history_len) {              // the newest entry starts after the '\0' before its own
+        size_t start = sh->history_len - 1;
+        while (start > 0 && sh->history[start - 1] != '\0')
+            start--;
+        if (!strcmp(sh->history + start, cmd))
+            return;
+    }
+    size_t drop = 0;
+    while (sh->history_len - drop + n > sizeof(sh->history))
+        drop += strlen(sh->history + drop) + 1;
+    if (drop) {
+        memmove(sh->history, sh->history + drop, sh->history_len - drop);
+        sh->history_len -= drop;
+        wipe(sh->history + sh->history_len, drop);
+    }
+    memcpy(sh->history + sh->history_len, cmd, n);
+    sh->history_len += n;
+}
+
+static int history_count(const shell_t *sh) {
+    int count = 0;
+    for (size_t i = 0; i < sh->history_len; i++)
+        count += sh->history[i] == '\0';
+    return count;
+}
+
+// The entry `back` places before the newest (0 = the newest).
+static const char *history_entry(const shell_t *sh, int back) {
+    int index = history_count(sh) - 1 - back;
+    const char *p = sh->history;
+    while (index-- > 0)
+        p += strlen(p) + 1;
+    return p;
+}
+
+// The line is being changed by hand (or entered): a recalled line becomes ordinary input, and
+// the next Up starts again from the newest command.
+static void history_edited(shell_t *sh) {
+    if (sh->history_pos < 0)
+        return;
+    sh->history_pos = -1;
+    wipe(sh->draft, sh->draft_len);
+    sh->draft_len = 0;
+}
+
+// Put text in place of the line being typed, and redraw it.
+static void line_replace(shell_t *sh, const char *text, size_t len) {
+    shell_hide_input(sh);
+    memcpy(sh->line, text, len);
+    sh->line_len = len;
+    shell_show_input(sh);
+}
+
+// Up: the previous command (the line being typed is kept for Down). Down: the next one, and
+// after the newest, the line that was being typed.
+static void history_key(shell_t *sh, int key) {
+    if (sh->answer)                     // a question: its answers aren't commands
+        return;
+    if (key == KEY_UP) {
+        if (sh->history_pos + 1 >= history_count(sh))
+            return;
+        if (sh->history_pos < 0) {
+            memcpy(sh->draft, sh->line, sh->line_len);
+            sh->draft_len = sh->line_len;
+        }
+        sh->history_pos++;
+        const char *e = history_entry(sh, sh->history_pos);
+        line_replace(sh, e, strlen(e));
+    } else if (key == KEY_DOWN) {
+        if (sh->history_pos < 0)
+            return;
+        sh->history_pos--;
+        if (sh->history_pos < 0) {
+            line_replace(sh, sh->draft, sh->draft_len);
+            wipe(sh->draft, sh->draft_len);
+            sh->draft_len = 0;
+        } else {
+            const char *e = history_entry(sh, sh->history_pos);
+            line_replace(sh, e, strlen(e));
+        }
+    }
+}
+
 // Trim spaces and hand non-empty commands to the command module.
 static void run_line(shell_t *sh, char *cmd) {
     while (*cmd == ' ')
@@ -141,8 +246,10 @@ static void run_line(shell_t *sh, char *cmd) {
     char *end = cmd + strlen(cmd);
     while (end > cmd && end[-1] == ' ')
         *--end = '\0';
-    if (*cmd)
+    if (*cmd) {
+        history_add(sh, cmd);
         shell_execute(sh, cmd);
+    }
 }
 
 // --- input ---------------------------------------------------------------------
@@ -161,6 +268,7 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->key = NULL;
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
+    shell_clear_history(sh);    // a new session doesn't see the last one's commands
 }
 
 void shell_greet(shell_t *sh) {
@@ -211,6 +319,7 @@ void shell_end(shell_t *sh) {
         step(sh, sh->job_arg, true);
     }
     sh->answer = NULL;
+    shell_clear_history(sh);    // the session's commands don't wait in RAM for the next one
 }
 
 // While a job runs: only Ctrl-C counts; then one step.
@@ -280,6 +389,7 @@ static void line_add(shell_t *sh, unsigned char c) {
         if (sh->line_len + need > SHELL_LINE_MAX)   // the whole character must fit
             return;
     }
+    history_edited(sh);
     sh->line[sh->line_len++] = (char)c;
     if (!sh->secret)
         write_out(sh, (const char *)&c, 1);
@@ -289,6 +399,7 @@ static void line_add(shell_t *sh, unsigned char c) {
 static void line_backspace(shell_t *sh) {
     if (!sh->line_len)
         return;
+    history_edited(sh);
     unsigned want;
     size_t start = last_char(sh, &want);
     size_t len = sh->line_len - start;
@@ -319,9 +430,14 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         sh->last_was_cr = (c == '\r');
 
         int k = keys_feed(&sh->keys, (unsigned char)c);
-        if (k == KEYS_NONE || k > 0xff)         // special keys: no line editing with them (yet)
+        if (k == KEY_UP || k == KEY_DOWN) {
+            history_key(sh, k);
+            continue;
+        }
+        if (k == KEYS_NONE || k > 0xff)         // other special keys: no editing with them (yet)
             continue;
         if (c == '\r' || c == '\n') {
+            history_edited(sh);
             shell_printf(sh, "\n");
             if (last_char_partial(sh)) {        // a character cut short: not part of the line
                 unsigned want;
@@ -339,6 +455,7 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         } else if (c == 0x7f || c == '\b') {
             line_backspace(sh);
         } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
+            history_edited(sh);
             shell_printf(sh, "^C\n");
             sh->line_len = 0;
             answer_question(sh, NULL);

@@ -16,6 +16,7 @@
 #define SHELL_LINE_MAX 256     // fits a pasted authorized_keys line (ECDSA P-256 is ~200)
 #define SHELL_PATH_MAX 128     // working directory of the file commands
 #define SHELL_PROMPT "sos> "   // the command prompt (a question replaces it)
+#define SHELL_HISTORY_BYTES 1024    // recent commands per session, for Up/Down (in RAM only)
 
 typedef struct {
     const char *name;                                   // channel name, e.g. "console", "ssh"
@@ -66,6 +67,16 @@ struct shell {
     char ahead[SHELL_LINE_MAX]; // input typed while a job ran, processed when it ends
     size_t ahead_len;
     char cwd[SHELL_PATH_MAX];   // working directory for file commands ("/" after init)
+    // Command history for Up/Down: the commands run in this session, oldest first, each ending
+    // in '\0'. Only commands: never answers to questions (passwords). Wiped when a session
+    // starts (shell_bind) or ends (shell_end), when the console locks itself
+    // (shell_discard_input) or is logged out of (`logout`), and at login (shell_clear_history
+    // from login.c, which also covers lines the gate refused while locked).
+    char history[SHELL_HISTORY_BYTES];
+    size_t history_len;
+    int history_pos;            // entry shown, counted back from the newest (0); -1 = none
+    char draft[SHELL_LINE_MAX + 1];     // the line being typed before Up, for Down to give back
+    size_t draft_len;
 };
 
 // Bind a shell to a channel and print the greeting and first prompt.
@@ -111,10 +122,13 @@ void shell_ask_eof(shell_t *sh, const char *prompt, shell_answer_fn answer, void
 extern char shell_eof[];
 #define SHELL_EOF shell_eof
 
-// Throw away what has been typed and not yet used: the line being edited and input typed ahead
-// during a job (wiped, since it may be a password). For when the person at the channel is no
-// longer the one who typed it (the console locking itself, shell/login.h).
+// Throw away what has been typed: the line being edited, input typed ahead during a job (it
+// may be a password) and the command history, all wiped. For when the person at the channel is
+// no longer the one who typed it (the console locking itself, shell/login.h).
 void shell_discard_input(shell_t *sh);
+
+// Wipe the command history only (from login.c: `logout` on the console, and at login).
+void shell_clear_history(shell_t *sh);
 
 // Drop a pending question without answering it (its owner has gone away); the next line is a
 // command again. For output around it, use shell_hide_input() / shell_show_input().
@@ -148,7 +162,8 @@ bool shell_busy(const shell_t *sh);
 // Bytes of output the channel takes now without waiting (jobs size their output by it).
 int shell_write_space(shell_t *sh);
 
-// The channel is gone (session ended): cancel a running job so it frees its resources.
+// The channel is gone (session ended): cancel a running job so it frees its resources, and
+// wipe the command history.
 void shell_end(shell_t *sh);
 
 #endif

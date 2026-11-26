@@ -93,6 +93,7 @@ static bool check_job(shell_t *sh, void *arg, bool cancel) {
     if (hooks->clear_count)
         hooks->clear_count();
     last_activity = hooks->now_ms();
+    shell_clear_history(sh);            // nothing typed while locked is offered by Up
     hooks->opened(sh);
     return false;
 }
@@ -172,6 +173,7 @@ void login_lock(shell_t *console) {
     if (!locked)
         shell_printf(console, "console locked\n");
     locked = true;
+    shell_clear_history(console);       // the next person to log in doesn't see these commands
     ask(console);
 }
 

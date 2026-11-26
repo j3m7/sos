@@ -135,6 +135,10 @@ The console runs over USB CDC (`/dev/ttyACM0` on Linux) and is mirrored on UART0
 picocom -b 115200 /dev/ttyACM0
 ```
 
+Up and Down recall the commands typed in this session, on the console and over SSH. The
+history is kept in RAM only (about 1.3 KB per session), never holds answers such as passwords,
+and is wiped when the console locks, logs out or logs in, and when an SSH session ends.
+
 `help` lists the commands. [docs/commands.md](docs/commands.md) is the full reference, and marks
 which commands work only on the console. The greeting above the first prompt (and after each SSH
 login) names the commit the firmware was built from, e.g. `SOS 9332d0364fb3`; `version` shows it

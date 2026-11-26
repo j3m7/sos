@@ -8,10 +8,18 @@ translation (`crlf`), and `admin` (true for the console only).
 ## `shell_core.c`: line editing and control (pure C, host tested)
 
 - **`shell_poll()`** reads whatever input is waiting and edits the line, handling backspace,
-  arrow keys, Ctrl-C and Ctrl-D. On Enter it calls `shell_execute()`. It never blocks.
+  Up/Down, Ctrl-C and Ctrl-D. On Enter it calls `shell_execute()`. It never blocks.
   The line takes UTF-8 (a Wi-Fi network named `Mjölnir`): a byte that can't start or continue
   a character is dropped, Backspace removes a whole character (and as many columns as
   `charwidth()` says it takes), and a character cut short at Enter is left out.
+- **History:** each command run (trimmed; not a repeat of the one before) goes into the
+  session's `history`, `SHELL_HISTORY_BYTES` of packed strings, oldest dropped first. Up and
+  Down replace the line with older and newer entries through `shell_hide_input()` /
+  `shell_show_input()`; Down past the newest gives back what was being typed. Answers to
+  questions never go in, and Up/Down do nothing while one is pending. It is wiped by
+  `shell_bind()` (a new session), `shell_end()` (the session ended), `shell_discard_input()`
+  (the console locking itself) and `shell_clear_history()`, which login.c calls on `logout` and
+  at login (so a line the gate refused while locked is never offered by Up).
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
@@ -72,7 +80,8 @@ The console asks for the console password before it takes any command (issue #64
 arrows, Home/End, Insert/Delete, PgUp/PgDn (CSI, SS3 and vt220 `~` forms, modifiers ignored),
 and the terminal's answer to a cursor position query (`KEY_CURSOR_POS`). Other bytes come back
 as themselves. A control character inside a sequence abandons it, so a stray ESC can't swallow
-Enter or Ctrl-C. The line editor uses it too, and ignores the special keys.
+Enter or Ctrl-C. The line editor uses it too: Up and Down for the history; it ignores the
+other special keys.
 
 ## `charwidth.c`: columns on the terminal (pure C, host tested)
 

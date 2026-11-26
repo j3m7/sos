@@ -403,12 +403,56 @@ TEST(logout_locks_the_console_again) {
     CHECK(login_locked());
 }
 
+// Locking wipes the command history, so whoever logs in next can't press Up to see it.
+TEST(locking_wipes_the_command_history) {
+    boot("open sesame");
+    type("open sesame\r");
+    run_ms(100);
+    type("key list\r");
+    run_ms(20);
+    CHECK(sh.history_len > 0);
+    type("logout\r");                           // `logout`
+    run_ms(20);
+    CHECK(login_locked());
+    CHECK_EQ(sh.history_len, 0);
+    type("open sesame\r");
+    run_ms(1500);
+    CHECK(!login_locked());
+    type("\x1b[A");                             // Up: nothing to recall
+    run_ms(20);
+    CHECK_EQ(sh.line_len, 0);
+    type("uptime\r");
+    run_ms(20);
+    CHECK(sh.history_len > 0);
+    connected = false;                           // the terminal goes away
+    run_ms(20);
+    CHECK(login_locked());
+    CHECK_EQ(sh.history_len, 0);
+}
+
 TEST(logout_without_a_password_does_not_lock) {
     boot(NULL);
     type("logout\r");
     run_ms(20);
     CHECK(!login_locked());
     CHECK(shown("no console password is set"));
+}
+
+// Lines refused by the gate while locked (the question dropped) aren't offered by Up after login.
+TEST(lines_typed_while_locked_are_not_in_the_history) {
+    boot("open sesame");
+    shell_cancel_question(&sh);                 // as if some code dropped it
+    type("a password guess\r");
+    run_ms(20);
+    CHECK_EQ(n_executed, 0);
+    CHECK(login_locked());
+    type("open sesame\r");                      // the gate asked again
+    run_ms(1500);
+    CHECK(!login_locked());
+    CHECK_EQ(sh.history_len, 0);
+    type("\x1b[A");
+    run_ms(20);
+    CHECK_EQ(sh.line_len, 0);
 }
 
 // The gate refuses a command line even if the password question isn't pending any more.
@@ -760,6 +804,8 @@ TEST_MAIN(
     RUN(check_that_cannot_start_counts_as_wrong);
     RUN(no_password_opens_into_first_use);
     RUN(logout_locks_the_console_again);
+    RUN(locking_wipes_the_command_history);
+    RUN(lines_typed_while_locked_are_not_in_the_history);
     RUN(logout_without_a_password_does_not_lock);
     RUN(gate_holds_without_the_question);
     RUN(no_keys_locks_with_rescue_commands_only);
