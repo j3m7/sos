@@ -101,11 +101,17 @@ refuse first.
   public key, 64 hex digits: what `bootkey` prints on a board and what a board's OTP holds.
   The rest of a line after `#` is a comment. It holds no private key.
 
+  With one kind of board, the hashes alone: every board this machine flashes accepts them.
+
   ```
   # ~/.config/sos/flash-keys
-  <64 hex digits>         # before any [serial] line: for every board not named below
-  <64 hex digits>
+  <64 hex digits>         # the key in use
+  <64 hex digits>         # the spare
+  ```
 
+  With boards that accept different keys, a section for each board instead:
+
+  ```
   [0123456789ABCDEF]      # a board, by its serial
   <64 hex digits>         #   the keys that board accepts, and only those
 
@@ -119,9 +125,10 @@ refuse first.
 - **With a list, the board must be named** with `SOS_FLASH_SERIAL`, and flashing is refused
   without it (exit status 3). Which keys are accepted depends on the board, and with two
   boards attached `picotool` would otherwise pick one.
-- **Which keys apply.** A board with a `[serial]` section takes that section's keys only. Any
-  other board takes the keys listed before the first section, and is refused if there are
-  none. A section with `open` turns the check off for that board.
+- **Which keys apply.** In a list without sections, all of them, for every board. In a list
+  with sections, a board takes its own section's keys only, and **a board with no section is
+  refused**: the list is then the list of boards this machine flashes. A hash before the
+  first section is an error. A section with `open` turns the check off for that board.
 - **What is refused** before anything is sent to the board: an image that is unsigned, or
   signed with a key the list doesn't give for that board. The message says which, with the
   hash of the image's key. A list with a line it can't read is an error for every board.

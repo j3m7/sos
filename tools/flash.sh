@@ -20,9 +20,9 @@
 # It belongs to the machine, not to a checkout, so that every checkout and worktree on the
 # machine is guarded, including one with no build settings of its own.
 #
-# Boards differ in the keys they accept, so the list can say which board takes which:
+# A list of hashes alone means: every board this machine flashes accepts these keys. Boards
+# that differ in the keys they accept get a section each instead:
 #
-#   <hash>                  # before any [serial] line: for every board not named below
 #   [F94525FD61D9A1CC]      # a board, by the serial `version` and picotool show
 #   <hash>                  #   the keys that board accepts, and only those
 #   [0123456789ABCDEF]
@@ -30,8 +30,8 @@
 #
 # With a list, the board must be named: SOS_FLASH_SERIAL=<serial>. The keys can't be chosen
 # without knowing the board, and with two boards attached picotool would otherwise pick one.
-# A board with a [serial] section takes that section's keys only; any other board takes the
-# keys listed before the first section, and is refused if there are none.
+# Once the list has sections, every board needs one: a board without a section is refused, and
+# a hash before the first section is an error, since it would belong to no board.
 #
 # No list: no guard, and the image is flashed as before (this says so). SOS_FLASH_UNGUARDED=1
 # flashes without the check.
@@ -74,10 +74,10 @@ else
         echo "  console and \`picotool info\` show the serial." >&2
         exit 3
     fi
-    # The accepted hashes for this board, lower case: its own section's if it has one, else
-    # the ones before the first section. A line that is none of comment, hash, [serial] or
-    # "open" is a mistake in the list, and a list with a mistake is not trusted.
-    default=() own=() own_open= has_own= section=
+    # The accepted hashes for this board, lower case: its own section's, or, in a list with
+    # no sections, all of them. A line that is none of comment, hash, [serial] or "open" is a
+    # mistake in the list, and a list with a mistake is not trusted.
+    default=() own=() own_open= has_own= section= sections=
     lineno=0
     while IFS= read -r line || [[ -n $line ]]; do
         lineno=$((lineno + 1))
@@ -85,6 +85,7 @@ else
         [[ $line =~ ^[[:space:]]*$ ]] && continue
         if [[ $line =~ ^[[:space:]]*\[([0-9a-fA-F]{16})\][[:space:]]*$ ]]; then
             section=${BASH_REMATCH[1]^^}
+            sections=1
             [[ $section == "$serial" ]] && has_own=1
         elif [[ $line =~ ^[[:space:]]*([0-9a-fA-F]{64})([[:space:]].*)?$ ]]; then
             if [[ -z $section ]]; then
@@ -104,13 +105,24 @@ else
         echo "flash guard: $keys lists board $serial as open and with keys; it can't be both" >&2
         exit 1
     fi
+    if [[ -n $sections && ${#default[@]} -gt 0 ]]; then
+        echo "flash guard: $keys has key hashes before its first [serial] line." >&2
+        echo "             In a list with sections every hash goes under the board it is for" >&2
+        exit 1
+    fi
     accepted=()
-    if [[ -n $has_own ]]; then
+    if [[ -n $sections ]]; then
+        if [[ -z $has_own ]]; then
+            echo "flash guard: REFUSED. Board $serial has no section in $keys." >&2
+            echo "  Add [$serial] with the key hashes it accepts, or 'open' if it takes" >&2
+            echo "  anything. Check the serial first: is this the board you meant?" >&2
+            exit 3
+        fi
         accepted=("${own[@]}")
         whose="board $serial"
     else
         accepted=("${default[@]}")
-        whose="boards without a section of their own"
+        whose="every board"
     fi
 fi
 
@@ -176,8 +188,9 @@ command -v picotool >/dev/null || { echo "picotool not found" >&2; exit 1; }
 # -f: reboot a running board into BOOTSEL for the load. -v: verify. -x: run it afterwards.
 # The .bin is what was checked above, so it is what is loaded; flash is mapped at 0x10000000.
 # $SOS_FLASH_SERIAL picks one board when several are connected.
+# Upper case, as the board reports it.
 ser=()
-[[ -n ${SOS_FLASH_SERIAL:-} ]] && ser=(--ser "$SOS_FLASH_SERIAL")
+[[ -n ${SOS_FLASH_SERIAL:-} ]] && ser=(--ser "${SOS_FLASH_SERIAL^^}")
 # picotool wants the file first, then its type and offset, then the options that pick and
 # reboot the device, together at the end.
 picotool load -v -x "$image" -t bin -o 0x10000000 -f "${ser[@]}"

@@ -67,7 +67,7 @@ run 0 "flash guard: off" "no list in the default place" -- "$tmp/key1.bin"
 # The default place is ${XDG_CONFIG_HOME}/sos/flash-keys.
 mkdir -p "$tmp/config/sos"
 printf '%s\n' "$hash1" > "$tmp/config/sos/flash-keys"
-run 0 "accepted for boards without a section of their own ($hash1)" "list in the default place" XDG_CONFIG_HOME="$tmp/config" -- "$tmp/key1.bin"
+run 0 "accepted for every board ($hash1)" "list in the default place" XDG_CONFIG_HOME="$tmp/config" -- "$tmp/key1.bin"
 run 3 "REFUSED" "list in the default place refuses" XDG_CONFIG_HOME="$tmp/config" -- "$tmp/key2.bin"
 
 # One key listed.
@@ -109,25 +109,29 @@ run 3 "Name the board" "a serial that isn't one" SOS_FLASH_KEYS="$tmp/keys" SOS_
 run 0 "flash guard: off" "no serial and no list" SOS_FLASH_KEYS="$tmp/absent" SOS_FLASH_SERIAL= -- "$tmp/key1.bin"
 run 0 "($hash1)" "a lower-case serial" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=aaaaaaaaaaaaaaaa -- "$tmp/key1.bin"
 
-# Keys per board: a board with a section takes that section's keys and only those; any other
-# board takes the keys before the first section.
-list "$hash1   # every other board" "[$board]   # this one" "$hash2"
+# Keys per board: a board takes its own section's keys and only those.
+list "[$other]   # one board" "$hash1" "[$board]   # this one" "$hash2"
 run 0 "accepted for board $board ($hash2)" "the board's own key" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key2.bin"
-run 3 "doesn't list for board $board" "the default key is not this board's" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
-run 0 "($hash1)" "another board takes the default key" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$other -- "$tmp/key1.bin"
-run 3 "REFUSED" "another board doesn't take this board's key" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$other -- "$tmp/key2.bin"
+run 3 "doesn't list for board $board" "another board's key is not this board's" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
+run 0 "accepted for board $other ($hash1)" "the other board takes its own" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$other -- "$tmp/key1.bin"
+run 3 "REFUSED" "and not this board's" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$other -- "$tmp/key2.bin"
 run 3 "is not signed" "unsigned for a board with a section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/unsigned.bin"
 run 0 "accepted for board" "the section is found whatever the case" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=${board,,} -- "$tmp/key2.bin"
 
-# Only sections, and the board isn't in any: nothing is accepted for it.
+# Once there are sections, a board without one is refused, whatever the image: the list is
+# then a list of the boards this machine flashes, and this isn't one of them.
 list "[$other]" "$hash1"
-run 3 "lists no key for boards without a section" "an unlisted board, no default keys" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
+run 3 "Board $board has no section" "an unlisted board" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
+run 3 "Board $board has no section" "an unlisted board, unsigned image" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/unsigned.bin"
+# A hash before the first section would belong to no board.
+list "$hash1" "[$board]" "$hash2"
+run 1 "before its first [serial] line" "a hash outside the sections" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key2.bin"
 # A section with nothing in it accepts nothing.
-list "$hash1" "[$board]"
+list "[$board]"
 run 3 "lists no key for board $board" "an empty section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
 
 # An open board takes anything; that is said, and only for that board.
-list "$hash1" "[$board]" "open   # the second development board"
+list "[$other]" "$hash1" "[$board]" "open   # the second development board"
 run 0 "listed as open" "an open board, unsigned image" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/unsigned.bin"
 run 0 "listed as open" "an open board, any key" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key2.bin"
 run 3 "is not signed" "the other board is not open" SOS_FLASH_KEYS="$tmp/keys" SOS_FLASH_SERIAL=$other -- "$tmp/unsigned.bin"
@@ -137,10 +141,10 @@ list "open"
 run 1 "is not a key hash" "'open' outside a section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
 list "[$board]" "open" "$hash1"
 run 1 "can't be both" "open and keys" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
-list "$hash1" "[dev-1]"
+list "[$board]" "[dev-1]"
 run 1 "line 2 is not a key hash" "a section that isn't a serial" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
-list "$hash1" "[$other]" "nonsense"
-run 1 "line 3 is not a key hash" "a bad line in another board's section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
+list "[$board]" "$hash1" "[$other]" "nonsense"
+run 1 "line 4 is not a key hash" "a bad line in another board's section" SOS_FLASH_KEYS="$tmp/keys" -- "$tmp/key1.bin"
 
 # With -n nothing is flashed, and it says what it would do.
 list "$hash1"
