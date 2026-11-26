@@ -1,7 +1,7 @@
 # OTP file for dev-1
 
 `boot-keys.json` holds the boot key hashes for dev-1 (serial `F94525FD61D9A1CC`) and no other
-board. It has not been loaded into any board. Loading it is permanent; it is step 7 of
+board. It was loaded into dev-1 on 2026-11-26. Loading it is permanent; it is step 7 of
 [`RUNBOOK.md`](RUNBOOK.md), which also has every other OTP write as a single `picotool otp set`.
 
 The keys are the public development keys in [`keys/`](../../../keys/README.md): anyone can sign
@@ -25,5 +25,5 @@ python3 -c "import json; d=json.load(open('boot-keys.json')); print(bytes(d['boo
 
 Checked: both hashes against the key files with `openssl`, and slot 0 against what `bootkey`
 prints for an image signed with the first key. The JSON form was compared with a file
-`picotool seal` wrote (same names, same byte order). Not checked, because only loading can show
-it: that `picotool otp load` accepts the file as written.
+`picotool seal` wrote (same names, same byte order). Loaded into dev-1 on 2026-11-26: rows
+0x080 to 0x09f read back as expected, and `bootkey` then reported a match in each slot.
