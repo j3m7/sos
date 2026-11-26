@@ -104,8 +104,28 @@ OTP field can change (above), the choice of starting value matters more than "we
 later" suggests. The firmware should report a detector reset in the
 log and in `uptime`, as it does for a watchdog reset.
 
-**The decision this needs:** approve the soak test (reversible, development board only), and
-decide after its results whether to enable the detector and at which sensitivity.
+**What has been run so far (2026-11-25, #78).** One soak on dev-1: armed by software at
+sensitivity 3, the highest, for 3 hours, with 574 SFTP cycles of 1 MB written to and read back
+from the encrypted card. No detector reset. A longer trial follows, with the detector set by
+the `glitch` command and watching rather than armed.
+
+**What that soak does not show.** The OTP setting can't be undone, so its limits belong next to
+the decision:
+
+- One board (an A2), for 3 hours, not days.
+- Powered over USB from a computer. Nothing about battery power or another supply.
+- Indoors at room temperature, not measured. Nothing about heat or cold.
+- Wi-Fi close to a strong access point (about -40 dBm). Nothing about transmitting at full power
+  on a weak signal, which loads the supply more.
+- Sensitivities 0 to 2 were not run; a clean run at 3 implies them only if the detectors behave
+  monotonically.
+- Software arming starts a second or two into boot, so the early boot was never covered. The
+  OTP flag arms it from reset.
+- The production board is a different board. Its own tolerance is unknown until step 4.5 is
+  checked on it, and by then the bit is burned.
+
+**The decision this needs:** decide after the longer trial whether to enable the detector and at
+which sensitivity.
 
 ## Signing keys: how to make them
 
