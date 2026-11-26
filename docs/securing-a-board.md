@@ -62,7 +62,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 6 | Rehearsal burn | First burn is the rehearsal, then the real one | Not applicable; dev-1 is the rehearsal |
 | 7 | Wrong-password count across reboots | In the firmware, merged | Same |
 | 8 | Rollback protection | Not set | Not now |
-| 9 | Sealed-only marker | Not set, so the board stays provisionable | Set |
+| 9 | Settings from a file over USB (`ninja provision`) | Accepted | Refused: the board is set up on its console only |
 | 10 | Host key tied to the owner secret | In the firmware, merged | Same |
 | 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page | Deferred until dev-1 is done |
 
@@ -112,10 +112,14 @@ so it slows down guessing only for someone who can't or won't do that.
 image signed with the same key, including one with a flaw found since. Preventing that costs
 OTP bits per version step (`BOOT_FLAGS0.ROLLBACK_REQUIRED`).
 
-**9. Sealed-only marker.** A board with the marker refuses unsealed configuration and can be
-set up only on its console (#84). It is a marker of its own in OTP, not secure boot, so that
-dev-1 can have secure boot and still be provisioned from a file. A production board gets it,
-and only once its firmware takes the root secret from OTP or not at all (#86).
+**9. Settings from a file over USB.** A board normally accepts a settings file written to its
+flash over USB, which is how `ninja provision` sets up dev-1. On a secured board that is a way
+in: anyone with a cable could load settings that name their own SSH key. So a board can be
+switched, once and permanently, to refuse such files and take its settings only from `setup`
+on its console. dev-1 is not switched, so it can still be provisioned from a file. A
+production board is. The switch is one OTP setting of its own, separate from secure boot,
+which is why dev-1 can have secure boot without it. (In the code and elsewhere in this
+document it is called the "sealed-only marker", #84.)
 
 **10. Host key tied to the owner secret.** Erasing a board's configuration makes its SSH host
 key unreadable, and the next setup makes a new one (#88). Otherwise someone who wiped a board
