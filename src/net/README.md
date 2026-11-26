@@ -9,11 +9,26 @@ processing runs in interrupt context). Their options are in `config/lwipopts.h`.
 `wifi_poll()` moves through `W_OFF → W_SCANNING → W_CONNECTING → W_UP`, or `→ W_WAIT` after a
 failure, then back to `W_SCANNING`. It logs each change.
 
+- **Several networks:** up to 5 are saved (`wifi_ssid`, then `wifi_extra[]`), in the order
+  they are preferred. Each attempt's scan looks for all of them, and `wifi_pick.c` (pure C,
+  host-tested) chooses: the first saved network the scan saw that hasn't failed in this round,
+  else the first not seen (hidden, or out of reach: the chip looks for it by name). So a hidden
+  network is tried only when no other saved network is in sight. A network is given up for the
+  round after 3 failed attempts, or, with others to try, at once on a wrong password or if the
+  scan didn't see it. Once all have failed, the next round starts after 15 s. With one network
+  this is the same timing as before. A connected device doesn't move to a preferred network
+  that comes into reach until the link drops or `wifi connect`.
+- **Configuration copies:** the scan callback runs in interrupt context, and the console edits
+  the live configuration in place. So each attempt copies the saved networks (under the
+  driver's lock), and the callback and the join use only the copy. The callback writes its
+  results to its own table, which the main loop clears and copies, also under the lock: past
+  the scan deadline a scan may still be running.
 - **Strongest access point:** a network may have several (a mesh, repeaters). Joining by name,
   the chip took one at -66 dBm with another at -34 dBm in reach in 8 of 12 boots. So:
   - Each attempt scans first (about 0.5 s) and logs the network's access points with their
     signal. The chip then joins by name.
-  - Once connected, the one it joined is compared with the scan. If another was stronger by
+  - Once connected, the one it joined is compared with the scan. If another of the same
+    network was stronger by
     10 dB (`SWITCH_MARGIN_DB`), the device leaves and joins that one by address, about 3 s
     more. At most twice per connection (`SWITCH_TRIES`).
   - A scan can miss an access point. If it found fewer than two, a second scan runs after
@@ -25,9 +40,10 @@ failure, then back to `W_SCANNING`. It logs each change.
     it is until the link drops.
 - **Connecting:** each attempt has 30 s. While the network isn't found, the join is re-issued
   every 3 s.
-- **Retries:** the first 2 failed attempts are retried after 1 s, because some access points
-  drop authentication frames now and then and an immediate retry usually works. After that the
-  retry delay is 15 s. The attempt count resets once connected.
+- **Retries:** the first 2 failed attempts on a network are retried after 1 s, because some
+  access points drop authentication frames now and then and an immediate retry usually works;
+  moving on to the next network also waits 1 s. Once every network has failed, the retry delay
+  is 15 s. The counts reset once connected.
 - **Link lost:** a new attempt starts straight away.
 - **Wrong password:** the driver also reports `CYW43_LINK_BADAUTH` for a moment when an
   authentication frame times out, and clears it ~10 ms later when the retry succeeds. So it
@@ -36,7 +52,8 @@ failure, then back to `W_SCANNING`. It logs each change.
 
 `wifi_up()` (associated, with an IP address) is what the rest of the system waits for: the
 SSH server starts, and NTS syncs, once it's true. `wifi set` and `wifi connect` on the console
-call `wifi_reconnect()`. A changed hostname applies at the next connect.
+call `wifi_reconnect()`, and so do `wifi add` when not connected and `wifi remove` of the
+network in use. `wifi_ssid()` names the network connected to. A changed hostname applies at the next connect.
 
 ## Country
 

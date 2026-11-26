@@ -31,12 +31,36 @@ static const char *set_text(char *field, size_t size, const char *value,
     return NULL;
 }
 
+// The Wi-Fi networks read so far: each wifi_ssid line starts one, and a wifi_password line
+// belongs to the network before it (or to the first, if no wifi_ssid came yet).
+typedef struct {
+    config_wifi_net_t nets[CONFIG_WIFI_NETS];
+    bool password_set[CONFIG_WIFI_NETS];
+    unsigned count;
+} wifi_list_t;
+
+static const char *apply_wifi(wifi_list_t *w, const char *name, const char *value) {
+    if (!strcmp(name, "wifi_ssid")) {
+        const char *err = config_check_ssid(value);
+        if (err)
+            return err;
+        for (unsigned i = 0; i < w->count; i++)
+            if (!strcmp(w->nets[i].ssid, value))
+                return "that network is already listed";
+        if (w->count == CONFIG_WIFI_NETS)
+            return "at most 5 networks";
+        snprintf(w->nets[w->count].ssid, sizeof(w->nets[0].ssid), "%s", value);
+        w->count++;
+        return NULL;
+    }
+    unsigned i = w->count ? w->count - 1 : 0;
+    if (w->password_set[i])
+        return "a second wifi_password for one network (each wifi_ssid takes at most one)";
+    w->password_set[i] = true;
+    return set_text(w->nets[i].password, sizeof(w->nets[0].password), value, config_check_password);
+}
+
 static const char *apply(sos_config_t *cfg, const char *name, const char *value) {
-    if (!strcmp(name, "wifi_ssid"))
-        return set_text(cfg->wifi_ssid, sizeof(cfg->wifi_ssid), value, config_check_ssid);
-    if (!strcmp(name, "wifi_password"))
-        return set_text(cfg->wifi_password, sizeof(cfg->wifi_password), value,
-                        config_check_password);
     if (!strcmp(name, "hostname"))
         return set_text(cfg->hostname, sizeof(cfg->hostname), value, config_check_hostname);
     if (!strcmp(name, "ssh_user"))
@@ -100,6 +124,8 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
 
 const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t errlen) {
     config_defaults(cfg);
+    wifi_list_t wifi;
+    memset(&wifi, 0, sizeof(wifi));
     unsigned lineno = 0;
     for (char *line = text; line && *line;) {
         char *next = strchr(line, '\n');
@@ -117,12 +143,23 @@ const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t e
         }
         *eq = '\0';
         const char *name = trim(s);
-        const char *err = apply(cfg, name, trim(eq + 1));
+        const char *err = !strcmp(name, "wifi_ssid") || !strcmp(name, "wifi_password")
+                              ? apply_wifi(&wifi, name, trim(eq + 1))
+                              : apply(cfg, name, trim(eq + 1));
         if (err) {
+            memset(&wifi, 0, sizeof(wifi));
             snprintf(errbuf, errlen, "line %u: %s: %s", lineno, name, err);
             return errbuf;
         }
     }
+    if (!wifi.count && wifi.password_set[0]) {
+        memset(&wifi, 0, sizeof(wifi));
+        snprintf(errbuf, errlen, "wifi_password without a wifi_ssid");
+        return errbuf;
+    }
+    for (unsigned i = 0; i < wifi.count; i++)
+        config_wifi_add(cfg, wifi.nets[i].ssid, wifi.nets[i].password);    // checked above
+    memset(&wifi, 0, sizeof(wifi));
     return NULL;
 }
 
@@ -190,9 +227,13 @@ int main(int argc, char **argv) {
         perror(argv[2]);
         return 1;
     }
-    printf("hostname %s, user %s, Wi-Fi %s (%s), %u trusted key(s)\n", cfg.hostname, cfg.ssh_user,
+    printf("hostname %s, user %s, Wi-Fi %s (%s)", cfg.hostname, cfg.ssh_user,
            cfg.wifi_ssid[0] ? cfg.wifi_ssid : "not set",
-           cfg.wifi_password[0] ? "password set" : "open", cfg.key_count);
+           cfg.wifi_password[0] ? "password set" : "open");
+    for (unsigned i = 1; i < config_wifi_count(&cfg); i++)
+        printf(", then %s (%s)", cfg.wifi_extra[i - 1].ssid,
+               cfg.wifi_extra[i - 1].password[0] ? "password set" : "open");
+    printf(", %u trusted key(s)\n", cfg.key_count);
     return 0;
 }
 #endif

@@ -8,6 +8,10 @@
 # Wi-Fi network to join (2.4 GHz, WPA2 personal). No password line: an open network.
 wifi_ssid = my-network
 wifi_password = my-password
+# More networks, up to 5 in all: each wifi_ssid starts one, and the wifi_password after it is
+# its password. The board joins the first one in reach, in this order.
+# wifi_ssid = my-phone
+# wifi_password = another-password
 
 # Hostname sent with DHCP requests (default: sos).
 hostname = sos

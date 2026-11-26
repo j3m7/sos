@@ -157,7 +157,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | Command | |
 |---|---|
 | `config` | show the configuration |
-| `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
+| `wifi` / `wifi set` / `wifi connect` | show the networks / change the first network (password not echoed) / reconnect |
+| `wifi add` / `wifi remove <n>` / `wifi prefer <n>` | save another network (up to 5) / forget one / move one to the front; the board joins the first saved network in reach |
 | `wifi power on` / `wifi power off` | Wi-Fi power saving (default off; see below) |
 | `wifi country US` / `wifi country worldwide` | radio rules to follow (two-letter country; default worldwide; after reboot) |
 | `wifi stats` / `wifi stats chip` | signal, noise and packet counters, for chasing packet loss / plus the chip's raw counters |
