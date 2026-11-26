@@ -10,4 +10,5 @@
 
 # Optional: sign the firmware image with this key (a secp256k1 private key, PEM), kept outside
 # the repository. Unset: the image is not signed. See "Signed builds" in docs/development.md.
+# -DSOS_SIGN_KEY=<other key> or -DSOS_SIGN_KEY=none on the command line wins over this line.
 # set(SOS_SIGN_KEY "/path/to/sos-sign.pem")
