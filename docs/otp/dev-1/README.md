@@ -5,6 +5,9 @@ board.** They are for the development board dev-1, serial `F94525FD61D9A1CC`, an
 board: the keys in them are development keys that every session on the development machine
 can read.
 
+**To run them, follow [`RUNBOOK.md`](RUNBOOK.md).** This page describes the files and how they
+were checked.
+
 They belong to the dev-board variant of [`docs/securing-a-board.md`](../../securing-a-board.md),
 which says when each is loaded, what must be true first, and who loads it: the board's owner,
 one file at a time, each named. Nothing here replaces that document's gates.

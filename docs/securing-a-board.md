@@ -1,4 +1,14 @@
-# Securing a board (draft procedure)
+# Securing a board: design and decisions
+
+**Who this is for.** Anyone who wants to know *why* a board is secured the way it is: what the
+attacks are, what each step does and doesn't protect against, and what was decided. It is not
+what you follow at the board. For that:
+
+- **dev-1:** [`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md), the steps and nothing else.
+- **A production board:** no runbook yet. It is written once dev-1 has been through its own.
+
+"The owner" in this document is the person the boards belong to, who made the decisions
+recorded here and who runs every command that writes one-time-programmable memory.
 
 **Status: not yet approved by the owner, and nothing in it has been run. No OTP write has been
 made on any board.** The owner confirmed the decisions below on 2026-11-25. The firmware it
@@ -441,67 +451,12 @@ approval of this document, the gates below, and the owner naming and running eac
 dev-1 is the only board all sessions develop on (serial F94525FD61D9A1CC, RP2350 A2). A mistake
 at the last step leaves the project without a board until another arrives.
 
-### The whole run on one page: what the owner does, in order
+### Running it
 
-Everything below is explained further down and in [`docs/otp/dev-1/`](otp/dev-1/README.md),
-which has every command in full. **Bold** steps write OTP and can't be undone. A session
-builds and flashes firmware and reads the console; the owner types the confirmations, holds
-the button and runs every `picotool otp` command.
-
-*Before the sitting, the owner confirms:*
-
-1. This document is approved.
-2. A backup of both dev keys exists off the development machine.
-3. Only dev-1 is connected, on a power supply that won't be disturbed, and every session has
-   been told and is on current main.
-
-*Preparation, nothing permanent:*
-
-4. `picotool otp dump` of the board is saved.
-5. The recovery path is walked: unplug, hold BOOTSEL, plug in, `picotool info` sees the board,
-   `picotool load` of the dev-signed image by hand, and it runs.
-6. The burn image is flashed. On the console: `rootsecret burn plan` says it would use OTP
-   page 4, and that the button reads "not held".
-
-*Step 3, the root secret (one sitting, with what follows):*
-
-7. **`rootsecret burn rehearse`**: type the serial, type `REHEARSE`, hold BOOTSEL. It must end
-   "rehearsal: stopped on purpose", page 4 locked. Write down the time it took. **Any other
-   ending: stop here.**
-8. **`rootsecret burn`**: type the serial, type `BURN`, hold BOOTSEL. It must end "written,
-   verified and its page locked", page 5. **Any other ending: stop here.**
-9. The everyday firmware is flashed. `rootsecret` says the secret is in OTP page 5, locked
-   until the next reset. **From here until step 11 the board has no configuration:** what it
-   had was sealed under the old root secret and no longer opens. No network, no SSH, an open
-   console. That is expected.
-10. From BOOTSEL, `picotool otp get` of a row in page 5 (the secret) **and** of a row in
-    page 4 (the spent page) is refused: both were locked by the burn.
-11. `setup` on the console (password, network, trusted key), and the card is formatted. After
-    a reboot the configuration loads and the card mounts. The board has a new SSH host key.
-
-*Step 4, the boot keys and secure boot:*
-
-12. **Load `1-boot-keys.json`.** Read the rows back. `bootkey` on the board says `NOT YET`.
-13. Trial load, then **load `2-key-valid.json`.** Read back. `bootkey` says `MATCH`, slot 0.
-    An image signed with the second key is flashed: `MATCH`, slot 1. The first key's image is
-    flashed back. (The second-key image is the same source built in a build directory of its
-    own, `cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=<the second key>`, so that the
-    everyday build and its setting in `local.cmake` are not touched.)
-14. The owner confirms the key backup once more. `bootkey` says `MATCH` and
-    `picotool info -a` of the image read back from the board says `signature: verified`.
-15. Trial load, then **load `3-secure-boot.json`: the last bit.** Read back. `version` still
-    says "off", with a warning, until the reset; after it the board boots and `version` says
-    `secure boot: on`.
-16. First a plain `ninja flash` of the signed image: flashing a secured board through the
-    bootloader must still work. Then an unsigned image is flashed, **with
-    `SOS_FLASH_UNGUARDED=1` for that one flash** (our own flash guard would otherwise refuse
-    it, which is its job): the board must not run it, and must come back with a signed one
-    loaded from BOOTSEL.
-17. Trial load, then **load `4-page3-lock.json`.** Read back. The zero write to row 0x0ff is
-    refused; a read of page 1 is answered.
-
-*Afterwards:* the board registry records each write with the date, and the results go on
-issue #64.
+The steps to follow at the board are in **[`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md)**:
+what to type, what you should see, and when to stop, in order, and nothing else. This section
+is the reasoning behind that runbook. If the two ever disagree, the runbook is wrong and must
+be corrected before anyone runs it.
 
 ### What it is for, and what it does not prove
 
