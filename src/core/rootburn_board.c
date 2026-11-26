@@ -22,6 +22,7 @@
 #include <wolfssl/wolfcrypt/random.h>
 
 #include "core/otpread.h"
+#include "core/wdog.h"
 
 // The rows this file is allowed to program: the root secret's list pages, and the lock words
 // of those pages. Every write goes through program(), which refuses anything else. This is a
@@ -112,9 +113,13 @@ bool __no_inline_not_in_flash_func(rootburn_button)(void) {
 
 static bool present(void *ctx) { (void)ctx; return rootburn_button(); }
 
+// A burn is some forty boot ROM writes in one call, and how long each takes on this chip
+// isn't known yet. The watchdog must not reset the board in the middle.
+static void tick(void *ctx) { (void)ctx; wdog_feed(); }
+
 static const rootburn_ops_t ops = {
     NULL, { NULL, rd_raw, rd_ecc, rd_careful, rd_lock1 },
-    wr_ecc, wr_raw, wr_lock1, get_random, present,
+    wr_ecc, wr_raw, wr_lock1, tick, get_random, present,
 };
 
 void rootburn_plan(rootburn_report_t *rep, unsigned *pages_to_lock) {
@@ -123,20 +128,31 @@ void rootburn_plan(rootburn_report_t *rep, unsigned *pages_to_lock) {
     rep->page = rep->row = 0;
     rep->wrote = rep->page_locked = false;
     *pages_to_lock = 0;
+    rep->nothing_landed = false;
+    bool found = false;
     switch (roototp_find(&ops.reader, &index)) {
     case ROOTOTP_NONE_YET:
         rep->result = ROOTBURN_OK;
         break;
     case ROOTOTP_FOUND:
         rep->result = ROOTBURN_HAS_SECRET;
+        found = true;
         break;
     default:
         return;
     }
     rep->page = ROOTOTP_FIRST_PAGE + index;
-    for (unsigned i = 0; i < index; i++)
-        if (roototp_bootloader_can_write(rd_lock1(NULL, ROOTOTP_FIRST_PAGE + i)))
+    // The pages a run would lock: written ones the bootloader can still write, before the page
+    // it would use, or up to and including the secret's if there is one. Never a blank one.
+    for (unsigned i = 0; i < ROOTOTP_PAGES && (found ? i <= index : i < index); i++) {
+        bool blank = true;
+        for (unsigned row = 0; row < ROOTOTP_PAGE_ROWS && blank; row++)
+            blank = otpread_raw(ROOTOTP_ROW(i, row)) == 0;
+        if (!blank && roototp_bootloader_can_write(rd_lock1(NULL, ROOTOTP_FIRST_PAGE + i)))
             (*pages_to_lock)++;
+    }
+    if (found && *pages_to_lock)
+        rep->result = ROOTBURN_RELOCKED;
 }
 
 void rootburn_board_run(bool rehearse, rootburn_report_t *rep) {

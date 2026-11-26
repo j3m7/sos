@@ -185,8 +185,17 @@ job (`docs/securing-a-board.md`, step 3). `rootburn_board.c` refuses to compile 
   complete, spending one page, to try the interrupted case.
 - **The order** (`rootburn_run`): lock earlier spent pages; take 32 random bytes; write them a
   row at a time with read-back; write the chaff; write the check; read everything back and
-  verify; write the marker last; lock the page. A failure anywhere leaves a spent page with
-  no marker, locked, and the next run uses the next page.
+  verify; write the marker last; lock the page. A failure after something was written leaves
+  a spent page with no marker, locked, and the next run uses the next page.
+- **A page that still reads blank is never locked.** If the first write fails and nothing
+  landed, the page stays blank and unlocked and is the next run's page. A locked blank page
+  could be neither written nor passed over, and would block all three pages for good.
+  (`roototp.c` passes over a blank page the firmware can't write, should one ever exist.)
+- **Stopping:** a run that ends in an error (other than nobody holding the button) makes the
+  image refuse further runs until a restart, and says to find the cause first. A run on a
+  board that already has its secret only locks pages an earlier run couldn't.
+- **Nothing resets the board mid-burn:** the watchdog is fed before every write and the
+  software glitch detector is off for the duration.
 - **The only place OTP is programmed** is `program()` in `rootburn_board.c`, and it refuses
   any row outside the root secret's three pages and their lock words.
 - `rootburn.c` has no hardware in it and is tested on the host against a model of OTP whose

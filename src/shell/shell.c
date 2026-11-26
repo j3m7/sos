@@ -838,29 +838,38 @@ static void on_rootsecret_forget(shell_t *sh, char *answer, void *arg) {
 #define BURN_HOLD_MS 1000u              // how long the button must be held before it starts
 
 static bool burn_rehearse;
+static bool burn_stopped;               // a run ended in a way that must be looked into first
 static uint64_t burn_deadline_ms, burn_held_since_ms;
 
 static void burn_report(shell_t *sh, const rootburn_report_t *rep) {
     shell_printf(sh, "\n%s.\n", rootburn_result_text(rep->result));
-    if (rep->wrote)
-        shell_printf(sh, "OTP page %u%s%s\n", rep->page,
-                     rep->result == ROOTBURN_WRITE && rep->row ? ", stopped at row " : "",
-                     rep->page_locked ? ": locked against the bootloader" : ": NOT LOCKED");
+    if (rep->nothing_landed)
+        shell_printf(sh, "Nothing landed in OTP: page %u still reads blank and was left "
+                         "unlocked.\n", rep->page);
+    else if (rep->wrote)
+        shell_printf(sh, "OTP page %u: %s\n", rep->page,
+                     rep->page_locked ? "locked against the bootloader" : "NOT LOCKED");
     if (rep->result == ROOTBURN_WRITE && rep->row)
-        shell_printf(sh, "(the row was 0x%03x)\n", rep->row);
-    log_msg(rep->result == ROOTBURN_OK || rep->result == ROOTBURN_REHEARSED ? SOS_LOG_NOTICE
-                                                                              : SOS_LOG_ERR,
-            "rootsecret burn: %s (OTP page %u, wrote %s, page %s)", rootburn_result_text(rep->result),
-            rep->page, rep->wrote ? "yes" : "no", rep->page_locked ? "locked" : "not locked");
-    if (rep->result == ROOTBURN_OK)
+        shell_printf(sh, "It stopped at row 0x%03x.\n", rep->row);
+    log_msg(rootburn_must_stop(rep->result) ? SOS_LOG_ERR : SOS_LOG_NOTICE,
+            "rootsecret burn: %s (OTP page %u, row 0x%03x, wrote %s, page %s%s)",
+            rootburn_result_text(rep->result), rep->page, rep->row, rep->wrote ? "yes" : "no",
+            rep->page_locked ? "locked" : "not locked",
+            rep->nothing_landed ? ", nothing landed" : "");
+    if (rootburn_must_stop(rep->result)) {
+        burn_stopped = true;
+        shell_printf(sh, "\nSTOP HERE. Do not run `rootsecret burn` again, on this board or "
+                         "another, until the cause is\nunderstood: a fault in how OTP is "
+                         "written would spend the remaining pages the same way.\nThis image "
+                         "refuses further runs until the board is restarted. `dmesg` has the "
+                         "details.\n");
+    } else if (rep->result == ROOTBURN_OK) {
         shell_printf(sh, "Now flash the everyday firmware; `rootsecret` there must report the "
                          "secret in OTP page %u.\n", rep->page);
-    else if (rep->result == ROOTBURN_REHEARSED)
-        shell_printf(sh, "Run `rootsecret burn` now, in this sitting, to write the real secret "
-                         "into the next page.\n");
-    else if (rep->result == ROOTBURN_LOCK)
-        shell_printf(sh, "Do not go on. The page holds the secret and anyone with a cable can "
-                         "still read it.\n");
+    } else if (rep->result == ROOTBURN_REHEARSED) {
+        shell_printf(sh, "That is how a rehearsal should end. Run `rootsecret burn` now, in "
+                         "this sitting, to write the\nreal secret into the next page.\n");
+    }
 }
 
 static bool burn_job(shell_t *sh, void *arg, bool cancel) {
@@ -882,9 +891,16 @@ static bool burn_job(shell_t *sh, void *arg, bool cancel) {
         burn_held_since_ms = now;
     if (now - burn_held_since_ms < BURN_HOLD_MS)
         return true;
-    shell_printf(sh, "\nwriting OTP: keep the button held and don't unplug the board...\n");
+    // Nothing may reset the board in the middle. The watchdog is fed between writes
+    // (rootburn_board.c). The glitch detector, armed by software, is switched off for the
+    // length of the burn: whether programming OTP disturbs the supply enough to trip it isn't
+    // known, and a detector reset would spend the page. It protects nothing (core/glitchdet.h).
+    shell_printf(sh, "\nwriting OTP: keep the button held and don't unplug the board...\n"
+                     "(the glitch detector is off until this is done)\n");
+    glitchdet_apply(0);
     rootburn_report_t rep;
     rootburn_board_run(burn_rehearse, &rep);
+    glitchdet_apply(config_glitch_mode(settings()->glitch_detector));
     burn_report(sh, &rep);
     shell_printf(sh, "You can let go of the button.\n");
     return false;
@@ -899,7 +915,9 @@ static void on_burn_word(shell_t *sh, char *answer, void *arg) {
     burn_deadline_ms = to_ms_since_boot(get_absolute_time()) + BURN_WAIT_MS;
     burn_held_since_ms = 0;
     shell_printf(sh, "Hold the BOOTSEL button now, and keep it held until told to let go "
-                     "(%u s to start; Ctrl-C cancels)...\n", BURN_WAIT_MS / 1000u);
+                     "(%u s to start; Ctrl-C cancels).\nIf the board restarts while the button "
+                     "is held it comes up in the USB bootloader, not broken:\n`picotool reboot` "
+                     "brings it back.\n", BURN_WAIT_MS / 1000u);
     shell_run_job(sh, burn_job, NULL);
 }
 
@@ -912,7 +930,7 @@ static void on_burn_serial(shell_t *sh, char *answer, void *arg) {
         return;
     }
     shell_ask(sh, burn_rehearse ? "Type REHEARSE to spend one OTP page on purpose: "
-                                : "Type BURN to write this board's root secret into OTP: ",
+                                : "Type BURN to write to this board's OTP: ",
               false, on_burn_word, NULL);
 }
 
@@ -927,25 +945,45 @@ static void cmd_rootsecret_burn(shell_t *sh, const char *what) {
     rootburn_report_t rep;
     unsigned to_lock;
     rootburn_plan(&rep, &to_lock);
-    if (rep.result != ROOTBURN_OK) {
+    if (rep.result == ROOTBURN_OK) {
+        shell_printf(sh, "It would use OTP page %u (rows 0x%03x to 0x%03x)", rep.page,
+                     rep.page * 64, rep.page * 64 + 63);
+        if (to_lock)
+            shell_printf(sh, ", after locking %u earlier, spent page%s", to_lock,
+                         to_lock == 1 ? "" : "s");
+        shell_printf(sh, ".\n");
+    } else if (rep.result == ROOTBURN_RELOCKED) {
+        shell_printf(sh, "This board has its root secret in OTP page %u. It would write no "
+                         "secret; it would lock %u page%s\nthat the bootloader can still "
+                         "write.\n", rep.page, to_lock, to_lock == 1 ? "" : "s");
+    } else {
         shell_printf(sh, "%s.\n", rootburn_result_text(rep.result));
         return;
     }
-    shell_printf(sh, "It would use OTP page %u (rows 0x%03x to 0x%03x)", rep.page, rep.page * 64,
-                 rep.page * 64 + 63);
-    if (to_lock)
-        shell_printf(sh, ", after locking %u earlier, spent page%s", to_lock, to_lock == 1 ? "" : "s");
-    shell_printf(sh, ".\n");
     if (plan) {
-        shell_printf(sh, "BOOTSEL button: %s. Nothing was written.\n",
-                     rootburn_button() ? "held" : "not held");
+        shell_printf(sh, "BOOTSEL button: %s. Nothing was written.%s\n",
+                     rootburn_button() ? "held" : "not held",
+                     burn_stopped ? " (This image refuses further runs until a restart: an "
+                                    "earlier run failed.)" : "");
         return;
     }
     if (!require_admin(sh))
         return;
+    if (burn_stopped) {
+        shell_printf(sh, "An earlier run on this board ended in an error. Nothing more is "
+                         "written until that is understood\nand the board has been "
+                         "restarted (`dmesg` has what happened).\n");
+        return;
+    }
     burn_rehearse = !strcmp(what, "rehearse");
+    if (burn_rehearse && rep.result == ROOTBURN_RELOCKED) {
+        shell_printf(sh, "This board already has its secret: there is nothing to rehearse.\n");
+        return;
+    }
     shell_printf(sh, "\nTHIS WRITES ONE-TIME-PROGRAMMABLE MEMORY. IT CANNOT BE UNDONE.\n");
-    if (burn_rehearse)
+    if (rep.result == ROOTBURN_RELOCKED)
+        shell_printf(sh, "It locks the pages named above, for good. No secret is written.\n");
+    else if (burn_rehearse)
         shell_printf(sh, "Rehearsal: it writes 32 random bytes into that page and stops before "
                          "they become a root\nsecret. The page is then spent for good, and "
                          "locked. This board has %u such pages.\n", (unsigned)ROOTOTP_PAGES);
