@@ -148,6 +148,13 @@ bool login_locked(void) {
     return locked;
 }
 
+void login_password_set(void) {
+    failures = 0;
+    not_before = 0;
+    if (hooks && hooks->clear_count)
+        hooks->clear_count();
+}
+
 unsigned login_failures(void) {
     return failures;
 }
