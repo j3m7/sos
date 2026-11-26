@@ -92,6 +92,15 @@ if (BASH_EXE)
     add_test(NAME flash_guard COMMAND ${BASH_EXE} ${SOS_ROOT}/tools/test/flash-guard-test.sh)
 endif()
 
+# tools/secure-board.py: the guided procedure, against a pretend picotool and console. No
+# hardware. (It uses tools/flash.sh, so it needs bash too.)
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_FOUND AND BASH_EXE)
+    add_test(NAME secure_board COMMAND ${Python3_EXECUTABLE} -W ignore
+        ${SOS_ROOT}/tools/test/secure-board-test.py)
+    set_tests_properties(secure_board PROPERTIES TIMEOUT 900)
+endif()
+
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)

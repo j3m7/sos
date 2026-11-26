@@ -4,7 +4,8 @@
 attacks are, what each step does and doesn't protect against, and what was decided. It is not
 what you follow at the board. For that:
 
-- **dev-1:** [`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md), the steps and nothing else.
+- **dev-1:** [`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md): how to start the guided
+  script (`tools/secure-board.py`) and what you do while it runs.
 - **A production board:** no runbook yet. It is written once dev-1 has been through its own.
 
 "The owner" in this document is the person the boards belong to, who made the decisions
@@ -370,22 +371,39 @@ It does not make dev-1 secret-keeping, and nobody should treat it as such:
 
 ### dev-1: running it
 
-The steps to follow at the board are in **[`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md)**:
-what to type, what you should see, and when to stop, in order, and nothing else. This section
-is the reasoning behind that runbook. If the two ever disagree, the runbook is wrong and must
-be corrected before anyone runs it.
+The run is led by a script, `tools/secure-board.py run dev-1`. It runs each command, compares
+each result with what it should be, and stops at the first difference. The person at the board
+starts it, holds the button, confirms each permanent step by typing its name, and sets the
+board up at the end. **[`docs/otp/dev-1/RUNBOOK.md`](otp/dev-1/RUNBOOK.md)** says how to start
+it and what the person does. `tools/secure-board.py plan dev-1` prints every step and command
+and is the one list of steps; this section is the reasoning behind them. If they ever
+disagree, the script is wrong and must be corrected before anyone runs it.
+
+Why a script: a first version of the runbook had the person type some forty commands and
+compare 64-digit values by eye. A slip there (a wrong board, a skipped check, a misread digit)
+is exactly what a permanent step can't forgive.
+
+What the script will not do: it refuses the permanent steps without a person at a terminal,
+it never types a console password, and `setup` and `sd format` stay with the person so the
+password and the card key never pass through it.
+
+Setting the board up comes last, after the OTP steps. What that gains: the console has no
+password during the run, so the script can read it after every restart, and settings only go
+onto a board that is already secured. What it gives up: from the burn to the end the board
+has no settings and no network, and the secure-boot checks run on a board that isn't set up,
+so "a set-up board survives turning secure boot on" is not something this run shows.
 
 ### dev-1: what it gets, and what it leaves out
 
 The dev-1 column of the Decisions table in Part 1. In short: the root secret
 in OTP, the two dev boot keys, and secure boot; not debug off, not the watchdog-scratch flag,
 not the glitch detector bit, not the sealed-only marker, and no lock on the boot-flag and
-boot-key pages. After the root secret is written the board is set up afresh, as below.
+boot-key pages. The board is set up afresh as the last step of the run, as below.
 
 ### dev-1: moving the root secret re-keys the board
 
 The root secret in OTP is a new one, so every key derived from it changes. On dev-1 that means:
-the sealed configuration no longer opens (set up again with `setup` or `ninja provision`), the
+the sealed configuration no longer opens (set up again with `setup`, at the end of the run), the
 SSH host key is replaced (clients will see a changed SSH host key and must forget the old one), the
 console password is gone with the configuration, and the encrypted card no longer mounts and is
 formatted again. dev-1's contents are disposable, so nothing is saved first. Whoever does it
@@ -450,8 +468,9 @@ pages, which keeps all three real pages but tests code the production board won'
       Secure code; raw row writes for the chaff) **are settled on paper and in host tests, and
       can't be closed any further before the run: this run is where they first happen on a
       chip.** The soft lock and the guarded read were tried on dev-1 on a blank page (#86);
-      raw and error-corrected row writes first run in the rehearsal (step 7 of the one-page
-      list), and the bootloader's lock keeping `picotool` out is first seen at step 10. That
+      raw and error-corrected row writes first run in the rehearsal (step 7 of
+      `tools/secure-board.py plan dev-1`), and the bootloader's lock keeping `picotool` out is
+      first seen at step 10. That
       is why the rehearsal comes first and why any ending but the expected one stops the run.
       Items 2 and 6 concern `DISABLE_WATCHDOG_SCRATCH` and item 5 the glitch detector: none is
       written on dev-1, so they don't gate this run.

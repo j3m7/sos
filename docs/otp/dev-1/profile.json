@@ -1,0 +1,32 @@
+{
+    "name": "dev-1",
+    "role": "development",
+    "serial": "F94525FD61D9A1CC",
+    "chip": "RP2350 A2 (revision 2, ROM 2)",
+    "picotool": "2.3.1",
+    "first_run": true,
+    "keys": [
+        {"slot": 0, "hash": "e2f7cff033600f5ab00e33b6f891a0ff6e635ad0f2088613ca8b71b5f56d0d51"},
+        {"slot": 1, "hash": "b97c0fd7efb68937e733c4916b44ce4f940141c4e6ecc90994c941f396d7c910"}
+    ],
+    "root_secret_pages": [4, 5, 6],
+    "otp_files": {
+        "boot_keys": "1-boot-keys.json",
+        "key_valid_trial": "0-no-change-key-valid.json",
+        "key_valid": "2-key-valid.json",
+        "secure_boot_trial": "0-no-change-secure-boot.json",
+        "secure_boot": "3-secure-boot.json",
+        "page_lock_trial": "0-no-change-page3-lock.json",
+        "page_lock": "4-page3-lock.json"
+    },
+    "key_valid": 3,
+    "page_lock": {"page": 3, "value": "0x101010", "test_row": "0x0ff"},
+    "not_on_this_board": [
+        "debug off",
+        "the watchdog-scratch flag (reboot into the bootloader on command is kept)",
+        "the glitch detector's OTP bit",
+        "the sealed-only marker (settings from a file over USB stay accepted)",
+        "marking key slots 2 and 3 invalid",
+        "locks on the boot-flag and boot-key pages"
+    ]
+}

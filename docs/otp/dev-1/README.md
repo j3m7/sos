@@ -5,7 +5,9 @@ board.** They are for the development board dev-1, serial `F94525FD61D9A1CC`, an
 board: the keys in them are development keys that every session on the development machine
 can read.
 
-**To run them, follow [`RUNBOOK.md`](RUNBOOK.md).** This page describes the files and how they
+**To run them, follow [`RUNBOOK.md`](RUNBOOK.md): the guided script loads them, never a
+hand-typed command.** `profile.json` is what the script reads: the board's serial, its key
+hashes, which file is loaded at which step. This page describes the files and how they
 were checked.
 
 They belong to Part 2 (dev-1) of [`docs/securing-a-board.md`](../../securing-a-board.md),
