@@ -85,6 +85,46 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
 - Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
   image's metadata after the firmware is linked.
 
+## Flashing, and the flash guard
+
+`ninja flash` (`cmake --build --preset debug --target flash`) loads `build/sos.bin` over USB
+with `tools/flash.sh`. Set `SOS_FLASH_SERIAL` to a board's serial number to pick one board when
+several are connected.
+
+A board with secure boot starts only firmware signed with a key whose hash is in its
+one-time-programmable memory. Flash it anything else and it doesn't start: it waits in the USB
+bootloader until a good image is loaded. That is easy to do by accident from a checkout whose
+build isn't set up to sign, so `tools/flash.sh` can refuse first.
+
+- **The list.** A file of accepted key hashes, one per line: the SHA-256 of a public key, 64
+  hex digits, which is what `bootkey` prints on a board and what a board's OTP holds. The rest
+  of a line, and lines starting with `#`, are comments. It holds no private key.
+
+  ```
+  # ~/.config/sos/flash-keys
+  <64 hex digits>   # the key this machine's boards are signed with
+  <64 hex digits>   # the spare
+  ```
+
+  It is `$SOS_FLASH_KEYS` if set, else `${XDG_CONFIG_HOME:-~/.config}/sos/flash-keys`: one per
+  machine, outside every checkout, so that a fresh checkout or worktree with no `local.cmake`
+  is guarded too.
+- **With a list,** an image that is unsigned, or signed with a key that isn't listed, is
+  refused before anything is sent to the board (exit status 3), and the message says which.
+  A list with a line that isn't a hash is an error, and an empty list accepts nothing.
+- **Without a list** there is no guard: the image is flashed as before, and the output says the
+  signature was not checked.
+- **`ninja flash-check`** runs the check and flashes nothing.
+- **`SOS_FLASH_UNGUARDED=1`** flashes without the check, for an open board that takes anything.
+  The list is per machine, not per board.
+- **What it doesn't cover:** `picotool load` typed by hand, and `tools/provision.sh`, which
+  writes a configuration record and no firmware. It compares the key's hash; it doesn't verify
+  the signature (`picotool info -a build/sos.elf` does).
+
+To get a key's hash for the list without a board:
+`openssl ec -in <key>.pem -pubout -outform DER | tail -c 64 | sha256sum`. A refusal also prints
+the hash of the key the refused image is signed with.
+
 ## Glitch detector resets
 
 SOS arms the RP2350's glitch detector by software at boot, at the highest sensitivity, on every

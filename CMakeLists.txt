@@ -297,13 +297,22 @@ add_custom_target(provision
     COMMENT "Writing the board's configuration (tools/provision.sh)"
 )
 
-# `ninja -C build flash` : reboot into BOOTSEL if needed, load, verify, run.
+# `ninja -C build flash` : reboot into BOOTSEL if needed, load, verify, run. It goes through
+# tools/flash.sh, which first checks the image's signing key against this machine's list of
+# accepted keys, if it has one (the flash guard; "Flashing" in docs/development.md).
+# `flash-check` does the check and flashes nothing.
 find_program(PICOTOOL_EXE picotool)
 if (PICOTOOL_EXE)
     add_custom_target(flash
-        COMMAND ${PICOTOOL_EXE} load -f -v -x $<TARGET_FILE:sos>
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/flash.sh ${CMAKE_CURRENT_BINARY_DIR}/sos.bin
         DEPENDS sos
         USES_TERMINAL
-        COMMENT "Flashing sos via picotool"
+        COMMENT "Flashing sos via picotool (tools/flash.sh)"
     )
 endif()
+add_custom_target(flash-check
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/flash.sh -n ${CMAKE_CURRENT_BINARY_DIR}/sos.bin
+    DEPENDS sos
+    USES_TERMINAL
+    COMMENT "Checking the image's signing key (tools/flash.sh -n)"
+)
