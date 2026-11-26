@@ -1,7 +1,8 @@
 # Securing a board (draft procedure)
 
-**Status: draft, for the owner's decisions and for review. Nothing in it has been run, and
-nothing in it may be run until the owner approves it.** It covers steps 3 and 4 of
+**Status: draft. The owner confirmed the decisions below on 2026-11-25. Nothing in it has been
+run, and nothing in it may be run until the firmware it lists exists, the "to confirm" list is
+closed, and the owner approves the procedure itself.** It covers steps 3 and 4 of
 [issue #64](https://github.com/j3m7/sos/issues/64): the root secret in one-time-programmable
 (OTP) memory, secure boot, and debug off. Every OTP write is permanent.
 
@@ -41,7 +42,7 @@ Moving to an A4 board later removes the four glitch attacks. It does not remove 
 | 5 | **Glitch detector** | **Not burned yet; open until a week-long test.** The owner's decision (2026-11-25): no multi-day soak for now. Every board running SOS arms the detector by software at boot, at the highest sensitivity (#78; `glitch off` turns it off), and whoever works with a board reports any detector reset. A week-long torture test follows once the feature set is more complete and there is a spare board and battery hardware; the OTP bit is decided after that. See "The glitch detector" below |
 | 6 | **A rehearsal on the development board** | **Yes:** the root-secret burn is rehearsed on dev-1 in spare OTP pages before the production board, including a read attempt from BOOTSEL and one burn interrupted on purpose. This is the owner's word for those OTP writes on dev-1 and for nothing else in OTP |
 | 7 | **Wrong-password count across reboots** | **Yes, add it.** Known limit: while the USB bootloader is kept (decision 2), someone with a cable can rewrite the flash and reset a counter stored there, so it slows down guessing at the console only for someone who can't or won't do that. It becomes a real limit if the bootloader is disabled later |
-| 8 | **Firmware rollback** | **Not decided; treated as "not now".** With the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`) would prevent it, at the cost of OTP bits per version step |
+| 8 | **Firmware rollback** | **Not now (confirmed by the owner, 2026-11-25).** With the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`) would prevent it, at the cost of OTP bits per version step |
 
 ## The glitch detector
 
