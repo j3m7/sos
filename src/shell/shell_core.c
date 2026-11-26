@@ -7,8 +7,10 @@
 
 #include "shell/shell.h"
 #include "core/version.h"
+#include "shell/charwidth.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -222,6 +224,90 @@ static void stash(shell_t *sh, const char *buf, size_t n) {
     sh->ahead_len += n;
 }
 
+// --- UTF-8 in the line ----------------------------------------------------------------------------
+// The line holds UTF-8 (a Wi-Fi network named "Mjölnir", say). A character's bytes arrive one by
+// one; a byte that can't continue or start a character is dropped, as are control bytes.
+
+// How many bytes a character with this lead byte has: 1 for ASCII, 2 to 4, 0 if it can't lead.
+static unsigned utf8_len(unsigned char c) {
+    if (c < 0x80)
+        return 1;
+    if (c >= 0xc2 && c <= 0xdf)
+        return 2;
+    if (c >= 0xe0 && c <= 0xef)
+        return 3;
+    if (c >= 0xf0 && c <= 0xf4)
+        return 4;
+    return 0;                           // a continuation byte, or never in UTF-8
+}
+
+// Where the line's last character starts; how many bytes it should have goes to *want.
+static size_t last_char(const shell_t *sh, unsigned *want) {
+    size_t i = sh->line_len;
+    while (i > 0 && ((unsigned char)sh->line[i - 1] & 0xc0) == 0x80 && sh->line_len - i < 3)
+        i--;
+    if (i == 0) {                       // only continuation bytes: can't happen, but be safe
+        *want = 0;
+        return 0;
+    }
+    i--;
+    *want = utf8_len((unsigned char)sh->line[i]);
+    return i;
+}
+
+// Is the line's last character still missing bytes?
+static bool last_char_partial(const shell_t *sh) {
+    if (!sh->line_len)
+        return false;
+    unsigned want;
+    size_t start = last_char(sh, &want);
+    return want > sh->line_len - start;
+}
+
+// Take a byte of a printable character into the line, echoing it unless secret.
+static void line_add(shell_t *sh, unsigned char c) {
+    unsigned need = utf8_len(c);
+    if ((c & 0xc0) == 0x80) {           // continuation: only of a character under way
+        if (!last_char_partial(sh))
+            return;
+    } else if (need == 0) {             // 0xc0, 0xc1, 0xf5-0xff: never in UTF-8
+        return;
+    } else {
+        if (last_char_partial(sh)) {    // a new character before the last one ended: drop that
+            unsigned want;
+            sh->line_len = last_char(sh, &want);
+        }
+        if (sh->line_len + need > SHELL_LINE_MAX)   // the whole character must fit
+            return;
+    }
+    sh->line[sh->line_len++] = (char)c;
+    if (!sh->secret)
+        write_out(sh, (const char *)&c, 1);
+}
+
+// Backspace: remove the line's last character, and as many columns of it on screen.
+static void line_backspace(shell_t *sh) {
+    if (!sh->line_len)
+        return;
+    unsigned want;
+    size_t start = last_char(sh, &want);
+    size_t len = sh->line_len - start;
+    const unsigned char *p = (const unsigned char *)sh->line + start;
+    int width = 1;
+    if (want >= 2 && len < want)        // cut short: the terminal showed nothing yet
+        width = 0;
+    else if (want >= 2) {
+        uint32_t cp = p[0] & (0x7f >> want);
+        for (size_t i = 1; i < len; i++)
+            cp = cp << 6 | (p[i] & 0x3f);
+        width = charwidth(cp);
+    }
+    sh->line_len = start;
+    if (!sh->secret)
+        for (int i = 0; i < width; i++)
+            shell_printf(sh, "\b \b");
+}
+
 // Line editing for `n` input bytes. Stops early (stashing the rest) if a command starts a job.
 static void process_input(shell_t *sh, const char *buf, size_t n) {
     for (size_t i = 0; i < n; i++) {
@@ -237,6 +323,10 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
             continue;
         if (c == '\r' || c == '\n') {
             shell_printf(sh, "\n");
+            if (last_char_partial(sh)) {        // a character cut short: not part of the line
+                unsigned want;
+                sh->line_len = last_char(sh, &want);
+            }
             sh->line[sh->line_len] = '\0';
             sh->line_len = 0;
             if (!answer_question(sh, sh->line))
@@ -247,11 +337,7 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
             }
             prompt(sh);
         } else if (c == 0x7f || c == '\b') {
-            if (sh->line_len > 0) {
-                sh->line_len--;
-                if (!sh->secret)
-                    shell_printf(sh, "\b \b");
-            }
+            line_backspace(sh);
         } else if (c == 0x03) {                  // Ctrl-C: discard line, cancel a question
             shell_printf(sh, "^C\n");
             sh->line_len = 0;
@@ -271,10 +357,8 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
                 }
                 prompt(sh);
             }
-        } else if (c >= 0x20 && c < 0x7f && sh->line_len < SHELL_LINE_MAX) {
-            sh->line[sh->line_len++] = c;
-            if (!sh->secret)
-                write_out(sh, &c, 1);
+        } else if ((unsigned char)c >= 0x20 && c != 0x7f) {
+            line_add(sh, (unsigned char)c);
         }
     }
 }

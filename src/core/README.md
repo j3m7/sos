@@ -139,6 +139,89 @@ with the configuration's owner secret (`files/cardkey.c`).
   - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
     root secret; changing a label would lock everything sealed under it.
 
+## The root secret in OTP, and choosing its source (`roototp.c`, `rootsource.c`)
+
+On a secured board the root secret is in one-time-programmable memory instead of flash. This
+firmware reads it there; a separate image, used once per board, writes it.
+
+- **Where:** OTP pages 4, 5 and 6, tried in order (page 3 holds SOS's own flags). In a page:
+  the 32-byte secret in rows 0 to 15, a 4-byte check over it in rows 16 and 17
+  (HMAC-SHA256 keyed with the secret), the marker 0xa55a in row 18, written last, and the
+  complement of the secret's raw rows in rows 32 to 47 against imaging the chip.
+- **What a page is:** blank; complete (the marker row reads 0xa55a); spent (something written,
+  the marker row still blank: a burn that stopped, skipped for good); damaged (the marker row
+  holds something else); or unreadable. The first page that isn't spent decides, and a
+  damaged or unreadable one means no secret, not "try the next".
+- **Locks:** a spent page holds 32 bytes and no marker. If the USB bootloader could write it,
+  someone with a cable could add the check and the marker and make it the board's root
+  secret, one they know. So every list page up to the secret's must be locked against the
+  bootloader's writes (the burn image does it). The firmware reads those lock words at boot:
+  an open board warns, a sealed-only board refuses the secret.
+- **Reading it:** what a page holds is decided with reads that can't fault. The secret itself
+  is read through the chip's guarded alias, which faults instead of returning a wrong value,
+  and then verified against its check. A complete page that fails its check is not a secret
+  and nothing replaces it.
+- **Which source** (`roototp_choose`, in `rootsource_init()` at boot): OTP if a secret is
+  there; otherwise **nothing on a sealed-only board**, whose flash is never read for a root
+  secret nor given one (anyone with a cable could write a root secret there with a
+  configuration sealed under it); otherwise the flash record of an open board, as before. An
+  open board whose OTP pages can't be read or hold a damaged secret also gets nothing, said
+  plainly, instead of quietly making a new flash secret.
+- **Locked after boot:** with the secret in OTP, `keyprov_lock()` sets the chip's soft lock for
+  the page (a register, until the next reset; not a write to OTP) and checks that the page
+  then reads as unreadable.
+- `roototp.c` has no hardware in it and is unit tested on the host. No board has a secret in
+  OTP yet: on the board only the paths with blank pages have run.
+
+## The burn image (`rootburn.c`, `rootburn_board.c`)
+
+Writing a board's root secret into OTP is permanent and is not something everyday firmware can
+do: the code is compiled only with `-DSOS_BURN_IMAGE=ON`, into an image flashed for that one
+job (`docs/securing-a-board.md`, step 3). `rootburn_board.c` refuses to compile otherwise.
+
+- **`rootsecret burn`** (console only): asks for the board's serial, then a typed word, then
+  waits for the BOOTSEL button to be held. `rootsecret burn plan` says which page it would
+  use and writes nothing. `rootsecret burn rehearse` stops on purpose before the secret is
+  complete, spending one page, to try the interrupted case.
+- **The order** (`rootburn_run`): lock earlier spent pages; take 32 random bytes; write them a
+  row at a time with read-back; write the chaff; write the check; read everything back and
+  verify; write the marker last; lock the page. A failure after something was written leaves
+  a spent page with no marker, locked, and the next run uses the next page.
+- **A page that still reads blank is never locked.** If the first write fails and nothing
+  landed, the page stays blank and unlocked and is the next run's page. A locked blank page
+  could be neither written nor passed over, and would block all three pages for good.
+  (`roototp.c` passes over a blank page the firmware can't write, should one ever exist.)
+- **Stopping:** a run that ends in an error (other than nobody holding the button) makes the
+  image refuse further runs until a restart, and says to find the cause first. A run on a
+  board that already has its secret only locks pages an earlier run couldn't.
+- **Nothing resets the board mid-burn:** the watchdog is fed before every write and the
+  software glitch detector is off for the duration.
+- **The only place OTP is programmed** is `program()` in `rootburn_board.c`, and it refuses
+  any row outside the root secret's three pages and their lock words.
+- `rootburn.c` has no hardware in it and is tested on the host against a model of OTP whose
+  bits can only be set: every single write failing, every write silently not taking, and
+  power lost after every write. **It has never been run on a chip.**
+
+## Wrong-password count (`failcount.c`, `failflash.c`)
+
+The console delays the next password check after each wrong answer (`shell/login.c`). The
+count behind that delay is kept in flash so that a reboot doesn't reset it.
+
+- **Counted before, cleared after:** `failcount_attempt()` runs before a check starts and
+  `failcount_clear()` after a right answer. A check that never finished (power pulled, reset,
+  Ctrl-C) therefore stays counted.
+- **Its own sector,** the fifth from the end, below the root secret's. Flashing, provisioning,
+  `config reset` and `rootsecret forget` don't touch it.
+- **No erase per answer:** flash bits can be cleared one at a time. One track has a bit cleared
+  per check started; a second track is cleared up to the same point by a right answer; the
+  count is the difference. The sector is erased once when first used, and again only when
+  the first track is full, after 14336 checks; what is outstanding is carried over (capped
+  at 64, far beyond the longest delay). A power cut during that one erase loses the count.
+- **If flash can't be written** the count goes up in RAM until the next reboot, and the log
+  says so once.
+- **Limit:** someone with a cable and the USB bootloader can erase the sector. `failcount.c`
+  has no hardware in it and is unit tested on the host.
+
 ## Key sector (`keysector.c`)
 
 The last 4 KB flash sector holds keys, one 256-byte flash page each: page 0 the SSH host key
@@ -148,6 +231,75 @@ configuration sectors, so `picotool load`, `config reset` and provisioning don't
 `keysector_write()` replaces one page and keeps the others; it erases and rewrites the whole
 sector, so a power cut during a write can lose what's in it. Writes happen only when the host
 key is made or sealed.
+
+## Reading OTP and the boot key check (`otpread.c`, `bootkey.c`)
+
+The RP2350's one-time-programmable memory holds the flags that secure a board (secure boot,
+debug off) and the hashes of the keys its firmware must be signed with.
+
+- **`otpread.c` only reads,** through the chip's memory-mapped read aliases, to which a write
+  is a bus fault. It never calls the boot ROM's `otp_access`, the function that can program
+  OTP: everyday firmware carries no code that writes it. Flag rows are stored several times
+  and read by vote (three of eight for `CRIT1`, two of three for the boot flags).
+- **Unreadable is not a state:** a row the code may not read comes back as all ones, which
+  would look like every flag set. It is reported as unreadable. The secure boot and debug
+  flags are taken from the chip's `CRITICAL` register (what it latched at reset and acts on),
+  with the `CRIT1` rows as a cross-check.
+- **`bootkey.c`** (no hardware, unit tested) finds the public key in the running image's
+  signature block (the block format of datasheet section 5.9; the last image definition in
+  the block loop is the one the boot ROM uses) and compares its SHA-256 with the boot key
+  slots. A slot counts when it is marked valid and not marked invalid.
+- **Shown by** `version` (secure boot, debug port) and `bootkey` (the verdict). The procedure
+  in `docs/securing-a-board.md` runs `bootkey` before the bit that turns secure boot on.
+- **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
+  that can't be read. Reading the root secret from OTP will need the guarded ones.
+
+## Sealed-only boards (`sealedonly.c`, `sealedonly_board.c`)
+
+An open board loads an unsealed configuration or host key from flash and seals it; that is how
+`ninja provision` works. A sealed-only board refuses them: anyone with a cable can write the
+flash, and an unsealed configuration naming their own SSH key would otherwise let them in.
+
+- **The marker** is three OTP rows, 0x0c0 to 0x0c2 (the start of page 3, the first page the
+  chip leaves to the user), each holding the raw value 0x5ea1ed, read by a two-of-three vote.
+  It is not secure boot: a development board can have secure boot and stay provisionable.
+- **It fails closed.** Blank rows mean no. The marker means yes. Rows that can't be read, or
+  that are neither blank nor the marker, also mean yes, and the log and `version` say which.
+  OTP bits can be set but not cleared, so the marker can be damaged but not removed.
+- **What it changes:** `core/settings.c` and `ssh/hostkey.c` refuse unsealed records
+  (`refuse_plain`); `rootsecret forget` is refused. An unsealed record that was refused is
+  reported in the log and left in flash. If it replaced the sealed one, the board has no
+  configuration and is set up on its console: an attacker with a cable can wipe a sealed-only
+  board, as they can erase its flash, but can't give it a configuration.
+- **The firmware only reads the rows.** Writing them is a step of `docs/securing-a-board.md`,
+  for production boards, done by the owner with `picotool`.
+- **`-DSOS_FORCE_SEALED_ONLY=ON`** builds an image that treats every board as sealed-only, to
+  try the behaviour on a development board without touching its OTP. It can only add the
+  restriction. `sealedonly_decide()` has no hardware in it and is unit tested on the host.
+
+## Glitch detector (`glitchdet.c`)
+
+The RP2350 has four detector circuits that reset the chip when its clock or core supply is
+disturbed (datasheet section 10.9). A secured board would arm them for good with an OTP bit.
+`glitchdet.c` arms them by software instead, from a setting, to find out in normal use
+whether they ever reset a healthy board (`docs/securing-a-board.md`).
+
+- **On by default:** armed at sensitivity 3, the highest, unless the setting says otherwise
+  (`glitch off`, `glitch on <0-3>`, `glitch watch <0-3>`; `glitch default` goes back). A
+  detector reset that nobody forced is a finding to report: see "Glitch detector resets" in
+  [`docs/development.md`](../../docs/development.md).
+- **Two modes:** *watching* (`glitch watch <0-3>`) runs the detectors at a sensitivity
+  without arming them, and logs a trigger without resetting anything; *armed* (`glitch on`)
+  resets the board on a trigger, as the OTP flag would.
+- **Not protection:** it is armed after the configuration loads, software can disarm it, and
+  the guard below disarms it after repeated resets, which is what deliberate glitching causes.
+- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 2 (that reset
+  clears the watchdog's scratch registers, and so the fault record): the number of detector
+  resets since power-on, how many came in a row soon after boot, and the uptime.
+- **Reported at boot** (log, `uptime`, `glitch`): that the last reset was the detector's, which
+  detectors fired, after how long.
+- **The guard:** three detector resets in a row, each within three minutes of starting, and
+  the next boot doesn't arm it, so the board stays reachable to turn the setting off.
 
 ## Watchdog (`wdog.c`)
 

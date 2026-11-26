@@ -61,6 +61,18 @@ the environment (read when CMake configures):
 set(SOS_SIGN_KEY "<keys-dir>/sos-sign.pem")
 ```
 
+A key given on the command line wins over `local.cmake`, for that build directory, so another
+key or an unsigned image can be built beside the everyday one without editing anything:
+
+```sh
+cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=<keys-dir>/other.pem    # signed with another key
+cmake --preset debug -B build-unsigned -DSOS_SIGN_KEY=none                 # not signed
+```
+
+CMake says which it is when it configures (`SOS: the image is signed with ...` or `is not
+signed`). To see which key an image is really signed with, `tools/flash.sh -n <dir>/sos.bin`
+prints the hash of its key and flashes nothing.
+
 `picotool` then hashes and signs the image after linking: `sos.elf`, `sos.uf2` and the `flash`
 target are the signed image. Without `SOS_SIGN_KEY` the image is unsigned, as before; CMake
 prints which it is when it configures. To check an image:
@@ -84,6 +96,86 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
   improvise it with `picotool seal`, which produces the same file if given a name for it.
 - Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
   image's metadata after the firmware is linked.
+
+## Flashing, and the flash guard
+
+`ninja flash` (`cmake --build --preset debug --target flash`) loads `build/sos.bin` over USB
+with `tools/flash.sh`. Set `SOS_FLASH_SERIAL` to a board's serial number (`version` on its
+console, or `picotool info`) to say which board; with a key list (below) it is required.
+
+A board with secure boot starts only firmware signed with a key whose hash is in its
+one-time-programmable memory. Flash it anything else and it doesn't start: it waits in the USB
+bootloader until a good image is loaded. That is easy to do by accident from a checkout whose
+build isn't set up to sign, or by flashing the wrong one of two boards, so `tools/flash.sh` can
+refuse first.
+
+- **The list.** A file saying which key hashes each board accepts. A hash is the SHA-256 of a
+  public key, 64 hex digits: what `bootkey` prints on a board and what a board's OTP holds.
+  The rest of a line after `#` is a comment. It holds no private key.
+
+  With one kind of board, the hashes alone: every board this machine flashes accepts them.
+
+  ```
+  # ~/.config/sos/flash-keys
+  <64 hex digits>         # the key in use
+  <64 hex digits>         # the spare
+  ```
+
+  With boards that accept different keys, a section for each board instead:
+
+  ```
+  [0123456789ABCDEF]      # a board, by its serial
+  <64 hex digits>         #   the keys that board accepts, and only those
+
+  [FEDCBA9876543210]
+  open                    #   an open board: it takes anything, nothing is checked
+  ```
+
+  It is `$SOS_FLASH_KEYS` if set, else `${XDG_CONFIG_HOME:-~/.config}/sos/flash-keys`: one per
+  machine, outside every checkout, so that a fresh checkout or worktree with no `local.cmake`
+  is guarded too.
+- **With a list, the board must be named** with `SOS_FLASH_SERIAL`, and flashing is refused
+  without it (exit status 3). Which keys are accepted depends on the board, and with two
+  boards attached `picotool` would otherwise pick one.
+- **Which keys apply.** In a list without sections, all of them, for every board. In a list
+  with sections, a board takes its own section's keys only, and **a board with no section is
+  refused**: the list is then the list of boards this machine flashes. A hash before the
+  first section is an error. A section with `open` turns the check off for that board.
+- **What is refused** before anything is sent to the board: an image that is unsigned, or
+  signed with a key the list doesn't give for that board. The message says which, with the
+  hash of the image's key. A list with a line it can't read is an error for every board.
+- **Without a list** there is no guard: the image is flashed as before, and the output says the
+  signature was not checked.
+- **`ninja flash-check`** runs the check and flashes nothing.
+- **`SOS_FLASH_UNGUARDED=1`** flashes without the check.
+- **What it doesn't cover:** `picotool load` typed by hand, and `tools/provision.sh`, which
+  writes a configuration record and no firmware. It trusts the serial it is given: it doesn't
+  ask the board which keys it holds. It compares the key's hash; it doesn't verify the
+  signature (`picotool info -a build/sos.elf` does).
+
+To get a key's hash for the list without a board:
+`openssl ec -in <key>.pem -pubout -outform DER | tail -c 64 | sha256sum`. A refusal also prints
+the hash of the key the refused image is signed with.
+
+## Glitch detector resets
+
+SOS arms the RP2350's glitch detector by software at boot, at the highest sensitivity, on every
+board (`glitch` shows it; `glitch off` turns it off). It is there to learn whether the detector
+ever resets a healthy board, before it is enabled for good in OTP on a secured board, where it
+can't be turned off again (`docs/securing-a-board.md`, decision 5). So far it has had one
+3-hour run under SFTP load without a reset; a week-long test waits for a spare board.
+
+**Whoever works with a board, person or agent, watches for it:**
+
+- At boot the log says `last reset: glitch detector (detectors 0x.. fired, after N s up; ...)`,
+  `uptime` says `(last reset: glitch detector)`, and `glitch` shows the count since power-on.
+- A detector reset that nobody forced with `glitch trig` is a finding. Record it on issue #64:
+  the firmware version, the detectors that fired, the uptime, what the board was doing (Wi-Fi
+  traffic, card access, a script, flashing), and how it was powered.
+- An unexplained reboot is worth a look at `glitch` before anything else: a detector reset
+  loses the fault record, so `uptime` shows no fault for it.
+- If it gets in the way of other work, `glitch off` is fine. Say so in the same place, with
+  what it was doing, and leave the setting off rather than lowering the sensitivity silently.
 
 ## Editor
 

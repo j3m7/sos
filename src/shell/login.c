@@ -9,7 +9,7 @@
 
 static const login_hooks_t *hooks;
 static bool locked = true;              // locked until login_start() decides otherwise
-static unsigned failures;               // wrong answers since boot
+static unsigned failures;               // answers counted since the last right one
 static uint64_t not_before;             // no check starts before this time (ms)
 static char pending[LOGIN_PASSWORD_MAX + 1];    // the answer, from typed until its check starts
 static bool have_pending, checking;
@@ -22,9 +22,9 @@ static void wipe(void *p, size_t len) {
         *v++ = 0;
 }
 
-// After the nth wrong answer in a row since boot: 1 s, 2 s, 4 s ... up to 30 s. It can't be
-// kept across a reboot (a counter in flash could be rewritten), and doesn't need to be: a
-// reboot takes longer than the first delays, and every check costs its slow derivation anyway.
+// After the nth wrong answer in a row: 1 s, 2 s, 4 s ... up to 30 s. With the hooks for it the
+// count is kept across reboots, so a reset doesn't shorten the wait. Whoever can rewrite the
+// flash can still reset a count kept there; every check costs its slow derivation regardless.
 static uint32_t delay_ms(unsigned n) {
     if (n == 0)
         return 0;
@@ -33,8 +33,15 @@ static uint32_t delay_ms(unsigned n) {
 
 static void ask(shell_t *sh);
 
-static void wrong(shell_t *sh) {
+// An answer is counted when its check starts, not when it turns out wrong: if the board is
+// reset in between, the count already has it.
+static void count_attempt(void) {
     failures++;
+    if (hooks->count_attempt)
+        hooks->count_attempt();
+}
+
+static void wrong(shell_t *sh) {
     not_before = hooks->now_ms() + delay_ms(failures);
     if (hooks->failed)
         hooks->failed(failures);
@@ -46,8 +53,12 @@ static void wrong(shell_t *sh) {
 static bool check_job(shell_t *sh, void *arg, bool cancel) {
     (void)arg;
     if (cancel) {
-        if (checking)
+        if (checking) {
+            // Ctrl-C during the check: the answer stays counted and earns its delay, like a
+            // wrong one. Otherwise interrupting every check would be a way round the count.
             hooks->check_abort();
+            not_before = hooks->now_ms() + delay_ms(failures);
+        }
         checking = false;
         have_pending = false;
         wipe(pending, sizeof(pending));
@@ -57,6 +68,7 @@ static bool check_job(shell_t *sh, void *arg, bool cancel) {
     if (!checking) {
         if (hooks->now_ms() < not_before)
             return true;
+        count_attempt();
         bool started = have_pending && hooks->check_begin(pending);
         have_pending = false;
         wipe(pending, sizeof(pending));
@@ -78,6 +90,8 @@ static bool check_job(shell_t *sh, void *arg, bool cancel) {
     locked = false;
     failures = 0;
     not_before = 0;
+    if (hooks->clear_count)
+        hooks->clear_count();
     last_activity = hooks->now_ms();
     hooks->opened(sh);
     return false;
@@ -105,8 +119,9 @@ static void ask(shell_t *sh) {
 
 void login_start(shell_t *console, const login_hooks_t *h) {
     hooks = h;
-    failures = 0;
-    not_before = 0;
+    // What was counted before this boot still counts, and so does the wait it earned.
+    failures = hooks->kept_failures ? hooks->kept_failures() : 0;
+    not_before = hooks->now_ms() + delay_ms(failures);
     have_pending = checking = false;
     last_activity = hooks->now_ms();
     was_connected = false;
@@ -131,6 +146,13 @@ void login_start(shell_t *console, const login_hooks_t *h) {
 
 bool login_locked(void) {
     return locked;
+}
+
+void login_password_set(void) {
+    failures = 0;
+    not_before = 0;
+    if (hooks && hooks->clear_count)
+        hooks->clear_count();
 }
 
 unsigned login_failures(void) {

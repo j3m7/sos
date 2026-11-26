@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 
 #include "core/config.h"
 #include "core/seal.h"
@@ -312,7 +313,7 @@ TEST(hostkey_sealed_round_trip_and_layout) {
     uint32_t len = 0;
     sample_key(der, sizeof(der));
     CHECK(hostrec_seal(page, &sealer, der, sizeof(der)));
-    static const uint8_t head[12] = { 'S', 'O', 'S', 'K', 2, 0, 0, 0, 82, 0, 0, 0 };
+    static const uint8_t head[12] = { 'S', 'O', 'S', 'K', 3, 0, 0, 0, 82, 0, 0, 0 };
     CHECK_MEM(page, head, sizeof(head));
     for (unsigned i = 12 + 82 + SEALER_OVERHEAD; i < HOSTREC_PAGE; i++)
         CHECK_EQ(page[i], 0xff);
@@ -386,7 +387,7 @@ TEST(hostkey_pages_that_are_not_records) {
     memset(page, 0, sizeof(page));
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
     memcpy(page, "SOSK", 4);
-    put_le32(page + 4, 3);                                  // a version from the future
+    put_le32(page + 4, 4);                                  // a version from the future
     put_le32(page + 8, 82);
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
     put_le32(page + 4, 2);
@@ -398,6 +399,170 @@ TEST(hostkey_pages_that_are_not_records) {
     put_le32(page + 4, 1);
     put_le32(page + 8, 241);                                // too long for a plain record
     CHECK_EQ(hostrec_kind(page), HOSTREC_NONE);
+}
+
+// --- the host key and its owner -----------------------------------------------------------------------
+
+// A seal context keyed with `key`, as ssh/hostkey.c makes them.
+static seal_ctx_t keyed_ctx[3];
+static sealer_t keyed(unsigned which, const uint8_t key[SEAL_KEY_LEN]) {
+    memset(&keyed_ctx[which], 0, sizeof(keyed_ctx[which]));
+    keyed_ctx[which].random = ctx.random;
+    memcpy(keyed_ctx[which].key, key, SEAL_KEY_LEN);
+    keyed_ctx[which].have_key = true;
+    return seal_sealer(&keyed_ctx[which]);
+}
+
+static void fill(uint8_t *p, size_t n, uint8_t start) {
+    for (size_t i = 0; i < n; i++)
+        p[i] = (uint8_t)(start + i * 5);
+}
+
+// seal key = HMAC-SHA256(base, owner secret): it changes with either, and is not the base.
+TEST(hostkey_owner_key) {
+    start();
+    uint8_t base[32], owner[32], k0[32], k[32];
+    fill(base, 32, 1);
+    fill(owner, 32, 100);
+    CHECK(hostrec_owner_key(k0, base, owner));
+    CHECK(memcmp(k0, base, 32) != 0);
+    CHECK(memcmp(k0, owner, 32) != 0);
+    CHECK(hostrec_owner_key(k, base, owner));
+    CHECK_MEM(k, k0, 32);                               // the same inputs give the same key
+    for (unsigned i = 0; i < 32; i++) {                 // every byte of the owner secret counts
+        owner[i] ^= 1;
+        CHECK(hostrec_owner_key(k, base, owner));
+        CHECK(memcmp(k, k0, 32) != 0);
+        owner[i] ^= 1;
+        base[i] ^= 1;                                   // and every byte of the base
+        CHECK(hostrec_owner_key(k, base, owner));
+        CHECK(memcmp(k, k0, 32) != 0);
+        base[i] ^= 1;
+    }
+    // Known answer, so that a change to the derivation doesn't pass unnoticed: HMAC-SHA256
+    // with the key 01 06 0b ... and the message 64 69 6e ..., computed with OpenSSL.
+    uint8_t expect[32];
+    unsigned int elen = 0;
+    CHECK(HMAC(EVP_sha256(), base, 32, owner, 32, expect, &elen) != NULL);
+    CHECK_EQ(elen, 32);
+    CHECK_MEM(k0, expect, 32);
+}
+
+// The point of it: after the configuration is erased the board has a new owner secret, and
+// the key made from it doesn't open the host key sealed for the old owner. The same board
+// (the same base key) can't read its own old host key.
+TEST(hostkey_new_owner_cannot_open_the_old_record) {
+    start();
+    uint8_t base[32], owner_a[32], owner_b[32], key_a[32], key_b[32];
+    uint8_t page[HOSTREC_PAGE], der[82], out[HOSTREC_PAGE];
+    uint32_t len = 0;
+    fill(base, 32, 7);
+    fill(owner_a, 32, 50);
+    fill(owner_b, 32, 51);
+    sample_key(der, sizeof(der));
+    CHECK(hostrec_owner_key(key_a, base, owner_a));
+    CHECK(hostrec_owner_key(key_b, base, owner_b));
+    sealer_t for_a = keyed(0, key_a), for_b = keyed(1, key_b), base_only = keyed(2, base);
+
+    CHECK(hostrec_seal(page, &for_a, der, sizeof(der)));
+    CHECK_EQ(hostrec_kind(page), HOSTREC_SEALED);
+    CHECK(hostrec_open(page, &for_a, true, out, &len));          // its owner opens it
+    CHECK_MEM(out, der, sizeof(der));
+    CHECK(!hostrec_open(page, &for_b, true, out, &len));         // the next owner doesn't
+    CHECK_EQ(len, 0);
+    for (unsigned i = 0; i < HOSTREC_PAGE; i++)
+        CHECK_EQ(out[i], 0);                                     // and gets nothing of it
+    CHECK(!hostrec_open(page, &base_only, true, out, &len));     // nor does the base key alone
+    // The other board with the same owner secret (a copied configuration) doesn't either.
+    uint8_t other_base[32], key_c[32];
+    fill(other_base, 32, 8);
+    CHECK(hostrec_owner_key(key_c, other_base, owner_a));
+    sealer_t for_c = keyed(1, key_c);
+    CHECK(!hostrec_open(page, &for_c, true, out, &len));
+}
+
+// A record as firmware before this wrote it: version 2, sealed under the base key alone.
+static bool v2_record(uint8_t page[HOSTREC_PAGE], const sealer_t *base_sealer, const uint8_t *der,
+                      uint32_t len) {
+    memset(page, 0xff, HOSTREC_PAGE);
+    memcpy(page, "SOSK", 4);
+    put_le32(page + 4, 2);
+    put_le32(page + 8, len);
+    return base_sealer->seal(base_sealer->ctx, page, 12, der, len, page + 12);
+}
+
+TEST(hostkey_version_2_records) {
+    start();
+    uint8_t base[32], owner[32], key[32];
+    uint8_t page[HOSTREC_PAGE], der[82], out[HOSTREC_PAGE];
+    uint32_t len = 0;
+    fill(base, 32, 9);
+    fill(owner, 32, 60);
+    sample_key(der, sizeof(der));
+    CHECK(hostrec_owner_key(key, base, owner));
+    sealer_t base_only = keyed(0, base), for_owner = keyed(1, key);
+
+    CHECK(v2_record(page, &base_only, der, sizeof(der)));
+    CHECK_EQ(hostrec_kind(page), HOSTREC_SEALED_OLD);            // told apart from version 3
+    CHECK(hostrec_open(page, &base_only, true, out, &len));      // opens the old way
+    CHECK_EQ(len, sizeof(der));
+    CHECK_MEM(out, der, sizeof(der));
+    CHECK(!hostrec_open(page, &for_owner, true, out, &len));     // not with the owner's key
+    // Taking it over: the same key stored as version 3, which the base key alone doesn't open.
+    uint8_t page3[HOSTREC_PAGE];
+    CHECK(hostrec_seal(page3, &for_owner, der, sizeof(der)));
+    CHECK_EQ(hostrec_kind(page3), HOSTREC_SEALED);
+    CHECK(hostrec_open(page3, &for_owner, true, out, &len));
+    CHECK_MEM(out, der, sizeof(der));
+    CHECK(!hostrec_open(page3, &base_only, true, out, &len));
+    // The version is part of what the seal authenticates: a version 2 record relabelled as 3
+    // (or the other way) opens with neither key.
+    put_le32(page + 4, 3);
+    CHECK_EQ(hostrec_kind(page), HOSTREC_SEALED);
+    CHECK(!hostrec_open(page, &base_only, true, out, &len));
+    CHECK(!hostrec_open(page, &for_owner, true, out, &len));
+    put_le32(page3 + 4, 2);
+    CHECK_EQ(hostrec_kind(page3), HOSTREC_SEALED_OLD);
+    CHECK(!hostrec_open(page3, &for_owner, true, out, &len));
+    CHECK(!hostrec_open(page3, &base_only, true, out, &len));
+}
+
+// What is done about the host key, for every combination.
+TEST(hostkey_decisions) {
+    static const int kinds[] = { HOSTREC_NONE, HOSTREC_PLAIN, HOSTREC_SEALED, HOSTREC_SEALED_OLD };
+    // A board that isn't set up (no owner secret) never gets a host key and never touches what
+    // is stored, whatever that is: the key belongs to an owner.
+    for (unsigned k = 0; k < 4; k++)
+        for (int sealed_only = 0; sealed_only <= 1; sealed_only++)
+            CHECK_EQ(hostrec_decide(kinds[k], true, false, sealed_only), HOSTKEY_NONE_NO_OWNER);
+    // Set up, with keys.
+    CHECK_EQ(hostrec_decide(HOSTREC_SEALED, true, true, false), HOSTKEY_OPEN);
+    CHECK_EQ(hostrec_decide(HOSTREC_SEALED, true, true, true), HOSTKEY_OPEN);
+    CHECK_EQ(hostrec_decide(HOSTREC_NONE, true, true, false), HOSTKEY_MAKE_NEW);
+    CHECK_EQ(hostrec_decide(HOSTREC_NONE, true, true, true), HOSTKEY_MAKE_NEW);
+    // Records from older firmware: an open board takes them over; a sealed-only board
+    // doesn't, since neither is tied to an owner and either could have been planted or
+    // carried across a wipe.
+    CHECK_EQ(hostrec_decide(HOSTREC_SEALED_OLD, true, true, false), HOSTKEY_TAKE_OVER_OLD);
+    CHECK_EQ(hostrec_decide(HOSTREC_SEALED_OLD, true, true, true), HOSTKEY_MAKE_NEW);
+    CHECK_EQ(hostrec_decide(HOSTREC_PLAIN, true, true, false), HOSTKEY_TAKE_OVER_PLAIN);
+    CHECK_EQ(hostrec_decide(HOSTREC_PLAIN, true, true, true), HOSTKEY_MAKE_NEW);
+    // No root secret: no host key, except an open board's plain one, used as it is.
+    for (int owner = 0; owner <= 1; owner++) {
+        CHECK_EQ(hostrec_decide(HOSTREC_PLAIN, false, owner, false), HOSTKEY_USE_PLAIN_UNSEALED);
+        CHECK_EQ(hostrec_decide(HOSTREC_PLAIN, false, owner, true), HOSTKEY_NONE_NO_KEYS);
+        CHECK_EQ(hostrec_decide(HOSTREC_SEALED, false, owner, false), HOSTKEY_NONE_NO_KEYS);
+        CHECK_EQ(hostrec_decide(HOSTREC_SEALED_OLD, false, owner, true), HOSTKEY_NONE_NO_KEYS);
+        CHECK_EQ(hostrec_decide(HOSTREC_NONE, false, owner, false), HOSTKEY_NONE_NO_KEYS);
+    }
+    // A sealed-only board never takes over a record that isn't tied to its owner.
+    for (unsigned k = 0; k < 4; k++)
+        for (int base = 0; base <= 1; base++)
+            for (int owner = 0; owner <= 1; owner++) {
+                hostkey_action_t a = hostrec_decide(kinds[k], base, owner, true);
+                CHECK(a != HOSTKEY_TAKE_OVER_OLD && a != HOSTKEY_TAKE_OVER_PLAIN &&
+                      a != HOSTKEY_USE_PLAIN_UNSEALED);
+            }
 }
 
 TEST_MAIN(
@@ -414,4 +579,8 @@ TEST_MAIN(
     RUN(hostkey_sealed_record_that_does_not_open);
     RUN(hostkey_record_limits);
     RUN(hostkey_pages_that_are_not_records);
+    RUN(hostkey_owner_key);
+    RUN(hostkey_new_owner_cannot_open_the_old_record);
+    RUN(hostkey_version_2_records);
+    RUN(hostkey_decisions);
 )

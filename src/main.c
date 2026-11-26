@@ -15,9 +15,12 @@
 
 #include "chat/chat.h"
 #include "core/fault.h"
+#include "core/glitchdet.h"
 #include "core/keyprov.h"
 #include "core/log.h"
-#include "core/rootflash.h"
+#include "core/failflash.h"
+#include "core/rootsource.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -136,6 +139,7 @@ static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 
 int main(void) {
     stackmon_paint();
+    glitchdet_boot();                   // why we last reset, before anything else changes it
     stdio_init_all();
     console_gate_set(true);             // the console is locked until shell/login.c says otherwise
 
@@ -164,12 +168,16 @@ int main(void) {
 
     // The root secret, then configuration and host key: all three may write flash, which is
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
-    rootflash_init();
+    sealedonly_init();                  // before anything loads a record from flash
+    rootsource_init();                  // OTP, the flash record, or nothing: starts the key provider
+    failflash_init();                   // wrong console passwords so far, before the console starts
     settings_init();
+    glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
     uint32_t hostkey_len;
-    bool have_hostkey = hostkey_get(&hostkey, &hostkey_len);
+    hostkey_init();
+    hostkey_get(&hostkey, &hostkey_len);    // now, before Wi-Fi; none yet on a board not set up
     cardkey_init();                     // the base of the key for encrypted SD cards
 
     if (cyw43_arch_init_with_country(wifi_country_code())) {
@@ -196,10 +204,17 @@ int main(void) {
         wdog_feed();
         wifi_poll();
         // Serve SSH once there's a network and someone to let in (keys may be added later).
-        if (!sshd_running() && !sshd_failed && have_hostkey && wifi_up() && settings()->key_count)
-            sshd_failed = !sshd_start(hostkey, hostkey_len);
+        if (!sshd_running() && !sshd_failed && wifi_up() && settings()->key_count) {
+            // A board set up since boot gets its host key now: it is tied to the owner, who
+            // didn't exist before.
+            // Asked every time, not remembered here: `config reset` takes the host key away
+            // with the owner it belonged to (hostkey_owner_gone).
+            if (hostkey_get(&hostkey, &hostkey_len))
+                sshd_failed = !sshd_start(hostkey, hostkey_len);
+        }
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
+        glitchdet_poll();
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);

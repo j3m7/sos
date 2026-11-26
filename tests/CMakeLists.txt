@@ -23,16 +23,26 @@ target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c)
+add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
 # src/shell/login.c: the console's lock (password prompt, delays, the gate), with the real
 # shell_core.c.
 add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/login.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c)
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
+
+# src/net/wifi_pick.c: which saved Wi-Fi network to try.
+add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
+target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
+add_test(NAME wifi_pick COMMAND test_wifi_pick)
+
+# src/core/failcount.c: the count of wrong console passwords kept in flash across reboots.
+add_executable(test_failcount test_failcount.c ${SOS_ROOT}/src/core/failcount.c)
+target_include_directories(test_failcount PRIVATE ${SOS_ROOT}/src)
+add_test(NAME failcount COMMAND test_failcount)
 
 # src/shell/keys.c: terminal key decoding (escape sequences to key codes).
 add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
@@ -63,6 +73,24 @@ add_test(NAME config COMMAND test_config)
 add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
 target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chipinfo COMMAND test_chipinfo)
+
+# src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
+# in OTP (the `bootkey` command).
+add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
+target_include_directories(test_bootkey PRIVATE ${SOS_ROOT}/src)
+add_test(NAME bootkey COMMAND test_bootkey)
+
+# src/core/sealedonly.c: whether the board refuses unsealed records, from its marker's OTP rows.
+add_executable(test_sealedonly test_sealedonly.c ${SOS_ROOT}/src/core/sealedonly.c
+    ${SOS_ROOT}/src/core/bootkey.c)
+target_include_directories(test_sealedonly PRIVATE ${SOS_ROOT}/src)
+add_test(NAME sealedonly COMMAND test_sealedonly)
+
+# tools/flash.sh: the guard that refuses to flash an image not signed with an accepted key.
+find_program(BASH_EXE bash)
+if (BASH_EXE)
+    add_test(NAME flash_guard COMMAND ${BASH_EXE} ${SOS_ROOT}/tools/test/flash-guard-test.sh)
+endif()
 
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
@@ -113,7 +141,7 @@ add_test(NAME http_msg COMMAND test_http_msg)
 
 # src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
 add_executable(test_chat test_chat.c stub_version.c ${SOS_ROOT}/src/chat/chat.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)
 
@@ -147,6 +175,19 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_link_libraries(test_keyprov PRIVATE wolfcrypt_host)
     add_test(NAME keyprov COMMAND test_keyprov)
 
+    # src/core/roototp.c: the root secret's OTP pages, and which source a board uses.
+    add_executable(test_roototp test_roototp.c ${SOS_ROOT}/src/core/roototp.c)
+    target_include_directories(test_roototp PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_roototp PRIVATE wolfcrypt_host)
+    add_test(NAME roototp COMMAND test_roototp)
+
+    # src/core/rootburn.c: writing the root secret into OTP (the burn image only).
+    add_executable(test_rootburn test_rootburn.c ${SOS_ROOT}/src/core/rootburn.c
+        ${SOS_ROOT}/src/core/roototp.c)
+    target_include_directories(test_rootburn PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_rootburn PRIVATE wolfcrypt_host)
+    add_test(NAME rootburn COMMAND test_rootburn)
+
     # src/core/pwverify.c: the console password's verifier (PBKDF2-HMAC-SHA256, then keyed).
     add_executable(test_pwverify test_pwverify.c ${SOS_ROOT}/src/core/pwverify.c)
     target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
@@ -173,6 +214,15 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
     target_include_directories(test_seal PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_seal PRIVATE wolfcrypt_host OpenSSL::Crypto)
     add_test(NAME seal COMMAND test_seal)
+
+    # src/ssh/hostkey.c: the host key and its owner, with the real record and seal code and
+    # stand-ins for flash, the key provider, the settings and key generation (tests/stubs).
+    add_executable(test_hostkey test_hostkey.c ${SOS_ROOT}/src/ssh/hostkey.c
+        ${SOS_ROOT}/src/ssh/hostkey_record.c ${SOS_ROOT}/src/core/seal.c)
+    target_include_directories(test_hostkey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+        ${SOS_ROOT}/src)
+    target_link_libraries(test_hostkey PRIVATE wolfcrypt_host)
+    add_test(NAME hostkey COMMAND test_hostkey)
 
     add_executable(sdcrypt ${SOS_ROOT}/tools/host/sdcrypt.c)
     target_link_libraries(sdcrypt PRIVATE OpenSSL::Crypto)

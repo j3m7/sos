@@ -49,15 +49,23 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 
 The Ed25519 host key is the first page of the key sector, the last 4 KB of flash
 (`core/keysector.c`). It's generated on
-the device at first boot (`hostkey_get()`, before Wi-Fi starts) and survives reflashing; the
+the device when the board is set up (`hostkey_get()`) and survives reflashing; the
 private key never leaves the device. The flash write goes through `flash_safe_execute()`.
 
-- **Sealed:** the record (`hostkey_record.c`, pure C, host tested) holds the key sealed with
-  AES-256-GCM under the key provider's host-key key (`core/seal.h`, `core/keyprov.h`), with the
-  record's header as associated data. `hostkey_get()` opens it at boot into RAM, where the SSH
-  server uses it; the seal key is wiped again before `hostkey_get()` returns.
-- **Upgrade:** a plain record from firmware before sealing is read, and stored sealed at once:
-  the same key, the same fingerprint. That rewrites the key sector (erase, then program), with
+- **Sealed for the owner:** the record (`hostkey_record.c`, pure C, host tested) holds the key
+  sealed with AES-256-GCM, the record's header as associated data. The seal key is
+  HMAC-SHA256(base key, owner secret): the base key comes from the root secret
+  (`core/keyprov.h`, derived at boot and kept in RAM), the owner secret from the sealed
+  configuration, the same construction as for encrypted cards (`files/cardkey.h`). Erase the
+  configuration and the host key can't be opened again; the next owner gets a new one.
+- **When:** `hostkey_get()` runs at boot. A board that isn't set up has no owner secret and so
+  no host key; `main.c` asks again when SSH is about to start, so a board set up on its
+  console gets its host key then, without a reboot.
+- **What it does with what it finds** is `hostrec_decide()`, a table tested on the host. An
+  open board takes over a record from older firmware once (plain, or sealed under the base
+  key alone), keeping the key and its fingerprint. A sealed-only board doesn't: such a record
+  isn't tied to an owner, and it makes a new key.
+- **Upgrade:** taking a record over rewrites the key sector (erase, then program), with
   the same power-cut window as any change to it.
 - **A sealed key that doesn't open** (another root secret, or damage) is replaced by a new
   key, and the log says clients will see a changed fingerprint. **With no usable root

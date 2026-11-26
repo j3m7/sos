@@ -157,7 +157,8 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | Command | |
 |---|---|
 | `config` | show the configuration |
-| `wifi` / `wifi set` / `wifi connect` | show / change the network (password not echoed) / reconnect |
+| `wifi` / `wifi set` / `wifi connect` | show the networks / change the first network (password not echoed) / reconnect |
+| `wifi add` / `wifi remove <n>` / `wifi prefer <n>` | save another network (up to 5) / forget one / move one to the front; the board joins the first saved network in reach |
 | `wifi power on` / `wifi power off` | Wi-Fi power saving (default off; see below) |
 | `wifi country US` / `wifi country worldwide` | radio rules to follow (two-letter country; default worldwide; after reboot) |
 | `wifi stats` / `wifi stats chip` | signal, noise and packet counters, for chasing packet loss / plus the chip's raw counters |
@@ -181,9 +182,13 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   the current one. `logout` (or Ctrl-D) locks the console again. SSH sessions aren't
   affected: they log in with their keys.
 - **Wrong passwords:** each check takes about 0.3 s by design, and after a wrong answer the
-  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot, so
-  what limits guessing in the end is the cost of each check; choose a password that isn't
-  guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
+  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count of wrong answers is kept in
+  flash and survives a reboot: it is written before each check starts and cleared by the right
+  password, so unplugging the board between guesses, or in the middle of one, skips no wait.
+  An answer interrupted with Ctrl-C counts as wrong. Someone with a USB cable can still erase
+  the count along with the rest of the flash (the USB bootloader allows it), so what limits a
+  determined guesser is the cost of each check: choose a password that isn't guessable in a
+  few thousand tries. Wrong attempts are logged (`dmesg`).
 - **It locks itself** when the USB terminal goes away (the cable is unplugged or the terminal
   program closes the port) and after 10 minutes with nothing typed
   (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off).
@@ -256,7 +261,8 @@ tools/provision.sh other.conf     # the same, from another file; -n only builds 
 trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
-everything saved on the board; the firmware and the SSH host key stay as they are. The record it
+everything saved on the board, and with it the board's owner: it gets a new SSH host key
+(clients will warn) and its encrypted cards are locked. The firmware stays as it is. The record it
 writes is not sealed (this machine doesn't have the board's key): the board seals it at its
 first boot and erases the unsealed copy. A `console_password` line sets the console password
 (it travels in the image in the clear until that first boot); without one, the board asks for a
@@ -306,9 +312,15 @@ ssh <device-ip>
 - Only public-key login is accepted, with one of the trusted keys. The user name doesn't
   matter: any name logs in with a trusted key, and the name is only shown (`ssh`, `who`, the
   log). The keys are what decide who gets in.
-- The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
-  flash sector (the key sector), sealed like the
-  configuration; it survives reflashing. The private key never leaves the device.
+- The Ed25519 host key is generated on the device when it is first set up and stored in the
+  last 4 KB flash sector (the key sector), sealed; it survives reflashing. The private key
+  never leaves the device.
+- **The host key belongs to the board's owner.** It is sealed under a key that depends on the
+  board and on the owner secret in its configuration. Erasing the configuration (`config
+  reset`, provisioning it again, or erasing it over USB) therefore makes the host key
+  unreadable, and the next setup makes a new one: SSH clients see a changed host key and warn.
+  That is intended. Someone who wipes a board and sets it up as theirs is a new SSH identity,
+  not the old board.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
   ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets

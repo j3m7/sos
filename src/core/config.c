@@ -24,7 +24,10 @@ _Static_assert(CONFIG_V4_LENGTH == 1640, "fields before wifi_country must not mo
 _Static_assert(CONFIG_V5_LENGTH == 1644, "fields before owner_secret must not move");
 #define CONFIG_V6_LENGTH offsetof(sos_config_t, console_iterations) // + owner_secret
 _Static_assert(CONFIG_V6_LENGTH == 1676, "fields before console_iterations must not move");
-_Static_assert(sizeof(sos_config_t) == 1796, "the record's size is part of the format");
+#define CONFIG_V7_LENGTH offsetof(sos_config_t, wifi_extra)       // + console fields, glitch_detector
+_Static_assert(CONFIG_V7_LENGTH == 1796, "fields before wifi_extra must not move");
+_Static_assert(offsetof(sos_config_t, glitch_detector) == 1793, "it takes a former padding byte");
+_Static_assert(sizeof(sos_config_t) == 2184, "the record's size is part of the format");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
@@ -32,7 +35,8 @@ static const uint16_t record_lengths[] = {
     CONFIG_V4_LENGTH,
     CONFIG_V5_LENGTH,
     CONFIG_V6_LENGTH,
-    sizeof(sos_config_t),   // + the console password
+    CONFIG_V7_LENGTH,
+    sizeof(sos_config_t),   // + wifi_extra
 };
 
 static bool known_length(uint16_t length) {
@@ -124,6 +128,23 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
         (!terminated(c->console_password, sizeof(c->console_password)) ||
          (c->console_password[0] && config_check_console_password(c->console_password))))
         return false;
+    if (HAS_FIELD(length, wifi_extra)) {
+        // Used entries first, none without a first network, each one valid.
+        bool used = c->wifi_ssid[0] != 0;
+        for (unsigned i = 0; i < CONFIG_WIFI_EXTRA; i++) {
+            const config_wifi_net_t *n = &c->wifi_extra[i];
+            if (!terminated(n->ssid, sizeof(n->ssid)) ||
+                !terminated(n->password, sizeof(n->password)))
+                return false;
+            if (!n->ssid[0]) {
+                used = false;
+                if (n->password[0])
+                    return false;
+            } else if (!used || config_check_ssid(n->ssid) || config_check_password(n->password)) {
+                return false;
+            }
+        }
+    }
     if (!terminated(c->wifi_ssid, sizeof(c->wifi_ssid)) ||
         !terminated(c->wifi_password, sizeof(c->wifi_password)) ||
         !terminated(c->hostname, sizeof(c->hostname)) ||
@@ -245,6 +266,10 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     // over from that, so it means "none" instead of making the whole record invalid.
     if (cfg->rtc_offset < CONFIG_RTC_OFFSET_MIN || cfg->rtc_offset > CONFIG_RTC_OFFSET_MAX)
         cfg->rtc_offset = 0;
+    // The same for the glitch detector setting, also a former padding byte: out of range means
+    // "not chosen", which is the default.
+    if (cfg->glitch_detector > CONFIG_GLITCH_DETECTOR_MAX)
+        cfg->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
     if (seq)
         *seq = s.hdr[s.newest].seq;
     return true;
@@ -577,5 +602,120 @@ bool config_key_remove(sos_config_t *cfg, unsigned index) {
             (cfg->key_count - index - 1) * sizeof(cfg->keys[0]));
     cfg->key_count--;
     memset(&cfg->keys[cfg->key_count], 0, sizeof(cfg->keys[0]));
+    return true;
+}
+
+// --- Wi-Fi networks ------------------------------------------------------------------------------
+
+// All networks as one list, and back: the editing functions work on that.
+static unsigned wifi_unpack(const sos_config_t *cfg, config_wifi_net_t all[CONFIG_WIFI_NETS]) {
+    memset(all, 0, CONFIG_WIFI_NETS * sizeof(all[0]));
+    strcpy(all[0].ssid, cfg->wifi_ssid);
+    strcpy(all[0].password, cfg->wifi_password);
+    memcpy(&all[1], cfg->wifi_extra, sizeof(cfg->wifi_extra));
+    unsigned n = 0;
+    while (n < CONFIG_WIFI_NETS && all[n].ssid[0])
+        n++;
+    return n;
+}
+
+static void wifi_pack(sos_config_t *cfg, config_wifi_net_t all[CONFIG_WIFI_NETS]) {
+    strcpy(cfg->wifi_ssid, all[0].ssid);
+    strcpy(cfg->wifi_password, all[0].password);
+    memcpy(cfg->wifi_extra, &all[1], sizeof(cfg->wifi_extra));
+    wipe(all, CONFIG_WIFI_NETS * sizeof(all[0]));
+}
+
+unsigned config_wifi_count(const sos_config_t *cfg) {
+    if (!cfg->wifi_ssid[0])
+        return 0;
+    unsigned n = 1;
+    while (n < CONFIG_WIFI_NETS && cfg->wifi_extra[n - 1].ssid[0])
+        n++;
+    return n;
+}
+
+bool config_wifi_get(const sos_config_t *cfg, unsigned index, config_wifi_net_t *net) {
+    if (index >= config_wifi_count(cfg))
+        return false;
+    if (index == 0) {
+        memset(net, 0, sizeof(*net));
+        strcpy(net->ssid, cfg->wifi_ssid);
+        strcpy(net->password, cfg->wifi_password);
+    } else {
+        *net = cfg->wifi_extra[index - 1];
+    }
+    return true;
+}
+
+int config_wifi_find(const sos_config_t *cfg, const char *ssid) {
+    unsigned n = config_wifi_count(cfg);
+    for (unsigned i = 0; i < n; i++)
+        if (!strcmp(i ? cfg->wifi_extra[i - 1].ssid : cfg->wifi_ssid, ssid))
+            return (int)i;
+    return -1;
+}
+
+const char *config_wifi_add(sos_config_t *cfg, const char *ssid, const char *password) {
+    const char *err = config_check_ssid(ssid);
+    if (!err)
+        err = config_check_password(password);
+    if (err)
+        return err;
+    if (config_wifi_find(cfg, ssid) >= 0)
+        return "that network is already saved";
+    config_wifi_net_t all[CONFIG_WIFI_NETS];
+    unsigned n = wifi_unpack(cfg, all);
+    if (n == CONFIG_WIFI_NETS) {
+        wipe(all, sizeof(all));
+        return "the network list is full (5 networks)";
+    }
+    strcpy(all[n].ssid, ssid);
+    strcpy(all[n].password, password);
+    wifi_pack(cfg, all);
+    return NULL;
+}
+
+const char *config_wifi_set_first(sos_config_t *cfg, const char *ssid, const char *password) {
+    const char *err = config_check_ssid(ssid);
+    if (!err)
+        err = config_check_password(password);
+    if (err)
+        return err;
+    int dup = config_wifi_find(cfg, ssid);
+    if (dup > 0)
+        config_wifi_remove(cfg, (unsigned)dup);
+    memset(cfg->wifi_ssid, 0, sizeof(cfg->wifi_ssid));
+    memset(cfg->wifi_password, 0, sizeof(cfg->wifi_password));
+    strcpy(cfg->wifi_ssid, ssid);
+    strcpy(cfg->wifi_password, password);
+    return NULL;
+}
+
+bool config_wifi_remove(sos_config_t *cfg, unsigned index) {
+    config_wifi_net_t all[CONFIG_WIFI_NETS];
+    unsigned n = wifi_unpack(cfg, all);
+    if (index >= n) {
+        wipe(all, sizeof(all));
+        return false;
+    }
+    memmove(&all[index], &all[index + 1], (CONFIG_WIFI_NETS - index - 1) * sizeof(all[0]));
+    memset(&all[CONFIG_WIFI_NETS - 1], 0, sizeof(all[0]));
+    wifi_pack(cfg, all);
+    return true;
+}
+
+bool config_wifi_prefer(sos_config_t *cfg, unsigned index) {
+    config_wifi_net_t all[CONFIG_WIFI_NETS], moved;
+    unsigned n = wifi_unpack(cfg, all);
+    if (index >= n) {
+        wipe(all, sizeof(all));
+        return false;
+    }
+    moved = all[index];
+    memmove(&all[1], &all[0], index * sizeof(all[0]));
+    all[0] = moved;
+    wipe(&moved, sizeof(moved));
+    wifi_pack(cfg, all);
     return true;
 }

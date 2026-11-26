@@ -7,9 +7,13 @@
 
 #include <string.h>
 
-#define MAGIC          0x4b534f53u      // "SOSK"
-#define VERSION_PLAIN  1u
-#define VERSION_SEALED 2u
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/hmac.h>
+
+#define MAGIC              0x4b534f53u  // "SOSK"
+#define VERSION_PLAIN      1u
+#define VERSION_SEALED_OLD 2u           // sealed under the base key alone
+#define VERSION_SEALED     3u           // sealed under the base key and the owner secret
 
 enum {
     OFF_MAGIC = 0, OFF_VERSION = 4, OFF_LEN = 8,
@@ -45,6 +49,8 @@ int hostrec_kind(const uint8_t page[HOSTREC_PAGE]) {
         return HOSTREC_PLAIN;
     if (version == VERSION_SEALED && len > 0 && len <= HOSTREC_MAX_KEY)
         return HOSTREC_SEALED;
+    if (version == VERSION_SEALED_OLD && len > 0 && len <= HOSTREC_MAX_KEY)
+        return HOSTREC_SEALED_OLD;
     return HOSTREC_NONE;
 }
 
@@ -60,6 +66,7 @@ bool hostrec_open(const uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, bool
         memcpy(der, page + OFF_PLAIN_KEY, n);
         break;
     case HOSTREC_SEALED:
+    case HOSTREC_SEALED_OLD:
         if (!sealer || !sealer->open(sealer->ctx, page, HEADER_AAD, page + OFF_SEALED,
                                      n + SEALER_OVERHEAD, der)) {
             memset(der, 0, HOSTREC_PAGE);
@@ -85,4 +92,44 @@ bool hostrec_seal(uint8_t page[HOSTREC_PAGE], const sealer_t *sealer, const uint
     }
     memset(page, 0, HOSTREC_PAGE);
     return false;
+}
+
+bool hostrec_owner_key(uint8_t out[HOSTREC_KEY_LEN], const uint8_t base[HOSTREC_KEY_LEN],
+                       const uint8_t owner[32]) {
+    Hmac hmac;
+    bool init = wc_HmacInit(&hmac, NULL, INVALID_DEVID) == 0;
+    bool ok = init && wc_HmacSetKey(&hmac, WC_SHA256, base, HOSTREC_KEY_LEN) == 0 &&
+              wc_HmacUpdate(&hmac, owner, 32) == 0 && wc_HmacFinal(&hmac, out) == 0;
+    if (init)
+        wc_HmacFree(&hmac);
+    volatile uint8_t *v = (volatile uint8_t *)&hmac;
+    for (size_t i = 0; i < sizeof(hmac); i++)
+        v[i] = 0;
+    if (!ok)
+        memset(out, 0, HOSTREC_KEY_LEN);
+    return ok;
+}
+
+hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool sealed_only) {
+    if (!have_base)
+        // No root secret: nothing sealed opens and nothing new could be sealed. An open
+        // board with a plain key from old firmware goes on using it.
+        return kind == HOSTREC_PLAIN && !sealed_only ? HOSTKEY_USE_PLAIN_UNSEALED
+                                                     : HOSTKEY_NONE_NO_KEYS;
+    if (!have_owner)
+        // Not set up yet. A key made now couldn't be tied to an owner; one is made when the
+        // board is set up. What is stored stays as it is until then.
+        return HOSTKEY_NONE_NO_OWNER;
+    switch (kind) {
+    case HOSTREC_SEALED:
+        return HOSTKEY_OPEN;
+    case HOSTREC_SEALED_OLD:
+        // Sealed under the board's key alone, so it would have survived a wipe: a sealed-only
+        // board doesn't carry it over to what may be a new owner.
+        return sealed_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_OLD;
+    case HOSTREC_PLAIN:
+        return sealed_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_PLAIN;
+    default:
+        return HOSTKEY_MAKE_NEW;
+    }
 }

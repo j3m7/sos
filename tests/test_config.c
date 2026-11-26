@@ -1352,7 +1352,7 @@ TEST(console_password_fields_are_appended) {
     CHECK_EQ(offsetof(sos_config_t, console_salt), 1680);
     CHECK_EQ(offsetof(sos_config_t, console_verifier), 1696);
     CHECK_EQ(offsetof(sos_config_t, console_password), 1728);
-    CHECK_EQ(sizeof(sos_config_t), 1796);
+    CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);
 }
 
 TEST(console_password_checks) {
@@ -1454,6 +1454,186 @@ TEST(records_from_before_the_console_password_load_with_none) {
     CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
 }
 
+// --- the glitch detector setting ---------------------------------------------------------------------
+
+// It takes a byte that was padding: the record's size doesn't change, records saved before
+// load as "not chosen" (the default: armed at the highest sensitivity), and a value out of
+// range is that too, not an invalid record.
+TEST(glitch_detector_setting) {
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, glitch_detector), 1793);
+    CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);     // the length of those records
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK_EQ(a.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);
+    CHECK_EQ(config_glitch_mode(CONFIG_GLITCH_DETECTOR_DEFAULT), 4);    // armed, sensitivity 3
+    CHECK_EQ(config_glitch_mode(CONFIG_GLITCH_DETECTOR_OFF), 0);
+    for (unsigned v = 1; v <= 8; v++)
+        CHECK_EQ(config_glitch_mode(v), v);
+    CHECK_EQ(config_glitch_mode(200), 4);
+    for (unsigned v = 0; v <= CONFIG_GLITCH_DETECTOR_MAX; v++) {
+        a.glitch_detector = (uint8_t)v;
+        CHECK(config_save(&sealed_store, &a));
+        CHECK(config_load(&sealed_store, &b, NULL));
+        CHECK_EQ(b.glitch_detector, v);
+    }
+    a.glitch_detector = CONFIG_GLITCH_DETECTOR_MAX + 1; // can only be a leftover
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_EQ(b.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    blank_flash();                                      // a plain record carries it too
+    a.glitch_detector = 2;
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.glitch_detector, 2);
+}
+
+// --- saved Wi-Fi networks ----------------------------------------------------------------------------
+
+static void check_net(const sos_config_t *c, unsigned i, const char *ssid, const char *password) {
+    config_wifi_net_t n;
+    CHECK(config_wifi_get(c, i, &n));
+    CHECK(!strcmp(n.ssid, ssid));
+    CHECK(!strcmp(n.password, password));
+}
+
+TEST(wifi_extra_is_appended) {
+    CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);
+    CHECK_EQ(sizeof(config_wifi_net_t), 97);
+    CHECK_EQ(sizeof(sos_config_t), 2184);
+}
+
+TEST(wifi_list_add_remove_prefer) {
+    sos_config_t c;
+    config_defaults(&c);
+    CHECK_EQ(config_wifi_count(&c), 0);
+    config_wifi_net_t n;
+    CHECK(!config_wifi_get(&c, 0, &n));
+    CHECK(config_wifi_add(&c, "home", "correct horse") == NULL);    // first: into wifi_ssid
+    CHECK(!strcmp(c.wifi_ssid, "home"));
+    CHECK(config_wifi_add(&c, "phone", "") == NULL);                // open network
+    CHECK(config_wifi_add(&c, "work", "battery staple") == NULL);
+    CHECK_EQ(config_wifi_count(&c), 3);
+    check_net(&c, 1, "phone", "");
+    check_net(&c, 2, "work", "battery staple");
+    CHECK_EQ(config_wifi_find(&c, "work"), 2);
+    CHECK_EQ(config_wifi_find(&c, "nope"), -1);
+    CHECK(config_wifi_add(&c, "work", "") != NULL);                 // already saved
+    CHECK(config_wifi_add(&c, "", "") != NULL);
+    CHECK(config_wifi_add(&c, "x", "short") != NULL);
+    CHECK_EQ(config_wifi_count(&c), 3);
+
+    CHECK(config_wifi_prefer(&c, 2));                               // work, home, phone
+    check_net(&c, 0, "work", "battery staple");
+    check_net(&c, 1, "home", "correct horse");
+    check_net(&c, 2, "phone", "");
+    CHECK(!config_wifi_prefer(&c, 3));
+
+    CHECK(config_wifi_remove(&c, 0));                               // home, phone
+    CHECK_EQ(config_wifi_count(&c), 2);
+    check_net(&c, 0, "home", "correct horse");
+    check_net(&c, 1, "phone", "");
+    CHECK_EQ(c.wifi_extra[1].ssid[0], 0);                           // nothing left behind
+    CHECK(!config_wifi_remove(&c, 2));
+    CHECK(config_wifi_remove(&c, 1));
+    CHECK(config_wifi_remove(&c, 0));
+    CHECK_EQ(config_wifi_count(&c), 0);
+    CHECK_EQ(c.wifi_ssid[0], 0);
+    CHECK_EQ(c.wifi_password[0], 0);
+}
+
+TEST(wifi_list_capacity) {
+    sos_config_t c;
+    config_defaults(&c);
+    char name[8];
+    for (unsigned i = 0; i < CONFIG_WIFI_NETS; i++) {
+        snprintf(name, sizeof(name), "net%u", i);
+        CHECK(config_wifi_add(&c, name, "") == NULL);
+    }
+    CHECK_EQ(config_wifi_count(&c), CONFIG_WIFI_NETS);
+    CHECK(config_wifi_add(&c, "one more", "") != NULL);
+    CHECK(config_wifi_prefer(&c, CONFIG_WIFI_NETS - 1));
+    check_net(&c, 0, "net4", "");
+    check_net(&c, CONFIG_WIFI_NETS - 1, "net3", "");
+}
+
+TEST(wifi_set_first_replaces_and_drops_a_duplicate) {
+    sos_config_t c;
+    config_defaults(&c);
+    CHECK(config_wifi_set_first(&c, "home", "") == NULL);           // as the only one
+    CHECK_EQ(config_wifi_count(&c), 1);
+    CHECK(config_wifi_add(&c, "phone", "") == NULL);
+    CHECK(config_wifi_add(&c, "work", "") == NULL);
+    CHECK(config_wifi_set_first(&c, "cafe", "espresso!") == NULL);  // home is replaced
+    CHECK_EQ(config_wifi_count(&c), 3);
+    check_net(&c, 0, "cafe", "espresso!");
+    CHECK(config_wifi_set_first(&c, "work", "new password") == NULL);   // moves up, once
+    CHECK_EQ(config_wifi_count(&c), 2);
+    check_net(&c, 0, "work", "new password");
+    check_net(&c, 1, "phone", "");
+    CHECK(config_wifi_set_first(&c, "x", "short") != NULL);
+    check_net(&c, 0, "work", "new password");
+}
+
+TEST(wifi_networks_round_trip_sealed_and_plain) {
+    sos_config_t a, b;
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK(config_wifi_add(&a, "Hotspot", "hotspot pass") == NULL);
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(!slot_contains(0, "hotspot pass") && !slot_contains(1, "hotspot pass"));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_EQ(config_wifi_count(&b), 2);
+    check_net(&b, 1, "Hotspot", "hotspot pass");
+    blank_flash();
+    CHECK(config_save(&store, &a));                         // the provisioning tool's save
+    CHECK(config_load(&store, &b, NULL));
+    check_net(&b, 1, "Hotspot", "hotspot pass");
+}
+
+// Records from before wifi_extra (1796 bytes) load with only the first network.
+TEST(records_from_before_wifi_extra_load_with_one_network) {
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "HomeNet");
+    CHECK(config_wifi_add(&a, "Hotspot", "") == NULL);
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + 1796, 0xff, CONFIG_SLOT_SIZE - 16 - 1796);
+    set_length(0, 1796);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(config_wifi_count(&b), 1);
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    CHECK_EQ(b.wifi_extra[0].ssid[0], 0);
+}
+
+// Contents a record can't have: an entry after an unused one, entries without a first
+// network, a password without a network, an invalid passphrase, an unterminated string.
+TEST(bad_wifi_extra_is_rejected) {
+    sos_config_t a, b;
+    blank_flash();
+    sample(&a, "HomeNet");
+    strcpy(a.wifi_extra[1].ssid, "gap");
+    CHECK(!config_save(&store, &a));
+    sample(&a, "");
+    strcpy(a.wifi_extra[0].ssid, "orphan");
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    strcpy(a.wifi_extra[0].password, "no network here");
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    strcpy(a.wifi_extra[0].ssid, "x");
+    strcpy(a.wifi_extra[0].password, "short");
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    memset(a.wifi_extra[0].ssid, 'n', sizeof(a.wifi_extra[0].ssid));
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    CHECK(config_wifi_add(&a, "fine", "") == NULL);
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+}
+
 TEST_MAIN(
     RUN(blank_flash_loads_defaults);
     RUN(save_and_load_round_trip);
@@ -1492,6 +1672,7 @@ TEST_MAIN(
     RUN(remove_keeps_order);
     RUN(key_list_capacity);
     RUN(crc32_known_value);
+    RUN(glitch_detector_setting);
     RUN(console_password_fields_are_appended);
     RUN(console_password_checks);
     RUN(verifier_round_trips_sealed_and_the_password_is_not_stored);
@@ -1524,4 +1705,11 @@ TEST_MAIN(
     RUN(secured_board_does_not_load_a_plain_record);
     RUN(secured_board_plain_record_cannot_hide_the_sealed_one);
     RUN(secured_board_no_fallback_to_plain_when_sealed_fails);
+    RUN(wifi_extra_is_appended);
+    RUN(wifi_list_add_remove_prefer);
+    RUN(wifi_list_capacity);
+    RUN(wifi_set_first_replaces_and_drops_a_duplicate);
+    RUN(wifi_networks_round_trip_sealed_and_plain);
+    RUN(records_from_before_wifi_extra_load_with_one_network);
+    RUN(bad_wifi_extra_is_rejected);
 )

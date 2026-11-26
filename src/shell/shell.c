@@ -16,14 +16,23 @@
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/hash.h>
+
 #include "chat/chat.h"
+#include "core/bootkey.h"
 #include "core/chipinfo.h"
 #include "core/config.h"
+#include "core/failflash.h"
 #include "core/fault.h"
+#include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/log.h"
+#include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
+#include "core/rootsource.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -35,6 +44,7 @@
 #include "lua/lua_host.h"
 #include "net/http.h"
 #include "net/wifi.h"
+#include "ssh/hostkey.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
 #include "time/timeconv.h"
@@ -66,14 +76,152 @@ static void cmd_version(shell_t *sh) {
     pico_get_unique_board_id_string(serial, sizeof(serial));
     chipinfo_format(chip, sizeof(chip), rp2350_chip_version(), rp2350_rom_version());
     shell_printf(sh, "SOS %s\n", sos_version);
+#ifdef SOS_BURN_IMAGE
+    shell_printf(sh, "THIS IS THE BURN IMAGE: it can write OTP (`rootsecret burn`). Not for "
+                     "everyday use.\n");
+#endif
     shell_printf(sh, "board: serial %s\n", serial);
     shell_printf(sh, "chip: %s\n", chip);
+    otpread_status_t otp;
+    otpread_status(&otp);
+    shell_printf(sh, "secure boot: %s\n", otp.secure_boot
+                     ? "on (only firmware signed with a boot key in OTP starts)"
+                     : "off (open board: any firmware starts)");
+    shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
+                     : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
+    shell_printf(sh, "root secret: %s\n", rootsource() == ROOTSRC_OTP ? "in OTP"
+                     : rootsource() == ROOTSRC_FLASH ? "in flash (open board)" : "none");
+    switch (sealedonly_state()) {
+    case SEALEDONLY_NO:
+        shell_printf(sh, "sealed-only: no (unsealed configuration from flash is accepted, as "
+                         "`ninja provision` writes it)\n");
+        break;
+    case SEALEDONLY_YES:
+        shell_printf(sh, "sealed-only: yes%s (unsealed records in flash are refused; set up on "
+                         "the console only)\n",
+                     sealedonly_forced() ? ", forced by this test build, not by the board" : "");
+        break;
+    case SEALEDONLY_YES_UNREADABLE:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP can't be read\n");
+        break;
+    case SEALEDONLY_YES_DAMAGED:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP is neither blank nor "
+                         "whole (rows 0x%06lx 0x%06lx 0x%06lx)\n",
+                     (unsigned long)sealedonly_rows()[0], (unsigned long)sealedonly_rows()[1],
+                     (unsigned long)sealedonly_rows()[2]);
+        break;
+    }
+    // Secure boot and debug are what the chip latched at reset. Its OTP rows should say the same.
+    if (!otp.rows_readable)
+        shell_printf(sh, "(the OTP rows behind those flags are unreadable, so they couldn't be "
+                         "cross-checked)\n");
+    else if (!otp.rows_agree)
+        shell_printf(sh, "WARNING: the OTP rows say otherwise (rows 0x%02lx, chip 0x%02lx): "
+                         "written since the last reset, or damaged\n",
+                     (unsigned long)(otp.rows & 0x7f), (unsigned long)(otp.latched & 0x7f));
+}
+
+// --- boot key --------------------------------------------------------------------------------
+
+static void print_hash(shell_t *sh, const uint8_t *hash) {
+    char hex[2 * BOOTKEY_HASH_LEN + 1];
+    for (unsigned i = 0; i < BOOTKEY_HASH_LEN; i++)
+        snprintf(hex + 2 * i, 3, "%02x", hash[i]);
+    shell_printf(sh, "%s", hex);
+}
+
+// `bootkey`: would this firmware still start with secure boot on? It finds the public key the
+// running image is signed with, hashes it as the boot ROM does, and compares that with the boot
+// key slots in OTP. Reads only. docs/securing-a-board.md runs it before the bit that turns
+// secure boot on is written, because a wrong hash in OTP then means a board that runs nothing.
+static void cmd_bootkey(shell_t *sh) {
+    extern char __flash_binary_start, __flash_binary_end;
+    // The signature's block is added after linking, just past what the linker calls the end.
+    const uint8_t *image = (const uint8_t *)&__flash_binary_start;
+    size_t len = (size_t)(&__flash_binary_end - &__flash_binary_start) + 4096;
+    size_t flash_left = XIP_BASE + PICO_FLASH_SIZE_BYTES - (uintptr_t)image;
+    if (len > flash_left)
+        len = flash_left;
+
+    const uint8_t *pubkey;
+    bootkey_image_t kind = bootkey_image_pubkey(image, len, &pubkey);
+    uint8_t hash[BOOTKEY_HASH_LEN];
+    bool signed_image = kind == BOOTKEY_IMAGE_SIGNED &&
+                        wc_Sha256Hash(pubkey, BOOTKEY_PUBKEY_LEN, hash) == 0;
+    if (signed_image) {
+        shell_printf(sh, "this firmware: signed; its key's hash is ");
+        print_hash(sh, hash);
+        shell_printf(sh, "\n");
+    } else if (kind == BOOTKEY_IMAGE_UNSIGNED) {
+        shell_printf(sh, "this firmware: not signed\n");
+    } else if (kind == BOOTKEY_IMAGE_SIGNED) {
+        shell_printf(sh, "this firmware: signed, but hashing its key failed\n");
+    } else {
+        shell_printf(sh, "this firmware: its image description wasn't found in flash, so "
+                         "nothing can be said about its signature\n");
+    }
+
+    bootkey_otp_t otp;
+    otpread_status_t st;
+    otpread_status(&st);
+    shell_printf(sh, "secure boot: %s\n", st.secure_boot ? "on" : "off");
+    if (!otpread_bootkeys(&otp)) {
+        shell_printf(sh, "boot key slots in OTP: unreadable\n"
+                         "NO VERDICT: the boot keys can't be read from here\n");
+        return;
+    }
+    bool any = false;
+    for (unsigned s = 0; s < BOOTKEY_SLOTS; s++) {
+        bool blank = bootkey_slot_blank(&otp, s);
+        bool marked_valid = otp.valid >> s & 1u, marked_invalid = otp.invalid >> s & 1u;
+        if (blank && !marked_valid && !marked_invalid)
+            continue;
+        any = true;
+        shell_printf(sh, "boot key slot %u: ", s);
+        if (blank)
+            shell_printf(sh, "(blank)");
+        else
+            print_hash(sh, otp.slot[s]);
+        shell_printf(sh, "  %s\n", marked_invalid ? "marked invalid: never accepted"
+                                   : marked_valid ? "valid" : "not marked valid");
+    }
+    if (!any)
+        shell_printf(sh, "boot key slots in OTP: all four blank\n");
+
+    if (!signed_image) {
+        if (kind == BOOTKEY_IMAGE_UNSIGNED)
+            shell_printf(sh, "NO MATCH: %s\n", st.secure_boot
+                             ? "(unexpected: secure boot is on and this firmware is running)"
+                             : "with secure boot on, this firmware would not start");
+        else
+            shell_printf(sh, "NO VERDICT: this firmware's key couldn't be determined\n");
+        return;
+    }
+    int slot;
+    switch (bootkey_compare(&otp, hash, &slot)) {
+    case BOOTKEY_MATCH:
+        shell_printf(sh, "MATCH: slot %d holds the hash of this firmware's key and is valid. "
+                         "This compares keys only:\nthe signature itself isn't checked here "
+                         "(`picotool info -a` on the image says `signature: verified`)\n", slot);
+        break;
+    case BOOTKEY_MATCH_NOT_VALID:
+        shell_printf(sh, "NOT YET: slot %d holds this firmware's key but isn't marked valid. "
+                         "With secure boot on, this firmware would not start\n", slot);
+        break;
+    case BOOTKEY_MATCH_INVALIDATED:
+        shell_printf(sh, "NO MATCH: slot %d holds this firmware's key but is marked invalid. "
+                         "With secure boot on, this firmware would not start\n", slot);
+        break;
+    default:
+        shell_printf(sh, "NO MATCH: no boot key slot holds this firmware's key. With secure boot "
+                         "on, this firmware would not start\n");
+    }
 }
 
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
-    shell_printf(sh, "version           firmware commit, board serial and chip revision\n");
+    shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "time cal [ppm]    RTC calibration: how fast the RTC runs\n");
@@ -89,9 +237,11 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "dmesg             system log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
+    shell_printf(sh, "glitch            glitch detector setting, state and resets\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
+    shell_printf(sh, "bootkey           would this firmware start with secure boot on? (its key vs OTP)\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
-    shell_printf(sh, "wifi              Wi-Fi network\n");
+    shell_printf(sh, "wifi              Wi-Fi networks and state\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
@@ -104,10 +254,12 @@ static void cmd_help(shell_t *sh) {
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
+        shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
-        shell_printf(sh, "wifi set|connect  change the network / reconnect\n");
+        shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
+        shell_printf(sh, "wifi add|remove <n>|prefer <n>  more networks: the first in reach is used\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi country <XX>|worldwide  radio rules to follow, e.g. US (after reboot)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
@@ -134,7 +286,8 @@ static void cmd_uptime(shell_t *sh) {
     uint64_t s = to_us_since_boot(get_absolute_time()) / 1000000;
     shell_printf(sh, "up %llud %02llu:%02llu:%02llu%s\n",
                  s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60,
-                 fault_last() ? "" : wdog_caused_reset() ? " (last reset: watchdog)" : "");
+                 fault_last() ? "" : glitchdet_caused_reset() ? " (last reset: glitch detector)"
+                                    : wdog_caused_reset() ? " (last reset: watchdog)" : "");
     if (fault_last())
         shell_printf(sh, "last reset: %s\n", fault_last());
 }
@@ -297,8 +450,18 @@ static char pending_ssid[CONFIG_SSID_MAX + 1];
 // saved (never the password itself); the board has no login password, SSH is keys only.
 static void wifi_show(shell_t *sh) {
     const sos_config_t *c = settings();
-    shell_printf(sh, "wifi network:  %s\n", c->wifi_ssid[0] ? c->wifi_ssid : "(not configured)");
-    shell_printf(sh, "wifi password: %s\n", c->wifi_password[0] ? "set" : "none (open network)");
+    unsigned n = config_wifi_count(c);
+    const char *now = wifi_ssid();
+    if (!n)
+        shell_printf(sh, "wifi network:  (not configured)\n");
+    for (unsigned i = 0; i < n; i++) {
+        config_wifi_net_t net;
+        config_wifi_get(c, i, &net);
+        shell_printf(sh, "wifi network %u: %s, %s%s\n", i + 1, net.ssid,
+                     net.password[0] ? "password set" : "open network",
+                     now && !strcmp(now, net.ssid) ? " (connected)" : "");
+        memset(&net, 0, sizeof(net));
+    }
     shell_printf(sh, "wifi state:    %s\n", wifi_state());
     shell_printf(sh, "wifi power:    saving %s\n", c->wifi_powersave ? "on" : "off");
     shell_printf(sh, "wifi country:  %s\n", c->wifi_country[0] ? c->wifi_country : "worldwide");
@@ -369,35 +532,57 @@ static void wifi_stats(shell_t *sh, bool chip) {
     shell_printf(sh, "\n");
 }
 
+// `wifi set` (arg NULL) replaces the first network; `wifi add` (arg non-NULL) adds one after
+// the others.
 static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
     if (!answer)
         return;
-    const char *err = config_check_password(answer);
+    sos_config_t *c = settings();
+    bool add = arg != NULL;
+    const char *err = add ? config_wifi_add(c, pending_ssid, answer)
+                          : config_wifi_set_first(c, pending_ssid, answer);
+    memset(answer, 0, strlen(answer));
     if (err) {
         shell_printf(sh, "not changed: %s\n", err);
         return;
     }
-    sos_config_t *c = settings();
-    strcpy(c->wifi_ssid, pending_ssid);
-    strcpy(c->wifi_password, answer);
-    memset(answer, 0, strlen(answer));
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", c->wifi_ssid);
-    wifi_reconnect();
+    if (add) {
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' added", pending_ssid);
+        if (!wifi_up())
+            wifi_reconnect();       // it may be the one in reach
+    } else {
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", pending_ssid);
+        wifi_reconnect();
+    }
 }
 
 static void on_wifi_ssid(shell_t *sh, char *answer, void *arg) {
-    (void)arg;
     if (!answer)
         return;
     const char *err = config_check_ssid(answer);
+    if (!err && arg && config_wifi_find(settings(), answer) >= 0)
+        err = "that network is already saved (remove it first to change its password)";
+    if (!err && arg && config_wifi_count(settings()) == CONFIG_WIFI_NETS)
+        err = "the network list is full (5 networks)";
     if (err) {
         shell_printf(sh, "not changed: %s\n", err);
         return;
     }
     strcpy(pending_ssid, answer);
-    shell_ask(sh, "Password (empty for an open network): ", true, on_wifi_password, NULL);
+    shell_ask(sh, "Password (empty for an open network): ", true, on_wifi_password, arg);
+}
+
+// `wifi remove <n>` and `wifi prefer <n>`: n as `wifi` numbers them. Returns the index, or -1
+// after saying why not.
+static int wifi_number(shell_t *sh, const char *arg) {
+    char *end;
+    long n = strtol(arg, &end, 10);
+    if (*arg == '\0' || *end != '\0' || n < 1 || n > (long)config_wifi_count(settings())) {
+        shell_printf(sh, "no network %s ('wifi' lists them)\n", arg);
+        return -1;
+    }
+    return (int)n - 1;
 }
 
 static void cmd_wifi(shell_t *sh, char *args) {
@@ -406,6 +591,34 @@ static void cmd_wifi(shell_t *sh, char *args) {
     } else if (!strcmp(args, "set")) {
         if (require_admin(sh))
             shell_ask(sh, "SSID: ", false, on_wifi_ssid, NULL);
+    } else if (!strcmp(args, "add")) {
+        if (require_admin(sh))
+            shell_ask(sh, "SSID: ", false, on_wifi_ssid, (void *)1);
+    } else if (!strncmp(args, "remove ", 7)) {
+        int i;
+        if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
+            return;
+        config_wifi_net_t net;
+        config_wifi_get(settings(), (unsigned)i, &net);
+        const char *now = wifi_ssid();
+        bool was_connected = now && !strcmp(now, net.ssid);
+        config_wifi_remove(settings(), (unsigned)i);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' removed", net.ssid);
+        memset(&net, 0, sizeof(net));
+        if (!config_wifi_count(settings()))
+            shell_printf(sh, "warning: no Wi-Fi network left\n");
+        if (was_connected)
+            wifi_reconnect();
+    } else if (!strncmp(args, "prefer ", 7)) {
+        int i;
+        if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
+            return;
+        config_wifi_prefer(settings(), (unsigned)i);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' preferred", settings()->wifi_ssid);
+        if (wifi_up() && strcmp(wifi_ssid(), settings()->wifi_ssid))
+            shell_printf(sh, "takes effect on the next Wi-Fi connect ('wifi connect')\n");
     } else if (!strcmp(args, "connect")) {
         if (require_admin(sh))
             wifi_reconnect();
@@ -451,7 +664,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_apply_power();
         log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
-        shell_printf(sh, "usage: wifi [set|connect|stats [chip]|power [on|off]|country <XX>|worldwide|keepalive on|off|\n            iovar <name> [<value>]]\n");
+        shell_printf(sh, "usage: wifi [set|add|remove <n>|prefer <n>|connect|stats [chip]|power [on|off]|\n            country <XX>|worldwide|keepalive on|off|iovar <name> [<value>]]\n");
     }
 }
 
@@ -485,8 +698,12 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     }
     bool erased = settings_reset();
     // The live configuration is gone either way, the owner secret with it: an encrypted card
-    // doesn't stay open under it.
+    // doesn't stay open under it, and the SSH host key was that owner's. SSH stops now (it
+    // would otherwise go on answering with the old key until a reboot) and starts again, with
+    // a new host key, once the board is set up.
     sdcard_owner_gone();
+    sshd_stop();
+    hostkey_owner_gone();
     if (erased)
         shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run "
                          "'setup'\n");
@@ -497,6 +714,108 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     wifi_reconnect();
+}
+
+// --- glitch detector -----------------------------------------------------------------------------
+
+static void glitch_status(shell_t *sh) {
+    unsigned setting = config_glitch_mode(settings()->glitch_detector);
+    bool is_default = settings()->glitch_detector == CONFIG_GLITCH_DETECTOR_DEFAULT;
+    int armed = glitchdet_armed_sensitivity();
+    if (setting == 0)
+        shell_printf(sh, "glitch detector: off\n");
+    else if (setting >= 5) {
+        shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
+                         "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
+        if (glitchdet_watch_triggers())
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up. Armed, "
+                             "it would have reset the board\n",
+                         (unsigned)glitchdet_watch_triggers(),
+                         (unsigned long)glitchdet_watch_first_s());
+        else
+            shell_printf(sh, "no trigger since boot\n");
+    } else
+        shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest)%s, %s\n",
+                     setting - 1, is_default ? ", the default" : "",
+                     armed >= 0 ? "armed" : glitchdet_guard_tripped()
+                         ? "NOT armed at this boot: it reset the board several times in a row "
+                           "right after starting"
+                         : "not armed");
+    shell_printf(sh, "set up by software after boot: it shows whether the detector resets a "
+                     "healthy board; it is not protection\n");
+    shell_printf(sh, "detector resets since power-on: %lu\n", (unsigned long)glitchdet_resets());
+    if (glitchdet_caused_reset())
+        shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
+                     (unsigned)glitchdet_last_triggers(),
+                     (unsigned long)glitchdet_last_uptime_s());
+}
+
+// `glitch`: the detector's setting, state and resets. Console only: `glitch on <0-3>` arms it now
+// and at every boot; `glitch off` disarms it; `glitch default` goes back to the default (armed at
+// the highest sensitivity); `glitch trig` makes a detector fire, to see a detector reset reported.
+static void cmd_glitch(shell_t *sh, char *args) {
+    char *sub = args ? strtok(args, " ") : NULL;
+    char *arg = sub ? strtok(NULL, " ") : NULL;
+    if (!sub) {
+        glitch_status(sh);
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    if (!strcmp(sub, "off") && !arg) {
+        settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_OFF;
+        glitchdet_apply(0);
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector off");
+        shell_printf(sh, "glitch detector off, now and at boot\n");
+    } else if (!strcmp(sub, "default") && !arg) {
+        settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector back to the default");
+        if (glitchdet_apply(CONFIG_GLITCH_DEFAULT_MODE))
+            shell_printf(sh, "glitch detector back to the default: armed at sensitivity %u, now "
+                             "and at boot\n", (unsigned)CONFIG_GLITCH_DEFAULT_MODE - 1);
+        else
+            shell_printf(sh, "saved, but arming it didn't take (see dmesg)\n");
+    } else if (!strcmp(sub, "on") && arg && arg[0] >= '0' && arg[0] <= '3' && !arg[1]) {
+        unsigned setting = (unsigned)(arg[0] - '0') + 1;
+        // Saved first: if arming resets the board at once, the guard at boot deals with it.
+        settings()->glitch_detector = (uint8_t)setting;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector on, sensitivity %c", arg[0]);
+        if (glitchdet_apply(setting))
+            shell_printf(sh, "glitch detector armed at sensitivity %c, now and at boot.\n"
+                             "If it resets the board, `glitch off` turns it off; after %u resets "
+                             "in a row right\nafter starting, a boot leaves it unarmed so that "
+                             "you can.\n", arg[0], GLITCHDET_GUARD_RESETS);
+        else
+            shell_printf(sh, "saved, but arming it didn't take (see dmesg)\n");
+    } else if (!strcmp(sub, "watch") && arg && arg[0] >= '0' && arg[0] <= '3' && !arg[1]) {
+        unsigned setting = (unsigned)(arg[0] - '0') + 5;
+        settings()->glitch_detector = (uint8_t)setting;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector watching, sensitivity %c", arg[0]);
+        if (glitchdet_apply(setting))
+            shell_printf(sh, "watching at sensitivity %c, now and at boot: a trigger is logged "
+                             "and shown by `glitch`; the board isn't reset\n", arg[0]);
+        else
+            shell_printf(sh, "saved, but setting the sensitivity didn't take (see dmesg)\n");
+    } else if (!strcmp(sub, "trig") && !arg) {
+        if (glitchdet_armed_sensitivity() < 0 && glitchdet_watching_sensitivity() < 0) {
+            shell_printf(sh, "the detector is off, so nothing would be seen\n");
+            return;
+        }
+        if (glitchdet_armed_sensitivity() >= 0) {
+            shell_printf(sh, "simulating a detector trigger: the board resets now\n");
+            sleep_ms(50);
+        } else {
+            shell_printf(sh, "simulating a detector trigger: it should be logged within a "
+                             "second\n");
+        }
+        glitchdet_simulate();
+    } else {
+        shell_printf(sh, "usage: glitch [watch <0-3> | on <0-3> | off | default | trig]\n");
+    }
 }
 
 // --- root secret ---------------------------------------------------------------------------------
@@ -511,11 +830,206 @@ static void on_rootsecret_forget(shell_t *sh, char *answer, void *arg) {
                                         : "clearing the record failed (see dmesg)\n");
 }
 
+#ifdef SOS_BURN_IMAGE
+// --- `rootsecret burn` (the burn image only) ---------------------------------------------------------
+//
+// Writes this board's root secret into OTP, for good (core/rootburn.h). On the console only,
+// and only after: the board's serial typed in, a word typed in, and the BOOTSEL button held.
+// `rootsecret burn plan` says what it would do and writes nothing.
+
+#include "core/rootburn_board.h"
+
+#define BURN_WAIT_MS 30000u             // how long it waits for the button
+#define BURN_HOLD_MS 1000u              // how long the button must be held before it starts
+
+static bool burn_rehearse;
+static bool burn_stopped;               // a run ended in a way that must be looked into first
+static uint64_t burn_deadline_ms, burn_held_since_ms;
+
+static void burn_report(shell_t *sh, const rootburn_report_t *rep) {
+    shell_printf(sh, "\n%s.\n", rootburn_result_text(rep->result));
+    if (rep->nothing_landed)
+        shell_printf(sh, "Nothing landed in OTP: page %u still reads blank and was left "
+                         "unlocked.\n", rep->page);
+    else if (rep->wrote)
+        shell_printf(sh, "OTP page %u: %s\n", rep->page,
+                     rep->page_locked ? "locked against the bootloader" : "NOT LOCKED");
+    if (rep->result == ROOTBURN_WRITE && rep->row)
+        shell_printf(sh, "It stopped at row 0x%03x.\n", rep->row);
+    log_msg(rootburn_must_stop(rep->result) ? SOS_LOG_ERR : SOS_LOG_NOTICE,
+            "rootsecret burn: %s (OTP page %u, row 0x%03x, wrote %s, page %s%s)",
+            rootburn_result_text(rep->result), rep->page, rep->row, rep->wrote ? "yes" : "no",
+            rep->page_locked ? "locked" : "not locked",
+            rep->nothing_landed ? ", nothing landed" : "");
+    if (rootburn_must_stop(rep->result)) {
+        burn_stopped = true;
+        shell_printf(sh, "\nSTOP HERE. Do not run `rootsecret burn` again, on this board or "
+                         "another, until the cause is\nunderstood: a fault in how OTP is "
+                         "written would spend the remaining pages the same way.\nThis image "
+                         "refuses further runs until the board is restarted. `dmesg` has the "
+                         "details.\n");
+    } else if (rep->result == ROOTBURN_OK) {
+        shell_printf(sh, "Now flash the everyday firmware; `rootsecret` there must report the "
+                         "secret in OTP page %u.\n", rep->page);
+    } else if (rep->result == ROOTBURN_REHEARSED) {
+        shell_printf(sh, "That is how a rehearsal should end. Run `rootsecret burn` now, in "
+                         "this sitting, to write the\nreal secret into the next page.\n");
+    }
+}
+
+static bool burn_job(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    uint64_t now = to_ms_since_boot(get_absolute_time());
+    if (cancel) {
+        shell_printf(sh, "\ncancelled: nothing was written\n");
+        return false;
+    }
+    if (!rootburn_button()) {
+        burn_held_since_ms = 0;
+        if (now >= burn_deadline_ms) {
+            shell_printf(sh, "\nthe button wasn't held in time: nothing was written\n");
+            return false;
+        }
+        return true;
+    }
+    if (!burn_held_since_ms)
+        burn_held_since_ms = now;
+    if (now - burn_held_since_ms < BURN_HOLD_MS)
+        return true;
+    // Nothing may reset the board in the middle. The watchdog is fed between writes
+    // (rootburn_board.c). The glitch detector, armed by software, is switched off for the
+    // length of the burn: whether programming OTP disturbs the supply enough to trip it isn't
+    // known, and a detector reset would spend the page. It protects nothing (core/glitchdet.h).
+    shell_printf(sh, "\nwriting OTP: keep the button held and don't unplug the board...\n"
+                     "(the glitch detector is off until this is done)\n");
+    glitchdet_apply(0);
+    rootburn_report_t rep;
+    uint64_t started_us = time_us_64();
+    rootburn_board_run(burn_rehearse, &rep);
+    uint32_t took_ms = (uint32_t)((time_us_64() - started_us) / 1000);
+    glitchdet_apply(config_glitch_mode(settings()->glitch_detector));
+    burn_report(sh, &rep);
+    // How long OTP programming takes on this chip isn't known until it has been done once:
+    // worth writing down (docs/securing-a-board.md).
+    shell_printf(sh, "It took %lu ms.\n", (unsigned long)took_ms);
+    log_msg(SOS_LOG_NOTICE, "rootsecret burn: took %lu ms", (unsigned long)took_ms);
+    shell_printf(sh, "You can let go of the button.\n");
+    return false;
+}
+
+static void on_burn_word(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer || strcmp(answer, burn_rehearse ? "REHEARSE" : "BURN")) {
+        shell_printf(sh, "not confirmed: nothing was written\n");
+        return;
+    }
+    burn_deadline_ms = to_ms_since_boot(get_absolute_time()) + BURN_WAIT_MS;
+    burn_held_since_ms = 0;
+    shell_printf(sh, "Hold the BOOTSEL button now, and keep it held until told to let go "
+                     "(%u s to start; Ctrl-C cancels).\nIf the board restarts while the button "
+                     "is held it comes up in the USB bootloader, not broken:\n`picotool reboot` "
+                     "brings it back.\n", BURN_WAIT_MS / 1000u);
+    shell_run_job(sh, burn_job, NULL);
+}
+
+static void on_burn_serial(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    char serial[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+    pico_get_unique_board_id_string(serial, sizeof(serial));
+    if (!answer || strcasecmp(answer, serial)) {
+        shell_printf(sh, "that isn't this board's serial: nothing was written\n");
+        return;
+    }
+    shell_ask(sh, burn_rehearse ? "Type REHEARSE to spend one OTP page on purpose: "
+                                : "Type BURN to write to this board's OTP: ",
+              false, on_burn_word, NULL);
+}
+
+static void cmd_rootsecret_burn(shell_t *sh, const char *what) {
+    while (*what == ' ')
+        what++;
+    bool plan = !strcmp(what, "plan");
+    if (*what && !plan && strcmp(what, "rehearse")) {
+        shell_printf(sh, "usage: rootsecret burn [plan | rehearse]\n");
+        return;
+    }
+    rootburn_report_t rep;
+    unsigned to_lock;
+    rootburn_plan(&rep, &to_lock);
+    if (rep.result == ROOTBURN_OK) {
+        shell_printf(sh, "It would use OTP page %u (rows 0x%03x to 0x%03x)", rep.page,
+                     rep.page * 64, rep.page * 64 + 63);
+        if (to_lock)
+            shell_printf(sh, ", after locking %u earlier, spent page%s", to_lock,
+                         to_lock == 1 ? "" : "s");
+        shell_printf(sh, ".\n");
+    } else if (rep.result == ROOTBURN_RELOCKED) {
+        shell_printf(sh, "This board has its root secret in OTP page %u. It would write no "
+                         "secret; it would lock %u page%s\nthat the bootloader can still "
+                         "write.\n", rep.page, to_lock, to_lock == 1 ? "" : "s");
+    } else {
+        shell_printf(sh, "%s.\n", rootburn_result_text(rep.result));
+        return;
+    }
+    if (plan) {
+        shell_printf(sh, "BOOTSEL button: %s. Nothing was written.%s\n",
+                     rootburn_button() ? "held" : "not held",
+                     burn_stopped ? " (This image refuses further runs until a restart: an "
+                                    "earlier run failed.)" : "");
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    if (burn_stopped) {
+        shell_printf(sh, "An earlier run on this board ended in an error. Nothing more is "
+                         "written until that is understood\nand the board has been "
+                         "restarted (`dmesg` has what happened).\n");
+        return;
+    }
+    burn_rehearse = !strcmp(what, "rehearse");
+    if (burn_rehearse && rep.result == ROOTBURN_RELOCKED) {
+        shell_printf(sh, "This board already has its secret: there is nothing to rehearse.\n");
+        return;
+    }
+    shell_printf(sh, "\nTHIS WRITES ONE-TIME-PROGRAMMABLE MEMORY. IT CANNOT BE UNDONE.\n");
+    if (rep.result == ROOTBURN_RELOCKED)
+        shell_printf(sh, "It locks the pages named above, for good. No secret is written.\n");
+    else if (burn_rehearse)
+        shell_printf(sh, "Rehearsal: it writes 32 random bytes into that page and stops before "
+                         "they become a root\nsecret. The page is then spent for good, and "
+                         "locked. This board has %u such pages.\n", (unsigned)ROOTOTP_PAGES);
+    else
+        shell_printf(sh, "It writes a new root secret into that page and locks it. Everything "
+                         "this board has\nsealed so far (configuration, host key, cards) is "
+                         "under its old root secret and will\nnot open afterwards. The secret "
+                         "is made on the board and never shown.\n");
+    shell_ask(sh, "Type this board's serial number to go on: ", false, on_burn_serial, NULL);
+}
+#endif // SOS_BURN_IMAGE
+
 // `rootsecret`: the state of the secret every stored key is derived from (core/keyprov.h);
 // `rootsecret forget` (console): clear a record that can't be used, the explicit way out. A
 // usable secret can't be cleared here: that would silently lock everything sealed with it.
 static void cmd_rootsecret(shell_t *sh, const char *args) {
     int state = rootflash_state();
+#ifdef SOS_BURN_IMAGE
+    if (args && !strncmp(args, "burn", 4) && (args[4] == '\0' || args[4] == ' ')) {
+        cmd_rootsecret_burn(sh, args + 4);
+        return;
+    }
+#endif
+    if (rootsource() != ROOTSRC_FLASH) {
+        // In OTP, or none at all: there is no flash record in play, and nothing to forget.
+        shell_printf(sh, "root secret: %s\n", rootsource_describe());
+        if (rootsource() == ROOTSRC_OTP)
+            shell_printf(sh, "its OTP page is %s\n", rootsource_otp_locked()
+                             ? "locked until the next reset"
+                             : "still readable by the firmware (boot hasn't finished)");
+        if (args && *args)
+            shell_printf(sh, "(`rootsecret forget` is for a flash record; this board doesn't "
+                             "use one)\n");
+        return;
+    }
     if (!args || !*args) {
         if (!rootflash_usable())
             shell_printf(sh, "root secret: none (the firmware image overlaps its flash sector)\n");
@@ -540,6 +1054,11 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
     }
     if (!sh->io->admin) {
         shell_printf(sh, "the root secret can only be cleared on the serial console\n");
+        return;
+    }
+    if (sealedonly()) {
+        shell_printf(sh, "this is a sealed-only board: its root secret record isn't cleared "
+                         "from here\n");
         return;
     }
     if (state != ROOTSECRET_INVALID || !rootflash_usable()) {
@@ -601,11 +1120,16 @@ static int console_check_step(void) {
 // With no usable root secret nothing sealed can be read, the password included. The console
 // must not be open because of that: it stays locked, with only the commands that deal with it.
 static const char *console_no_keys(void) {
-    return rootflash_state() == ROOTSECRET_OK
-               ? NULL
-               : "this board's root secret can't be used, so nothing it stores can be read.\n"
+    if (rootsource_ok())
+        return NULL;
+    // Only a flash record can be cleared and made again from here. A secret that should be in
+    // OTP and isn't usable is not something a command puts right.
+    return rootsource() == ROOTSRC_FLASH
+               ? "this board's root secret can't be used, so nothing it stores can be read.\n"
                  "`rootsecret` says more, `rootsecret forget` starts over (what was stored is "
-                 "lost), `reboot` restarts.";
+                 "lost), `reboot` restarts."
+               : "this board has no root secret it can use, so nothing it stores can be read.\n"
+                 "`rootsecret` says why, `reboot` restarts.";
 }
 
 static bool console_rescue_allowed(const char *cmd) {
@@ -633,7 +1157,7 @@ static void console_first_use(shell_t *sh) {
 // Not printed on the console while it's locked (the log is held); `dmesg` in an SSH session and
 // the console after the next login show it.
 static void console_failed(unsigned failures) {
-    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since boot)", failures);
+    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since the last right one)", failures);
 }
 
 static void console_auto_locked(const char *why) {
@@ -644,12 +1168,19 @@ static const login_hooks_t console_login = {
     console_now_ms, settings_console_has_password, settings_console_check_begin,
     console_check_step, settings_console_check_abort, console_no_keys, console_rescue_allowed,
     console_opened, console_first_use, console_failed, console_auto_locked,
+    failflash_count, failflash_attempt, failflash_clear,    // the count is kept across reboots
 };
 
 void shell_console_start(shell_t *console) {
     if (!console_no_keys() && !settings_console_has_password())
         log_msg(SOS_LOG_WARNING, "console: no console password is set: the console is open to "
                                  "anyone at the port (`passwd` sets one)");
+    // Wrong answers from before this boot still count: say so, since the first check will wait.
+    unsigned kept = failflash_count();
+    if (kept && settings_console_has_password())
+        log_msg(SOS_LOG_WARNING, "console: %u wrong password%s since the last right one, "
+                                 "counted across reboots; the next check waits for it",
+                kept, kept == 1 ? "" : "s");
     login_start(console, &console_login);
 }
 
@@ -664,10 +1195,8 @@ static struct {
 static void setup_finish(shell_t *sh) {
     sos_config_t *c = settings();
     bool wifi_changed = setup_state.wifi_changed;
-    if (wifi_changed) {
-        strcpy(c->wifi_ssid, setup_state.ssid);
-        strcpy(c->wifi_password, setup_state.password);
-    }
+    if (wifi_changed)       // checked as it was typed
+        config_wifi_set_first(c, setup_state.ssid, setup_state.password);
     memset(&setup_state, 0, sizeof(setup_state));
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: setup completed");
@@ -780,6 +1309,10 @@ static void on_new_password_again(shell_t *sh, char *answer, void *arg) {
     }
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: console password set");
+    // Whoever set it had the console open. Wrong answers counted against an earlier password
+    // (or with none set) must not delay the first login with this one: the count kept in flash
+    // and the one login.c took from it at boot both start again.
+    login_password_set();
     shell_printf(sh, "console password set; the console asks for it from now on (`logout` locks "
                      "it)\n");
     if (then)
@@ -1088,6 +1621,10 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_log(sh, args);
     else if (!strcmp(cmd, "config"))
         cmd_config(sh, args);
+    else if (!strcmp(cmd, "glitch"))
+        cmd_glitch(sh, args);
+    else if (!strcmp(cmd, "bootkey"))
+        cmd_bootkey(sh);
     else if (!strcmp(cmd, "rootsecret"))
         cmd_rootsecret(sh, args);
     else if (!strcmp(cmd, "key"))

@@ -8,6 +8,10 @@
 # Wi-Fi network to join (2.4 GHz, WPA2 personal). No password line: an open network.
 wifi_ssid = my-network
 wifi_password = my-password
+# More networks, up to 5 in all: each wifi_ssid starts one, and the wifi_password after it is
+# its password. The board joins the first one in reach, in this order.
+# wifi_ssid = my-phone
+# wifi_password = another-password
 
 # Hostname sent with DHCP requests (default: sos).
 hostname = sos
@@ -28,4 +32,7 @@ ssh_key = ssh-ed25519 AAAA... user@host
 # wifi_powersave = on            (default off)
 # nts_server = time.example.org  (default: the firmware's SOS_NTS_SERVER)
 # nts_sync_hours = 24            (periodic clock sync; default 0 = off)
+# glitch_detector = watch 3      (glitch detector: "off"; a sensitivity 0-3, armed: a trigger resets
+#                                 the board; or "watch" and a sensitivity: a trigger is only
+#                                 logged. Default: armed at 3, the highest)
 # rtc_cal_ppm = 92               (how fast the RTC runs, in ppm; negative: slow; default 0)

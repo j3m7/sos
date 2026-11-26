@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Wi-Fi station connection, driven from the main loop without blocking: connects with the
-// network in the live configuration, retries after failures and reconnects if the link drops.
+// Wi-Fi station connection, driven from the main loop without blocking: connects to one of the
+// networks saved in the live configuration (the first in sight, in the order saved), retries
+// after failures and reconnects if the link drops.
 // Power saving follows the configuration too (off by default).
 //
 // While connected it also announces its address once a minute (a gratuitous ARP). A device that
@@ -25,7 +26,9 @@ void wifi_start(void);
 // Advance the connection: call from the main loop. Logs state changes.
 void wifi_poll(void);
 
-// Drop the current connection and connect again with the (possibly changed) configuration.
+// Drop the current connection and connect again with the (possibly changed) configuration,
+// starting from the first saved network. While connected, a network preferred over the one in
+// use that comes into reach isn't noticed: only a new attempt (this, or a dropped link) looks.
 void wifi_reconnect(void);
 
 // Apply the power-saving setting (settings()->wifi_powersave) to the radio: takes effect at once.
@@ -39,7 +42,6 @@ bool wifi_keepalive(void);
 // ARP packets received and sent since boot (lwIP's counters; they wrap at 65536).
 void wifi_arp_counts(unsigned *received, unsigned *sent);
 
-// True while associated and holding an IP address.
 // Radio state while connected, from the Wi-Fi chip. False if a value couldn't be read.
 typedef struct {
     int32_t rssi;           // dBm
@@ -61,7 +63,11 @@ unsigned wifi_chip_counters(uint32_t *out, unsigned max);
 int wifi_iovar_get(const char *name, uint32_t *value);
 int wifi_iovar_set(const char *name, uint32_t value);
 
+// True while associated and holding an IP address.
 bool wifi_up(void);
+
+// The SSID of the network connected to, or NULL while not connected.
+const char *wifi_ssid(void);
 
 // Short description of the state, e.g. "connected", "connecting", "not configured".
 const char *wifi_state(void);

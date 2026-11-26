@@ -23,7 +23,19 @@ pico_sdk_init()
 # local.cmake: dependency paths and build options for this machine. The firmware image holds no
 # device configuration: a board is set up on its console ('setup') or with the `provision`
 # target below.
+#
+# The signing key (SOS_SIGN_KEY, see "Signed builds" below) given on the command line wins over
+# local.cmake: -DSOS_SIGN_KEY=<key> for this build directory, or -DSOS_SIGN_KEY=none for an
+# unsigned image. local.cmake's set() would otherwise hide the command line's value, and a
+# build made "with the other key" would silently be signed with the usual one.
+if (DEFINED CACHE{SOS_SIGN_KEY})
+    set(SOS_SIGN_KEY_FROM_COMMAND_LINE "$CACHE{SOS_SIGN_KEY}")
+    set(SOS_SIGN_KEY_ON_COMMAND_LINE TRUE)
+endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL)
+if (SOS_SIGN_KEY_ON_COMMAND_LINE)
+    set(SOS_SIGN_KEY "${SOS_SIGN_KEY_FROM_COMMAND_LINE}")
+endif()
 
 # --- wolfSSL / wolfSSH ---------------------------------------------------------
 # Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
@@ -110,6 +122,10 @@ set(SOS_SOURCES
     src/core/keysector.c
     src/core/rootsecret.c
     src/core/rootflash.c
+    src/core/roototp.c
+    src/core/rootsource.c
+    src/core/failcount.c
+    src/core/failflash.c
     src/core/keyprov.c
     src/core/seal.c
     src/core/pwverify.c
@@ -118,7 +134,12 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/core/heap.c
+    src/core/glitchdet.c
     src/core/chipinfo.c
+    src/core/bootkey.c
+    src/core/otpread.c
+    src/core/sealedonly.c
+    src/core/sealedonly_board.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -129,6 +150,7 @@ set(SOS_SOURCES
     src/edit/editor.c
     src/chat/chat.c
     src/net/wifi.c
+    src/net/wifi_pick.c
     src/net/http.c
     src/net/http_msg.c
     src/ssh/sshd.c
@@ -258,8 +280,15 @@ pico_enable_stdio_uart(sos 1)
 # key's hash, the "key valid" flag AND the bit that enables secure boot. Loading that file once
 # turns secure boot on for good. A file like that doesn't belong among everyday build outputs,
 # so it's switched off below; making it is part of the written procedure for securing a board.
+#
+# Where the key comes from, first match: the command line (-DSOS_SIGN_KEY=..., kept in this
+# build directory's cache until -USOS_SIGN_KEY), local.cmake, the environment. "none" or an
+# empty value means: this image is not signed, whatever the others say.
 if (NOT DEFINED SOS_SIGN_KEY AND DEFINED ENV{SOS_SIGN_KEY})
     set(SOS_SIGN_KEY "$ENV{SOS_SIGN_KEY}")
+endif()
+if ("${SOS_SIGN_KEY}" STREQUAL "none" OR "${SOS_SIGN_KEY}" STREQUAL "NONE")
+    set(SOS_SIGN_KEY "")
 endif()
 if (SOS_SIGN_KEY)
     if (NOT EXISTS "${SOS_SIGN_KEY}")
@@ -274,6 +303,27 @@ if (SOS_SIGN_KEY)
     message(STATUS "SOS: the image is signed with ${SOS_SIGN_KEY}")
 else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
+endif()
+
+# The burn image (docs/securing-a-board.md, step 3): the one build that can write a board's
+# root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
+# job and replaced by the everyday firmware afterwards. Everyday firmware has no code that
+# programs OTP: the two files below are compiled only here.
+option(SOS_BURN_IMAGE "Build the image that writes the root secret into OTP (permanent)" OFF)
+if (SOS_BURN_IMAGE)
+    target_sources(sos PRIVATE src/core/rootburn.c src/core/rootburn_board.c)
+    target_compile_definitions(sos PRIVATE SOS_BURN_IMAGE=1)
+    message(WARNING "SOS: this is the BURN IMAGE. It can write one-time-programmable memory. "
+                    "Do not leave it on a board.")
+endif()
+
+# For trying the sealed-only behaviour (src/core/sealedonly.h) on a development board without
+# writing its OTP marker: -DSOS_FORCE_SEALED_ONLY=ON makes this image treat every board as
+# sealed-only. It can only add the restriction; an image without it reads the board's marker.
+option(SOS_FORCE_SEALED_ONLY "Treat every board as sealed-only (testing)" OFF)
+if (SOS_FORCE_SEALED_ONLY)
+    target_compile_definitions(sos PRIVATE SOS_FORCE_SEALED_ONLY=1)
+    message(STATUS "SOS: this image treats every board as sealed-only (SOS_FORCE_SEALED_ONLY)")
 endif()
 
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map
@@ -294,13 +344,22 @@ add_custom_target(provision
     COMMENT "Writing the board's configuration (tools/provision.sh)"
 )
 
-# `ninja -C build flash` : reboot into BOOTSEL if needed, load, verify, run.
+# `ninja -C build flash` : reboot into BOOTSEL if needed, load, verify, run. It goes through
+# tools/flash.sh, which first checks the image's signing key against this machine's list of
+# accepted keys, if it has one (the flash guard; "Flashing" in docs/development.md).
+# `flash-check` does the check and flashes nothing.
 find_program(PICOTOOL_EXE picotool)
 if (PICOTOOL_EXE)
     add_custom_target(flash
-        COMMAND ${PICOTOOL_EXE} load -f -v -x $<TARGET_FILE:sos>
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/flash.sh ${CMAKE_CURRENT_BINARY_DIR}/sos.bin
         DEPENDS sos
         USES_TERMINAL
-        COMMENT "Flashing sos via picotool"
+        COMMENT "Flashing sos via picotool (tools/flash.sh)"
     )
 endif()
+add_custom_target(flash-check
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/flash.sh -n ${CMAKE_CURRENT_BINARY_DIR}/sos.bin
+    DEPENDS sos
+    USES_TERMINAL
+    COMMENT "Checking the image's signing key (tools/flash.sh -n)"
+)

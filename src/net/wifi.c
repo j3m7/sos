@@ -7,12 +7,14 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "lwip/dhcp.h"
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
 #include "core/log.h"
 #include "core/settings.h"
+#include "net/wifi_pick.h"
 
 #define CONNECT_TIMEOUT_MS  30000   // one attempt
 #define REJOIN_INTERVAL_MS  3000    // re-issue the join while the network isn't found
@@ -38,19 +40,28 @@
 #define IOCTL_GET_RATE      (12 << 1)
 #define IOCTL_GET_PHY_NOISE (135 << 1)
 
-// A network may have several access points (a mesh, or repeaters), and the device should be on
-// the strongest. The chip doesn't see to that: joining by name, it took one at -66 dBm with
-// another at -34 dBm in reach in 8 of 12 boots. So each attempt scans for the network first,
-// then lets the chip join by name. Once connected, the access point it chose is compared with
-// the scan; if another was stronger by SWITCH_MARGIN_DB, the device leaves and joins that one
-// by address, which takes about 3 s more. A scan can miss an access point, so if it found
-// fewer than two, a second scan runs before the comparison (W_VERIFY).
+// Several networks may be saved (core/config.h); they are preferred in the order saved. Each
+// attempt scans first and picks the network to join from what it saw (net/wifi_pick.h): the
+// first saved network in sight that hasn't failed in this round, else one not in sight, by name
+// (a hidden network, or out of reach). A network is given up on for the round after
+// QUICK_RETRIES + 1 failed attempts, or, when there are others to try, at once on a wrong
+// password or if the scan didn't see it. When every network has failed the round starts again
+// after RETRY_DELAY_MS. With one network saved this is the same as before there were several.
+//
+// A network may also have several access points (a mesh, or repeaters), and the device should
+// be on the strongest. The chip doesn't see to that: joining by name, it took one at -66 dBm
+// with another at -34 dBm in reach in 8 of 12 boots. So the chip joins the chosen network by
+// name, and once connected, the access point it chose is compared with the scan; if another of
+// the same network was stronger by SWITCH_MARGIN_DB, the device leaves and joins that one by
+// address, which takes about 3 s more. A scan can miss an access point, so if it found fewer
+// than two of the network's, a second scan runs before the comparison (W_VERIFY).
 // Joining by address straight away isn't used: the first such join after boot failed every
 // time (the retry worked), and with the scan's channel passed too it never completed.
 #define SCAN_TIMEOUT_MS     10000   // a scan takes about 0.5 s
-#define SCAN_MAX_APS        8       // access points of our network remembered per scan
+#define SCAN_MAX_APS        12      // access points of our networks remembered per scan
 #define SWITCH_MARGIN_DB    10      // readings of one access point vary by a few dB
 #define SWITCH_TRIES        2       // moves to a stronger access point per connection
+_Static_assert(CONFIG_WIFI_NETS <= WIFI_PICK_MAX_NETS, "one bit per network in failed");
 
 typedef enum { W_OFF, W_SCANNING, W_CONNECTING, W_VERIFY, W_UP, W_WAIT } wifi_st_t;
 
@@ -60,15 +71,36 @@ static absolute_time_t scan_deadline;   // W_SCANNING, W_VERIFY: stop waiting fo
 static absolute_time_t next_rejoin;
 static absolute_time_t badauth_until;   // W_CONNECTING: BADAUTH still showing then = wrong password
 static bool badauth_seen;
-static unsigned attempt;
+static unsigned attempt;                // failed attempts since the last connection, + this one
 
-// Scan results for our network. Written by scan_result() in the driver's context (interrupt),
-// read by the main loop once the scan has ended.
-static struct {
-    uint8_t bssid[6];
-    int16_t rssi;
-} scan_aps[SCAN_MAX_APS];
-static volatile unsigned scan_count;
+// The saved networks: a copy of the configuration taken when an attempt begins. The scan
+// callback runs in the driver's context (a low-priority interrupt with the threadsafe_background
+// architecture), and the console edits the live configuration in place, so neither the callback
+// nor a join in progress reads settings() directly. An edit takes effect at the next attempt;
+// the console calls wifi_reconnect() after one.
+static config_wifi_net_t nets[CONFIG_WIFI_NETS];
+static unsigned net_count;
+static unsigned cur;                    // the network of this attempt (index into nets)
+static bool cur_seen;                   // ...and whether the scan saw it
+static uint32_t failed;                 // networks given up on in this round, one bit each
+static uint8_t tries[CONFIG_WIFI_NETS]; // failed attempts per network since the last connection
+// The network whose DHCP address the interface holds (empty: none yet). The address stays on
+// the interface after leaving, and the driver counts the link as up as soon as there's one, so
+// joining another network with it would look connected at once, with an address that isn't
+// that network's, until DHCP there refused it (and the link seemed lost). Seen on dev-1 going
+// from a phone hotspot back to the home network.
+static char addr_ssid[CONFIG_SSID_MAX + 1];
+
+// Access points of our networks, as scanned. scan_rx is written by scan_result() in the
+// driver's context; the main loop changes it, and copies it to scan_aps, only while holding the
+// driver's lock (cyw43_arch_lwip_begin), so a scan still running (past its deadline) can't write
+// it halfway through. The driver keeps one callback argument for all scans, not one per scan, so
+// results arriving late from a scan started earlier can't be told apart; they are matched
+// against the current networks all the same, and an access point heard is one in reach.
+static wifi_ap_t scan_rx[SCAN_MAX_APS];
+static unsigned scan_rx_count;
+static wifi_ap_t scan_aps[SCAN_MAX_APS];    // main loop only: taken by take_scan()
+static unsigned scan_count;
 static bool prefer_bssid;               // join the scan's strongest by address (see above)
 static unsigned switch_tries;
 static bool verified;                   // the second scan (W_VERIFY) has run this attempt
@@ -82,72 +114,123 @@ static struct netif *sta(void) {
 }
 
 static uint32_t auth_mode(void) {
-    return settings()->wifi_password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN;
+    return nets[cur].password[0] ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN;
 }
 
-// A scan result: remember it if it's one of our network's access points (the strongest reading
-// of each). Runs in the driver's context.
+// A scan result: remember it if it's an access point of one of our networks (the strongest
+// reading of each). Runs in the driver's context, which holds the driver's lock meanwhile; it
+// reads only nets, which the main loop changes only under that lock (begin_attempt()).
 static int scan_result(void *env, const cyw43_ev_scan_result_t *r) {
     (void)env;
-    const char *ssid = settings()->wifi_ssid;
-    size_t len = strlen(ssid);
-    if (!r || r->ssid_len != len || memcmp(r->ssid, ssid, len))
+    if (!r)
+        return 0;
+    unsigned net;
+    for (net = 0; net < net_count; net++)
+        if (r->ssid_len == strlen(nets[net].ssid) && !memcmp(r->ssid, nets[net].ssid, r->ssid_len))
+            break;
+    if (net == net_count)
         return 0;
     unsigned i;
-    for (i = 0; i < scan_count; i++)
-        if (!memcmp(scan_aps[i].bssid, r->bssid, 6))
+    for (i = 0; i < scan_rx_count; i++)
+        if (!memcmp(scan_rx[i].bssid, r->bssid, 6))
             break;
     if (i == SCAN_MAX_APS)
         return 0;
-    if (i == scan_count) {
-        memcpy(scan_aps[i].bssid, r->bssid, 6);
-        scan_aps[i].rssi = r->rssi;
-        scan_count = i + 1;
-    } else if (r->rssi > scan_aps[i].rssi) {
-        scan_aps[i].rssi = r->rssi;
+    if (i == scan_rx_count) {
+        memcpy(scan_rx[i].bssid, r->bssid, 6);
+        scan_rx[i].rssi = r->rssi;
+        scan_rx[i].net = (uint8_t)net;
+        scan_rx_count = i + 1;
+    } else if (r->rssi > scan_rx[i].rssi) {
+        scan_rx[i].rssi = r->rssi;
     }
     return 0;
 }
 
+// Forget the scan results (before a new attempt's scan).
+static void clear_scan(void) {
+    cyw43_arch_lwip_begin();
+    scan_rx_count = 0;
+    cyw43_arch_lwip_end();
+    scan_count = 0;
+}
+
+// Copy the results so far for the main loop to use.
+static void take_scan(void) {
+    cyw43_arch_lwip_begin();
+    scan_count = scan_rx_count;
+    memcpy(scan_aps, scan_rx, scan_count * sizeof(scan_aps[0]));
+    cyw43_arch_lwip_end();
+}
+
+// How many access points of the current network the scan saw.
+static unsigned cur_aps(void) {
+    unsigned n = 0;
+    for (unsigned i = 0; i < scan_count; i++)
+        n += scan_aps[i].net == cur;
+    return n;
+}
+
 // Ask the chip to join: the access point chosen by the scan, or any with the network's name.
 static int join(void) {
-    const sos_config_t *c = settings();
+    const config_wifi_net_t *n = &nets[cur];
     // No channel is passed: with the scan's channel (cyw43_wifi_join's last argument) the join
     // never completed on this chip firmware.
     if (join_bssid_set)
-        return cyw43_arch_wifi_connect_bssid_async(c->wifi_ssid, join_bssid, c->wifi_password,
-                                                   auth_mode());
-    return cyw43_arch_wifi_connect_async(c->wifi_ssid, c->wifi_password, auth_mode());
+        return cyw43_arch_wifi_connect_bssid_async(n->ssid, join_bssid, n->password, auth_mode());
+    return cyw43_arch_wifi_connect_async(n->ssid, n->password, auth_mode());
 }
 
-static unsigned strongest(void) {
-    unsigned best = 0;
-    for (unsigned i = 1; i < scan_count; i++)
-        if (scan_aps[i].rssi > scan_aps[best].rssi)
-            best = i;
-    return best;
+// Log the access points the scan saw of the current network.
+static void log_aps(void) {
+    char list[SCAN_MAX_APS * 28 + 1];
+    size_t used = 0;
+    list[0] = '\0';
+    for (unsigned i = 0; i < scan_count && used < sizeof(list) - 1; i++) {
+        if (scan_aps[i].net != cur)
+            continue;
+        const uint8_t *b = scan_aps[i].bssid;
+        int len = snprintf(list + used, sizeof(list) - used,
+                           "%s%02x:%02x:%02x:%02x:%02x:%02x %d dBm", used ? ", " : "",
+                           b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[i].rssi);
+        // Cut short (an odd signal value takes more room): stop, don't run past the end.
+        used = len < 0 || (size_t)len >= sizeof(list) - used ? sizeof(list) - 1
+                                                             : used + (size_t)len;
+    }
+    log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", nets[cur].ssid, list);
+}
+
+// Joining another network than the one the address is from: drop the address and the lease,
+// so the link counts as up only once DHCP there has given one. (The same network again keeps
+// it: DHCP asks to keep the address, and connections on it may survive.)
+static void forget_address_unless_same_network(void) {
+    if (!addr_ssid[0] || !strcmp(addr_ssid, nets[cur].ssid))
+        return;
+    cyw43_arch_lwip_begin();
+    dhcp_release_and_stop(sta());       // removes the address; not associated, so nothing is sent
+    dhcp_start(sta());                  // starts over (discover) once the link is up
+    cyw43_arch_lwip_end();
+    addr_ssid[0] = '\0';
 }
 
 static void start_join(void) {
-    const sos_config_t *c = settings();
-    join_bssid_set = prefer_bssid;      // move_to_strongest() chose join_bssid
-    unsigned n = scan_count;
-    if (n) {
-        char list[SCAN_MAX_APS * 28 + 1];
-        size_t used = 0;
-        for (unsigned i = 0; i < n && used < sizeof(list) - 1; i++) {
-            const uint8_t *b = scan_aps[i].bssid;
-            int len = snprintf(list + used, sizeof(list) - used,
-                               "%s%02x:%02x:%02x:%02x:%02x:%02x %d dBm", i ? ", " : "",
-                               b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[i].rssi);
-            // Cut short (an odd signal value takes more room): stop, don't run past the end.
-            used = len < 0 || (size_t)len >= sizeof(list) - used ? sizeof(list) - 1
-                                                                 : used + (size_t)len;
+    join_bssid_set = prefer_bssid;      // move_to_strongest() chose join_bssid, in nets[cur]
+    if (!prefer_bssid) {
+        int pick = wifi_pick(scan_aps, scan_count, net_count, failed);
+        if (pick < 0) {                 // can't happen: retry_later() starts a new round
+            failed = 0;
+            pick = wifi_pick(scan_aps, scan_count, net_count, failed);
         }
-        log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", c->wifi_ssid, list);
-    } else if (!prefer_bssid) {
-        // Not seen (out of reach, or a hidden network): the chip looks for it by name.
-        log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", c->wifi_ssid);
+        cur = (unsigned)pick;
+        cur_seen = wifi_pick_seen(scan_aps, scan_count, cur);
+        if (net_count > 1)
+            log_msg(SOS_LOG_INFO, "wifi: trying '%s' (saved network %u of %u)", nets[cur].ssid,
+                    cur + 1, net_count);
+        if (cur_seen)
+            log_aps();
+        else            // not seen (out of reach, or a hidden network): the chip looks for it by name
+            log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", nets[cur].ssid);
+        forget_address_unless_same_network();
     }
     int err = join();
     if (err) {
@@ -162,17 +245,43 @@ static void start_join(void) {
     badauth_seen = false;
 }
 
+// Forget which networks failed: after a connection, or when the saved networks change.
+static void reset_failures(void) {
+    failed = 0;
+    memset(tries, 0, sizeof(tries));
+}
+
 static void begin_attempt(void) {
     const sos_config_t *c = settings();
-    if (!c->wifi_ssid[0]) {
+    unsigned count = config_wifi_count(c);
+    if (!count) {
         state = W_OFF;
         return;
     }
     attempt++;
+    static config_wifi_net_t now[CONFIG_WIFI_NETS];     // 485 bytes: not on the stack
+    memset(now, 0, sizeof(now));
+    for (unsigned i = 0; i < count; i++)
+        config_wifi_get(c, i, &now[i]);
+    // A scan past its deadline may still be running, so under the driver's lock.
+    cyw43_arch_lwip_begin();
+    bool changed = count != net_count || memcmp(now, nets, sizeof(nets));
+    memcpy(nets, now, sizeof(nets));
+    net_count = count;
+    cyw43_arch_lwip_end();
+    memset(now, 0, sizeof(now));
+    if (changed) {                      // the failures counted were for other networks
+        reset_failures();
+        prefer_bssid = false;
+    }
     // The hostname is sent with DHCP requests; the string must stay valid (it's in settings).
     netif_set_hostname(sta(), c->hostname);
-    log_msg(SOS_LOG_NOTICE, "wifi: connecting to '%s' (attempt %u)", c->wifi_ssid, attempt);
-    scan_count = 0;
+    if (net_count == 1)
+        log_msg(SOS_LOG_NOTICE, "wifi: connecting to '%s' (attempt %u)", nets[0].ssid, attempt);
+    else
+        log_msg(SOS_LOG_NOTICE, "wifi: looking for %u saved networks (attempt %u)", net_count,
+                attempt);
+    clear_scan();
     verified = false;
     cyw43_wifi_scan_options_t opts = {0};
     if (cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result) != 0) {
@@ -183,23 +292,24 @@ static void begin_attempt(void) {
     scan_deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
 }
 
-// Connected: if the scan saw a clearly stronger access point than the one the chip joined,
-// move to it. True if it has started doing so.
+// Connected: if the scan saw a clearly stronger access point of this network than the one the
+// chip joined, move to it. True if it has started doing so.
 static bool move_to_strongest(void) {
-    uint8_t cur[6];
+    uint8_t now[6];
     bool moving = false;
-    unsigned n = scan_count, best = strongest(), mine;
-    if (n >= 2 && cyw43_wifi_get_bssid(&cyw43_state, cur) == 0) {
-        for (mine = 0; mine < n; mine++)
-            if (!memcmp(scan_aps[mine].bssid, cur, 6))
+    int best = wifi_pick_strongest(scan_aps, scan_count, cur);
+    unsigned mine;
+    if (cur_aps() >= 2 && cyw43_wifi_get_bssid(&cyw43_state, now) == 0) {
+        for (mine = 0; mine < scan_count; mine++)
+            if (scan_aps[mine].net == cur && !memcmp(scan_aps[mine].bssid, now, 6))
                 break;
-        // mine == n: joined one the scan missed, so there's nothing to compare.
-        if (mine < n && mine != best && switch_tries < SWITCH_TRIES &&
+        // mine == scan_count: joined one the scan missed, so there's nothing to compare.
+        if (mine < scan_count && (int)mine != best && switch_tries < SWITCH_TRIES &&
             scan_aps[best].rssi - scan_aps[mine].rssi >= SWITCH_MARGIN_DB) {
             const uint8_t *b = scan_aps[best].bssid;
             log_msg(SOS_LOG_NOTICE, "wifi: joined %02x:%02x:%02x:%02x:%02x:%02x (%d dBm), but "
                     "%02x:%02x:%02x:%02x:%02x:%02x is stronger (%d dBm); moving to it",
-                    cur[0], cur[1], cur[2], cur[3], cur[4], cur[5], (int)scan_aps[mine].rssi,
+                    now[0], now[1], now[2], now[3], now[4], now[5], (int)scan_aps[mine].rssi,
                     b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[best].rssi);
             switch_tries++;
             memcpy(join_bssid, b, 6);
@@ -210,7 +320,7 @@ static bool move_to_strongest(void) {
     if (moving) {
         // Straight to the join: the target is known, and a new scan might miss it.
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-        scan_count = 0;
+        clear_scan();
         verified = true;
         start_join();
     }
@@ -226,20 +336,41 @@ static void connected(void) {
     int32_t rssi = 0;
     cyw43_wifi_get_bssid(&cyw43_state, b);
     cyw43_wifi_get_rssi(&cyw43_state, &rssi);
-    log_msg(SOS_LOG_NOTICE, "wifi: connected, ip %s (access point %02x:%02x:%02x:%02x:%02x:%02x, "
-            "%d dBm)", ip, b[0], b[1], b[2], b[3], b[4], b[5], (int)rssi);
+    log_msg(SOS_LOG_NOTICE, "wifi: connected to '%s', ip %s (access point "
+            "%02x:%02x:%02x:%02x:%02x:%02x, %d dBm)", nets[cur].ssid, ip, b[0], b[1], b[2], b[3],
+            b[4], b[5], (int)rssi);
     state = W_UP;
     attempt = 0;
+    reset_failures();
+    strcpy(addr_ssid, nets[cur].ssid);
     next_keepalive = make_timeout_time_ms(KEEPALIVE_MS);
 }
 
-static void retry_later(const char *why) {
-    // Joining by address keeps failing: go back to joining by name.
-    if (prefer_bssid && attempt > QUICK_RETRIES + 1)
+// The attempt failed. wrong_password: the access point said so (not a timeout).
+static void retry_later(const char *why, bool wrong_password) {
+    if (tries[cur] < UINT8_MAX)
+        tries[cur]++;
+    // Give the network up for this round? With others to try, a wrong password or a network
+    // not in sight is not worth retrying straight away.
+    bool give_up = tries[cur] > QUICK_RETRIES ||
+                   (net_count > 1 && (wrong_password || !cur_seen));
+    if (give_up)
+        failed |= 1u << cur;
+    bool round_over = failed == (1u << net_count) - 1;
+    if (round_over)
+        failed = 0;
+    // Joining by address keeps failing, or the network is given up for another: back to
+    // joining by name.
+    if (prefer_bssid && (attempt > QUICK_RETRIES + 1 || (net_count > 1 && give_up)))
         prefer_bssid = false;
-    // The first failures are often transient (see QUICK_RETRIES), so retry those soon.
-    int delay_ms = attempt <= QUICK_RETRIES ? QUICK_RETRY_DELAY_MS : RETRY_DELAY_MS;
-    log_msg(SOS_LOG_WARNING, "wifi: %s; retrying in %d s", why, delay_ms / 1000);
+    // The first failures are often transient (see QUICK_RETRIES), so retry those soon, and
+    // move on to the next network soon too. Wait longer once every network has failed.
+    int delay_ms = round_over ? RETRY_DELAY_MS : QUICK_RETRY_DELAY_MS;
+    if (net_count > 1 && give_up && !round_over)
+        log_msg(SOS_LOG_WARNING, "wifi: '%s': %s; trying the next network in %d s",
+                nets[cur].ssid, why, delay_ms / 1000);
+    else
+        log_msg(SOS_LOG_WARNING, "wifi: %s; retrying in %d s", why, delay_ms / 1000);
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     state = W_WAIT;
     deadline = make_timeout_time_ms(delay_ms);
@@ -289,6 +420,7 @@ void wifi_reconnect(void) {
     attempt = 0;
     prefer_bssid = false;
     switch_tries = 0;
+    reset_failures();               // every network gets its chance again, the first one first
     begin_attempt();
 }
 
@@ -298,8 +430,10 @@ void wifi_poll(void) {
     case W_OFF:
         break;
     case W_SCANNING:
-        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline))
+        if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline)) {
+            take_scan();
             start_join();
+        }
         break;
     case W_CONNECTING:
         link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
@@ -312,7 +446,7 @@ void wifi_poll(void) {
         if (link == CYW43_LINK_UP) {
             // A scan that found one access point may have missed another: look once more.
             cyw43_wifi_scan_options_t opts = {0};
-            if (scan_count < 2 && !verified &&
+            if (cur_aps() < 2 && !verified &&
                 cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result) == 0) {
                 verified = true;
                 state = W_VERIFY;       // the attempt's own deadline stays as it is
@@ -321,11 +455,11 @@ void wifi_poll(void) {
                 connected();
             }
         } else if (link == CYW43_LINK_BADAUTH && time_reached(badauth_until)) {
-            retry_later("wrong password");
+            retry_later("wrong password", true);
         } else if (link == CYW43_LINK_FAIL) {
-            retry_later("connection failed");
+            retry_later("connection failed", false);
         } else if (time_reached(deadline)) {
-            retry_later("no connection within 30 s");
+            retry_later("no connection within 30 s", false);
         } else if (link == CYW43_LINK_NONET && time_reached(next_rejoin)) {
             // Network not found (yet): the join has ended, so ask again until the deadline.
             join();
@@ -334,6 +468,7 @@ void wifi_poll(void) {
         break;
     case W_VERIFY:
         if (!cyw43_wifi_scan_active(&cyw43_state) || time_reached(scan_deadline)) {
+            take_scan();
             state = W_CONNECTING;       // the link is checked again there
             if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP &&
                 !move_to_strongest())
@@ -379,6 +514,10 @@ void wifi_arp_counts(unsigned *received, unsigned *sent) {
 
 bool wifi_up(void) {
     return state == W_UP;
+}
+
+const char *wifi_ssid(void) {
+    return state == W_UP ? nets[cur].ssid : NULL;
 }
 
 const char *wifi_state(void) {
