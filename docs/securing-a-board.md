@@ -660,9 +660,13 @@ confirm" items named in the gates, and the owner's word for each write.
 
 This list is a gate: the document is not final, and nothing is burned, while any item is open.
 
-1. The exact `picotool` commands and file contents for each write. I have the field names from
-   `picotool otp list`; I have not run any OTP write, and the selector and JSON syntax must be
-   checked against a dry run (`picotool otp list` with the same selectors, and the rehearsal).
+1. The exact `picotool` commands and file contents for each write. **For dev-1 they are in
+   [`docs/otp/dev-1/`](otp/dev-1/README.md), for review:** one file per write, the read-back
+   command after each, and what the blank board answers to each read today. The read commands
+   have been run on dev-1; no file has been loaded, and that page lists what can only be
+   confirmed by loading (that `picotool` accepts each file as written, the lock word's form in
+   particular). Files for a production board are written when there is one: other keys, and
+   the rows dev-1 leaves out.
 2. That `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` leaves SOS's fault record and watchdog reset
    detection working. They use the watchdog scratch registers 0 to 3 and the watchdog's reason
    register; the datasheet says the flag makes the bootrom ignore the scratch registers at boot.
