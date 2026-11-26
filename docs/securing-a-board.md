@@ -223,10 +223,27 @@ and merged before anything is burned.
    use carry no code that writes OTP. And it needs someone present: besides the console
    password and the board's serial typed in, a physical action while it runs (holding the
    BOOTSEL button, or a jumper on a pin).
-3. **Knowing it is secured.** The firmware reads `CRIT1.SECURE_BOOT_ENABLE` at boot. When it
-   is set the firmware refuses unsealed configuration and host-key records (`refuse_plain`,
-   already implemented and off) and refuses `rootsecret forget`. `version` shows both facts:
-   where the root secret is, and whether secure boot is on.
+3. **Knowing it is secured: a marker of its own, not secure boot** (the owner's decision,
+   2026-11-25). A board refuses unsealed configuration and host-key records (`refuse_plain`,
+   already implemented and off) and refuses `rootsecret forget` when its *sealed-only marker*
+   is set. `SECURE_BOOT_ENABLE` alone does not do it, so that a development board with secure
+   boot can still be provisioned from a file. `version` shows the three facts: where the root
+   secret is, whether secure boot is on (#79), and whether the board is sealed-only.
+
+   **Proposed marker: one OTP row that SOS defines,** in a free page of its own, written on a
+   production board as step 4.6a and never on a development board. Why OTP and not the
+   alternatives:
+   - *A build option* would make "sealed-only" a property of the image. Any image without it
+     that the board's key has ever signed (an older one, a development one) would then accept
+     an unsealed record again.
+   - *A field in the sealed configuration* disappears when someone erases the configuration
+     over USB, which is exactly when it is needed.
+   - *An OTP row* can't be cleared by rewriting the flash, and is the same for every image.
+   The row holds a fixed pattern, stored three times and read by vote like the chip's own
+   flags, through the read aliases of #79. A row that can't be read counts as **set**: here
+   the safe direction is to refuse. Which page and row, and the pattern, are for the pull
+   request that builds it. Firmware older than that pull request ignores the marker; that is
+   the rollback case decision 8 leaves open.
 4. **Checking the boot key on the board:** the `bootkey` command (#79). It hashes the public
    key from the running image's own signature block, compares it with the boot key slots in
    OTP, and says `MATCH`, `NOT YET` (slot written, not marked valid), `NO MATCH` or
@@ -307,6 +324,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
 | 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
 | 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
+| 4.6a | The sealed-only marker row (firmware item 3). Production boards only | `version` shows the board as sealed-only. An unsealed configuration written with `ninja provision` is ignored and the sealed one still loads; `rootsecret forget` is refused | From here the board can only be set up on its console |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
@@ -369,6 +387,7 @@ It does not make dev-1 secret-keeping, and nobody should treat it as such:
 | Glitch detector in OTP (4.5) | Decision 5, after the week-long test | **Not set** | Decision 5 unchanged |
 | `DEBUG_DISABLE` (4.6) | Set | **Not set** | "Do not turn debug off on dev-1" |
 | `SECURE_BOOT_ENABLE` (4.7) | Set, last | Set, last | |
+| Sealed-only marker (4.6a) | Set | **Not set** | The owner's decision: dev-1 stays provisionable with `ninja provision` |
 | Root secret in OTP (step 3) | Yes | Yes | |
 | Set up fresh after step 3 | Yes | Yes: dev-1 is re-keyed, see below | |
 
@@ -403,7 +422,8 @@ pages, which keeps all three real pages but tests code the production board won'
 **Before any OTP write on dev-1:**
 
 - [ ] Merged and reviewed: the key provider's OTP backend and the burn image (firmware items 1
-      and 2), and the secured-board behaviour (item 3) with open question B below decided.
+      and 2), and the sealed-only marker (item 3), so that secure boot on dev-1 changes nothing
+      about how it is provisioned.
 - [ ] "To confirm" items 1, 3, 4 and 7 are closed (the exact commands and files; reading and
       soft-locking a page from Secure code; raw row writes for the chaff; which pages). Items 2
       and 6 concern `DISABLE_WATCHDOG_SCRATCH` and item 5 the glitch detector: none is written
@@ -413,7 +433,8 @@ pages, which keeps all three real pages but tests code the production board won'
 - [ ] The OTP files for dev-1 are written by hand, one per write, reviewed, and contain
       nothing but public hashes and flag values. Every command names the board with `--ser`.
 - [ ] `picotool otp dump` of dev-1 as it is now is saved.
-- [ ] Open question A (the flash guard) is decided, and built if the answer is yes.
+- [ ] The flash guard (below) is merged, and has been seen to refuse an unsigned image and one
+      signed with another key.
 - [ ] Every session that uses dev-1 has been told, has the signing key in its build settings,
       and has confirmed its builds come out signed.
 
@@ -435,7 +456,7 @@ Then:
 |---|---|---|
 | D4.1 | The dev key's hash into `BOOTKEY0`, the second dev key's into `BOOTKEY1` | Rows read back equal the two computed hashes. **`bootkey` says `NOT YET` for slot 0** with the hash shown equal to the image's: the first run of that path, and a check of the slot byte order while a wrong slot can still be abandoned |
 | D4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | `bootkey` says `MATCH`, slot 0. Flash an image signed with the second key: `bootkey` says `MATCH`, slot 1. Flash the first key's image back |
-| | *4.3 to 4.6 are not done on dev-1* | |
+| | *4.3 to 4.6a are not done on dev-1* | |
 | D4.7 | `CRIT1.SECURE_BOOT_ENABLE`, after the gate above | Before the reset, `version` says `secure boot: off` with the "OTP rows say otherwise" warning. After it: the signed firmware boots, `version` says `secure boot: on` with no warning, and what was set up in 3.5 still loads |
 
 ### What runs on hardware for the first time
@@ -470,18 +491,22 @@ probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is ex
 - If both dev keys are lost, dev-1 keeps its last firmware for ever.
 - The board registry records what was written to dev-1's OTP, with the date.
 
+### Decided by the owner for this variant (2026-11-25: "Yes to both, flash guard and separate marker")
+
+- **A guard on flashing.** `ninja flash` (and `tools/provision.sh`, where it flashes) refuses
+  an image that isn't signed with the expected key, so a session with a missing build setting
+  can't leave dev-1 in BOOTSEL by accident. Built and merged before D4.7. The expected key is
+  named by its public hash in the build settings, not by the private key file, so the guard
+  also works where the key isn't present. It guards our own tools only: `picotool load` typed
+  by hand goes around it.
+- **A separate marker for "sealed-only".** Secure boot alone does not make a board refuse
+  unsealed records or `rootsecret forget`. Firmware item 3 above has the proposal for the
+  marker; dev-1 never gets it.
+
 ### Open, not decided by the owner
 
-- **A. A guard on flashing.** Should `ninja flash` (and `tools/provision.sh`, where it flashes)
-  refuse an image that isn't signed with the expected key, so a session with a missing build
-  setting can't put dev-1 into BOOTSEL by accident? Recommended: yes, built before D4.7.
-- **B. Does dev-1 with secure boot count as "secured"?** Firmware item 3 has a board with
-  `SECURE_BOOT_ENABLE` refuse unsealed configuration and host-key records and refuse
-  `rootsecret forget`. On dev-1 that would end `ninja provision`, which writes an unsealed
-  record, and with it automated test setups. Recommended: a separate marker for "refuse
-  unsealed records" (its own OTP row or a build setting, to be designed), so that a development
-  board with secure boot stays provisionable and a production board does not.
-- **C. The rehearsal proposal above** (the interrupted burn on the real page list).
+- **The rehearsal proposal above** (the interrupted burn on the real page list, which goes
+  beyond the words of decision 6).
 
 ## What can't be undone, in one place
 
