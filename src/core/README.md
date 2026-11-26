@@ -149,6 +149,24 @@ configuration sectors, so `picotool load`, `config reset` and provisioning don't
 sector, so a power cut during a write can lose what's in it. Writes happen only when the host
 key is made or sealed.
 
+## Reading OTP and the boot key check (`otpread.c`, `bootkey.c`)
+
+The RP2350's one-time-programmable memory holds the flags that secure a board (secure boot,
+debug off) and the hashes of the keys its firmware must be signed with.
+
+- **`otpread.c` only reads,** through the chip's memory-mapped read aliases, to which a write
+  is a bus fault. It never calls the boot ROM's `otp_access`, the function that can program
+  OTP: everyday firmware carries no code that writes it. Flag rows are stored several times
+  and read by vote (three of eight for `CRIT1`, two of three for the boot flags).
+- **`bootkey.c`** (no hardware, unit tested) finds the public key in the running image's
+  signature block (the block format of datasheet section 5.9; the last image definition in
+  the block loop is the one the boot ROM uses) and compares its SHA-256 with the boot key
+  slots. A slot counts when it is marked valid and not marked invalid.
+- **Shown by** `version` (secure boot, debug port) and `bootkey` (the verdict). The procedure
+  in `docs/securing-a-board.md` runs `bootkey` before the bit that turns secure boot on.
+- **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
+  that can't be read. Reading the root secret from OTP will need the guarded ones.
+
 ## Glitch detector (`glitchdet.c`)
 
 The RP2350 has four detector circuits that reset the chip when its clock or core supply is

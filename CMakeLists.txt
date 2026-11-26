@@ -120,6 +120,8 @@ set(SOS_SOURCES
     src/core/heap.c
     src/core/glitchdet.c
     src/core/chipinfo.c
+    src/core/bootkey.c
+    src/core/otpread.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
