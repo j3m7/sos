@@ -9,6 +9,9 @@ translation (`crlf`), and `admin` (true for the console only).
 
 - **`shell_poll()`** reads whatever input is waiting and edits the line, handling backspace,
   arrow keys, Ctrl-C and Ctrl-D. On Enter it calls `shell_execute()`. It never blocks.
+  The line takes UTF-8 (a Wi-Fi network named `Mjölnir`): a byte that can't start or continue
+  a character is dropped, Backspace removes a whole character (and as many columns as
+  `charwidth()` says it takes), and a character cut short at Enter is left out.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop

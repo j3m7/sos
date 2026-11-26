@@ -847,7 +847,57 @@ TEST(plain_job_after_raw_job_still_stashes) {
     CHECK(!strcmp(executed[2], "ls"));
 }
 
+// UTF-8 is taken into the line (a Wi-Fi network named "Mjölnir"); Backspace removes a whole
+// character, and as many columns as it takes.
+TEST(utf8_characters_are_taken) {
+    start(&io_plain);
+    type("wifi Mj\xc3\xb6lnir\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "wifi Mj\xc3\xb6lnir"));
+    CHECK_OUT("wifi Mj\xc3\xb6lnir\n<wifi Mj\xc3\xb6lnir>\nsos> ");
+}
+
+TEST(utf8_byte_at_a_time) {
+    fake.chunk = 0;
+    start(&io_plain);
+    fake.chunk = 1;
+    type("\xe2\x82\xac" "5\r");                                // euro sign, three bytes
+    CHECK(!strcmp(executed[0], "\xe2\x82\xac" "5"));
+}
+
+TEST(backspace_removes_a_whole_utf8_character) {
+    start(&io_plain);
+    type("a\xc3\xb6\x7f" "b\r");                             // ö then Backspace
+    CHECK(!strcmp(executed[0], "ab"));
+    CHECK_OUT("a\xc3\xb6\b \bb\n<ab>\nsos> ");
+    start(&io_plain);
+    type("\xe4\xb8\xad\x7f\r");                              // a wide CJK character: 2 columns
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("\xe4\xb8\xad\b \b\b \b\nsos> ");
+}
+
+TEST(broken_utf8_is_dropped) {
+    start(&io_plain);
+    type("a\xb6" "b\xc3" "c\xc0\xaf" "d\xf8" "e\xc3\r");     // stray, cut short, overlong, invalid
+    CHECK(!strcmp(executed[0], "abcde"));
+}
+
+TEST(utf8_character_must_fit_the_line) {
+    char in[SHELL_LINE_MAX + 4];
+    memset(in, 'x', SHELL_LINE_MAX - 1);
+    memcpy(in + SHELL_LINE_MAX - 1, "\xc3\xb6\r", 3);         // one byte of room: ö doesn't fit
+    start(&io_plain);
+    type_n(in, SHELL_LINE_MAX + 2);
+    CHECK_EQ(n_executed, 1);
+    CHECK_EQ(strlen(executed[0]), SHELL_LINE_MAX - 1);
+}
+
 TEST_MAIN(
+    RUN(utf8_characters_are_taken);
+    RUN(utf8_byte_at_a_time);
+    RUN(backspace_removes_a_whole_utf8_character);
+    RUN(broken_utf8_is_dropped);
+    RUN(utf8_character_must_fit_the_line);
     RUN(init_prints_greeting_and_prompt);
     RUN(command_is_echoed_and_executed);
     RUN(line_endings);
