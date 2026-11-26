@@ -899,9 +899,15 @@ static bool burn_job(shell_t *sh, void *arg, bool cancel) {
                      "(the glitch detector is off until this is done)\n");
     glitchdet_apply(0);
     rootburn_report_t rep;
+    uint64_t started_us = time_us_64();
     rootburn_board_run(burn_rehearse, &rep);
+    uint32_t took_ms = (uint32_t)((time_us_64() - started_us) / 1000);
     glitchdet_apply(config_glitch_mode(settings()->glitch_detector));
     burn_report(sh, &rep);
+    // How long OTP programming takes on this chip isn't known until it has been done once:
+    // worth writing down (docs/securing-a-board.md).
+    shell_printf(sh, "It took %lu ms.\n", (unsigned long)took_ms);
+    log_msg(SOS_LOG_NOTICE, "rootsecret burn: took %lu ms", (unsigned long)took_ms);
     shell_printf(sh, "You can let go of the button.\n");
     return false;
 }
