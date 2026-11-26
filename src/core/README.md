@@ -139,6 +139,33 @@ with the configuration's owner secret (`files/cardkey.c`).
   - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
     root secret; changing a label would lock everything sealed under it.
 
+## The root secret in OTP, and choosing its source (`roototp.c`, `rootsource.c`)
+
+On a secured board the root secret is in one-time-programmable memory instead of flash. This
+firmware reads it there; a separate image, used once per board, writes it.
+
+- **Where:** OTP pages 4, 5 and 6, tried in order (page 3 holds SOS's own flags). In a page:
+  the 32-byte secret in rows 0 to 15, a 4-byte check over it in rows 16 and 17
+  (HMAC-SHA256 keyed with the secret), the marker 0xa55a in row 18, written last, and the
+  complement of the secret's raw rows in rows 32 to 47 against imaging the chip.
+- **What a page is:** blank; complete (the marker is there); spent (written but no marker: a
+  burn that stopped, skipped for good); or unreadable. The first page that isn't spent decides.
+- **Reading it:** what a page holds is decided with reads that can't fault. The secret itself
+  is read through the chip's guarded alias, which faults instead of returning a wrong value,
+  and then verified against its check. A complete page that fails its check is not a secret
+  and nothing replaces it.
+- **Which source** (`roototp_choose`, in `rootsource_init()` at boot): OTP if a secret is
+  there; otherwise **nothing on a sealed-only board**, whose flash is never read for a root
+  secret nor given one (anyone with a cable could write a root secret there with a
+  configuration sealed under it); otherwise the flash record of an open board, as before. An
+  open board whose OTP pages can't be read or hold a damaged secret also gets nothing, said
+  plainly, instead of quietly making a new flash secret.
+- **Locked after boot:** with the secret in OTP, `keyprov_lock()` sets the chip's soft lock for
+  the page (a register, until the next reset; not a write to OTP) and checks that the page
+  then reads as unreadable.
+- `roototp.c` has no hardware in it and is unit tested on the host. No board has a secret in
+  OTP yet: on the board only the paths with blank pages have run.
+
 ## Wrong-password count (`failcount.c`, `failflash.c`)
 
 The console delays the next password check after each wrong answer (`shell/login.c`). The

@@ -31,6 +31,7 @@
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
+#include "core/rootsource.h"
 #include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
@@ -83,6 +84,8 @@ static void cmd_version(shell_t *sh) {
                      : "off (open board: any firmware starts)");
     shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
                      : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
+    shell_printf(sh, "root secret: %s\n", rootsource() == ROOTSRC_OTP ? "in OTP"
+                     : rootsource() == ROOTSRC_FLASH ? "in flash (open board)" : "none");
     switch (sealedonly_state()) {
     case SEALEDONLY_NO:
         shell_printf(sh, "sealed-only: no (unsealed configuration from flash is accepted, as "
@@ -762,6 +765,18 @@ static void on_rootsecret_forget(shell_t *sh, char *answer, void *arg) {
 // usable secret can't be cleared here: that would silently lock everything sealed with it.
 static void cmd_rootsecret(shell_t *sh, const char *args) {
     int state = rootflash_state();
+    if (rootsource() != ROOTSRC_FLASH) {
+        // In OTP, or none at all: there is no flash record in play, and nothing to forget.
+        shell_printf(sh, "root secret: %s\n", rootsource_describe());
+        if (rootsource() == ROOTSRC_OTP)
+            shell_printf(sh, "its OTP page is %s\n", rootsource_otp_locked()
+                             ? "locked until the next reset"
+                             : "still readable by the firmware (boot hasn't finished)");
+        if (args && *args)
+            shell_printf(sh, "(`rootsecret forget` is for a flash record; this board doesn't "
+                             "use one)\n");
+        return;
+    }
     if (!args || !*args) {
         if (!rootflash_usable())
             shell_printf(sh, "root secret: none (the firmware image overlaps its flash sector)\n");
@@ -852,7 +867,7 @@ static int console_check_step(void) {
 // With no usable root secret nothing sealed can be read, the password included. The console
 // must not be open because of that: it stays locked, with only the commands that deal with it.
 static const char *console_no_keys(void) {
-    return rootflash_state() == ROOTSECRET_OK
+    return rootsource_ok()
                ? NULL
                : "this board's root secret can't be used, so nothing it stores can be read.\n"
                  "`rootsecret` says more, `rootsecret forget` starts over (what was stored is "

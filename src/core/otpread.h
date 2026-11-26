@@ -7,9 +7,9 @@
 // Nothing here calls the boot ROM's otp_access function, which is the one that can program
 // OTP. Everyday firmware carries no code that writes OTP (docs/securing-a-board.md).
 //
-// These are the unguarded aliases: a row this code isn't allowed to read comes back as all
-// ones instead of a fault, which suits a status display. They are NOT for reading a secret:
-// that needs the guarded aliases, which fault on a failed check.
+// otpread_raw() and otpread_ecc() use the unguarded aliases: a row this code isn't allowed to
+// read comes back as all ones instead of a fault, which suits a status display and deciding
+// what a page holds. They are NOT for reading a secret: otpread_ecc_guarded() is.
 
 #ifndef SOS_OTPREAD_H
 #define SOS_OTPREAD_H
@@ -25,6 +25,13 @@ uint32_t otpread_raw(unsigned row);
 // A row's 16 data bits after error correction. 0xffff when it can't be read, which is also a
 // possible value.
 uint16_t otpread_ecc(unsigned row);
+
+// The same through the guarded read alias, for data the firmware relies on (the root secret):
+// the chip checks the read and, on a row that can't be read, an error it can't correct, or a
+// disturbed read, raises a bus fault instead of returning something. That stops the firmware
+// (the fault is recorded and the board restarts), which is the intent: carry on with a wrong
+// secret is the outcome to avoid. Only for rows known to have been written whole.
+uint16_t otpread_ecc_guarded(unsigned row);
 
 // The flags that say how the board is secured.
 //
