@@ -58,7 +58,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 2 | USB bootloader | Kept | Kept for now |
 | 3 | Reboot into bootloader on command | Kept | Removed (the watchdog-scratch flag) |
 | 4 | Signing keys | The two dev keys on this machine; slots 2 and 3 left blank | Two keys made off this machine; slots 2 and 3 marked invalid |
-| 5 | Glitch detector in OTP | Not set | Open until the week-long test |
+| 5 | Glitch detector | Turned on by the firmware at boot (highest sensitivity); not set in OTP | Turned on by the firmware the same way; the OTP bit is open until the week-long test |
 | 6 | Rehearsal burn | First burn is the rehearsal, then the real one | Not applicable; dev-1 is the rehearsal |
 | 7 | Wrong-password count across reboots | In the firmware, merged | Same |
 | 8 | Rollback protection | Not set | Not now |
@@ -90,10 +90,14 @@ and 3 stay blank, which leaves room to add a key and equally lets anyone with a 
 theirs. A production board gets two keys made away from the development machine, each with an
 offline backup, and its unused slots marked invalid. How to make them is below.
 
-**5. Glitch detector in OTP.** Once enabled in OTP it can't be turned off, and a detector too
-sensitive for the board resets a healthy board for ever. So it is not burned anywhere yet.
-Every board arms it by software at boot instead (#78), and a week-long test on a spare board,
-with battery hardware, comes before the decision. See "The glitch detector" below.
+**5. Glitch detector.** The detector is on: the firmware turns it on at every boot, at the
+highest sensitivity, on every board (#78; `glitch off` on the console turns it off). What is
+not done anywhere yet is enabling it in OTP. Once enabled there it can't be turned off, and a
+detector too sensitive for the board would reset a healthy board for ever. So the OTP bit
+waits for a week-long test on a spare board, with battery hardware. Turned on by the firmware
+it starts a second or two into boot and firmware can turn it off again, so it shows whether
+the detector troubles a healthy board; it is not the protection the OTP bit would be. See "The
+glitch detector" below.
 
 **6. Rehearsal burn.** The first time the burn code runs on a chip, it runs as a rehearsal
 that stops on purpose before the secret is complete, spending one of dev-1's three pages. Only

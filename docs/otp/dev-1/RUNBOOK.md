@@ -372,5 +372,6 @@ You should see: refused.
 ## What is left open on dev-1, on purpose
 
 Debug is still enabled, the board still reboots into the bootloader on command, key slots 2
-and 3 are blank, and pages 1 and 2 can still be written over USB. dev-1 shows that the
+and 3 are blank, and pages 1 and 2 can still be written over USB. The glitch detector is on,
+turned on by the firmware at every boot as before; it is not enabled in OTP. dev-1 shows that the
 mechanism works. It does not keep secrets from someone with the board in their hands.
