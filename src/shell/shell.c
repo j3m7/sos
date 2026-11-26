@@ -75,6 +75,10 @@ static void cmd_version(shell_t *sh) {
     pico_get_unique_board_id_string(serial, sizeof(serial));
     chipinfo_format(chip, sizeof(chip), rp2350_chip_version(), rp2350_rom_version());
     shell_printf(sh, "SOS %s\n", sos_version);
+#ifdef SOS_BURN_IMAGE
+    shell_printf(sh, "THIS IS THE BURN IMAGE: it can write OTP (`rootsecret burn`). Not for "
+                     "everyday use.\n");
+#endif
     shell_printf(sh, "board: serial %s\n", serial);
     shell_printf(sh, "chip: %s\n", chip);
     otpread_status_t otp;
@@ -760,11 +764,150 @@ static void on_rootsecret_forget(shell_t *sh, char *answer, void *arg) {
                                         : "clearing the record failed (see dmesg)\n");
 }
 
+#ifdef SOS_BURN_IMAGE
+// --- `rootsecret burn` (the burn image only) ---------------------------------------------------------
+//
+// Writes this board's root secret into OTP, for good (core/rootburn.h). On the console only,
+// and only after: the board's serial typed in, a word typed in, and the BOOTSEL button held.
+// `rootsecret burn plan` says what it would do and writes nothing.
+
+#include "core/rootburn_board.h"
+
+#define BURN_WAIT_MS 30000u             // how long it waits for the button
+#define BURN_HOLD_MS 1000u              // how long the button must be held before it starts
+
+static bool burn_rehearse;
+static uint64_t burn_deadline_ms, burn_held_since_ms;
+
+static void burn_report(shell_t *sh, const rootburn_report_t *rep) {
+    shell_printf(sh, "\n%s.\n", rootburn_result_text(rep->result));
+    if (rep->wrote)
+        shell_printf(sh, "OTP page %u%s%s\n", rep->page,
+                     rep->result == ROOTBURN_WRITE && rep->row ? ", stopped at row " : "",
+                     rep->page_locked ? ": locked against the bootloader" : ": NOT LOCKED");
+    if (rep->result == ROOTBURN_WRITE && rep->row)
+        shell_printf(sh, "(the row was 0x%03x)\n", rep->row);
+    log_msg(rep->result == ROOTBURN_OK || rep->result == ROOTBURN_REHEARSED ? SOS_LOG_NOTICE
+                                                                              : SOS_LOG_ERR,
+            "rootsecret burn: %s (OTP page %u, wrote %s, page %s)", rootburn_result_text(rep->result),
+            rep->page, rep->wrote ? "yes" : "no", rep->page_locked ? "locked" : "not locked");
+    if (rep->result == ROOTBURN_OK)
+        shell_printf(sh, "Now flash the everyday firmware; `rootsecret` there must report the "
+                         "secret in OTP page %u.\n", rep->page);
+    else if (rep->result == ROOTBURN_REHEARSED)
+        shell_printf(sh, "Run `rootsecret burn` now, in this sitting, to write the real secret "
+                         "into the next page.\n");
+    else if (rep->result == ROOTBURN_LOCK)
+        shell_printf(sh, "Do not go on. The page holds the secret and anyone with a cable can "
+                         "still read it.\n");
+}
+
+static bool burn_job(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    uint64_t now = to_ms_since_boot(get_absolute_time());
+    if (cancel) {
+        shell_printf(sh, "\ncancelled: nothing was written\n");
+        return false;
+    }
+    if (!rootburn_button()) {
+        burn_held_since_ms = 0;
+        if (now >= burn_deadline_ms) {
+            shell_printf(sh, "\nthe button wasn't held in time: nothing was written\n");
+            return false;
+        }
+        return true;
+    }
+    if (!burn_held_since_ms)
+        burn_held_since_ms = now;
+    if (now - burn_held_since_ms < BURN_HOLD_MS)
+        return true;
+    shell_printf(sh, "\nwriting OTP: keep the button held and don't unplug the board...\n");
+    rootburn_report_t rep;
+    rootburn_board_run(burn_rehearse, &rep);
+    burn_report(sh, &rep);
+    shell_printf(sh, "You can let go of the button.\n");
+    return false;
+}
+
+static void on_burn_word(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    if (!answer || strcmp(answer, burn_rehearse ? "REHEARSE" : "BURN")) {
+        shell_printf(sh, "not confirmed: nothing was written\n");
+        return;
+    }
+    burn_deadline_ms = to_ms_since_boot(get_absolute_time()) + BURN_WAIT_MS;
+    burn_held_since_ms = 0;
+    shell_printf(sh, "Hold the BOOTSEL button now, and keep it held until told to let go "
+                     "(%u s to start; Ctrl-C cancels)...\n", BURN_WAIT_MS / 1000u);
+    shell_run_job(sh, burn_job, NULL);
+}
+
+static void on_burn_serial(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    char serial[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+    pico_get_unique_board_id_string(serial, sizeof(serial));
+    if (!answer || strcasecmp(answer, serial)) {
+        shell_printf(sh, "that isn't this board's serial: nothing was written\n");
+        return;
+    }
+    shell_ask(sh, burn_rehearse ? "Type REHEARSE to spend one OTP page on purpose: "
+                                : "Type BURN to write this board's root secret into OTP: ",
+              false, on_burn_word, NULL);
+}
+
+static void cmd_rootsecret_burn(shell_t *sh, const char *what) {
+    while (*what == ' ')
+        what++;
+    bool plan = !strcmp(what, "plan");
+    if (*what && !plan && strcmp(what, "rehearse")) {
+        shell_printf(sh, "usage: rootsecret burn [plan | rehearse]\n");
+        return;
+    }
+    rootburn_report_t rep;
+    unsigned to_lock;
+    rootburn_plan(&rep, &to_lock);
+    if (rep.result != ROOTBURN_OK) {
+        shell_printf(sh, "%s.\n", rootburn_result_text(rep.result));
+        return;
+    }
+    shell_printf(sh, "It would use OTP page %u (rows 0x%03x to 0x%03x)", rep.page, rep.page * 64,
+                 rep.page * 64 + 63);
+    if (to_lock)
+        shell_printf(sh, ", after locking %u earlier, spent page%s", to_lock, to_lock == 1 ? "" : "s");
+    shell_printf(sh, ".\n");
+    if (plan) {
+        shell_printf(sh, "BOOTSEL button: %s. Nothing was written.\n",
+                     rootburn_button() ? "held" : "not held");
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    burn_rehearse = !strcmp(what, "rehearse");
+    shell_printf(sh, "\nTHIS WRITES ONE-TIME-PROGRAMMABLE MEMORY. IT CANNOT BE UNDONE.\n");
+    if (burn_rehearse)
+        shell_printf(sh, "Rehearsal: it writes 32 random bytes into that page and stops before "
+                         "they become a root\nsecret. The page is then spent for good, and "
+                         "locked. This board has %u such pages.\n", (unsigned)ROOTOTP_PAGES);
+    else
+        shell_printf(sh, "It writes a new root secret into that page and locks it. Everything "
+                         "this board has\nsealed so far (configuration, host key, cards) is "
+                         "under its old root secret and will\nnot open afterwards. The secret "
+                         "is made on the board and never shown.\n");
+    shell_ask(sh, "Type this board's serial number to go on: ", false, on_burn_serial, NULL);
+}
+#endif // SOS_BURN_IMAGE
+
 // `rootsecret`: the state of the secret every stored key is derived from (core/keyprov.h);
 // `rootsecret forget` (console): clear a record that can't be used, the explicit way out. A
 // usable secret can't be cleared here: that would silently lock everything sealed with it.
 static void cmd_rootsecret(shell_t *sh, const char *args) {
     int state = rootflash_state();
+#ifdef SOS_BURN_IMAGE
+    if (args && !strncmp(args, "burn", 4) && (args[4] == '\0' || args[4] == ' ')) {
+        cmd_rootsecret_burn(sh, args + 4);
+        return;
+    }
+#endif
     if (rootsource() != ROOTSRC_FLASH) {
         // In OTP, or none at all: there is no flash record in play, and nothing to forget.
         shell_printf(sh, "root secret: %s\n", rootsource_describe());
