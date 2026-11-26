@@ -64,6 +64,12 @@ add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
 target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chipinfo COMMAND test_chipinfo)
 
+# src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
+# in OTP (the `bootkey` command).
+add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
+target_include_directories(test_bootkey PRIVATE ${SOS_ROOT}/src)
+add_test(NAME bootkey COMMAND test_bootkey)
+
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)

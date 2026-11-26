@@ -16,13 +16,18 @@
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/hash.h>
+
 #include "chat/chat.h"
+#include "core/bootkey.h"
 #include "core/chipinfo.h"
 #include "core/config.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/log.h"
+#include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
 #include "core/settings.h"
@@ -69,12 +74,124 @@ static void cmd_version(shell_t *sh) {
     shell_printf(sh, "SOS %s\n", sos_version);
     shell_printf(sh, "board: serial %s\n", serial);
     shell_printf(sh, "chip: %s\n", chip);
+    otpread_status_t otp;
+    otpread_status(&otp);
+    shell_printf(sh, "secure boot: %s\n", otp.secure_boot
+                     ? "on (only firmware signed with a boot key in OTP starts)"
+                     : "off (open board: any firmware starts)");
+    shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
+                     : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
+    // Those two are what the chip latched at reset. Its OTP rows should say the same.
+    if (!otp.rows_readable)
+        shell_printf(sh, "(the OTP rows behind those flags are unreadable, so they couldn't be "
+                         "cross-checked)\n");
+    else if (!otp.rows_agree)
+        shell_printf(sh, "WARNING: the OTP rows say otherwise (rows 0x%02lx, chip 0x%02lx): "
+                         "written since the last reset, or damaged\n",
+                     (unsigned long)(otp.rows & 0x7f), (unsigned long)(otp.latched & 0x7f));
+}
+
+// --- boot key --------------------------------------------------------------------------------
+
+static void print_hash(shell_t *sh, const uint8_t *hash) {
+    char hex[2 * BOOTKEY_HASH_LEN + 1];
+    for (unsigned i = 0; i < BOOTKEY_HASH_LEN; i++)
+        snprintf(hex + 2 * i, 3, "%02x", hash[i]);
+    shell_printf(sh, "%s", hex);
+}
+
+// `bootkey`: would this firmware still start with secure boot on? It finds the public key the
+// running image is signed with, hashes it as the boot ROM does, and compares that with the boot
+// key slots in OTP. Reads only. docs/securing-a-board.md runs it before the bit that turns
+// secure boot on is written, because a wrong hash in OTP then means a board that runs nothing.
+static void cmd_bootkey(shell_t *sh) {
+    extern char __flash_binary_start, __flash_binary_end;
+    // The signature's block is added after linking, just past what the linker calls the end.
+    const uint8_t *image = (const uint8_t *)&__flash_binary_start;
+    size_t len = (size_t)(&__flash_binary_end - &__flash_binary_start) + 4096;
+    size_t flash_left = XIP_BASE + PICO_FLASH_SIZE_BYTES - (uintptr_t)image;
+    if (len > flash_left)
+        len = flash_left;
+
+    const uint8_t *pubkey;
+    bootkey_image_t kind = bootkey_image_pubkey(image, len, &pubkey);
+    uint8_t hash[BOOTKEY_HASH_LEN];
+    bool signed_image = kind == BOOTKEY_IMAGE_SIGNED &&
+                        wc_Sha256Hash(pubkey, BOOTKEY_PUBKEY_LEN, hash) == 0;
+    if (signed_image) {
+        shell_printf(sh, "this firmware: signed; its key's hash is ");
+        print_hash(sh, hash);
+        shell_printf(sh, "\n");
+    } else if (kind == BOOTKEY_IMAGE_UNSIGNED) {
+        shell_printf(sh, "this firmware: not signed\n");
+    } else if (kind == BOOTKEY_IMAGE_SIGNED) {
+        shell_printf(sh, "this firmware: signed, but hashing its key failed\n");
+    } else {
+        shell_printf(sh, "this firmware: its image description wasn't found in flash, so "
+                         "nothing can be said about its signature\n");
+    }
+
+    bootkey_otp_t otp;
+    otpread_status_t st;
+    otpread_status(&st);
+    shell_printf(sh, "secure boot: %s\n", st.secure_boot ? "on" : "off");
+    if (!otpread_bootkeys(&otp)) {
+        shell_printf(sh, "boot key slots in OTP: unreadable\n"
+                         "NO VERDICT: the boot keys can't be read from here\n");
+        return;
+    }
+    bool any = false;
+    for (unsigned s = 0; s < BOOTKEY_SLOTS; s++) {
+        bool blank = bootkey_slot_blank(&otp, s);
+        bool marked_valid = otp.valid >> s & 1u, marked_invalid = otp.invalid >> s & 1u;
+        if (blank && !marked_valid && !marked_invalid)
+            continue;
+        any = true;
+        shell_printf(sh, "boot key slot %u: ", s);
+        if (blank)
+            shell_printf(sh, "(blank)");
+        else
+            print_hash(sh, otp.slot[s]);
+        shell_printf(sh, "  %s\n", marked_invalid ? "marked invalid: never accepted"
+                                   : marked_valid ? "valid" : "not marked valid");
+    }
+    if (!any)
+        shell_printf(sh, "boot key slots in OTP: all four blank\n");
+
+    if (!signed_image) {
+        if (kind == BOOTKEY_IMAGE_UNSIGNED)
+            shell_printf(sh, "NO MATCH: %s\n", st.secure_boot
+                             ? "(unexpected: secure boot is on and this firmware is running)"
+                             : "with secure boot on, this firmware would not start");
+        else
+            shell_printf(sh, "NO VERDICT: this firmware's key couldn't be determined\n");
+        return;
+    }
+    int slot;
+    switch (bootkey_compare(&otp, hash, &slot)) {
+    case BOOTKEY_MATCH:
+        shell_printf(sh, "MATCH: slot %d holds the hash of this firmware's key and is valid. "
+                         "This compares keys only:\nthe signature itself isn't checked here "
+                         "(`picotool info -a` on the image says `signature: verified`)\n", slot);
+        break;
+    case BOOTKEY_MATCH_NOT_VALID:
+        shell_printf(sh, "NOT YET: slot %d holds this firmware's key but isn't marked valid. "
+                         "With secure boot on, this firmware would not start\n", slot);
+        break;
+    case BOOTKEY_MATCH_INVALIDATED:
+        shell_printf(sh, "NO MATCH: slot %d holds this firmware's key but is marked invalid. "
+                         "With secure boot on, this firmware would not start\n", slot);
+        break;
+    default:
+        shell_printf(sh, "NO MATCH: no boot key slot holds this firmware's key. With secure boot "
+                         "on, this firmware would not start\n");
+    }
 }
 
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
-    shell_printf(sh, "version           firmware commit, board serial and chip revision\n");
+    shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
     shell_printf(sh, "time cal [ppm]    RTC calibration: how fast the RTC runs\n");
@@ -92,6 +209,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "glitch            glitch detector setting, state and resets\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
+    shell_printf(sh, "bootkey           would this firmware start with secure boot on? (its key vs OTP)\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
     shell_printf(sh, "wifi              Wi-Fi network\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
@@ -1196,6 +1314,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_config(sh, args);
     else if (!strcmp(cmd, "glitch"))
         cmd_glitch(sh, args);
+    else if (!strcmp(cmd, "bootkey"))
+        cmd_bootkey(sh);
     else if (!strcmp(cmd, "rootsecret"))
         cmd_rootsecret(sh, args);
     else if (!strcmp(cmd, "key"))
