@@ -63,7 +63,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 7 | Wrong-password count across reboots | In the firmware, merged | Same |
 | 8 | Rollback protection | Not set | Not now |
 | 9 | Settings from a file over USB (`ninja provision`) | Accepted | Refused: the board is set up on its console only |
-| 10 | Host key tied to the owner secret | In the firmware, merged | Same |
+| 10 | The board's SSH host key after its settings are wiped | A new one is made at the next setup (in the firmware, merged) | Same |
 | 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page | Deferred until dev-1 is done |
 
 ### The reasons, and what each costs
@@ -121,9 +121,11 @@ production board is. The switch is one OTP setting of its own, separate from sec
 which is why dev-1 can have secure boot without it. (In the code and elsewhere in this
 document it is called the "sealed-only marker", #84.)
 
-**10. Host key tied to the owner secret.** Erasing a board's configuration makes its SSH host
-key unreadable, and the next setup makes a new one (#88). Otherwise someone who wiped a board
-and set it up as theirs would answer SSH as the old board. The cost: the owner's own
+**10. The board's SSH host key after its settings are wiped.** The SSH host key is the key
+pair an SSH server uses to identify itself. SSH clients remember its fingerprint and warn when
+it changes, so it is the board's SSH identity. Erasing a board's configuration makes its SSH
+host key unreadable, and the next setup makes a new one (#88). Otherwise someone who wiped a
+board and set it up as theirs would answer SSH as the old board. The cost: the owner's own
 `config reset` changes the board's SSH identity, and clients warn.
 
 **11. OTP pages locked against the bootloader.** With the bootloader kept, `picotool` can
@@ -327,7 +329,7 @@ and merged before anything is burned.
    password and the board's serial typed in, a physical action while it runs (holding the
    BOOTSEL button, or a jumper on a pin).
 3. **Knowing it is secured: a marker of its own, not secure boot** (the owner's decision,
-   2026-11-25). A board refuses unsealed configuration and host-key records (`refuse_plain`,
+   2026-11-25). A board refuses unsealed configuration and SSH host-key records (`refuse_plain`,
    already implemented and off) and refuses `rootsecret forget` when its *sealed-only marker*
    is set. `SECURE_BOOT_ENABLE` alone does not do it, so that a development board with secure
    boot can still be provisioned from a file. `version` shows the three facts: where the root
@@ -370,7 +372,7 @@ and merged before anything is burned.
    same load as the key hash.
 
 Moving a board's root secret from flash to OTP changes every derived key. The board's sealed
-configuration and host key become unreadable and its cards locked. So the production board is
+configuration and SSH host key become unreadable and its cards locked. So the production board is
 set up fresh after step 3, never before.
 
 ## Before touching the production board
@@ -500,9 +502,9 @@ issue.
 | Load a build signed with another key | The bootrom won't run it |
 | Load the signed build | Runs |
 | `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
-| `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no host key |
+| `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no SSH host key |
 | Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
-| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. **Its SSH host key is still there** (it is in another sector, sealed under the same root secret), so the board set up again by whoever is at the console presents the old host key, until the change in "to confirm" item 8 is built: after it, the wipe makes the old host key unreadable and setup makes a new one |
+| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. Its old SSH host key can no longer be opened (decision 10): the board set up again by whoever is at the console gets a new one, and SSH clients warn that it changed |
 | Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
 | `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
 | Console without the password | Nothing but the prompt |
@@ -558,7 +560,7 @@ boot-key pages. After the root secret is written the board is set up afresh, as 
 
 The root secret in OTP is a new one, so every key derived from it changes. On dev-1 that means:
 the sealed configuration no longer opens (set up again with `setup` or `ninja provision`), the
-SSH host key is replaced (clients will see a changed host key and must forget the old one), the
+SSH host key is replaced (clients will see a changed SSH host key and must forget the old one), the
 console password is gone with the configuration, and the encrypted card no longer mounts and is
 formatted again. dev-1's contents are disposable, so nothing is saved first. Whoever does it
 says so to the other sessions before and after.
@@ -762,13 +764,13 @@ This list is a gate: the document is not final, and nothing is burned, while any
    a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
    sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
    the root secret's list starts at page 4 or later.
-8. **The host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
+8. **The SSH host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
    key is sealed under a key made from the root secret and the owner secret, the way an
    encrypted card's key is. Erasing or provisioning a board's configuration makes its host
    key unreadable, `config reset` also stops SSH at once, and the next setup makes a new
    one. Costs the owner accepted: the owner's own `config reset` changes the board's SSH
-   identity (clients warn), and losing both configuration copies loses the host key too.
-   An open board kept its existing host key when #88 landed (it is taken over once, same
+   identity (clients warn), and losing both configuration copies loses the SSH host key too.
+   An open board kept its existing SSH host key when #88 landed (it is taken over once, same
    fingerprint); a sealed-only board does not take over a key from before #88. On dev-1 the
-   host key changes during this run, at step 3.5, because the root secret moves to OTP.
-   Firmware older than #88 makes a new host key over the record #88 writes.
+   SSH host key changes during this run, at step 3.5, because the root secret moves to OTP.
+   Firmware older than #88 makes a new SSH host key over the record #88 writes.

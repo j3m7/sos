@@ -35,7 +35,7 @@ password, so **after every restart the console asks for it** before it takes a c
 
 What will change on the board: its saved configuration, its SSH host key and its SD card's
 encryption all belong to the root secret it has now. After step 6 they no longer open. You set
-the board up again in step 9, and SSH clients will warn about a changed host key.
+the board up again in step 9, and SSH clients will warn about a changed SSH host key.
 
 ## Part 1: preparation (nothing permanent)
 
@@ -200,8 +200,8 @@ On the console: `setup` (console password, Wi-Fi, your SSH public key). Then `sd
 type `yes`; write down the card key it shows. Then `reboot`.
 
 You should see after the reboot: the console asks for the password you just set; then Wi-Fi
-connects, `sshd: listening ... host key ...` with a fingerprint different from before, and
-`sd` shows the card mounted.
+connects, and the log line `sshd: listening ... host key ...` shows the board's new SSH host
+key: a fingerprint different from before. `sd` shows the card mounted.
 
 From here on, every restart ends at the `Password:` prompt. Type it before the next console
 command.
