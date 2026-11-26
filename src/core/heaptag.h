@@ -11,7 +11,9 @@
 // malloc really gave it (malloc_usable_size), so freeing needs no size and blocks carry no
 // header; malloc's own bookkeeping per block isn't counted. Pure C, safe from both cores.
 typedef enum {
-    HEAP_NET,       // SSH and TLS: all of wolfSSL/wolfSSH, session buffers, certificates, SFTP files
+    HEAP_NET,       // SSH and TLS: all of wolfSSL/wolfSSH, session buffers, certificates, SFTP files.
+                    // wolfCrypt's hooks don't say who asks, so its other users count here too,
+                    // network or not: card encryption, sealed records, passwords, the RNG
     HEAP_LUA,       // the script's state, its source and core 1's stack
     HEAP_EDIT,      // the editor's text
     HEAP_FILES,     // ls, cat, cp, format

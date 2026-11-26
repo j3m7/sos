@@ -68,6 +68,8 @@ static tls_conn_t *verifying;
 
 // --- heap accounting (all wolfSSL/wolfSSH allocations) ---------------------------------------
 
+// Kept apart from HEAP_NET's counter, which these hooks also feed: that one includes the
+// application's own SSH, TLS and certificate blocks, and a connection's peak is wolfSSL's alone.
 static int64_t heap_now;
 
 // Raise each open connection's peak to what's in use now, counted from its tls_open(). Each

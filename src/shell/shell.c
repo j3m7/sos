@@ -310,7 +310,9 @@ static void cmd_mem(shell_t *sh) {
     cyw43_arch_lwip_begin();
     struct stats_mem net = lwip_stats.mem;
     cyw43_arch_lwip_end();
-    shell_printf(sh, "lwip:  %u in use, %u peak, %u total (its own pool, not in the heap)\n",
+    // lwIP's heap only (MEM_SIZE); its packet and connection pools are in `wifi stats`.
+    shell_printf(sh, "lwip:  %u in use, %u peak, %u total (lwIP's own heap, not part of the above; "
+                     "its pools: wifi stats)\n",
                  (unsigned)net.used, (unsigned)net.max, (unsigned)net.avail);
     shell_printf(sh, "stack: %u peak of %u bytes\n",
                  (unsigned)stackmon_peak(), (unsigned)stackmon_size());

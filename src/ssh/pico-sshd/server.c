@@ -208,7 +208,8 @@ ssh_server_t* ssh_server_new(unsigned max_sessions, size_t rxbuf_size, size_t tx
 		return NULL;
 	if (!(st = heap_zalloc(HEAP_NET, sizeof(ssh_server_t))))
 		return NULL;
-	if (!(st->sessions = heap_zalloc(HEAP_NET, max_sessions * sizeof(ssh_session_t)))) {
+	if (max_sessions > SIZE_MAX / sizeof(ssh_session_t) ||
+	    !(st->sessions = heap_zalloc(HEAP_NET, max_sessions * sizeof(ssh_session_t)))) {
 		heap_release(HEAP_NET, st);
 		return NULL;
 	}
