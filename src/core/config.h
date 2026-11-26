@@ -47,6 +47,9 @@
 #define CONFIG_GLITCH_DETECTOR_OFF     9
 #define CONFIG_GLITCH_DETECTOR_MAX     9
 #define CONFIG_GLITCH_DEFAULT_MODE     4        // armed at sensitivity 3
+// Saved Wi-Fi networks: the first in wifi_ssid/wifi_password, the others in wifi_extra[].
+#define CONFIG_WIFI_EXTRA 4
+#define CONFIG_WIFI_NETS  (1 + CONFIG_WIFI_EXTRA)
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -54,7 +57,14 @@ typedef struct {
     char comment[CONFIG_KEY_COMMENT_MAX + 1];
 } config_key_t;
 
+// A Wi-Fi network: SSID (empty = unused entry) and passphrase (empty = open network).
 typedef struct {
+    char ssid[CONFIG_SSID_MAX + 1];
+    char password[CONFIG_PASSWORD_MAX + 1];
+} config_wifi_net_t;
+
+typedef struct {
+    // The first saved Wi-Fi network (see wifi_extra for the others).
     char wifi_ssid[CONFIG_SSID_MAX + 1];        // empty = not configured
     char wifi_password[CONFIG_PASSWORD_MAX + 1];// empty = open network
     char hostname[CONFIG_HOSTNAME_MAX + 1];
@@ -102,6 +112,13 @@ typedef struct {
     // Not protection (see glitchdet.h). This byte was padding (zero) in records saved before it
     // had a use, so those load as the default and the record's length doesn't change.
     uint8_t glitch_detector;
+    // Padding in records saved before wifi_extra existed (they are 1796 bytes, this included),
+    // named so the field after it starts where those records end.
+    uint8_t reserved[2];
+    // The other saved Wi-Fi networks, in the order they are preferred, after wifi_ssid. Used
+    // entries come first; all are unused while wifi_ssid is empty. Edit them with the
+    // config_wifi_*() functions, which keep that so.
+    config_wifi_net_t wifi_extra[CONFIG_WIFI_EXTRA];
 } sos_config_t;
 
 // The stored setting as glitchdet_start() and glitchdet_apply() take it: 0 = off, 1..4 = armed
@@ -179,6 +196,32 @@ const char *config_check_console_password(const char *password);
 const char *config_check_country(const char *country);
 // A DNS name or IPv4 address: letters, digits, '-' and '.', no empty labels.
 const char *config_check_ntp_server(const char *server);
+
+// --- Wi-Fi networks ------------------------------------------------------------------------------
+// Numbered 0 (wifi_ssid) to config_wifi_count() - 1, in the order they are preferred.
+
+unsigned config_wifi_count(const sos_config_t *cfg);
+
+// Copy network `index` to *net. False if out of range.
+bool config_wifi_get(const sos_config_t *cfg, unsigned index, config_wifi_net_t *net);
+
+// The index of the network named ssid, or -1.
+int config_wifi_find(const sos_config_t *cfg, const char *ssid);
+
+// Add a network after the others. Returns NULL on success, otherwise a reason (invalid SSID or
+// passphrase, already saved, list full).
+const char *config_wifi_add(sos_config_t *cfg, const char *ssid, const char *password);
+
+// Make ssid the first network, with this passphrase, in place of the current first one (or as
+// the only one); a later entry with the same SSID is dropped. NULL on success, otherwise a reason.
+const char *config_wifi_set_first(sos_config_t *cfg, const char *ssid, const char *password);
+
+// Remove network `index`, keeping the order of the rest (removing 0 makes 1 the first). False
+// if out of range.
+bool config_wifi_remove(sos_config_t *cfg, unsigned index);
+
+// Move network `index` to the front; the others keep their order. False if out of range.
+bool config_wifi_prefer(sos_config_t *cfg, unsigned index);
 
 // Parse an authorized_keys line: "<type> <base64> [comment]". Supported types: ssh-ed25519,
 // ecdsa-sha2-nistp256. Returns NULL on success, otherwise a short reason.
