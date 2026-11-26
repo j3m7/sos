@@ -158,6 +158,10 @@ debug off) and the hashes of the keys its firmware must be signed with.
   is a bus fault. It never calls the boot ROM's `otp_access`, the function that can program
   OTP: everyday firmware carries no code that writes it. Flag rows are stored several times
   and read by vote (three of eight for `CRIT1`, two of three for the boot flags).
+- **Unreadable is not a state:** a row the code may not read comes back as all ones, which
+  would look like every flag set. It is reported as unreadable. The secure boot and debug
+  flags are taken from the chip's `CRITICAL` register (what it latched at reset and acts on),
+  with the `CRIT1` rows as a cross-check.
 - **`bootkey.c`** (no hardware, unit tested) finds the public key in the running image's
   signature block (the block format of datasheet section 5.9; the last image definition in
   the block loop is the one the boot ROM uses) and compares its SHA-256 with the boot key

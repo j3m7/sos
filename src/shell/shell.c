@@ -81,6 +81,14 @@ static void cmd_version(shell_t *sh) {
                      : "off (open board: any firmware starts)");
     shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
                      : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
+    // Those two are what the chip latched at reset. Its OTP rows should say the same.
+    if (!otp.rows_readable)
+        shell_printf(sh, "(the OTP rows behind those flags are unreadable, so they couldn't be "
+                         "cross-checked)\n");
+    else if (!otp.rows_agree)
+        shell_printf(sh, "WARNING: the OTP rows say otherwise (rows 0x%02lx, chip 0x%02lx): "
+                         "written since the last reset, or damaged\n",
+                     (unsigned long)(otp.rows & 0x7f), (unsigned long)(otp.latched & 0x7f));
 }
 
 // --- boot key --------------------------------------------------------------------------------
@@ -125,8 +133,13 @@ static void cmd_bootkey(shell_t *sh) {
 
     bootkey_otp_t otp;
     otpread_status_t st;
-    otpread_bootkeys(&otp);
     otpread_status(&st);
+    shell_printf(sh, "secure boot: %s\n", st.secure_boot ? "on" : "off");
+    if (!otpread_bootkeys(&otp)) {
+        shell_printf(sh, "boot key slots in OTP: unreadable\n"
+                         "NO VERDICT: the boot keys can't be read from here\n");
+        return;
+    }
     bool any = false;
     for (unsigned s = 0; s < BOOTKEY_SLOTS; s++) {
         bool blank = bootkey_slot_blank(&otp, s);
@@ -144,20 +157,22 @@ static void cmd_bootkey(shell_t *sh) {
     }
     if (!any)
         shell_printf(sh, "boot key slots in OTP: all four blank\n");
-    shell_printf(sh, "secure boot: %s\n", st.secure_boot ? "on" : "off");
 
     if (!signed_image) {
         if (kind == BOOTKEY_IMAGE_UNSIGNED)
             shell_printf(sh, "NO MATCH: %s\n", st.secure_boot
                              ? "(unexpected: secure boot is on and this firmware is running)"
                              : "with secure boot on, this firmware would not start");
+        else
+            shell_printf(sh, "NO VERDICT: this firmware's key couldn't be determined\n");
         return;
     }
     int slot;
     switch (bootkey_compare(&otp, hash, &slot)) {
     case BOOTKEY_MATCH:
-        shell_printf(sh, "MATCH: slot %d holds this firmware's key and is valid. With secure boot "
-                         "on, this firmware starts\n", slot);
+        shell_printf(sh, "MATCH: slot %d holds the hash of this firmware's key and is valid. "
+                         "This compares keys only:\nthe signature itself isn't checked here "
+                         "(`picotool info -a` on the image says `signature: verified`)\n", slot);
         break;
     case BOOTKEY_MATCH_NOT_VALID:
         shell_printf(sh, "NOT YET: slot %d holds this firmware's key but isn't marked valid. "
