@@ -407,7 +407,7 @@ issue.
 | Attempt | Expected |
 |---|---|
 | Attach a debug probe | Refused |
-| Load an unsigned build over USB (if the bootloader was kept) | The bootrom won't run it |
+| Load an unsigned build over USB (if the bootloader was kept). Through our own tools this needs `SOS_FLASH_UNGUARDED=1` for that one flash: the flash guard refuses an unsigned image before it reaches the board | The bootrom won't run it |
 | Load a build signed with another key | The bootrom won't run it |
 | Load the signed build | Runs |
 | `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
@@ -426,11 +426,12 @@ Not possible to try here: the glitch attacks, the flash swap and chip imaging.
 mechanisms work. We don't really care about protecting the data on the board." And: "We are
 not working with a production board until dev-1 is tested and working."
 
-**Status: draft, for review. No OTP write on dev-1 is approved by this section.** The owner
-chose on 2026-11-25 to run steps 3 and 4 on dev-1 with the development signing key ("lets test
-the whole thing"), and then: "Lets wait for the firmware to be ready and then enable all of the
-features in the intended order." So nothing here is run until the firmware it needs is merged,
-the gates below are met, and the owner names each write. The owner runs every OTP command.
+**Status: reviewed; waiting for the owner's approval. No OTP write on dev-1 is approved by
+this section, and none has been made.** The owner chose on 2026-11-25 to run steps 3 and 4 on
+dev-1 with the development signing key ("lets test the whole thing"), and then: "Lets wait for
+the firmware to be ready and then enable all of the features in the intended order." The
+firmware is merged (#79, #80, #81, #82, #84, #86, #87, #88, #89). What remains is the owner's
+approval of this document, the gates below, and the owner naming and running each write.
 
 dev-1 is the only board all sessions develop on (serial F94525FD61D9A1CC, RP2350 A2). A mistake
 at the last step leaves the project without a board until another arrives.
@@ -465,8 +466,11 @@ the button and runs every `picotool otp` command.
 8. **`rootsecret burn`**: type the serial, type `BURN`, hold BOOTSEL. It must end "written,
    verified and its page locked", page 5. **Any other ending: stop here.**
 9. The everyday firmware is flashed. `rootsecret` says the secret is in OTP page 5, locked
-   until the next reset.
-10. From BOOTSEL, `picotool otp get` of a row in page 5 is refused.
+   until the next reset. **From here until step 11 the board has no configuration:** what it
+   had was sealed under the old root secret and no longer opens. No network, no SSH, an open
+   console. That is expected.
+10. From BOOTSEL, `picotool otp get` of a row in page 5 (the secret) **and** of a row in
+    page 4 (the spent page) is refused: both were locked by the burn.
 11. `setup` on the console (password, network, trusted key), and the card is formatted. After
     a reboot the configuration loads and the card mounts. The board has a new SSH host key.
 
@@ -475,14 +479,19 @@ the button and runs every `picotool otp` command.
 12. **Load `1-boot-keys.json`.** Read the rows back. `bootkey` on the board says `NOT YET`.
 13. Trial load, then **load `2-key-valid.json`.** Read back. `bootkey` says `MATCH`, slot 0.
     An image signed with the second key is flashed: `MATCH`, slot 1. The first key's image is
-    flashed back.
+    flashed back. (The second-key image is the same source built in a build directory of its
+    own, `cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=<the second key>`, so that the
+    everyday build and its setting in `local.cmake` are not touched.)
 14. The owner confirms the key backup once more. `bootkey` says `MATCH` and
     `picotool info -a` of the image read back from the board says `signature: verified`.
 15. Trial load, then **load `3-secure-boot.json`: the last bit.** Read back. `version` still
     says "off", with a warning, until the reset; after it the board boots and `version` says
     `secure boot: on`.
-16. An unsigned image is flashed: the board must not run it, and must come back with a
-    signed one loaded from BOOTSEL.
+16. First a plain `ninja flash` of the signed image: flashing a secured board through the
+    bootloader must still work. Then an unsigned image is flashed, **with
+    `SOS_FLASH_UNGUARDED=1` for that one flash** (our own flash guard would otherwise refuse
+    it, which is its job): the board must not run it, and must come back with a signed one
+    loaded from BOOTSEL.
 17. Trial load, then **load `4-page3-lock.json`.** Read back. The zero write to row 0x0ff is
     refused; a read of page 1 is answered.
 
@@ -557,7 +566,8 @@ below still apply and the owner names each write.
    watchdog feeding really has.
 3. Only then: the burn is run again, without the rehearsal argument. It lands in the second
    page. That is dev-1's root secret.
-4. The read attempt from BOOTSEL is step 3.4 on that page.
+4. The read attempt from BOOTSEL is step 3.4, on that page and on the spent one: the burn
+   locked both, and both must refuse.
 
 **What the spent page then holds:** 32 random bytes with their chaff, complete, with no marker.
 They were never a root secret: nothing was ever derived from or sealed under them, and the
@@ -581,10 +591,16 @@ pages, which keeps all three real pages but tests code the production board won'
 - [ ] Merged and reviewed: the key provider's OTP backend and the burn image (firmware items 1
       and 2), and the sealed-only marker (item 3), so that secure boot on dev-1 changes nothing
       about how it is provisioned.
-- [ ] "To confirm" items 1, 3, 4 and 7 are closed (the exact commands and files; reading and
-      soft-locking a page from Secure code; raw row writes for the chaff; which pages). Items 2
-      and 6 concern `DISABLE_WATCHDOG_SCRATCH` and item 5 the glitch detector: none is written
-      on dev-1, so they don't gate this run.
+- [ ] "To confirm" items 1 and 7 are closed (the exact commands and files, in
+      `docs/otp/dev-1/`; which pages). Items 3 and 4 (reading and soft-locking a page from
+      Secure code; raw row writes for the chaff) **are settled on paper and in host tests, and
+      can't be closed any further before the run: this run is where they first happen on a
+      chip.** The soft lock and the guarded read were tried on dev-1 on a blank page (#86);
+      raw and error-corrected row writes first run in the rehearsal (step 7 of the one-page
+      list), and the bootloader's lock keeping `picotool` out is first seen at step 10. That
+      is why the rehearsal comes first and why any ending but the expected one stops the run.
+      Items 2 and 6 concern `DISABLE_WATCHDOG_SCRATCH` and item 5 the glitch detector: none is
+      written on dev-1, so they don't gate this run.
 - [ ] The second dev key exists. The hash of each key has been computed twice, independently
       (`bootkey` on a board flashed with an image signed by that key is one of the two).
 - [ ] The OTP files for dev-1 are written by hand, one per write, reviewed, and contain
@@ -726,8 +742,12 @@ This list is a gate: the document is not final, and nothing is burned, while any
    register; the datasheet says the flag makes the bootrom ignore the scratch registers at boot.
 3. How Secure code reads and soft-locks an OTP page in the SDK version we use, and that the
    bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
+   *The first half is done: #86, with the soft lock and the guarded read tried on dev-1 on a
+   blank page. The second half is first seen on a chip in the dev-1 run, when a read of the
+   locked pages from BOOTSEL is refused.*
 4. Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
-   row write and read, used for the chaff rows.
+   row write and read, used for the chaff rows. *Written and host tested (#87) against the
+   SDK's description of the call; first run on a chip in the dev-1 rehearsal.*
 5. Glitch detector: the week-long test's results; and that the detector's `LOCK` register
    stops software from disarming it.
 6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
@@ -735,17 +755,13 @@ This list is a gate: the document is not final, and nothing is burned, while any
    a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
    sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
    the root secret's list starts at page 4 or later.
-8. **The host key after a wipe: decided by the owner, 2026-11-25 ("Yes"), not built yet.**
-   Erasing or provisioning the configuration of a sealed-only board empties it, and whoever
-   is then at its console can set it up as theirs. Today the SSH host key survives that, so
-   their board answers SSH as the old one did. Decided: the host key is sealed under a key
-   derived from the root secret **and the owner secret**, the way an encrypted card's key
-   already is. A configuration wipe then makes the old host key unreadable, and the board
-   makes a new one at the next setup, with nothing needing to detect the wipe. Costs the owner
-   accepted: the owner's own `config reset` changes the board's SSH identity (clients warn);
-   losing both configuration copies loses the host key too; dev-1's host key is replaced once
-   when this lands. A pull request of its own. It must settle the order at boot (the owner
-   secret is loaded or made before the host key is opened or made), what an unconfigured
-   board offers on SSH before it is set up, that a host key sealed the old way isn't quietly
-   accepted on a sealed-only board, and it needs a host test that a new owner secret can't
-   open the old record.
+8. **The host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
+   key is sealed under a key made from the root secret and the owner secret, the way an
+   encrypted card's key is. Erasing or provisioning a board's configuration makes its host
+   key unreadable, `config reset` also stops SSH at once, and the next setup makes a new
+   one. Costs the owner accepted: the owner's own `config reset` changes the board's SSH
+   identity (clients warn), and losing both configuration copies loses the host key too.
+   An open board kept its existing host key when #88 landed (it is taken over once, same
+   fingerprint); a sealed-only board does not take over a key from before #88. On dev-1 the
+   host key changes during this run, at step 3.5, because the root secret moves to OTP.
+   Firmware older than #88 makes a new host key over the record #88 writes.
