@@ -23,7 +23,19 @@ pico_sdk_init()
 # local.cmake: dependency paths and build options for this machine. The firmware image holds no
 # device configuration: a board is set up on its console ('setup') or with the `provision`
 # target below.
+#
+# The signing key (SOS_SIGN_KEY, see "Signed builds" below) given on the command line wins over
+# local.cmake: -DSOS_SIGN_KEY=<key> for this build directory, or -DSOS_SIGN_KEY=none for an
+# unsigned image. local.cmake's set() would otherwise hide the command line's value, and a
+# build made "with the other key" would silently be signed with the usual one.
+if (DEFINED CACHE{SOS_SIGN_KEY})
+    set(SOS_SIGN_KEY_FROM_COMMAND_LINE "$CACHE{SOS_SIGN_KEY}")
+    set(SOS_SIGN_KEY_ON_COMMAND_LINE TRUE)
+endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/local.cmake OPTIONAL)
+if (SOS_SIGN_KEY_ON_COMMAND_LINE)
+    set(SOS_SIGN_KEY "${SOS_SIGN_KEY_FROM_COMMAND_LINE}")
+endif()
 
 # --- wolfSSL / wolfSSH ---------------------------------------------------------
 # Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
@@ -268,8 +280,15 @@ pico_enable_stdio_uart(sos 1)
 # key's hash, the "key valid" flag AND the bit that enables secure boot. Loading that file once
 # turns secure boot on for good. A file like that doesn't belong among everyday build outputs,
 # so it's switched off below; making it is part of the written procedure for securing a board.
+#
+# Where the key comes from, first match: the command line (-DSOS_SIGN_KEY=..., kept in this
+# build directory's cache until -USOS_SIGN_KEY), local.cmake, the environment. "none" or an
+# empty value means: this image is not signed, whatever the others say.
 if (NOT DEFINED SOS_SIGN_KEY AND DEFINED ENV{SOS_SIGN_KEY})
     set(SOS_SIGN_KEY "$ENV{SOS_SIGN_KEY}")
+endif()
+if ("${SOS_SIGN_KEY}" STREQUAL "none" OR "${SOS_SIGN_KEY}" STREQUAL "NONE")
+    set(SOS_SIGN_KEY "")
 endif()
 if (SOS_SIGN_KEY)
     if (NOT EXISTS "${SOS_SIGN_KEY}")

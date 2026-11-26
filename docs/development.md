@@ -61,6 +61,18 @@ the environment (read when CMake configures):
 set(SOS_SIGN_KEY "<keys-dir>/sos-sign.pem")
 ```
 
+A key given on the command line wins over `local.cmake`, for that build directory, so another
+key or an unsigned image can be built beside the everyday one without editing anything:
+
+```sh
+cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=<keys-dir>/other.pem    # signed with another key
+cmake --preset debug -B build-unsigned -DSOS_SIGN_KEY=none                 # not signed
+```
+
+CMake says which it is when it configures (`SOS: the image is signed with ...` or `is not
+signed`). To see which key an image is really signed with, `tools/flash.sh -n <dir>/sos.bin`
+prints the hash of its key and flashes nothing.
+
 `picotool` then hashes and signs the image after linking: `sos.elf`, `sos.uf2` and the `flash`
 target are the signed image. Without `SOS_SIGN_KEY` the image is unsigned, as before; CMake
 prints which it is when it configures. To check an image:
