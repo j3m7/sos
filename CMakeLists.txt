@@ -110,6 +110,8 @@ set(SOS_SOURCES
     src/core/keysector.c
     src/core/rootsecret.c
     src/core/rootflash.c
+    src/core/failcount.c
+    src/core/failflash.c
     src/core/keyprov.c
     src/core/seal.c
     src/core/pwverify.c
@@ -122,6 +124,8 @@ set(SOS_SOURCES
     src/core/chipinfo.c
     src/core/bootkey.c
     src/core/otpread.c
+    src/core/sealedonly.c
+    src/core/sealedonly_board.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -278,6 +282,15 @@ if (SOS_SIGN_KEY)
     message(STATUS "SOS: the image is signed with ${SOS_SIGN_KEY}")
 else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
+endif()
+
+# For trying the sealed-only behaviour (src/core/sealedonly.h) on a development board without
+# writing its OTP marker: -DSOS_FORCE_SEALED_ONLY=ON makes this image treat every board as
+# sealed-only. It can only add the restriction; an image without it reads the board's marker.
+option(SOS_FORCE_SEALED_ONLY "Treat every board as sealed-only (testing)" OFF)
+if (SOS_FORCE_SEALED_ONLY)
+    target_compile_definitions(sos PRIVATE SOS_FORCE_SEALED_ONLY=1)
+    message(STATUS "SOS: this image treats every board as sealed-only (SOS_FORCE_SEALED_ONLY)")
 endif()
 
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map

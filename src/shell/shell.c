@@ -23,6 +23,7 @@
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
 #include "core/config.h"
+#include "core/failflash.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
@@ -30,6 +31,7 @@
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -81,7 +83,27 @@ static void cmd_version(shell_t *sh) {
                      : "off (open board: any firmware starts)");
     shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
                      : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
-    // Those two are what the chip latched at reset. Its OTP rows should say the same.
+    switch (sealedonly_state()) {
+    case SEALEDONLY_NO:
+        shell_printf(sh, "sealed-only: no (unsealed configuration from flash is accepted, as "
+                         "`ninja provision` writes it)\n");
+        break;
+    case SEALEDONLY_YES:
+        shell_printf(sh, "sealed-only: yes%s (unsealed records in flash are refused; set up on "
+                         "the console only)\n",
+                     sealedonly_forced() ? ", forced by this test build, not by the board" : "");
+        break;
+    case SEALEDONLY_YES_UNREADABLE:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP can't be read\n");
+        break;
+    case SEALEDONLY_YES_DAMAGED:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP is neither blank nor "
+                         "whole (rows 0x%06lx 0x%06lx 0x%06lx)\n",
+                     (unsigned long)sealedonly_rows()[0], (unsigned long)sealedonly_rows()[1],
+                     (unsigned long)sealedonly_rows()[2]);
+        break;
+    }
+    // Secure boot and debug are what the chip latched at reset. Its OTP rows should say the same.
     if (!otp.rows_readable)
         shell_printf(sh, "(the OTP rows behind those flags are unreadable, so they couldn't be "
                          "cross-checked)\n");
@@ -827,6 +849,11 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
         shell_printf(sh, "the root secret can only be cleared on the serial console\n");
         return;
     }
+    if (sealedonly()) {
+        shell_printf(sh, "this is a sealed-only board: its root secret record isn't cleared "
+                         "from here\n");
+        return;
+    }
     if (state != ROOTSECRET_INVALID || !rootflash_usable()) {
         shell_printf(sh, state == ROOTSECRET_OK ? "the root secret is usable; it isn't cleared\n"
                                                 : "there's no record to clear\n");
@@ -918,7 +945,7 @@ static void console_first_use(shell_t *sh) {
 // Not printed on the console while it's locked (the log is held); `dmesg` in an SSH session and
 // the console after the next login show it.
 static void console_failed(unsigned failures) {
-    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since boot)", failures);
+    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since the last right one)", failures);
 }
 
 static void console_auto_locked(const char *why) {
@@ -929,12 +956,19 @@ static const login_hooks_t console_login = {
     console_now_ms, settings_console_has_password, settings_console_check_begin,
     console_check_step, settings_console_check_abort, console_no_keys, console_rescue_allowed,
     console_opened, console_first_use, console_failed, console_auto_locked,
+    failflash_count, failflash_attempt, failflash_clear,    // the count is kept across reboots
 };
 
 void shell_console_start(shell_t *console) {
     if (!console_no_keys() && !settings_console_has_password())
         log_msg(SOS_LOG_WARNING, "console: no console password is set: the console is open to "
                                  "anyone at the port (`passwd` sets one)");
+    // Wrong answers from before this boot still count: say so, since the first check will wait.
+    unsigned kept = failflash_count();
+    if (kept && settings_console_has_password())
+        log_msg(SOS_LOG_WARNING, "console: %u wrong password%s since the last right one, "
+                                 "counted across reboots; the next check waits for it",
+                kept, kept == 1 ? "" : "s");
     login_start(console, &console_login);
 }
 
@@ -1063,6 +1097,9 @@ static void on_new_password_again(shell_t *sh, char *answer, void *arg) {
     }
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: console password set");
+    // Whoever set it had the console open. Wrong answers counted against an earlier password
+    // (or with none set) must not delay the first login with this one.
+    failflash_clear();
     shell_printf(sh, "console password set; the console asks for it from now on (`logout` locks "
                      "it)\n");
     if (then)

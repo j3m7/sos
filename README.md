@@ -182,9 +182,13 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
   the current one. `logout` (or Ctrl-D) locks the console again. SSH sessions aren't
   affected: they log in with their keys.
 - **Wrong passwords:** each check takes about 0.3 s by design, and after a wrong answer the
-  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count starts again at every boot, so
-  what limits guessing in the end is the cost of each check; choose a password that isn't
-  guessable in a few thousand tries. Wrong attempts are logged (`dmesg`).
+  next one waits 1 s, then 2 s, 4 s ... up to 30 s. The count of wrong answers is kept in
+  flash and survives a reboot: it is written before each check starts and cleared by the right
+  password, so unplugging the board between guesses, or in the middle of one, skips no wait.
+  An answer interrupted with Ctrl-C counts as wrong. Someone with a USB cable can still erase
+  the count along with the rest of the flash (the USB bootloader allows it), so what limits a
+  determined guesser is the cost of each check: choose a password that isn't guessable in a
+  few thousand tries. Wrong attempts are logged (`dmesg`).
 - **It locks itself** when the USB terminal goes away (the cable is unplugged or the terminal
   program closes the port) and after 10 minutes with nothing typed
   (the CMake setting `SOS_CONSOLE_IDLE_LOCK_MIN`; 0 turns the idle lock off).

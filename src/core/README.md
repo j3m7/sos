@@ -139,6 +139,26 @@ with the configuration's owner secret (`files/cardkey.c`).
   - **The labels are part of the stored formats.** The tests pin each purpose's key for a known
     root secret; changing a label would lock everything sealed under it.
 
+## Wrong-password count (`failcount.c`, `failflash.c`)
+
+The console delays the next password check after each wrong answer (`shell/login.c`). The
+count behind that delay is kept in flash so that a reboot doesn't reset it.
+
+- **Counted before, cleared after:** `failcount_attempt()` runs before a check starts and
+  `failcount_clear()` after a right answer. A check that never finished (power pulled, reset,
+  Ctrl-C) therefore stays counted.
+- **Its own sector,** the fifth from the end, below the root secret's. Flashing, provisioning,
+  `config reset` and `rootsecret forget` don't touch it.
+- **No erase per answer:** flash bits can be cleared one at a time. One track has a bit cleared
+  per check started; a second track is cleared up to the same point by a right answer; the
+  count is the difference. The sector is erased once when first used, and again only when
+  the first track is full, after 14336 checks; what is outstanding is carried over (capped
+  at 64, far beyond the longest delay). A power cut during that one erase loses the count.
+- **If flash can't be written** the count goes up in RAM until the next reboot, and the log
+  says so once.
+- **Limit:** someone with a cable and the USB bootloader can erase the sector. `failcount.c`
+  has no hardware in it and is unit tested on the host.
+
 ## Key sector (`keysector.c`)
 
 The last 4 KB flash sector holds keys, one 256-byte flash page each: page 0 the SSH host key
@@ -170,6 +190,29 @@ debug off) and the hashes of the keys its firmware must be signed with.
   in `docs/securing-a-board.md` runs `bootkey` before the bit that turns secure boot on.
 - **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
   that can't be read. Reading the root secret from OTP will need the guarded ones.
+
+## Sealed-only boards (`sealedonly.c`, `sealedonly_board.c`)
+
+An open board loads an unsealed configuration or host key from flash and seals it; that is how
+`ninja provision` works. A sealed-only board refuses them: anyone with a cable can write the
+flash, and an unsealed configuration naming their own SSH key would otherwise let them in.
+
+- **The marker** is three OTP rows, 0x0c0 to 0x0c2 (the start of page 3, the first page the
+  chip leaves to the user), each holding the raw value 0x5ea1ed, read by a two-of-three vote.
+  It is not secure boot: a development board can have secure boot and stay provisionable.
+- **It fails closed.** Blank rows mean no. The marker means yes. Rows that can't be read, or
+  that are neither blank nor the marker, also mean yes, and the log and `version` say which.
+  OTP bits can be set but not cleared, so the marker can be damaged but not removed.
+- **What it changes:** `core/settings.c` and `ssh/hostkey.c` refuse unsealed records
+  (`refuse_plain`); `rootsecret forget` is refused. An unsealed record that was refused is
+  reported in the log and left in flash. If it replaced the sealed one, the board has no
+  configuration and is set up on its console: an attacker with a cable can wipe a sealed-only
+  board, as they can erase its flash, but can't give it a configuration.
+- **The firmware only reads the rows.** Writing them is a step of `docs/securing-a-board.md`,
+  for production boards, done by the owner with `picotool`.
+- **`-DSOS_FORCE_SEALED_ONLY=ON`** builds an image that treats every board as sealed-only, to
+  try the behaviour on a development board without touching its OTP. It can only add the
+  restriction. `sealedonly_decide()` has no hardware in it and is unit tested on the host.
 
 ## Glitch detector (`glitchdet.c`)
 

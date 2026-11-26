@@ -7,8 +7,12 @@
 //
 // - Locked: the shell has a pending question, "Password: ", not echoed. A right answer opens
 //   the console; a wrong one asks again, after a delay that grows with each wrong answer since
-//   boot (the slow password check is the real limit; the delay only adds to it). Checking runs
-//   as a shell job in slices, so the main loop keeps turning.
+//   the last right one (the slow password check is the real limit; the delay only adds to it).
+//   Checking runs as a shell job in slices, so the main loop keeps turning.
+// - The count of wrong answers can be kept across reboots (the three hooks at the end of
+//   login_hooks_t; core/failcount.h on the board). An answer is counted BEFORE its check starts
+//   and the count is cleared after a right one, so a check cut short by a reset, or by Ctrl-C,
+//   counts as a wrong answer, and a board that was reset starts with the delay it had earned.
 // - The gate: login_gate() is called for every command line of the console before it runs, and
 //   refuses while locked, whatever state the shell's question is in. The lock doesn't depend on
 //   the question staying pending.
@@ -57,11 +61,19 @@ typedef struct {
     void (*opened)(shell_t *sh);
     // The console is open because no password is set: start setting one.
     void (*first_use)(shell_t *sh);
-    // A wrong answer was given (`failures` since boot, this one included): for the log. May be
-    // NULL.
+    // A wrong answer was given (`failures` since the last right one, this one included): for
+    // the log. May be NULL.
     void (*failed)(unsigned failures);
     // The console locked itself (`why`: a few words): for the log. May be NULL.
     void (*auto_locked)(const char *why);
+    // The count kept across reboots. All three may be NULL: the count then starts at zero at
+    // every boot.
+    // - At boot: answers counted and not followed by a right one.
+    unsigned (*kept_failures)(void);
+    // - An answer is about to be checked (or was refused unchecked): count it, durably, now.
+    void (*count_attempt)(void);
+    // - The answer was right: the count is zero again.
+    void (*clear_count)(void);
 } login_hooks_t;
 
 // At boot, on the console's shell, bound but with nothing printed yet (shell_bind): lock it
@@ -88,7 +100,7 @@ void login_poll(shell_t *console, bool connected, uint32_t idle_limit_ms);
 // Not for other shells.
 bool login_gate(shell_t *console, const char *cmd);
 
-// Wrong answers since boot (for `who`-style reporting and tests).
+// Wrong answers since the last right one, as counted now (for reporting and tests).
 unsigned login_failures(void);
 
 #endif

@@ -18,7 +18,9 @@
 #include "core/glitchdet.h"
 #include "core/keyprov.h"
 #include "core/log.h"
+#include "core/failflash.h"
 #include "core/rootflash.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -166,7 +168,9 @@ int main(void) {
 
     // The root secret, then configuration and host key: all three may write flash, which is
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
+    sealedonly_init();                  // before anything loads a record from flash
     rootflash_init();
+    failflash_init();                   // wrong console passwords so far, before the console starts
     settings_init();
     glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
