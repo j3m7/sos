@@ -10,9 +10,9 @@ what you follow at the board. For that:
 "The owner" in this document is the person the boards belong to, who made the decisions
 recorded here and who runs every command that writes one-time-programmable memory.
 
-**Status.** Nothing in this document has been run, and no OTP write has been made on any
-board. The dev-1 part is reviewed and waits for the owner's approval; the production part is a
-draft. Nothing here may be run until the owner approves it and names each write. Every OTP
+**Status.** dev-1 was secured on 2026-11-26 by its runbook: root secret in OTP page 5, both
+dev keys valid, secure boot on, page 3 locked. The production part is a draft. Nothing in it
+may be run until the owner approves it and names each write. Every OTP
 write is permanent. It covers steps 3 and 4 of
 [issue #64](https://github.com/j3m7/sos/issues/64): the root secret in one-time-programmable
 (OTP) memory, secure boot, and (on a production board) debug off.

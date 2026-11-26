@@ -6,18 +6,33 @@ step exists is in [`docs/securing-a-board.md`](../../securing-a-board.md).
 - Board: dev-1, serial `F94525FD61D9A1CC`. **No other board connected.**
 - **PERMANENT** steps write one-time-programmable (OTP) memory and can't be undone.
 - **If what you see differs from "You should see", stop.** Don't retry and don't go on.
-- Run from the repository root, on current main, with `picotool` 2.3.1. After a command that
-  restarts the board (`-f`, any flash), wait for its console to answer before the next one.
-- No OTP write in this runbook has been run on any chip. Steps 4 and 5 are the first time this
-  code writes OTP at all.
+- Run from the repository root, on current main, with `picotool` 2.3.1.
+- **Run one `picotool` or `flash.sh` command at a time.** Each one restarts the board. Wait for
+  its console device (`/dev/serial/by-id/usb-Raspberry_Pi_Pico_F94525FD61D9A1CC-if00`) to come
+  back before the next, or the next fails with `ERROR: ... rebooting`. That error is not a
+  failed write: run the read-back again on its own.
+- **A refused `picotool` command leaves the board in its bootloader** (no console; USB shows
+  "RP2350 Boot"). Steps 6 and 12 expect refusals. Bring it back with
+  `picotool reboot --ser $SOS_FLASH_SERIAL`.
+- dev-1 went through this runbook on 2026-11-26, with every step as written here.
 
 ## Before you start
 
 - [ ] `~/.config/sos/flash-keys` lists `e2f7cff0...0d51` and `b97c0fd7...c910`.
 - [ ] Nobody else is using the board, and its USB cable and power won't be touched for an hour.
-- [ ] You can reach the BOOTSEL button, and a serial terminal is open on the board's console.
+- [ ] You can reach the BOOTSEL button.
 
-In this terminal, once:
+Open the console in a terminal of its own, and keep it open:
+
+```sh
+picocom -b 115200 /dev/serial/by-id/usb-Raspberry_Pi_Pico_F94525FD61D9A1CC-if00
+```
+
+It drops when the board restarts: quit (Ctrl-A Ctrl-X) and start it again once the board is
+back.
+
+Run the commands below in one terminal that stays open, and set this there, once. (In Claude
+Code, each `!` command runs in a new shell, so an `export` there doesn't carry over.)
 
 ```sh
 export SOS_FLASH_SERIAL=F94525FD61D9A1CC
@@ -106,13 +121,22 @@ OTP page 5: locked against the bootloader
 
 ```sh
 tools/flash.sh build/sos.bin
-picotool otp get -r -n -f --ser $SOS_FLASH_SERIAL 0x140 0x100
 ```
 
-On the console: `rootsecret`.
+On the console: `rootsecret`. Then read each page on its own (`picotool` stops at the first
+refused row, so one command can't test both):
 
-You should see: `root secret: present, in OTP page 5`. Both `picotool` reads are refused, or
-read zero. **Stop if** either read shows a non-zero value: that page isn't locked.
+```sh
+picotool otp get -r -n -f --ser $SOS_FLASH_SERIAL 0x140
+picotool otp get -r -n --ser $SOS_FLASH_SERIAL 0x100
+picotool reboot --ser $SOS_FLASH_SERIAL
+```
+
+The second read has no `-f`: the first refusal left the board in its bootloader.
+
+You should see: `root secret: present, in OTP page 5`. Both reads end
+`ERROR: The RP2350 device returned an error: permission failure`. The board then restarts into
+SOS. **Stop if** either read shows a value: that page isn't locked.
 
 ## 7. Write the boot key hashes (PERMANENT)
 
@@ -177,10 +201,14 @@ You should see: after the first command the console does **not** come back. Afte
 picotool otp set -r PAGE3_LOCK1 0x101010 -f --ser $SOS_FLASH_SERIAL
 picotool otp get -r -n -f --ser $SOS_FLASH_SERIAL PAGE3_LOCK1
 picotool otp set -r 0x0ff 0 -f --ser $SOS_FLASH_SERIAL
+picotool reboot --ser $SOS_FLASH_SERIAL
 ```
 
-You should see: `OLD_VALUE=0x000000`, then `VALUE 0x101010`, then the second `otp set`
-refused. That last command writes the value 0, so it changes nothing even if the lock didn't
+You should see: `OLD_VALUE=0x000000`, then `VALUE 0x101010`, then the second `otp set` shows
+`OLD_VALUE=0x000000` (the bootloader may still read page 3) and ends
+`ERROR: ... permission failure`. `picotool reboot` brings the board back from its bootloader.
+
+The `otp set` of row 0x0ff writes the value 0, so it changes nothing even if the lock didn't
 take. **Use exactly that command: no other row, no other value.**
 
 ## 13. Save the OTP and set the board up
