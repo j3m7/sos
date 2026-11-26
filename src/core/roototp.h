@@ -42,6 +42,12 @@
 // boot (roototp_locks_ok). A sealed-only board whose pages aren't locked so has no source; an
 // open board is warned.
 //
+// What that check is worth: it catches a board that was LEFT unlocked. It is no proof of the
+// board's history. The lock words themselves can be written from the bootloader, so someone
+// who completes a spent page can set its lock afterwards, and the check then passes. What
+// prevents the attack is the burn locking each spent page in the same sitting in which it was
+// spent, before the board is out of its owner's hands.
+//
 // Which source a board uses (roototp_choose):
 //   - a secret in OTP: OTP (but not on a sealed-only board whose list pages the bootloader can
 //     still write: see "Locks" above);
