@@ -498,6 +498,9 @@ below still apply and the owner names each write.
    run on a chip at all; a result of "a write failed or didn't read back" on some row means
    one of them is wrong, and it would be wrong for the real secret too. The image enforces
    this for the rest of that boot; the procedure enforces it after a restart.
+   **Write down how long the rehearsal took** (the command prints it): the time the chip
+   needs per OTP row is the one number nobody has yet, and it says how much margin the
+   watchdog feeding really has.
 3. Only then: the burn is run again, without the rehearsal argument. It lands in the second
    page. That is dev-1's root secret.
 4. The read attempt from BOOTSEL is step 3.4 on that page.
