@@ -108,6 +108,10 @@ cmake --preset debug          # or: release
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
 
+The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
+flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) is
+installed: `just` lists them. It is optional: each recipe runs the commands documented here.
+
 ## Flashing
 
 ```sh
