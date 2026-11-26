@@ -34,6 +34,11 @@ add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/logi
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
 
+# src/core/failcount.c: the count of wrong console passwords kept in flash across reboots.
+add_executable(test_failcount test_failcount.c ${SOS_ROOT}/src/core/failcount.c)
+target_include_directories(test_failcount PRIVATE ${SOS_ROOT}/src)
+add_test(NAME failcount COMMAND test_failcount)
+
 # src/shell/keys.c: terminal key decoding (escape sequences to key codes).
 add_executable(test_keys test_keys.c ${SOS_ROOT}/src/shell/keys.c)
 target_include_directories(test_keys PRIVATE ${SOS_ROOT}/src)

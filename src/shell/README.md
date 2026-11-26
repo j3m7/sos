@@ -45,9 +45,13 @@ The console asks for the console password before it takes any command (issue #64
 - **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
   root-derived key). It runs as a shell job, a slice per main-loop pass, through
   `login_hooks_t`; `core/settings.c` holds the verifier and the key.
-- **Delays:** after the nth wrong answer since boot the next check waits 1 s, 2 s, 4 s ... up to
-  30 s. Ctrl-C drops a check or a wait but not the delay. The typed password is wiped from the
-  line buffer and from `login.c`'s copy as soon as its check starts.
+- **Delays:** after the nth wrong answer since the last right one the next check waits 1 s,
+  2 s, 4 s ... up to 30 s. Ctrl-C drops a check or a wait but not the delay. The typed password
+  is wiped from the line buffer and from `login.c`'s copy as soon as its check starts.
+- **The count survives a reboot** through three optional hooks (`kept_failures`,
+  `count_attempt`, `clear_count`; on the board `core/failflash.c`). An answer is counted before
+  its check begins and the count is cleared after a right answer, so a check cut short by a
+  reset or by Ctrl-C counts as wrong, and `login_start()` begins with the wait already earned.
 - **No password set:** the console is open and `first_use` starts setting one (`setup` on a
   board that was never set up).
 - **No usable root secret:** the console stays locked whatever the configuration says, and

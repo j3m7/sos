@@ -4,7 +4,8 @@
 // The root secret of an open board, in flash, and the key provider's backend that reads it
 // (core/rootsecret.h, core/keyprov.h).
 //
-//   ... firmware ... | root secret | config slot A | config slot B | key sector |  <- end of flash
+//   ... firmware ... | password count | root secret | config slot A | config slot B | key sector |
+//                                                                                (end of flash)
 //
 // It has a sector of its own, the fourth from the end, and not a page of the key sector:
 // firmware from before the root secret rewrites the key sector with only the pages it knows

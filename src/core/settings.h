@@ -4,7 +4,8 @@
 // The device's live configuration (see config.h), kept in flash just below the key sector (the SSH host
 // key), and above the root secret (core/rootflash.h):
 //
-//   ... firmware ... | root secret | config slot A | config slot B | key sector |   <- end of flash
+//   ... firmware ... | password count | root secret | config slot A | config slot B | key sector |
+//                                                                                (end of flash)
 //
 // It's stored sealed: AES-256-GCM under a key derived from the board's root secret
 // (core/seal.h, core/keyprov.h), so the flash contents don't give away the Wi-Fi password or let
