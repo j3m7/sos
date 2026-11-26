@@ -193,9 +193,10 @@ run.
 None of this exists yet. Each item is firmware or tooling work with host tests and review, done
 and merged before anything is burned.
 
-1. **The key provider's OTP backend.** Reads the root secret from an OTP page as Secure code,
-   and on `keyprov_lock()` advances that page's Secure lock in the `SW_LOCK` register so nothing
-   can read it until the next reset. Today's backend reads a flash sector.
+1. **The key provider's OTP backend** (#86, in review). Reads the root secret from an OTP page
+   as Secure code, and on `keyprov_lock()` advances that page's lock in the `SW_LOCK` register
+   so nothing can read it until the next reset. The page list is pages 4, 5 and 6; the format
+   of a page is in `src/core/roototp.h` and is what the burn command must write.
    - **Which backend a board uses depends on whether a valid root secret is in OTP,** not on
      secure boot: the board is set up in step 3.5, after the burn and before secure boot is
      on, and what is sealed then has to open after step 4.
@@ -350,7 +351,7 @@ issue.
 | `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
 | `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no host key |
 | Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
-| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. **Its SSH host key is still there** (it is in another sector, sealed under the same root secret), so the board set up again by whoever is at the console presents the old host key: see the open question below |
+| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. **Its SSH host key is still there** (it is in another sector, sealed under the same root secret), so the board set up again by whoever is at the console presents the old host key, until the change in "to confirm" item 8 is built: after it, the wipe makes the old host key unreadable and setup makes a new one |
 | Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
 | `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
 | Console without the password | Nothing but the prompt |
@@ -580,9 +581,17 @@ This list is a gate: the document is not final, and nothing is burned, while any
    a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
    sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
    the root secret's list starts at page 4 or later.
-8. **Open question for the owner: the host key after a wipe.** Erasing or provisioning the
-   configuration of a sealed-only board empties it, and whoever is then at its console can
-   set it up as theirs. The SSH host key survives that, so their board answers SSH as the old
-   one did, and a client that trusted the old host key trusts it. Proposed: a board that
-   starts with no configuration makes a new host key when it is first set up, so that a new
-   owner is a new identity, as it already is for encrypted cards. Not built; to be decided.
+8. **The host key after a wipe: decided by the owner, 2026-11-25 ("Yes"), not built yet.**
+   Erasing or provisioning the configuration of a sealed-only board empties it, and whoever
+   is then at its console can set it up as theirs. Today the SSH host key survives that, so
+   their board answers SSH as the old one did. Decided: the host key is sealed under a key
+   derived from the root secret **and the owner secret**, the way an encrypted card's key
+   already is. A configuration wipe then makes the old host key unreadable, and the board
+   makes a new one at the next setup, with nothing needing to detect the wipe. Costs the owner
+   accepted: the owner's own `config reset` changes the board's SSH identity (clients warn);
+   losing both configuration copies loses the host key too; dev-1's host key is replaced once
+   when this lands. A pull request of its own. It must settle the order at boot (the owner
+   secret is loaded or made before the host key is opened or made), what an unconfigured
+   board offers on SSH before it is set up, that a host key sealed the old way isn't quietly
+   accepted on a sealed-only board, and it needs a host test that a new owner secret can't
+   open the old record.
