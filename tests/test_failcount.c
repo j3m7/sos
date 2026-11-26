@@ -15,6 +15,8 @@ static unsigned programs, erases;
 static int fail_program_at = -1;        // the nth program from now fails (0 = the next)
 static bool fail_erase;
 static bool cut_power;                  // a program is "cut": only half of its bits land
+static bool silent_program;             // a program reports success and changes nothing
+static bool silent_erase;               // an erase reports success and changes nothing
 
 static const uint8_t *f_read(void *ctx) { (void)ctx; return flash; }
 static bool f_program(void *ctx, unsigned page, const uint8_t *data) {
@@ -27,6 +29,8 @@ static bool f_program(void *ctx, unsigned page, const uint8_t *data) {
     if (fail_program_at > 0)
         fail_program_at--;
     programs++;
+    if (silent_program)
+        return true;
     for (unsigned i = 0; i < FAILCOUNT_PAGE; i++) {
         if (cut_power && i >= FAILCOUNT_PAGE / 2)
             break;
@@ -39,7 +43,8 @@ static bool f_erase(void *ctx) {
     if (fail_erase)
         return false;
     erases++;
-    memset(flash, 0xff, sizeof(flash));
+    if (!silent_erase)
+        memset(flash, 0xff, sizeof(flash));
     return true;
 }
 static const failcount_store_t store = { NULL, f_read, f_program, f_erase };
@@ -48,7 +53,7 @@ static void fresh(void) {
     memset(flash, 0xff, sizeof(flash));
     programs = erases = 0;
     fail_program_at = -1;
-    fail_erase = cut_power = false;
+    fail_erase = cut_power = silent_program = silent_erase = false;
     failcount_init(&store);
 }
 static void reboot(void) { failcount_init(&store); }
@@ -241,6 +246,80 @@ TEST(a_cut_write_leaves_a_sane_count) {
     CHECK_EQ(failcount_get(), 0);
 }
 
+// The flash call itself reports nothing on the board, so a write that didn't take must be
+// found by reading back: it is reported, and the count still goes up in RAM.
+TEST(a_write_that_did_not_take_is_noticed) {
+    fresh();
+    CHECK(failcount_attempt());
+    silent_program = true;
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 2);
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 3);
+    silent_program = false;
+    CHECK(failcount_attempt());
+    CHECK_EQ(failcount_get(), 4);
+    reboot();
+    CHECK_EQ(failcount_get(), 2);       // the two that did land
+    // A clear that didn't take isn't a clear.
+    silent_program = true;
+    CHECK(!failcount_clear());
+    silent_program = false;
+    reboot();
+    CHECK_EQ(failcount_get(), 2);
+    CHECK(failcount_clear());
+    reboot();
+    CHECK_EQ(failcount_get(), 0);
+    // An erase that didn't take, over garbage: nothing is trusted, the count stays in RAM.
+    fresh();
+    memset(flash, 0x5a, sizeof(flash));
+    reboot();
+    silent_erase = true;
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 1);
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 2);
+    silent_erase = false;
+    CHECK(failcount_attempt());
+    CHECK_EQ(failcount_get(), 3);
+}
+
+// The attempts track is full and starting over fails after the erase: the outstanding count
+// was only in the erased track. It must not drop: it is carried in RAM.
+TEST(a_failed_restart_keeps_the_count) {
+    fresh();
+    for (unsigned i = 0; i < FAILCOUNT_CAPACITY - 5; i++)
+        CHECK(failcount_attempt());
+    CHECK(failcount_clear());
+    for (int i = 0; i < 5; i++)
+        CHECK(failcount_attempt());     // full, 5 outstanding
+    CHECK_EQ(failcount_get(), 5);
+    fail_program_at = 0;                // the marker's write, right after the erase
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 6);       // not 1
+    CHECK(failcount_attempt());         // flash works again: counted there from now on
+    CHECK_EQ(failcount_get(), 7);
+    fresh();
+    for (unsigned i = 0; i < FAILCOUNT_CAPACITY - 5; i++)
+        CHECK(failcount_attempt());
+    CHECK(failcount_clear());
+    for (int i = 0; i < 5; i++)
+        CHECK(failcount_attempt());
+    fail_program_at = 1;                // the marker lands, the carry's write fails
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 6);
+    fail_erase = true;                  // or the erase itself fails: the full track stays
+    fresh();
+    fail_erase = false;
+    for (unsigned i = 0; i < FAILCOUNT_CAPACITY; i++)
+        CHECK(failcount_attempt());
+    fail_erase = true;
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), FAILCOUNT_CAPACITY + 1);
+    reboot();
+    CHECK_EQ(failcount_get(), FAILCOUNT_CAPACITY);
+}
+
 // Only this sector's own bits are touched, and never set: every program is one page, and the
 // marker stays.
 TEST(marker_stays) {
@@ -266,5 +345,7 @@ TEST_MAIN(
     RUN(write_failures_count_in_ram);
     RUN(a_failed_clear_is_not_a_clear);
     RUN(a_cut_write_leaves_a_sane_count);
+    RUN(a_write_that_did_not_take_is_noticed);
+    RUN(a_failed_restart_keeps_the_count);
     RUN(marker_stays);
 )

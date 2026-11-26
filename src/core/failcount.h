@@ -61,8 +61,9 @@ void failcount_init(const failcount_store_t *store);
 // Checks started since the last right password.
 unsigned failcount_get(void);
 
-// A check is about to start: count it, in flash first. Returns false if it couldn't be written
-// (the count in RAM goes up all the same, so the delays still grow until the next reboot).
+// A check is about to start: count it, in flash first. Every write is read back. Returns false
+// if it couldn't be written or didn't take (the count in RAM goes up all the same, and never
+// down, so the delays still grow until the next reboot).
 bool failcount_attempt(void);
 
 // The password was right: the count is zero again. False if that couldn't be written.

@@ -1012,6 +1012,9 @@ static void on_new_password_again(shell_t *sh, char *answer, void *arg) {
     }
     save(sh);
     log_msg(SOS_LOG_NOTICE, "config: console password set");
+    // Whoever set it had the console open. Wrong answers counted against an earlier password
+    // (or with none set) must not delay the first login with this one.
+    failflash_clear();
     shell_printf(sh, "console password set; the console asks for it from now on (`logout` locks "
                      "it)\n");
     if (then)

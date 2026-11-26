@@ -62,6 +62,12 @@ static bool clear_bits(size_t offset, unsigned from, unsigned to) {
             buf[offset + bit / 8 - page * FAILCOUNT_PAGE] &= (uint8_t)~(1u << (bit % 8));
         if (!st->program(st->ctx, (unsigned)page, buf))
             return false;
+        // The flash call reports nothing, so a write that didn't take would go unnoticed:
+        // read the bits back. Every bit that was to be cleared must now read 0.
+        const uint8_t *now = st->read(st->ctx) + page * FAILCOUNT_PAGE;
+        for (unsigned i = 0; i < FAILCOUNT_PAGE; i++)
+            if (now[i] & (uint8_t)~buf[i])
+                return false;
         from = stop;
     }
     return true;
@@ -76,9 +82,13 @@ static bool restart(unsigned carry) {
         return false;
     have_marker = false;
     attempts = cleared = 0;
+    const uint8_t *s = st->read(st->ctx);
+    for (size_t i = 0; i < FAILCOUNT_SECTOR; i++)
+        if (s[i] != 0xff)               // an erase that didn't take: the tracks can't be trusted
+            return false;
     memset(buf, 0xff, sizeof(buf));
     memcpy(buf, marker, sizeof(marker));
-    if (!st->program(st->ctx, 0, buf))
+    if (!st->program(st->ctx, 0, buf) || memcmp(st->read(st->ctx), marker, sizeof(marker)))
         return false;
     have_marker = true;
     if (!clear_bits(ATTEMPTS_OFFSET, 0, carry))
@@ -98,19 +108,28 @@ unsigned failcount_get(void) {
 }
 
 bool failcount_attempt(void) {
-    bool ok = true;
+    unsigned want = failcount_get() + 1;
+    bool ok = true, restarted = false;
     if (!have_marker) {
         ok = restart(0);
     } else if (attempts >= FAILCOUNT_CAPACITY) {
         unsigned carry = attempts - cleared;
         ok = restart(carry > FAILCOUNT_CARRY_MAX ? FAILCOUNT_CARRY_MAX : carry);
+        restarted = true;
     }
     if (ok && clear_bits(ATTEMPTS_OFFSET, attempts, attempts + 1)) {
         attempts++;
-        return true;
+        if (restarted)
+            want = failcount_get();     // the cap applied: that is the count now
+    } else {
+        ok = false;
+        load();                         // whatever flash holds now is what a reboot will see
     }
-    extra++;
-    return false;
+    // Whatever flash did, the count in RAM never goes down here: what flash holds short of
+    // `want` (a restart that failed after its erase lost the carry) is made up in RAM.
+    unsigned flash_count = attempts - cleared;
+    extra = want > flash_count ? want - flash_count : 0;
+    return ok;
 }
 
 bool failcount_clear(void) {

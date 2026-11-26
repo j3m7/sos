@@ -22,7 +22,8 @@ unsigned failflash_init(void);
 bool failflash_usable(void);
 
 // For the console's login hooks (shell/login.h): the count now; an answer is about to be
-// checked; the answer was right.
+// checked; the answer was right. failflash_clear() is also called when a console password is
+// set from the open console.
 unsigned failflash_count(void);
 void failflash_attempt(void);
 void failflash_clear(void);
