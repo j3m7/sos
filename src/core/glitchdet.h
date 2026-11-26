@@ -4,17 +4,19 @@
 // The RP2350's glitch detector: four circuits that reset the chip when its clock or core supply
 // is disturbed enough for logic to misbehave (datasheet section 10.9).
 //
-// This file arms it by software, as a setting, and reports what it does. THAT IS A TRIAL AID,
-// NOT PROTECTION:
+// This file arms it by software, as a setting, and reports what it does. It is armed by default,
+// at the highest sensitivity, so that every board running SOS shows over time whether the
+// detector ever resets a healthy board. THAT IS A TRIAL AID, NOT PROTECTION:
 // - It is armed only once the configuration has loaded, a second or two into boot, so the
 //   early boot (where the boot ROM checks signatures) isn't covered.
 // - Software armed it, and software can disarm it.
 // - The loop guard below disarms it after a few resets in a row, which is exactly what someone
 //   glitching the board on purpose would cause.
 // A secured board gets the detector from the OTP flag CRIT1.GLITCH_DETECTOR_ENABLE instead:
-// armed from reset, with no off switch and no guard. The purpose here is to find out, over days
-// of normal use, whether the detector resets a healthy board, before that bit is burned
-// (docs/securing-a-board.md, decision 5).
+// armed from reset, with no off switch and no guard. The purpose here is to find out, in
+// normal use, whether the detector resets a healthy board, before that bit is burned
+// (docs/securing-a-board.md, decision 5). A DETECTOR RESET NOBODY FORCED IS THEREFORE A FINDING:
+// see "Glitch detector resets" in docs/development.md.
 //
 // What it keeps across a detector reset is in the POWMAN scratch registers 0 to 2, which that
 // reset doesn't clear (it does clear the watchdog's, and with them the fault record):
@@ -39,7 +41,8 @@
 void glitchdet_boot(void);
 
 // Once the configuration is loaded and the log works: say what the last reset was, and arm the
-// detector if `setting` asks for it and the guard allows. The setting is sos_config_t's:
+// detector if `setting` asks for it and the guard allows. The setting is what
+// config_glitch_mode() makes of sos_config_t's:
 // 0 = off, 1..4 = armed at sensitivity 0..3, 5..8 = watching at sensitivity 0..3.
 void glitchdet_start(unsigned setting);
 

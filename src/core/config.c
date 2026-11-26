@@ -246,9 +246,10 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     // over from that, so it means "none" instead of making the whole record invalid.
     if (cfg->rtc_offset < CONFIG_RTC_OFFSET_MIN || cfg->rtc_offset > CONFIG_RTC_OFFSET_MAX)
         cfg->rtc_offset = 0;
-    // The same for the glitch detector setting, also a former padding byte.
+    // The same for the glitch detector setting, also a former padding byte: out of range means
+    // "not chosen", which is the default.
     if (cfg->glitch_detector > CONFIG_GLITCH_DETECTOR_MAX)
-        cfg->glitch_detector = 0;
+        cfg->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
     if (seq)
         *seq = s.hdr[s.newest].seq;
     return true;

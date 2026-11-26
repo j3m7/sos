@@ -153,10 +153,13 @@ key is made or sealed.
 
 The RP2350 has four detector circuits that reset the chip when its clock or core supply is
 disturbed (datasheet section 10.9). A secured board would arm them for good with an OTP bit.
-`glitchdet.c` arms them by software instead, from a setting (`glitch on <0-3>`), to find out
-over days of normal use whether they ever reset a healthy board
-(`docs/securing-a-board.md`).
+`glitchdet.c` arms them by software instead, from a setting, to find out in normal use
+whether they ever reset a healthy board (`docs/securing-a-board.md`).
 
+- **On by default:** armed at sensitivity 3, the highest, unless the setting says otherwise
+  (`glitch off`, `glitch on <0-3>`, `glitch watch <0-3>`; `glitch default` goes back). A
+  detector reset that nobody forced is a finding to report: see "Glitch detector resets" in
+  [`docs/development.md`](../../docs/development.md).
 - **Two modes:** *watching* (`glitch watch <0-3>`) runs the detectors at a sensitivity
   without arming them, and logs a trigger without resetting anything; *armed* (`glitch on`)
   resets the board on a trigger, as the OTP flag would.

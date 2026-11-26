@@ -123,13 +123,15 @@ TEST(console_password_line) {
 TEST(glitch_detector_line) {
     sos_config_t cfg;
     CHECK(!parse("wifi_ssid = net\n", &cfg));
-    CHECK_EQ(cfg.glitch_detector, 0);
+    CHECK_EQ(cfg.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);  // no line: the default
+    CHECK(!parse("wifi_ssid = net\nglitch_detector = default\n", &cfg));
+    CHECK_EQ(cfg.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);
     CHECK(!parse("wifi_ssid = net\nglitch_detector = 0\n", &cfg));
     CHECK_EQ(cfg.glitch_detector, 1);                   // sensitivity 0 is setting 1
     CHECK(!parse("wifi_ssid = net\nglitch_detector = 3\n", &cfg));
     CHECK_EQ(cfg.glitch_detector, 4);
     CHECK(!parse("wifi_ssid = net\nglitch_detector = off\n", &cfg));
-    CHECK_EQ(cfg.glitch_detector, 0);
+    CHECK_EQ(cfg.glitch_detector, CONFIG_GLITCH_DETECTOR_OFF);
     CHECK(!parse("wifi_ssid = net\nglitch_detector = watch 0\n", &cfg));
     CHECK_EQ(cfg.glitch_detector, 5);
     CHECK(!parse("wifi_ssid = net\nglitch_detector = watch 3\n", &cfg));

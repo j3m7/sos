@@ -85,6 +85,26 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
 - Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
   image's metadata after the firmware is linked.
 
+## Glitch detector resets
+
+SOS arms the RP2350's glitch detector by software at boot, at the highest sensitivity, on every
+board (`glitch` shows it; `glitch off` turns it off). It is there to learn whether the detector
+ever resets a healthy board, before it is enabled for good in OTP on a secured board, where it
+can't be turned off again (`docs/securing-a-board.md`, decision 5). So far it has had one
+3-hour run under SFTP load without a reset; a week-long test waits for a spare board.
+
+**Whoever works with a board, person or agent, watches for it:**
+
+- At boot the log says `last reset: glitch detector (detectors 0x.. fired, after N s up; ...)`,
+  `uptime` says `(last reset: glitch detector)`, and `glitch` shows the count since power-on.
+- A detector reset that nobody forced with `glitch trig` is a finding. Record it on issue #64:
+  the firmware version, the detectors that fired, the uptime, what the board was doing (Wi-Fi
+  traffic, card access, a script, flashing), and how it was powered.
+- An unexplained reboot is worth a look at `glitch` before anything else: a detector reset
+  loses the fault record, so `uptime` shows no fault for it.
+- If it gets in the way of other work, `glitch off` is fine. Say so in the same place, with
+  what it was doing, and leave the setting off rather than lowering the sensitivity silently.
+
 ## Editor
 
 `.vscode/` configures VS Code to use [clangd](https://clangd.llvm.org/) (extension

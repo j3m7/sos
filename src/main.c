@@ -168,7 +168,7 @@ int main(void) {
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
     rootflash_init();
     settings_init();
-    glitchdet_start(settings()->glitch_detector);   // armed here if the setting says so
+    glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
     uint32_t hostkey_len;

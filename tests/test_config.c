@@ -1457,14 +1457,20 @@ TEST(records_from_before_the_console_password_load_with_none) {
 // --- the glitch detector setting ---------------------------------------------------------------------
 
 // It takes a byte that was padding: the record's size doesn't change, records saved before
-// load as "off", and a value out of range is "off" too, not an invalid record.
+// load as "not chosen" (the default: armed at the highest sensitivity), and a value out of
+// range is that too, not an invalid record.
 TEST(glitch_detector_setting) {
     sos_config_t a, b;
     CHECK_EQ(offsetof(sos_config_t, glitch_detector), 1793);
     CHECK_EQ(sizeof(sos_config_t), 1796);
     sealed_start();
     sample(&a, "HomeNet");
-    CHECK_EQ(a.glitch_detector, 0);                     // off by default
+    CHECK_EQ(a.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);
+    CHECK_EQ(config_glitch_mode(CONFIG_GLITCH_DETECTOR_DEFAULT), 4);    // armed, sensitivity 3
+    CHECK_EQ(config_glitch_mode(CONFIG_GLITCH_DETECTOR_OFF), 0);
+    for (unsigned v = 1; v <= 8; v++)
+        CHECK_EQ(config_glitch_mode(v), v);
+    CHECK_EQ(config_glitch_mode(200), 4);
     for (unsigned v = 0; v <= CONFIG_GLITCH_DETECTOR_MAX; v++) {
         a.glitch_detector = (uint8_t)v;
         CHECK(config_save(&sealed_store, &a));
@@ -1474,7 +1480,7 @@ TEST(glitch_detector_setting) {
     a.glitch_detector = CONFIG_GLITCH_DETECTOR_MAX + 1; // can only be a leftover
     CHECK(config_save(&sealed_store, &a));
     CHECK(config_load(&sealed_store, &b, NULL));
-    CHECK_EQ(b.glitch_detector, 0);
+    CHECK_EQ(b.glitch_detector, CONFIG_GLITCH_DETECTOR_DEFAULT);
     CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
     blank_flash();                                      // a plain record carries it too
     a.glitch_detector = 2;

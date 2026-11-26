@@ -106,7 +106,7 @@ static void cmd_help(shell_t *sh) {
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
-        shell_printf(sh, "glitch watch|on <0-3>, glitch off  glitch detector trial: log triggers / reset on them\n");
+        shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
         shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
@@ -506,7 +506,8 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
 // --- glitch detector -----------------------------------------------------------------------------
 
 static void glitch_status(shell_t *sh) {
-    unsigned setting = settings()->glitch_detector;
+    unsigned setting = config_glitch_mode(settings()->glitch_detector);
+    bool is_default = settings()->glitch_detector == CONFIG_GLITCH_DETECTOR_DEFAULT;
     int armed = glitchdet_armed_sensitivity();
     if (setting == 0)
         shell_printf(sh, "glitch detector: off\n");
@@ -521,14 +522,14 @@ static void glitch_status(shell_t *sh) {
         else
             shell_printf(sh, "no trigger since boot\n");
     } else
-        shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest), %s\n",
-                     setting - 1,
+        shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest)%s, %s\n",
+                     setting - 1, is_default ? ", the default" : "",
                      armed >= 0 ? "armed" : glitchdet_guard_tripped()
                          ? "NOT armed at this boot: it reset the board several times in a row "
                            "right after starting"
                          : "not armed");
-    shell_printf(sh, "armed by software after boot: a trial setting to see whether it resets a "
-                     "healthy board, not protection\n");
+    shell_printf(sh, "set up by software after boot: it shows whether the detector resets a "
+                     "healthy board; it is not protection\n");
     shell_printf(sh, "detector resets since power-on: %lu\n", (unsigned long)glitchdet_resets());
     if (glitchdet_caused_reset())
         shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
@@ -537,8 +538,8 @@ static void glitch_status(shell_t *sh) {
 }
 
 // `glitch`: the detector's setting, state and resets. Console only: `glitch on <0-3>` arms it now
-// and at every boot; `glitch off` disarms it; `glitch trig` makes a detector fire, to see a
-// detector reset reported.
+// and at every boot; `glitch off` disarms it; `glitch default` goes back to the default (armed at
+// the highest sensitivity); `glitch trig` makes a detector fire, to see a detector reset reported.
 static void cmd_glitch(shell_t *sh, char *args) {
     char *sub = args ? strtok(args, " ") : NULL;
     char *arg = sub ? strtok(NULL, " ") : NULL;
@@ -549,11 +550,20 @@ static void cmd_glitch(shell_t *sh, char *args) {
     if (!require_admin(sh))
         return;
     if (!strcmp(sub, "off") && !arg) {
-        settings()->glitch_detector = 0;
+        settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_OFF;
         glitchdet_apply(0);
         save(sh);
         log_msg(SOS_LOG_NOTICE, "config: glitch detector off");
         shell_printf(sh, "glitch detector off, now and at boot\n");
+    } else if (!strcmp(sub, "default") && !arg) {
+        settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
+        save(sh);
+        log_msg(SOS_LOG_NOTICE, "config: glitch detector back to the default");
+        if (glitchdet_apply(CONFIG_GLITCH_DEFAULT_MODE))
+            shell_printf(sh, "glitch detector back to the default: armed at sensitivity %u, now "
+                             "and at boot\n", (unsigned)CONFIG_GLITCH_DEFAULT_MODE - 1);
+        else
+            shell_printf(sh, "saved, but arming it didn't take (see dmesg)\n");
     } else if (!strcmp(sub, "on") && arg && arg[0] >= '0' && arg[0] <= '3' && !arg[1]) {
         unsigned setting = (unsigned)(arg[0] - '0') + 1;
         // Saved first: if arming resets the board at once, the guard at boot deals with it.
@@ -591,7 +601,7 @@ static void cmd_glitch(shell_t *sh, char *args) {
         }
         glitchdet_simulate();
     } else {
-        shell_printf(sh, "usage: glitch [watch <0-3> | on <0-3> | off | trig]\n");
+        shell_printf(sh, "usage: glitch [watch <0-3> | on <0-3> | off | default | trig]\n");
     }
 }
 
