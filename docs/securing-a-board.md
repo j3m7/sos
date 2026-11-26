@@ -1,8 +1,13 @@
 # Securing a board (draft procedure)
 
-**Status: draft. The owner confirmed the decisions below on 2026-11-25. Nothing in it has been
-run, and nothing in it may be run until the firmware it lists exists, the "to confirm" list is
-closed, and the owner approves the procedure itself.** It covers steps 3 and 4 of
+**Status: not yet approved by the owner, and nothing in it has been run. No OTP write has been
+made on any board.** The owner confirmed the decisions below on 2026-11-25. The firmware it
+lists is merged and the part for the development board ("Variant for the development board",
+with its files in `docs/otp/dev-1/`) has been reviewed; that part waits for the owner's approval
+and is what is run first. The production board's part is not final: it waits for dev-1 to be
+tested and working, by the owner's word, and has questions deferred until then. **Nothing in
+this document may be run until the owner approves it and names each write.** It covers steps 3
+and 4 of
 [issue #64](https://github.com/j3m7/sos/issues/64): the root secret in one-time-programmable
 (OTP) memory, secure boot, and debug off. Every OTP write is permanent.
 
