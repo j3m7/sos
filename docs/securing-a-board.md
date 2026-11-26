@@ -38,7 +38,7 @@ Moving to an A4 board later removes the four glitch attacks. It does not remove 
 | 2 | **USB bootloader (BOOTSEL) on the secured board** | **Kept, for now.** More fixes and improvements are expected, and they have to be flashable. Consequences accepted: the two glitch attacks that go through BOOTSEL (E20, E21) stay open, and anyone with a cable can erase or roll back the flash, though not read what is sealed. Disabling it later remains possible: it is one more OTP write (`BOOT_FLAGS0.DISABLE_BOOTSEL_USB_PICOBOOT_IFC`, `..._USB_MSD_IFC`, `..._UART_BOOT`), after which the board can never be reflashed over USB |
 | 3 | **Bootrom reboot types** | **`BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` is set** (the other E20 workaround). Cost accepted: the secured board no longer reboots into BOOTSEL on command, which `ninja flash` and `tools/provision.sh` (`picotool load -f`) rely on. Flashing it needs someone to hold the BOOTSEL button while plugging it in. SOS's own fault record uses other scratch registers and should be unaffected (*to confirm*) |
 | 4 | **Signing keys** | **Two:** `BOOTKEY0` in use and `BOOTKEY1` as a spare, generated away from the development machine, each with an offline backup. Slots 2 and 3 are marked invalid. Instructions below |
-| 5 | **Glitch detector** | **Open: the owner asked for more information.** See "The glitch detector" below |
+| 5 | **Glitch detector** | **Not burned yet; open until a week-long test.** The owner's decision (2026-11-25): no multi-day soak for now. Every board running SOS arms the detector by software at boot, at the highest sensitivity (#78; `glitch off` turns it off), and whoever works with a board reports any detector reset. A week-long torture test follows once the feature set is more complete and there is a spare board and battery hardware; the OTP bit is decided after that. See "The glitch detector" below |
 | 6 | **A rehearsal on the development board** | **Yes:** the root-secret burn is rehearsed on dev-1 in spare OTP pages before the production board, including a read attempt from BOOTSEL and one burn interrupted on purpose. This is the owner's word for those OTP writes on dev-1 and for nothing else in OTP |
 | 7 | **Wrong-password count across reboots** | **Yes, add it.** Known limit: while the USB bootloader is kept (decision 2), someone with a cable can rewrite the flash and reset a counter stored there, so it slows down guessing at the console only for someone who can't or won't do that. It becomes a real limit if the bootloader is disabled later |
 | 8 | **Firmware rollback** | **Not decided; treated as "not now".** With the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`) would prevent it, at the cost of OTP bits per version step |
@@ -96,7 +96,8 @@ the development board can arm it at each sensitivity in turn and run the board's
 (Wi-Fi traffic, SSH, SFTP, the card, a Lua script) for hours, counting detector resets. That
 tells us which settings this board design tolerates before any OTP bit is spent.
 
-**What I'd do.** Run that soak test on dev-1 at all four sensitivities, for days, not hours.
+**What I'd do.** Run a soak test at all four sensitivities, for days, not hours (the owner has
+put this off until there is a spare board: see below).
 It is one board, at room temperature, on one power supply, so the most it justifies is "the
 highest setting that stayed clean, minus one". Then burn "enabled" on the production board at
 that setting; if even the lowest setting resets a healthy board, leave it off. Given how the
@@ -106,8 +107,15 @@ log and in `uptime`, as it does for a watchdog reset.
 
 **What has been run so far (2026-11-25, #78).** One soak on dev-1: armed by software at
 sensitivity 3, the highest, for 3 hours, with 574 SFTP cycles of 1 MB written to and read back
-from the encrypted card. No detector reset. A longer trial follows, with the detector set by
-the `glitch` command and watching rather than armed.
+from the encrypted card. No detector reset.
+
+**What runs from now on (the owner's decision, 2026-11-25).** No multi-day soak yet. Instead
+SOS arms the detector by software at every boot, at sensitivity 3, by default (#78), so that
+ordinary development use shows whether it resets a healthy board. `glitch off` turns it off if
+it becomes a problem. A detector reset nobody forced is recorded on #64 (`docs/development.md`,
+"Glitch detector resets"). That is evidence gathered in passing, not a test: it says nothing for
+the conditions nobody happens to run. The week-long torture test comes later, with a more
+complete feature set, a spare board and battery hardware.
 
 **What that soak does not show.** The OTP setting can't be undone, so its limits belong next to
 the decision:
@@ -124,8 +132,8 @@ the decision:
 - The production board is a different board. Its own tolerance is unknown until step 4.5 is
   checked on it, and by then the bit is burned.
 
-**The decision this needs:** decide after the longer trial whether to enable the detector and at
-which sensitivity.
+**The decision this needs:** after the week-long test, whether to enable the detector in OTP
+and at which sensitivity. Until then step 4.5 is not done.
 
 ## Signing keys: how to make them
 
@@ -225,9 +233,10 @@ and merged before anything is burned.
    after wrong console passwords doesn't start again at every boot. The count is stored
    *before* the password is checked and cleared after a right one: otherwise cutting the power
    after a wrong answer would give free guesses.
-6. **A soak-test build for the glitch detector** (decision 5), for the development board only:
-   arms the detector by software at a chosen sensitivity and reports detector resets. No OTP.
-   Also, in everyday firmware, reporting a detector reset in the log and `uptime`.
+6. **The glitch detector by software** (decision 5): done in #78. A setting arms the detector
+   at a chosen sensitivity (by default the highest) or only watches it, and detector resets
+   are reported in the log, `uptime` and `glitch`. No OTP. Still to build: the week-long test
+   itself (load, power and temperature conditions, and what counts as a pass).
 7. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build
    deliberately produces no OTP file.
 8. **The OTP settings as files we write by hand,** one per stage below, in the form
@@ -241,7 +250,8 @@ set up fresh after step 3, never before.
 
 ## Before touching the production board
 
-- [ ] The owner has approved this document, with decision 5 settled after the soak test.
+- [ ] The owner has approved this document. Decision 5 is settled only after the week-long
+      test; until then step 4.5 is left out.
 - [ ] All firmware in the previous section is merged, and the build that will be burned is
       tagged.
 - [ ] The rehearsal (decision 6) has been done and written up, if chosen.
@@ -291,7 +301,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.2 | `BOOT_FLAGS1.KEY_VALID` for slots 0 and 1 | Read back. The signed firmware still boots (secure boot is not on yet, so this proves nothing about the key by itself). **Run the on-board key check: it must say "match" for the image that is on the board now** | A "no match" stops the procedure here, with the board still open |
 | 4.3 | `BOOT_FLAGS1.KEY_INVALID` for slots 2 and 3 | Read back | |
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
-| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the soak test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
+| 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
 | 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | A debug probe can no longer attach | |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | The board boots the signed firmware. `version` shows secure boot on. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
@@ -344,7 +354,7 @@ This list is a gate: the document is not final, and nothing is burned, while any
    bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
 4. Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
    row write and read, used for the chaff rows.
-5. Glitch detector: the soak test's results on dev-1; and that the detector's `LOCK` register
+5. Glitch detector: the week-long test's results; and that the detector's `LOCK` register
    stops software from disarming it.
 6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
 7. Which free OTP page to use (pages 3 to 60 are free for user data), and that a failed write
