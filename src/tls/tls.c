@@ -22,6 +22,7 @@
 #include "pico-sshd/ringbuffer.h"
 
 #include "core/heap.h"
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "time/timesync.h"
 #include "tls/certstore.h"
@@ -67,6 +68,8 @@ static tls_conn_t *verifying;
 
 // --- heap accounting (all wolfSSL/wolfSSH allocations) ---------------------------------------
 
+// Kept apart from HEAP_NET's counter, which these hooks also feed: that one includes the
+// application's own SSH, TLS and certificate blocks, and a connection's peak is wolfSSL's alone.
 static int64_t heap_now;
 
 // Raise each open connection's peak to what's in use now, counted from its tls_open(). Each
@@ -80,7 +83,7 @@ static void note_peak(void) {
 }
 
 static void *count_malloc(size_t n) {
-    void *p = malloc(n);
+    void *p = heap_alloc(HEAP_NET, n);
     if (p) {
         heap_now += (int64_t)malloc_usable_size(p);
         note_peak();
@@ -91,12 +94,12 @@ static void *count_malloc(size_t n) {
 static void count_free(void *p) {
     if (p)
         heap_now -= (int64_t)malloc_usable_size(p);
-    free(p);
+    heap_release(HEAP_NET, p);
 }
 
 static void *count_realloc(void *p, size_t n) {
     size_t old = p ? malloc_usable_size(p) : 0;
-    void *q = realloc(p, n);
+    void *q = heap_realloc(HEAP_NET, p, n);
     if (q || n == 0) {
         heap_now += (int64_t)(q ? malloc_usable_size(q) : 0) - (int64_t)old;
         note_peak();
@@ -395,7 +398,7 @@ static void handshake_step(tls_conn_t *c) {
 tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
                      tls_use_t use) {
     size_t free_heap = heap_free();         // before this connection's own allocation
-    tls_conn_t *c = calloc(1, sizeof(*c));
+    tls_conn_t *c = heap_zalloc(HEAP_NET, sizeof(*c));
     if (!c)
         return NULL;
     snprintf(c->host, sizeof(c->host), "%s", host);
@@ -530,7 +533,7 @@ void tls_close(tls_conn_t *c) {
 
     if (c->rx.buf)
         ssh_ringbuffer_destroy(&c->rx);
-    free(c);
+    heap_release(HEAP_NET, c);
 }
 
 const char *tls_error(const tls_conn_t *c) {

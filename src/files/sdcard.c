@@ -25,6 +25,7 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/wdog.h"
 #include "files/files.h"
@@ -606,7 +607,7 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     }
     if (files_in_use(sh))
         return;
-    void *work = malloc(FORMAT_WORK_BYTES);
+    void *work = heap_alloc(HEAP_FILES, FORMAT_WORK_BYTES);
     if (!work) {
         shell_printf(sh, "not formatted: out of memory\n");
         return;
@@ -621,7 +622,7 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
         if (disk_status(0) & STA_NOINIT)
             shell_printf(sh, "format failed: no card\n");
         crypt_off();
-        free(work);
+        heap_release(HEAP_FILES, work);
         return;
     }
     log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s%s", name,
@@ -635,7 +636,7 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     FRESULT fr = f_mkfs(drive, &opt, work, FORMAT_WORK_BYTES);
     formatting = false;
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
-    free(work);
+    heap_release(HEAP_FILES, work);
     log_msg(SOS_LOG_INFO, "sd: format did %lu reads, %lu writes (%lu sectors), last write %lu+%lu",
             (unsigned long)io_stats.reads, (unsigned long)io_stats.writes,
             (unsigned long)io_stats.sectors, (unsigned long)io_stats.last_sector,

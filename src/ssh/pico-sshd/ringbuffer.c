@@ -32,6 +32,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "core/heaptag.h"
 #include "pico-sshd/ringbuffer.h"
 
 
@@ -41,7 +42,7 @@ int ssh_ringbuffer_init(ssh_ringbuffer_t *rb, void *buf, size_t size)
 		return -1;
 
 	if (!buf) {
-		if (!(rb->buf = calloc(1, size)))
+		if (!(rb->buf = heap_zalloc(HEAP_NET, size)))
 			return -2;
 		rb->free_buf = true;
 	} else {
@@ -64,7 +65,7 @@ int ssh_ringbuffer_destroy(ssh_ringbuffer_t *rb)
 		return -1;
 
 	if (rb->free_buf && rb->buf)
-		free(rb->buf);
+		heap_release(HEAP_NET, rb->buf);
 
 	rb->buf = NULL;
 	rb->size = 0;

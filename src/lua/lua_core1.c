@@ -19,6 +19,7 @@
 #include "lua.h"
 #include "lualib.h"
 
+#include "core/heaptag.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_core1.h"
 #include "net/http.h"
@@ -73,13 +74,13 @@ static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     if (!ptr)
         osize = 0;                              // osize is the object type when ptr is NULL
     if (nsize == 0) {
-        free(ptr);
+        heap_release(HEAP_LUA, ptr);
         mem_used -= (uint32_t)osize;
         return NULL;
     }
     if (nsize > osize && mem_used - osize + nsize > mem_limit)
         return NULL;                            // Lua raises "not enough memory"
-    void *p = realloc(ptr, nsize);
+    void *p = heap_realloc(HEAP_LUA, ptr, nsize);
     if (p) {
         mem_used = mem_used - (uint32_t)osize + (uint32_t)nsize;
         if (mem_used > mem_peak)
@@ -1058,7 +1059,7 @@ static void core1_main(void) {
 bool lua_core1_start(void) {
     if (stack)
         return true;
-    stack = malloc(LUA_CORE1_STACK);
+    stack = heap_alloc(HEAP_LUA, LUA_CORE1_STACK);
     if (!stack)
         return false;
     multicore_launch_core1_with_stack(core1_main, stack, LUA_CORE1_STACK);

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "core/config.h"         // config_base64_decode()
+#include "core/heaptag.h"
 
 #define PEM_BEGIN "-----BEGIN "
 #define PEM_CERT_BEGIN "-----BEGIN CERTIFICATE-----"
@@ -67,7 +68,7 @@ static size_t parse_pem(const uint8_t *file, size_t len, uint8_t *out, size_t ou
                         certbundle_cert_t *certs, size_t max, const char **why) {
     size_t count = 0, out_len = 0;
     const uint8_t *p = file, *end = file + len;
-    char *b64 = malloc(len);                    // a block's base64 without whitespace
+    char *b64 = heap_alloc(HEAP_NET, len);                    // a block's base64 without whitespace
     if (!b64) {
         *why = "out of memory";
         return 0;
@@ -110,7 +111,7 @@ static size_t parse_pem(const uint8_t *file, size_t len, uint8_t *out, size_t ou
         out_len += (size_t)der;
         p = stop + strlen(PEM_CERT_END);
     }
-    free(b64);
+    heap_release(HEAP_NET, b64);
     if (count == 0 && !*why)
         *why = "no certificates in the file";
     return count;

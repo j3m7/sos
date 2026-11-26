@@ -27,6 +27,7 @@
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/otpread.h"
 #include "core/rootflash.h"
@@ -228,7 +229,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "nts [ke]          NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
     shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
-    shell_printf(sh, "mem               heap and stack usage\n");
+    shell_printf(sh, "mem               heap (by feature) and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ssh               SSH server status\n");
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
@@ -296,6 +297,23 @@ static void cmd_mem(shell_t *sh) {
     heap_info_t h = heap_info();
     shell_printf(sh, "heap:  %u in use, %u peak, %u total\n",
                  (unsigned)h.used, (unsigned)h.arena, (unsigned)h.total);
+    // What each feature holds. "other" is the rest of what's in use: the SDK, the SD card and
+    // Wi-Fi drivers, and malloc's own bookkeeping per block (the tags count usable bytes only).
+    size_t tagged = 0;
+    for (int t = 0; t < HEAP_TAGS; t++) {
+        size_t used = heap_tag_used((heap_tag_t)t);
+        tagged += used;
+        shell_printf(sh, "  %-8s %7u, %u peak\n", heap_tag_name((heap_tag_t)t), (unsigned)used,
+                     (unsigned)heap_tag_peak((heap_tag_t)t));
+    }
+    shell_printf(sh, "  %-8s %7u\n", "other", (unsigned)(h.used > tagged ? h.used - tagged : 0));
+    cyw43_arch_lwip_begin();
+    struct stats_mem net = lwip_stats.mem;
+    cyw43_arch_lwip_end();
+    // lwIP's heap only (MEM_SIZE); its packet and connection pools are in `wifi stats`.
+    shell_printf(sh, "lwip:  %u in use, %u peak, %u total (lwIP's own heap, not part of the above; "
+                     "its pools: wifi stats)\n",
+                 (unsigned)net.used, (unsigned)net.max, (unsigned)net.avail);
     shell_printf(sh, "stack: %u peak of %u bytes\n",
                  (unsigned)stackmon_peak(), (unsigned)stackmon_size());
     if (lua_core1_stack_peak())

@@ -31,6 +31,19 @@ malloc, calloc, realloc and free in a mutex so the two cores never allocate at o
 `__malloc_lock()`/`__malloc_unlock()` (no-ops by default) with a recursive mutex: reading the
 figures on core 0 can't race a Lua script allocating on core 1.
 
+`heaptag.c` (pure C, host tested) says what the heap is used for. Features allocate with
+`heap_alloc(tag, n)`, `heap_zalloc()`, `heap_realloc()` and `heap_release(tag, p)` instead of
+malloc and free, and each tag (`ssh/tls`, `lua`, `editor`, `files`, `http`, `time`) keeps what it
+holds now and its peak; `mem` lists them. Notes:
+
+- **No per-block cost:** a block counts at its `malloc_usable_size()`, so releasing needs no size
+  and no header. The price is that a block must be released under the tag it was allocated with.
+- **`ssh/tls` is one tag:** wolfSSL's allocator hooks (`tls.c`) don't say who is asking, so SSH
+  sessions, TLS connections and every other wolfCrypt allocation share it.
+- **`other` in `mem`** is the heap in use minus the tags: code that calls malloc directly (the
+  SDK, the SD card and Wi-Fi drivers) plus malloc's bookkeeping per block.
+- **New code** should allocate through a tag, adding one to `heap_tag_t` if none fits.
+
 ## Configuration
 
 Two layers:

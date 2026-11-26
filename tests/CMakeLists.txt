@@ -18,8 +18,9 @@ if (SOS_TEST_SANITIZE)
 endif()
 
 # src/ssh/pico-sshd/ringbuffer.c: buffers for all SSH session I/O.
-add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/pico-sshd/ringbuffer.c)
-target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd/include)
+add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/pico-sshd/ringbuffer.c
+    ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd/include ${SOS_ROOT}/src)
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
@@ -55,7 +56,7 @@ target_include_directories(test_charwidth PRIVATE ${SOS_ROOT}/src)
 add_test(NAME charwidth COMMAND test_charwidth)
 
 # src/edit/editor.c: the full-screen editor's text, keys and screen.
-add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
+add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
 target_include_directories(test_editor PRIVATE ${SOS_ROOT}/src)
 add_test(NAME editor COMMAND test_editor)
 
@@ -92,6 +93,11 @@ if (BASH_EXE)
     add_test(NAME flash_guard COMMAND ${BASH_EXE} ${SOS_ROOT}/tools/test/flash-guard-test.sh)
 endif()
 
+# src/core/heaptag.c: heap use by feature (the `mem` command's breakdown).
+add_executable(test_heaptag test_heaptag.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_heaptag PRIVATE ${SOS_ROOT}/src)
+add_test(NAME heaptag COMMAND test_heaptag)
+
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
@@ -113,7 +119,7 @@ target_include_directories(test_nts_ntp PRIVATE ${SOS_ROOT}/src)
 add_test(NAME nts_ntp COMMAND test_nts_ntp)
 
 # src/tls/certbundle.c: PEM bundles and DER certificates for /certs/roots.pem (base64 from config.c).
-add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/config.c)
+add_executable(test_certbundle test_certbundle.c ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_certbundle PRIVATE ${SOS_ROOT}/src)
 add_test(NAME certbundle COMMAND test_certbundle)
 
