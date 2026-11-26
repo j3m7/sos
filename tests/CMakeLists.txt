@@ -70,6 +70,12 @@ add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
 target_include_directories(test_bootkey PRIVATE ${SOS_ROOT}/src)
 add_test(NAME bootkey COMMAND test_bootkey)
 
+# tools/flash.sh: the guard that refuses to flash an image not signed with an accepted key.
+find_program(BASH_EXE bash)
+if (BASH_EXE)
+    add_test(NAME flash_guard COMMAND ${BASH_EXE} ${SOS_ROOT}/tools/test/flash-guard-test.sh)
+endif()
+
 # src/core/log.c: log levels, console output with input-line redraw, RAM history.
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
