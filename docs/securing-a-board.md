@@ -449,8 +449,12 @@ pages, which keeps all three real pages but tests code the production board won'
 - [ ] The OTP files for dev-1 are written by hand, one per write, reviewed, and contain
       nothing but public hashes and flag values. Every command names the board with `--ser`.
 - [ ] `picotool otp dump` of dev-1 as it is now is saved.
-- [ ] The flash guard (below) is merged, and has been seen to refuse an unsigned image and one
+- [ ] The flash guard (#80) is merged, and has been seen to refuse an unsigned image and one
       signed with another key.
+- [ ] **Every session flashes dev-1 through the guard** (`ninja flash` or `tools/flash.sh`, with
+      `SOS_FLASH_SERIAL` set), and no longer with `picotool load` directly: the guard only
+      helps where it is used. The shared notes on the board say so, and each session has
+      confirmed it. Scripts that call `picotool load` themselves are changed or retired first.
 - [ ] Every session that uses dev-1 has been told, has the signing key in its build settings,
       and has confirmed its builds come out signed.
 
@@ -521,7 +525,10 @@ probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is ex
   are a **list** of public key hashes in the build settings, not the private key file: a list,
   because dev-1 accepts two keys and step D4.2 flashes an image signed with the second; hashes,
   so that the guard also works where no private key is present. It guards our own tools only:
-  `picotool load` typed by hand goes around it.
+  `picotool load` typed by hand goes around it. Two things it doesn't do yet, to add before a
+  second board is in use: refuse when more than one board is attached and none is named, and
+  keep the accepted keys per board serial instead of per machine (a production board will
+  accept other keys than dev-1).
 - **A separate marker for "sealed-only".** Secure boot alone does not make a board refuse
   unsealed records or `rootsecret forget`. Firmware item 3 above has the proposal for the
   marker; dev-1 never gets it.
