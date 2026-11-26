@@ -32,11 +32,50 @@ def load_world():
         return json.load(f)
 
 
+class world_lock:
+    """One writer of the world at a time: the pretend picotool, the pretend console and the
+    test (the person's hands) all change it."""
+
+    def __enter__(self):
+        import fcntl
+        self.f = open(os.environ["SOS_FAKE_WORLD"] + ".lock", "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def unique():
+    import threading
+    return "%d.%d" % (os.getpid(), threading.get_ident())
+
+
 def save_world(w):
     path = os.environ["SOS_FAKE_WORLD"]
-    with open(path + ".tmp", "w") as f:
+    tmp = "%s.%s.tmp" % (path, unique())
+    with open(tmp, "w") as f:
         json.dump(w, f)
-    os.replace(path + ".tmp", path)
+    os.replace(tmp, path)
+    show_on_usb(w)
+
+
+def show_on_usb(w):
+    """What the computer sees of the board, as on the real thing: the USB listing says whether
+    each board runs or sits in its bootloader, and the console device exists only while the
+    board runs. (A console that was always there hid a real fault once.)"""
+    if w.get("usb_file"):
+        mode = "running" if w["mode"] == "app" else "bootloader"
+        tmp = "%s.%s.tmp" % (w["usb_file"], unique())
+        with open(tmp, "w") as f:
+            json.dump([[s, mode if s == w["serial"] else "running"] for s in w["boards"]], f)
+        os.replace(tmp, w["usb_file"])
+    link = w.get("tty_link")
+    if link:
+        there = os.path.islink(link)
+        if w["mode"] == "app" and w["serial"] in w["boards"] and not there:
+            os.symlink(w["pty"], link)
+        elif (w["mode"] != "app" or w["serial"] not in w["boards"]) and there:
+            os.unlink(link)
 
 
 def row(w, n):
@@ -259,6 +298,11 @@ def flash(w, args):
 
 
 def picotool(argv):
+    with world_lock():
+        return picotool_locked(argv)
+
+
+def picotool_locked(argv):
     w = load_world()
     if argv[:1] == ["version"]:
         print("picotool v%s (Linux, pretend)" % w.get("picotool", "2.3.1"))
@@ -342,7 +386,7 @@ def console_answer(w, line, state):
             return out + "\nthe button wasn't held in time: nothing was written\n", False
         out += "\nwriting OTP: keep the button held and don't unplug the board...\n"
         page = first_blank_page(w)
-        if "burn_fails" in w["faults"]:
+        if "burn_fails" in w["faults"] or ("real_burn_fails" in w["faults"] and not rehearse):
             w["otp"][str(page * 64)] = 0x212345
             w["otp"][str(0xF81 + 2 * page)] = 0x3D3D3D
             return (out + "\na write failed or didn't read back.\nOTP page %d: locked against the bootloader\n"
@@ -445,11 +489,16 @@ def serve_console(master_fd, stop):
                     os.write(master_fd, b"\r\nsos> ")
                     continue
                 text, changed = console_answer(w, line, state)
-                if changed:
-                    save_world(w)
+                if changed:                  # a burn: only OTP changed; keep what others changed
+                    with world_lock():
+                        now = load_world()
+                        now["otp"] = w["otp"]
+                        save_world(now)
                 text = text.replace("\n", "\r\n")
                 if not state:
                     text += "sos> "
+                    if changed and "log_after_prompt" in w["faults"]:
+                        text += "\r\n[   12.345] wifi: no settings\r\n"
                 os.write(master_fd, (line + "\r\n" + text).encode())
             else:
                 buf += bytes([ch])

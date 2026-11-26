@@ -26,7 +26,8 @@ not repeat it.
 
 ## Before you start
 
-- [ ] This runbook and the script are approved and on main. Your checkout is current main.
+- [ ] This runbook and the script are approved and on main. Your checkout is current main with
+      nothing uncommitted (the script checks, and stops otherwise).
 - [ ] A copy of both signing keys (`sos-dev-sign.pem`, `sos-dev-sign-2.pem`) exists somewhere
       other than this computer. **Without it, a lost disk means dev-1 can never be reflashed.**
       The script asks you to confirm this twice.
@@ -63,10 +64,18 @@ The script tells you when. Nothing else is typed by hand.
 | Unplug the board, hold BOOTSEL, plug it in, let go | Do that, then type `DONE`. |
 | Hold the BOOTSEL button | Hold it until the script says to let go. Three times: a test, the rehearsal, the real burn. |
 | `PERMANENT:` ... Type `REHEARSE` / `BURN` / `KEYS` / `VALID` / `SECUREBOOT` / `LOCK` | Read the command and the "what this changes for good" line. Type the word to do it. Anything else stops, with nothing written. |
+| The board is in its bootloader ... Type `FLASH` | Only appears if you start the script with the board sitting in its bootloader (for example after an earlier stop). Typing it flashes the everyday image through the guard. It writes flash, not OTP. |
 | A question ending `Type YES or NO` | Read the output shown above it and answer truthfully. There are four: the board answering from its bootloader, the OTP reads being refused, the signature being verified, the test write being refused. These are outputs nobody has seen yet, so the script can't judge them. `NO` stops the run. |
 
 `SECUREBOOT` is the step with no way back: after it the board runs only firmware signed with
 one of the two keys, for ever.
+
+## If the burn image says STOP HERE
+
+The script stops and leaves a file `BURN-FAILED` next to its records. While that file is there
+the script refuses to run on this board at all. Don't remove it until the cause is understood.
+A burn that failed part way leaves its page spent without a secret; the script says so when it
+finds one, and going on from there is a decision, not a retry.
 
 ## Last: set the board up (you, on the console)
 

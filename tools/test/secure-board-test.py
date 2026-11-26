@@ -76,17 +76,18 @@ class Board(unittest.TestCase):
                   open(os.path.join(dst, profile["otp_files"]["boot_keys"]), "w"))
         with open(os.path.join(t, "flash-keys"), "w") as f:
             f.write("%s\n%s\n" % (HASH1, HASH2))
-        json.dump([SERIAL], open(os.path.join(t, "usb.json"), "w"))
         # the board
         self.world_path = os.path.join(t, "world.json")
         os.environ["SOS_FAKE_WORLD"] = self.world_path
+        self.master, slave = pty.openpty()
+        self.tty = os.path.join(t, "console")
         fake.save_world({"boards": [SERIAL], "serial": SERIAL, "pages": [4, 5, 6],
+                         "usb_file": os.path.join(t, "usb.json"), "tty_link": self.tty,
+                         "pty": os.ttyname(slave),
                          "otp": {str(0xF83): 0x040404, str(0xF85): 0x040404},
                          "running": {"key": HASH1, "burn": False}, "mode": "app", "faults": [],
                          "otp_loads": [], "otp_sets": [], "flashed": [], "restarts": 0, "button": False})
         # its console
-        self.master, slave = pty.openpty()
-        self.tty = os.ttyname(slave)
         self.stopping = False
         self.console = threading.Thread(target=fake.serve_console, args=(self.master, lambda: self.stopping), daemon=True)
         self.console.start()
@@ -111,15 +112,17 @@ class Board(unittest.TestCase):
         return fake.load_world()
 
     def change(self, **kw):
-        w = self.world()
-        for k, v in kw.items():
-            w[k] = v
-        fake.save_world(w)
+        with fake.world_lock():
+            w = self.world()
+            for k, v in kw.items():
+                w[k] = v
+            fake.save_world(w)
 
     def fault(self, name):
-        w = self.world()
-        w["faults"].append(name)
-        fake.save_world(w)
+        with fake.world_lock():
+            w = self.world()
+            w["faults"].append(name)
+            fake.save_world(w)
 
     def script(self, mode, answers=None, timeout=240):
         """Run the script on a pty, as a person at a terminal would. `answers` maps what a
@@ -154,7 +157,10 @@ class Board(unittest.TestCase):
                 self.change(button=want)
             if "Unplug the board, hold BOOTSEL" in new and not unplugged:
                 unplugged = True
-                self.change(mode="bootsel")
+                if "stay_running" not in answers:
+                    self.change(mode="bootsel")
+            if "PRETEND RUN" not in out and len(out) > 200 and "REFUSED" not in out:
+                self.fail("a pretend run did not say so at the top:\n" + out[:300])
             m = re.search(r"Type (\w+) to do it \(anything else stops\): $", new) or \
                 re.search(r"Type (DONE) when it is \(anything else stops\): $", new) or \
                 re.search(r"Type (YES) or NO: $", new)
@@ -271,7 +277,6 @@ class NoPerson(Board):
 
 class WrongBoard(Board):
     def attached(self, serials):
-        json.dump(serials, open(os.path.join(self.tmp, "usb.json"), "w"))
         self.change(boards=serials)
 
     def refused(self, text):
@@ -300,7 +305,7 @@ class WrongBoard(Board):
         rc, out = self.script("run", answers={"REHEARSE": "no"})
         self.assertEqual(rc, 2, out)
         self.assertEqual(self.otp_written(), {})
-        json.dump([SERIAL, "BBBBBBBBBBBBBBBB"], open(os.path.join(self.tmp, "usb.json"), "w"))
+        self.change(boards=[SERIAL, "BBBBBBBBBBBBBBBB"])
         rc, out = self.script("run")
         self.assertEqual(rc, 2, out)
         self.assertIn("More than one board is attached", out)
@@ -456,7 +461,7 @@ class Stops(Board):
 
     def test_the_root_secret_is_not_read_from_otp(self):
         self.fault("root_secret_from_flash")
-        self.stopped("the root secret is read from OTP", ["KEYS", "VALID", "SECUREBOOT", "LOCK"])
+        self.stopped("page 5 is SPENT WITHOUT A", ["KEYS", "VALID", "SECUREBOOT", "LOCK"])
 
     def test_the_pages_are_judged_readable_over_usb(self):
         self.stopped("The answer was not YES", ["KEYS", "VALID", "SECUREBOOT", "LOCK"], answers={"YES": ["YES", "NO"]})
@@ -520,6 +525,165 @@ class Stops(Board):
         w["otp"][str(0x80 + 32)] = 0x1234                       # slot 2
         fake.save_world(w)
         self.stopped("Boot key slot 2 is not blank", PERMANENT_WORDS)
+
+
+class Bootloader(Board):
+    """A board found in its bootloader, with or without something runnable in flash."""
+
+    def test_the_console_is_gone_in_the_bootloader(self):
+        # The pretend board itself: no console device while it is in its bootloader.
+        self.assertTrue(os.path.exists(self.tty))
+        self.change(mode="bootsel")
+        self.assertFalse(os.path.exists(self.tty))
+        self.assertEqual(json.load(open(os.path.join(self.tmp, "usb.json"))), [[SERIAL, "bootloader"]])
+
+    def test_run_picks_up_a_board_in_its_bootloader(self):
+        self.change(mode="bootsel")
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("The board is in its bootloader, not running.", out)
+        self.assertIn("Type FLASH to do it", out)
+        self.assert_secured()
+
+    def test_the_flash_from_the_bootloader_can_be_declined(self):
+        self.change(mode="bootsel")
+        rc, out = self.script("run", answers={"FLASH": "no"})
+        self.assertEqual(rc, 2, out)
+        self.assertIn("Not flashed", out)
+        self.assertEqual(self.world()["flashed"], [])
+        self.assertEqual(self.otp_written(), {})
+
+    def test_check_names_the_way_out(self):
+        self.change(mode="bootsel")
+        rc, out = self.without_terminal("check")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("SOS_FLASH_SERIAL=%s tools/flash.sh build/sos.bin" % SERIAL, out)
+        self.assertEqual(self.world()["flashed"], [])
+
+    def test_stopped_after_the_unsigned_flash_and_started_again(self):
+        # Stop the run at the page lock, then leave the board as the unsigned flash leaves it:
+        # in its bootloader, with an image it refuses. The next run must get it going again.
+        rc, out = self.script("run", answers={"LOCK": "no"})
+        self.assertEqual(rc, 2, out)
+        w = self.world()
+        w["running"] = {"key": None, "burn": False}
+        w["mode"] = "bootsel"
+        fake.save_world(w)
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Type FLASH to do it", out)
+        self.assert_secured()
+
+    def test_the_recovery_step_needs_the_bootloader(self):
+        # The person types DONE without having put the board in its bootloader.
+        rc, out = self.script("run", answers={"stay_running": True})
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not in its bootloader", out)
+        self.assertEqual(self.otp_written(), {})
+
+
+class Overrides(Board):
+    """Test settings must not be able to reach a real run."""
+
+    def refused(self, mode, env):
+        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "secure-board.py"), mode, "test-board"],
+                           env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        out = p.stdout + p.stderr
+        self.assertEqual(p.returncode, 2, out)
+        self.assertIn("REFUSED", out)
+        self.assertEqual(self.world()["restarts"], 0)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "state")))
+        return out
+
+    def test_the_usb_listing_alone(self):
+        # The dangerous one: the board check answered from a file, everything else real.
+        for mode in ("run", "check"):
+            env = {k: v for k, v in self.env.items() if not k.startswith("SOS_SECURE_BOARD_") and k != "SOS_PICOTOOL"}
+            env["SOS_SECURE_BOARD_USB"] = os.path.join(self.tmp, "usb.json")
+            env["SOS_SECURE_BOARD_PROFILES"] = os.path.join(self.tmp, "profiles")
+            out = self.refused(mode, env)
+            self.assertIn("SOS_PICOTOOL", out)
+
+    def test_each_one_missing(self):
+        for name in ("SOS_PICOTOOL", "SOS_SECURE_BOARD_USB", "SOS_SECURE_BOARD_TTY", "SOS_SECURE_BOARD_IMAGES"):
+            env = dict(self.env)
+            del env[name]
+            self.assertIn(name, self.refused("run", env))
+
+    def test_the_real_picotool_on_the_path(self):
+        env = dict(self.env)
+        other = os.path.join(self.tmp, "otherbin")
+        os.mkdir(other)
+        with open(os.path.join(other, "picotool"), "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(os.path.join(other, "picotool"), 0o755)
+        env["PATH"] = other + os.pathsep + env["PATH"]
+        self.assertIn("flashing would use the real one", self.refused("run", env))
+
+    def test_a_pretend_run_says_so(self):
+        rc, out = self.without_terminal("check")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.startswith("PRETEND RUN"), out[:200])
+        records = os.path.join(self.tmp, "state", "sos", "boards", SERIAL)
+        log = open(os.path.join(records, os.listdir(records)[0], "log.txt")).read()
+        self.assertIn("PRETEND RUN", log.split("\n")[0])
+
+
+class FailedBurn(Board):
+    def test_a_failed_burn_is_not_taken_for_a_finished_one(self):
+        self.fault("real_burn_fails")
+        rc, out = self.script("run")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("The burn image said STOP HERE", out)
+        w = self.world()
+        self.assertEqual(fake.row(w, 0xF81 + 2 * 5), 0x3D3D3D)      # same lock word as a good burn
+        self.assertEqual(fake.root_secret_page(w), None)
+        before = self.otp_written()
+        # Started again: the brake left by the STOP HERE holds it, before anything is run.
+        rc, out = self.script("run")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("An earlier run on this board ended with the burn image saying STOP HERE", out)
+        self.assertEqual(self.otp_written(), before)
+        # A person removes the brake. Now the board itself is asked, and the stop says what it is.
+        os.unlink(os.path.join(self.tmp, "state", "sos", "boards", SERIAL, "BURN-FAILED"))
+        for mode in ("run", "check"):
+            rc, out = self.script(mode) if mode == "run" else self.without_terminal(mode)
+            self.assertEqual(rc, 2, out)
+            self.assertIn("page 5 is SPENT WITHOUT A", out)
+            self.assertNotIn("Type KEYS to do it", out)
+            self.assertEqual(self.otp_written(), before)
+
+    def test_check_on_a_locked_console_says_not_confirmed(self):
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        self.fault("console_locked")
+        rc, out = self.without_terminal("check")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("not confirmed (the console is locked", out)
+
+
+class Smaller(Board):
+    def test_another_chip(self):
+        path = os.path.join(self.tmp, "profiles", "test-board", "profile.json")
+        profile = json.load(open(path))
+        profile["chip"] = "RP2350 A4 (revision 4, ROM 3)"
+        json.dump(profile, open(path, "w"))
+        rc, out = self.script("run")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("the chip is the one the profile was written for", out)
+        self.assertEqual(self.otp_written(), {})
+
+    def test_a_log_line_after_the_prompt_does_not_fail_a_burn(self):
+        self.fault("log_after_prompt")
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        self.assert_secured()
+
+    def test_the_zero_write_is_shown_before_it_runs(self):
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        shown = out.index("command: picotool otp set -r 0x0ff 0 -f --ser " + SERIAL)
+        self.assertLess(shown, out.index("Was that write refused?"))
 
 
 if __name__ == "__main__":

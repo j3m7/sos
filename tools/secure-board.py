@@ -29,10 +29,13 @@ What it does (docs/securing-a-board.md has the reasons):
   Passwords and the SD card's key never pass through it: `setup` and `sd format` are done by
   the person on the board's console, last, with the script paused and the console released.
 
-Environment, for tests: SOS_PICOTOOL (the picotool to run), SOS_SECURE_BOARD_USB (a JSON file
-listing attached boards in place of /sys), SOS_SECURE_BOARD_TTY (the console's device),
+Environment, for tests only: SOS_PICOTOOL (the picotool to run), SOS_SECURE_BOARD_USB (a JSON
+file listing attached boards in place of /sys), SOS_SECURE_BOARD_TTY (the console's device),
 SOS_SECURE_BOARD_IMAGES (a directory holding build/, build-burn/ ... already built),
-SOS_SECURE_BOARD_PROFILES (where the profiles are), SOS_SECURE_BOARD_TIME_SCALE.
+SOS_SECURE_BOARD_PROFILES (where the profiles are), SOS_SECURE_BOARD_TIME_SCALE. Together they
+make a PRETEND run against a pretend board. `check` and `run` refuse to start with only some
+of them set: one alone could answer "which board is attached?" from a file while the real
+picotool wrote to a real board.
 """
 
 import argparse
@@ -42,6 +45,7 @@ import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import termios
@@ -73,6 +77,52 @@ class Stop(Exception):
     """The run stops here. Nothing offers to continue."""
 
 
+PRETEND_ALL = ["SOS_PICOTOOL", "SOS_SECURE_BOARD_USB", "SOS_SECURE_BOARD_TTY",
+               "SOS_SECURE_BOARD_IMAGES", "SOS_SECURE_BOARD_PROFILES"]
+
+
+def pretend_run():
+    """True if this is a pretend run (every test override set), False if it is a real one
+    (none set). Anything in between is refused: a mixture is how a test setting could reach a
+    real board."""
+    have = [v for v in PRETEND_ALL + ["SOS_SECURE_BOARD_TIME_SCALE"] if os.environ.get(v)]
+    if not have:
+        return False
+    missing = [v for v in PRETEND_ALL if not os.environ.get(v)]
+    if missing:
+        raise Stop("Test settings are in this shell's environment: %s.\nThey are only allowed all "
+                   "together (a pretend run); missing: %s.\nFor a real run, unset them and start again."
+                   % (", ".join(have), ", ".join(missing)))
+    # tools/flash.sh runs `picotool` from PATH: in a pretend run that must be the pretend one too.
+    on_path = shutil.which("picotool")
+    if not on_path or not os.path.samefile(on_path, os.environ["SOS_PICOTOOL"]):
+        raise Stop("Test settings are set, but `picotool` on PATH (%s) is not SOS_PICOTOOL (%s): "
+                   "flashing would use the real one. Refused."
+                   % (on_path or "none", os.environ["SOS_PICOTOOL"]))
+    return True
+
+
+def checkout_problem():
+    """Why this checkout must not be used for a real run, or None. A run from a modified or
+    stale tree would do something other than what was reviewed."""
+    def git(*args):
+        return subprocess.run(["git", "-C", ROOT] + list(args), capture_output=True, text=True, timeout=60)
+    try:
+        st = git("status", "--porcelain")
+        if st.returncode != 0:
+            return "`git status` failed here: %s" % st.stderr.strip()
+        if st.stdout.strip():
+            return "this checkout has changes that are not committed:\n" + indent(tail(st.stdout, 10))
+        if git("fetch", "--quiet", "origin", "main").returncode != 0:
+            return "`git fetch origin main` failed, so it can't be told whether this checkout is current"
+        head, main = git("rev-parse", "HEAD").stdout.strip(), git("rev-parse", "origin/main").stdout.strip()
+        if not head or head != main:
+            return "this checkout is at %s, and origin/main is at %s" % (head[:12], main[:12])
+    except (OSError, subprocess.SubprocessError) as e:
+        return "git could not be run: %s" % e
+    return None
+
+
 # --- the record ------------------------------------------------------------------------------------
 
 class Record:
@@ -85,7 +135,10 @@ class Record:
         stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
         self.dir = os.path.join(base, "sos", "boards", profile["serial"], stamp + "-" + mode)
         os.makedirs(self.dir, exist_ok=True)
+        self.board_dir = os.path.dirname(self.dir)
         self.log_file = open(os.path.join(self.dir, "log.txt"), "w")
+        if os.environ.get("SOS_SECURE_BOARD_USB"):
+            self.note("PRETEND RUN against a pretend board: no real board is involved")
         self.note("profile %s, mode %s, script at commit %s" % (profile["name"], mode, git_commit()))
 
     def note(self, text):
@@ -194,12 +247,20 @@ def judge(question, output, record):
 
 # --- the board on USB --------------------------------------------------------------------------------
 
-def attached_boards():
-    """The RP2 boards on USB: a list of serial numbers (upper case)."""
+BOOTLOADER_PRODUCTS = {"0003", "000f"}
+
+
+def usb_listing():
+    """The RP2 boards on USB: a list of (serial in upper case, "bootloader" or "running")."""
     fake = os.environ.get("SOS_SECURE_BOARD_USB")
     if fake:
-        with open(fake) as f:
-            return [s.upper() for s in json.load(f)]
+        for _ in range(20):                      # the pretend board rewrites this file
+            try:
+                with open(fake) as f:
+                    return [(s.upper(), m) for s, m in json.load(f)]
+            except (OSError, ValueError):
+                time.sleep(0.01)
+        raise Stop("The pretend USB listing (%s) could not be read." % fake)
     found = []
     for dev in glob.glob("/sys/bus/usb/devices/*"):
         try:
@@ -211,12 +272,25 @@ def attached_boards():
             continue
         if vendor != RPI_VENDOR or product not in BOARD_PRODUCTS:
             continue
+        mode = "bootloader" if product in BOOTLOADER_PRODUCTS else "running"
         try:
             with open(os.path.join(dev, "serial")) as f:
-                found.append(f.read().strip().upper())
+                found.append((f.read().strip().upper(), mode))
         except OSError:
-            found.append("(no serial)")
+            found.append(("(no serial)", mode))
     return found
+
+
+def attached_boards():
+    return [serial for serial, _ in usb_listing()]
+
+
+def board_mode(profile):
+    """"bootloader" or "running" for the profile's board; None if it isn't (alone) on USB."""
+    listing = usb_listing()
+    if len(listing) == 1 and listing[0][0] == profile["serial"]:
+        return listing[0][1]
+    return None
 
 
 def only_this_board(profile, record, wait=0):
@@ -331,10 +405,13 @@ class Console:
                 pass
             self.fd = None
 
-    def read_until(self, endings, timeout):
-        """Read until the text ends with one of `endings`. Returns the text; None on timeout."""
-        out, deadline = "", time.time() + timeout
+    def read_until(self, endings, timeout, containing=()):
+        """Read until the text ends with one of `endings`, or holds one of `containing` (then a
+        moment more, for the rest of that answer). Returns the text; None on timeout."""
+        out, deadline, seen_at = "", time.time() + timeout, None
         while time.time() < deadline:
+            if seen_at and time.time() - seen_at > 1.0:
+                return out
             r, _, _ = select.select([self.fd], [], [], 0.2)
             if r:
                 try:
@@ -347,6 +424,8 @@ class Console:
                 out = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out)
                 if any(out.endswith(e) for e in endings):
                     return out
+                if not seen_at and any(c in out for c in containing):
+                    seen_at = time.time()
         self.record.note("console, no ending seen in %d s; got:\n%s" % (timeout, out.rstrip()))
         return None
 
@@ -402,6 +481,9 @@ class Run:
         self.secret_page = pages[1] if self.first else pages[0]
         self.key = {k["slot"]: k["hash"] for k in profile["keys"]}
         self.state = {}
+        self.chip_checked = False
+        self.secret_seen = None                # what the firmware said about the secret's page
+        self.recover_cmd = "SOS_FLASH_SERIAL=%s tools/flash.sh build/sos.bin" % profile["serial"]
 
     # ---- small helpers ----
 
@@ -430,6 +512,10 @@ class Run:
         if not self.con.reach_prompt():
             raise Stop("The board's console asks for a password. This script never types one, and its "
                        "checks need an open console.")
+        if not self.chip_checked and self.p.get("chip"):
+            self.expect_in("the chip is the one the profile was written for", "chip: %s\n" % self.p["chip"],
+                           self.con.command("version") + "\n")
+            self.chip_checked = True
 
     def board_back(self):
         """After a command that restarts the board: it is on USB again, alone, AND running (its
@@ -438,15 +524,89 @@ class Run:
         only_this_board(self.p, self.record, wait=WAIT_BOARD)
         deadline, since = time.time() + WAIT_BOARD, None
         while time.time() < deadline:
-            if os.path.exists(self.con.path()) and attached_boards() == [self.p["serial"]]:
+            if os.path.exists(self.con.path()) and board_mode(self.p) == "running":
                 since = since or time.time()
                 if time.time() - since >= 3 * SCALE:
                     return
             else:
                 since = None
             time.sleep(min(0.1, SCALE))
+        if board_mode(self.p) == "bootloader":
+            raise Stop(self.in_bootloader_text("The board did not start its firmware within %d s of a "
+                                               "restart: it sits in its bootloader." % WAIT_BOARD))
         raise Stop("The board did not come back up within %d s of a restart (no console at %s)."
                    % (WAIT_BOARD, self.con.path()))
+
+    def in_bootloader_text(self, first):
+        return ("%s\nThat is where a board waits when nothing in its flash can start (an image it "
+                "refuses, or a flash that failed).\nThe way out is to flash the everyday image, through "
+                "the guard:\n    %s\n`run` offers to do exactly that when it is started with the board "
+                "in this state." % (first, self.recover_cmd))
+
+    def wait_bootloader(self):
+        """The person has put the board in its bootloader: it is alone on USB, as a bootloader."""
+        deadline = time.time() + WAIT_BOARD
+        while time.time() < deadline:
+            if board_mode(self.p) == "bootloader":
+                self.record.note("the board is in its bootloader")
+                return
+            pause(1)
+        only_this_board(self.p, self.record)
+        raise Stop("The board is attached but not in its bootloader (%d s). Unplug it, hold BOOTSEL "
+                   "while plugging it in, and start again." % WAIT_BOARD)
+
+    def start_from_bootloader(self):
+        """Started with the board already in its bootloader: the one safe thing is offered."""
+        say("\nThe board is in its bootloader, not running.")
+        if self.mode != "run":
+            raise Stop(self.in_bootloader_text("`check` only reads, and a board in its bootloader has "
+                                               "no firmware running to read through."))
+        if not os.path.exists(self.image("build")):
+            raise Stop("The board is in its bootloader and %s isn't built yet.\nBuild it "
+                       "(`cmake --preset debug && cmake --build build`), then start again."
+                       % self.image("build"))
+        self.expect("build is signed with", self.key[0], self.image_key("build") or "(not signed)")
+        say("The one safe way on is to flash the everyday image through the guard. It writes flash,")
+        say("not OTP, and is what the recovery step does anyway.")
+        say("  command: %s" % self.recover_cmd)
+        tty = need_person("Flashing from the bootloader")
+        with tty:
+            tty.write("Type FLASH to do it (anything else stops): ")
+            answer = tty.readline().strip()
+        self.record.note("offered the flash from the bootloader: %s" % ("taken" if answer == "FLASH" else "declined"))
+        if answer != "FLASH":
+            raise Stop("Not flashed. The board is still in its bootloader.")
+        self.flash("build")
+        say("  ok: the board runs again")
+
+    def confirm_secret(self):
+        """The lock word of the secret's page is the same after a burn that worked and one that
+        failed part way: only the firmware can tell them apart. Ask it, where it will answer."""
+        page = self.secret_page
+        if self.state["lock"][page] != LOCK_BURNED:
+            return
+        self.con.open()
+        if not self.con.reach_prompt():
+            self.con.close()
+            if self.mode == "run":
+                raise Stop("The board's console asks for a password. This script never types one, and its "
+                           "checks need an open console.")
+            say("  the root secret in page %d: not confirmed (the console is locked, as on a set-up board)" % page)
+            return
+        out = self.con.command("rootsecret")
+        self.secret_seen = out
+        if "root secret: present, in OTP page %d" % page in out:
+            say("  ok: the firmware reads the root secret from OTP page %d" % page)
+            return
+        raise Stop(self.spent_text(out))
+
+    def spent_text(self, seen):
+        page = self.secret_page
+        return ("OTP page %d is locked the way a burn leaves it, but the firmware does not find a root "
+                "secret in it.\nThat is what a burn that failed part way leaves: page %d is SPENT WITHOUT A "
+                "SECRET, and this board's profile expects the secret there.\nThis is not something to "
+                "retry. Whether to use another page is a decision, and a change to the profile.\n"
+                "The firmware said:\n%s" % (page, page, indent(seen)))
 
     def flash(self, directory, unguarded=False, runs=True):
         env = dict(os.environ, SOS_FLASH_SERIAL=self.p["serial"])
@@ -603,6 +763,9 @@ class Run:
             ["picotool version is %s" % p["picotool"],
              "exactly one board attached, serial %s" % p["serial"],
              "the flash guard's key list holds this board's key hashes",
+             "no earlier run on this board ended with the burn image saying STOP HERE",
+             "run: the checkout is clean and is origin/main",
+             "only if the board is found in its bootloader: offer to flash build/sos.bin through the guard (FLASH)",
              "the person confirms a backup of the signing keys exists off this computer (BACKUP)"],
             self.step_preflight)
         add("otp-before", "Save the board's OTP as it is", "check",
@@ -617,7 +780,9 @@ class Run:
             build += ["build-key2 signed with %s; build-unsigned not signed" % self.key[1]]
         add("images", "Build the images and check which key each is signed with", "build", build, self.step_images)
         add("state", "Read where the board is", "check",
-            ["picotool otp get: the lock words, the boot key rows, BOOT_FLAGS1, CRIT1"], self.step_state)
+            ["picotool otp get: the lock words, the boot key rows, BOOT_FLAGS1, CRIT1",
+             "if the secret's page is locked: console: rootsecret -> present, in OTP page %d" % self.secret_page],
+            self.step_state)
         add("recovery", "Walk the recovery path", "manual",
             ["the person: unplug, hold BOOTSEL, plug in, let go",
              "picotool info --ser %s   (shown; the person says whether it is this board in the bootloader)" % p["serial"],
@@ -712,6 +877,19 @@ class Run:
             if h not in listed:
                 raise Stop("The flash guard's key list (%s) does not hold the key for slot %d:\n  %s" % (keys, slot, h))
         say("  ok: the flash guard's key list holds this board's key hashes")
+        failed = os.path.join(self.record.board_dir, "BURN-FAILED")
+        if os.path.exists(failed):
+            with open(failed) as f:
+                raise Stop("An earlier run on this board ended with the burn image saying STOP HERE:\n%s\n"
+                           "Nothing is run on this board until that is understood. When it is, a person "
+                           "removes %s." % (indent(f.read()), failed))
+        if self.mode == "run" and not self.pretend:
+            problem = checkout_problem()
+            if problem:
+                raise Stop("A real run is only made from a clean checkout of origin/main: %s." % problem)
+            say("  ok: the checkout is clean and is origin/main")
+        if board_mode(self.p) == "bootloader":
+            self.start_from_bootloader()
         if self.mode == "run":
             say("\nA lost signing key means this board can never take new firmware once secure boot is on.")
             say("Is there a copy of the signing keys somewhere other than this computer?")
@@ -747,6 +925,8 @@ class Run:
                          ["cmake", "--build", "build-key2"],
                          ["cmake", "--preset", "debug", "-B", "build-unsigned", "-DSOS_SIGN_KEY=none"],
                          ["cmake", "--build", "build-unsigned"]]
+            say("  Building %d images. This takes several minutes and prints nothing while it works."
+                % (len(cmds) // 2))
             for cmd in cmds:
                 say("  $ " + " ".join(cmd))
                 self.record.note("$ " + " ".join(cmd))
@@ -766,11 +946,13 @@ class Run:
         for name in ["rehearsal", "burn", "boot_keys", "key_valid", "secure_boot", "page_lock"]:
             if name in d:
                 say("  %-12s %s" % (name, "done" if d[name] else "not yet"))
+        self.confirm_secret()
 
     def step_recovery(self):
         say("This is the only way back if a later flash goes wrong, so it is tried now.")
+        self.con.close()
         ask_ready("Unplug the board, hold BOOTSEL, plug it in, and let go.", self.record)
-        self.board_back()
+        self.wait_bootloader()
         rc, out = self.pt.run(["info", "--ser", self.p["serial"]])
         if rc != 0:
             raise Stop("The board did not answer from its bootloader.\nSeen:\n%s" % indent(out))
@@ -824,7 +1006,10 @@ class Run:
             raise Stop("The burn image did not accept the serial. Nothing was written.")
         self.con.send(word + "\r")
         started = time.time()
-        out = self.con.read_until([PROMPT], WAIT_BUTTON + WAIT_BURN)
+        # The end is the image's own last line, not "the prompt came back": a log line printed
+        # after the prompt must not turn a finished burn into "did not finish".
+        out = self.con.read_until([PROMPT], WAIT_BUTTON + WAIT_BURN,
+                                  containing=["You can let go of the button.", "nothing was written"])
         if out is None:
             raise Stop("The burn did not finish within %d s. Do not run anything else: look at the board."
                        % (WAIT_BUTTON + WAIT_BURN))
@@ -832,6 +1017,9 @@ class Run:
         say(indent(out.rstrip()))
         say("\nYou can let go of the button.")
         if "STOP HERE" in out:
+            with open(os.path.join(self.record.board_dir, "BURN-FAILED"), "w") as f:
+                f.write("%s, `%s`, record %s\n" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                                    command, self.record.dir))
             raise Stop("The burn image said STOP HERE. Do not run this again, on this board or another, "
                        "until the cause is understood.")
         if "nothing was written" in out and "writing OTP" not in out:
@@ -863,6 +1051,8 @@ class Run:
         say("  ok: the everyday firmware is on the board")
         root = self.con.command("rootsecret")
         if self.done()["burn"]:
+            if "root secret: present, in OTP page" not in root:
+                raise Stop(self.spent_text(root))
             self.expect_in("the root secret is read from OTP", "root secret: present, in OTP page %d" % self.secret_page, root)
 
     def step_usb_read(self):
@@ -995,7 +1185,9 @@ class Run:
         say("The lock is tried with a write that changes nothing even if the lock failed: the value 0.")
         only_this_board(self.p, self.record)
         need_person("Trying the lock").__exit__()
-        rc, out = self.pt.run(["otp", "set", "-r", lp["test_row"], "0"] + self.pt.sel)
+        set_args = ["otp", "set", "-r", lp["test_row"], "0"] + self.pt.sel
+        say("  command: %s" % self.pt.text(set_args))
+        rc, out = self.pt.run(set_args)
         self.board_back()
         judge("Was that write refused?", out, self.record)
         rows, _ = self.pt.get(["-r"], [lp["test_row"]])
@@ -1033,6 +1225,8 @@ class Run:
     def run(self):
         steps = self.steps()
         check_only = self.mode == "check"
+        if self.pretend:
+            say("PRETEND RUN against a pretend board (test settings are set). No real board is involved.")
         say("%s %s (serial %s). Record: %s\n" % ("Checking" if check_only else "Securing", self.p["name"],
                                                  self.p["serial"], self.record.dir))
         n = 0
@@ -1099,7 +1293,15 @@ def main():
         sys.exit("No profile for a board called %r (%s/profile.json)." % (args.board, rel(profile_dir)))
     profile["serial"] = profile["serial"].upper()
     mode = args.mode
+    pretend = False
+    if mode != "plan":
+        try:
+            pretend = pretend_run()
+        except Stop as stop:
+            say("REFUSED.\n%s" % stop)
+            return 2
     run = Run(profile, profile_dir, mode)
+    run.pretend = pretend
     try:
         if mode == "plan":
             run.plan()
