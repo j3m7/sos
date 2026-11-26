@@ -261,7 +261,8 @@ tools/provision.sh other.conf     # the same, from another file; -n only builds 
 trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
 over USB with `picotool`, like flashing: the board reboots into BOOTSEL and back. It replaces
-everything saved on the board; the firmware and the SSH host key stay as they are. The record it
+everything saved on the board, and with it the board's owner: it gets a new SSH host key
+(clients will warn) and its encrypted cards are locked. The firmware stays as it is. The record it
 writes is not sealed (this machine doesn't have the board's key): the board seals it at its
 first boot and erases the unsealed copy. A `console_password` line sets the console password
 (it travels in the image in the clear until that first boot); without one, the board asks for a
@@ -311,9 +312,15 @@ ssh <device-ip>
 - Only public-key login is accepted, with one of the trusted keys. The user name doesn't
   matter: any name logs in with a trusted key, and the name is only shown (`ssh`, `who`, the
   log). The keys are what decide who gets in.
-- The Ed25519 host key is generated on the device at first boot and stored in the last 4 KB
-  flash sector (the key sector), sealed like the
-  configuration; it survives reflashing. The private key never leaves the device.
+- The Ed25519 host key is generated on the device when it is first set up and stored in the
+  last 4 KB flash sector (the key sector), sealed; it survives reflashing. The private key
+  never leaves the device.
+- **The host key belongs to the board's owner.** It is sealed under a key that depends on the
+  board and on the owner secret in its configuration. Erasing the configuration (`config
+  reset`, provisioning it again, or erasing it over USB) therefore makes the host key
+  unreadable, and the next setup makes a new one: SSH clients see a changed host key and warn.
+  That is intended. Someone who wipes a board and sets it up as theirs is a new SSH identity,
+  not the old board.
 - Up to 3 concurrent sessions (`SOS_SSH_MAX_SESSIONS`). While all are in use, further
   connections are refused with an SSH disconnect message the client displays
   ("Too many connections: all 3 SSH sessions are in use, try again later"). Each session gets
