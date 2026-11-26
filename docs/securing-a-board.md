@@ -46,18 +46,84 @@ have none on A2. So a secured A2 raises the bar from "anyone with a cable" to "s
 soldering iron and a second flash chip, or with fault-injection equipment", and no further.
 Moving to an A4 board later removes the four glitch attacks. It does not remove the flash swap.
 
-## Decisions (owner, 2026-11-25)
+## Decisions
 
-| # | Decision | Decided |
-|---|---|---|
-| 1 | **Debug** | **Off for good:** `CRIT1.DEBUG_DISABLE`. No debug key |
-| 2 | **USB bootloader (BOOTSEL) on the secured board** | **Kept, for now.** More fixes and improvements are expected, and they have to be flashable. Consequences accepted: the two glitch attacks that go through BOOTSEL (E20, E21) stay open, and anyone with a cable can erase or roll back the flash, though not read what is sealed. Disabling it later remains possible: it is one more OTP write (`BOOT_FLAGS0.DISABLE_BOOTSEL_USB_PICOBOOT_IFC`, `..._USB_MSD_IFC`, `..._UART_BOOT`), after which the board can never be reflashed over USB |
-| 3 | **Bootrom reboot types** | **`BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` is set** (the other E20 workaround). Cost accepted: the secured board no longer reboots into BOOTSEL on command, which `ninja flash` and `tools/provision.sh` (`picotool load -f`) rely on. Flashing it needs someone to hold the BOOTSEL button while plugging it in. SOS's own fault record uses other scratch registers and should be unaffected (*to confirm*) |
-| 4 | **Signing keys** | **Two:** `BOOTKEY0` in use and `BOOTKEY1` as a spare, generated away from the development machine, each with an offline backup. Slots 2 and 3 are marked invalid. Instructions below |
-| 5 | **Glitch detector** | **Not burned yet; open until a week-long test.** The owner's decision (2026-11-25): no multi-day soak for now. Every board running SOS arms the detector by software at boot, at the highest sensitivity (#78; `glitch off` turns it off), and whoever works with a board reports any detector reset. A week-long torture test follows once the feature set is more complete and there is a spare board and battery hardware; the OTP bit is decided after that. See "The glitch detector" below |
-| 6 | **A rehearsal on the development board** | **Yes:** the root-secret burn is rehearsed on dev-1 in spare OTP pages before the production board, including a read attempt from BOOTSEL and one burn interrupted on purpose. This is the owner's word for those OTP writes on dev-1 and for nothing else in OTP. Since then the owner has chosen to run steps 3 and 4 on dev-1 itself: see "Variant for the development board (dev-1)" |
-| 7 | **Wrong-password count across reboots** | **Yes, add it.** Known limit: while the USB bootloader is kept (decision 2), someone with a cable can rewrite the flash and reset a counter stored there, so it slows down guessing at the console only for someone who can't or won't do that. It becomes a real limit if the bootloader is disabled later |
-| 8 | **Firmware rollback** | **Not now (confirmed by the owner, 2026-11-25).** With the bootloader kept, anyone can flash any older image signed with the same key, including one with a flaw found since. Rollback versions in OTP (`BOOT_FLAGS0.ROLLBACK_REQUIRED`) would prevent it, at the cost of OTP bits per version step |
+One table for both boards. **The dev-1 column was confirmed by the owner on 2026-11-25** and
+is what the dev-1 runbook does. The production column is what was recorded earlier; it is
+**not final and is to be revisited before there is a production board.**
+
+| # | Decision | dev-1 (now) | Production board (as recorded, to be revisited) |
+|---|---|---|---|
+| 1 | Debug port | Stays on | Off for good |
+| 2 | USB bootloader | Kept | Kept for now |
+| 3 | Reboot into bootloader on command | Kept | Removed (the watchdog-scratch flag) |
+| 4 | Signing keys | The two dev keys on this machine; slots 2 and 3 left blank | Two keys made off this machine; slots 2 and 3 marked invalid |
+| 5 | Glitch detector in OTP | Not set | Open until the week-long test |
+| 6 | Rehearsal burn | First burn is the rehearsal, then the real one | Not applicable; dev-1 is the rehearsal |
+| 7 | Wrong-password count across reboots | In the firmware, merged | Same |
+| 8 | Rollback protection | Not set | Not now |
+| 9 | Sealed-only marker | Not set, so the board stays provisionable | Set |
+| 10 | Host key tied to the owner secret | In the firmware, merged | Same |
+| 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page | Deferred until dev-1 is done |
+
+### The reasons, and what each costs
+
+**1. Debug port.** With debug on, anyone with a probe reads the root secret out of the
+running chip. On dev-1 it stays on because the board is for development and what is being
+tested is that the mechanisms work, not that the board keeps a secret. On a production board
+it is turned off for good (`CRIT1.DEBUG_DISABLE`), with no debug key.
+
+**2. USB bootloader.** Kept on both, because more fixes are expected and they have to be
+flashable. The cost: the two glitch attacks that go through the bootloader (E20, E21) stay
+open, and anyone with a cable can erase or roll back the flash, though not read what is
+sealed. Disabling it later is one more OTP write, after which the board can never be reflashed
+over USB.
+
+**3. Reboot into the bootloader on command.** `ninja flash` and `tools/provision.sh` rely on
+it (`picotool load -f`), and on dev-1 the sessions flash with nobody at the button, so it is
+kept. On a production board `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` removes it, as the other
+workaround for E20; flashing then needs someone to hold BOOTSEL while plugging the board in.
+
+**4. Signing keys.** dev-1 uses two development keys that are files on the development
+machine, readable by every session, so they prove the mechanism and nothing more. Its slots 2
+and 3 stay blank, which leaves room to add a key and equally lets anyone with a cable add
+theirs. A production board gets two keys made away from the development machine, each with an
+offline backup, and its unused slots marked invalid. How to make them is below.
+
+**5. Glitch detector in OTP.** Once enabled in OTP it can't be turned off, and a detector too
+sensitive for the board resets a healthy board for ever. So it is not burned anywhere yet.
+Every board arms it by software at boot instead (#78), and a week-long test on a spare board,
+with battery hardware, comes before the decision. See "The glitch detector" below.
+
+**6. Rehearsal burn.** The first time the burn code runs on a chip, it runs as a rehearsal
+that stops on purpose before the secret is complete, spending one of dev-1's three pages. Only
+if that ends as expected is the real secret written, into the next page. For a production
+board there is no rehearsal of its own: dev-1 is the rehearsal.
+
+**7. Wrong-password count across reboots.** The delay after wrong console passwords survives
+a reboot (#82). While the bootloader is kept, someone with a cable can still erase the count,
+so it slows down guessing only for someone who can't or won't do that.
+
+**8. Rollback protection.** Not set. With the bootloader kept, anyone can flash any older
+image signed with the same key, including one with a flaw found since. Preventing that costs
+OTP bits per version step (`BOOT_FLAGS0.ROLLBACK_REQUIRED`).
+
+**9. Sealed-only marker.** A board with the marker refuses unsealed configuration and can be
+set up only on its console (#84). It is a marker of its own in OTP, not secure boot, so that
+dev-1 can have secure boot and still be provisioned from a file. A production board gets it,
+and only once its firmware takes the root secret from OTP or not at all (#86).
+
+**10. Host key tied to the owner secret.** Erasing a board's configuration makes its SSH host
+key unreadable, and the next setup makes a new one (#88). Otherwise someone who wiped a board
+and set it up as theirs would answer SSH as the old board. The cost: the owner's own
+`config reset` changes the board's SSH identity, and clients warn.
+
+**11. OTP pages locked against the bootloader.** With the bootloader kept, `picotool` can
+still write any unlocked OTP page on a secured board: mark the boot keys invalid, or add a key
+to a blank slot. On dev-1 only the root secret's pages (locked by the burn) and SOS's flag
+page are locked; the boot-flag and boot-key pages stay open for later OTP tests, knowingly. For
+a production board the question is deferred: locking the boot-flag page also blocks the later
+writes that decisions 2, 5 and 8 leave for "later". See "Step 4.8".
 
 ## The glitch detector
 
@@ -473,20 +539,12 @@ It does not make dev-1 secret-keeping, and nobody should treat it as such:
 - So what is sealed on dev-1 is protected from someone with only a USB cable and no key, and
   from nobody else. dev-1 tests the mechanism.
 
-### What differs from the production procedure
+### What dev-1 gets, and what it leaves out
 
-| | Production board | dev-1 | Why |
-|---|---|---|---|
-| Signing key | Made away from the development machine | `~/slop/sos-dev-sign.pem`, on the development machine | A development key, never for a production board or a release |
-| `BOOTKEY0` / `BOOTKEY1` | In use / spare | The dev key / a second dev key (not made yet) | The owner's answer 5 |
-| Slots 2 and 3 (step 4.3) | Marked invalid | **Left blank, not marked invalid** | Room to add a key later; the cost is that someone else could too |
-| `DISABLE_WATCHDOG_SCRATCH` (4.4) | Set | **Not set** | "We keep the ability to reboot in the bootloader": agents flash with `picotool load -f`, with nobody at the button |
-| Glitch detector in OTP (4.5) | Decision 5, after the week-long test | **Not set** | Decision 5 unchanged |
-| `DEBUG_DISABLE` (4.6) | Set | **Not set** | "Do not turn debug off on dev-1" |
-| `SECURE_BOOT_ENABLE` (4.7) | Set, last | Set, last | |
-| Sealed-only marker (4.6a) | Set | **Not set** | The owner's decision: dev-1 stays provisionable with `ninja provision` |
-| Root secret in OTP (step 3) | Yes | Yes | |
-| Set up fresh after step 3 | Yes | Yes: dev-1 is re-keyed, see below | |
+The dev-1 column of the Decisions table at the top of this document. In short: the root secret
+in OTP, the two dev boot keys, and secure boot; not debug off, not the watchdog-scratch flag,
+not the glitch detector bit, not the sealed-only marker, and no lock on the boot-flag and
+boot-key pages. After the root secret is written the board is set up afresh, as below.
 
 ### Moving the root secret re-keys dev-1
 
@@ -627,14 +685,10 @@ signature verified by `picotool`, and both keys shown to match.
 After D4.7 the checks of "Afterwards: trying the attacks" are run on dev-1 except the debug
 probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is expected to work).
 
-### dev-1 and step 4.8 (decided by the owner, 2026-11-25)
+### dev-1 and step 4.8
 
-"For dev-1 leave them open for later OTP tests, what we are testing on dev-1 is that the
-mechanisms work. We don't really care about protecting the data on the board."
-
-So on dev-1 **only page 3 and the root secret's list pages are locked against writes from the
-bootloader.** Pages 1 and 2 (boot flags, boot keys) and the lock pages stay open, for later
-OTP tests. The list pages are locked by the burn itself; page 3 by the owner with `picotool`.
+Decision 11: on dev-1 only page 3 and the root secret's list pages are locked against writes
+from the bootloader. The list pages are locked by the burn itself; page 3 with `picotool`.
 
 | # | Write (the owner runs it) | Check |
 |---|---|---|
@@ -651,28 +705,13 @@ life. Neither loses anything the owner cares about on this board.
 - If both dev keys are lost, dev-1 keeps its last firmware for ever.
 - The board registry records what was written to dev-1's OTP, with the date.
 
-### Decided by the owner for this variant (2026-11-25: "Yes to both, flash guard and separate marker")
+### The flash guard
 
-- **A guard on flashing.** `ninja flash` (and `tools/provision.sh`, where it flashes) refuses
-  an image that isn't signed with the expected key, so a session with a missing build setting
-  can't leave dev-1 in BOOTSEL by accident. Built and merged before D4.7. The expected keys
-  are a **list** of public key hashes in the build settings, not the private key file: a list,
-  because dev-1 accepts two keys and step D4.2 flashes an image signed with the second; hashes,
-  so that the guard also works where no private key is present. It guards our own tools only:
-  `picotool load` typed by hand goes around it. Two things it doesn't do yet, to add before a
-  second board is in use: refuse when more than one board is attached and none is named, and
-  keep the accepted keys per board serial instead of per machine (a production board will
-  accept other keys than dev-1).
-- **A separate marker for "sealed-only".** Secure boot alone does not make a board refuse
-  unsealed records or `rootsecret forget`. Firmware item 3 above has the proposal for the
-  marker; dev-1 never gets it.
-
-- **The sealed-only marker is an OTP row,** and **the interrupted burn is the first run on
-  the real page list** (both agreed 2026-11-25; see firmware item 3 and "How the rehearsal
-  fits").
-
-Nothing in this variant is left open for the owner. What remains is the firmware, the "to
-confirm" items named in the gates, and the owner's word for each write.
+`ninja flash` (and `tools/flash.sh`) refuses an image that isn't signed with an accepted key
+(#80, #81), so that a checkout with a missing build setting can't leave dev-1 in the
+bootloader by accident. The accepted keys are a list of public key hashes kept per machine: a
+list, because dev-1 accepts two keys; hashes, so that the guard works where no private key is
+present. It guards our own tools only: `picotool load` typed by hand goes around it.
 
 ## What can't be undone, in one place
 
