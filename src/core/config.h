@@ -40,6 +40,13 @@
 #define CONFIG_CONSOLE_VERIFIER_LEN 32
 #define CONFIG_CONSOLE_ITERATIONS_MIN 1000      // as core/pwverify.h accepts
 #define CONFIG_CONSOLE_ITERATIONS_MAX 1000000
+// sos_config_t.glitch_detector as stored: 0 = not chosen, which means the default (armed at the
+// highest sensitivity); 1..4 = armed at sensitivity 0..3; 5..8 = watching at sensitivity 0..3;
+// 9 = off. config_glitch_mode() turns that into what core/glitchdet.h takes.
+#define CONFIG_GLITCH_DETECTOR_DEFAULT 0
+#define CONFIG_GLITCH_DETECTOR_OFF     9
+#define CONFIG_GLITCH_DETECTOR_MAX     9
+#define CONFIG_GLITCH_DEFAULT_MODE     4        // armed at sensitivity 3
 
 typedef struct {
     uint16_t len;                               // blob length; 0 = unused entry
@@ -89,7 +96,21 @@ typedef struct {
     // password to set here; the board turns it into the verifier when it seals the record,
     // and it is never written sealed (zeroed before sealing). Empty = none given.
     char console_password[CONFIG_CONSOLE_PW_MAX + 1];
+    // The glitch detector, set up by software at boot (core/glitchdet.h): 0 = the default
+    // (armed at the highest sensitivity), 1..4 = armed at sensitivity 0..3 (a trigger resets
+    // the board), 5..8 = watching at sensitivity 0..3 (a trigger is only logged), 9 = off.
+    // Not protection (see glitchdet.h). This byte was padding (zero) in records saved before it
+    // had a use, so those load as the default and the record's length doesn't change.
+    uint8_t glitch_detector;
 } sos_config_t;
+
+// The stored setting as glitchdet_start() and glitchdet_apply() take it: 0 = off, 1..4 = armed
+// at sensitivity 0..3, 5..8 = watching at sensitivity 0..3.
+static inline unsigned config_glitch_mode(unsigned stored) {
+    if (stored == CONFIG_GLITCH_DETECTOR_OFF)
+        return 0;
+    return stored >= 1 && stored <= 8 ? stored : CONFIG_GLITCH_DEFAULT_MODE;
+}
 
 // --- storage ------------------------------------------------------------------------------------
 

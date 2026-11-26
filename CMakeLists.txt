@@ -118,6 +118,7 @@ set(SOS_SOURCES
     src/core/fault.c
     src/core/stackmon.c
     src/core/heap.c
+    src/core/glitchdet.c
     src/core/chipinfo.c
     src/shell/shell.c
     src/shell/keys.c

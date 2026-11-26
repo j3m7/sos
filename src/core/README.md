@@ -149,6 +149,30 @@ configuration sectors, so `picotool load`, `config reset` and provisioning don't
 sector, so a power cut during a write can lose what's in it. Writes happen only when the host
 key is made or sealed.
 
+## Glitch detector (`glitchdet.c`)
+
+The RP2350 has four detector circuits that reset the chip when its clock or core supply is
+disturbed (datasheet section 10.9). A secured board would arm them for good with an OTP bit.
+`glitchdet.c` arms them by software instead, from a setting, to find out in normal use
+whether they ever reset a healthy board (`docs/securing-a-board.md`).
+
+- **On by default:** armed at sensitivity 3, the highest, unless the setting says otherwise
+  (`glitch off`, `glitch on <0-3>`, `glitch watch <0-3>`; `glitch default` goes back). A
+  detector reset that nobody forced is a finding to report: see "Glitch detector resets" in
+  [`docs/development.md`](../../docs/development.md).
+- **Two modes:** *watching* (`glitch watch <0-3>`) runs the detectors at a sensitivity
+  without arming them, and logs a trigger without resetting anything; *armed* (`glitch on`)
+  resets the board on a trigger, as the OTP flag would.
+- **Not protection:** it is armed after the configuration loads, software can disarm it, and
+  the guard below disarms it after repeated resets, which is what deliberate glitching causes.
+- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 2 (that reset
+  clears the watchdog's scratch registers, and so the fault record): the number of detector
+  resets since power-on, how many came in a row soon after boot, and the uptime.
+- **Reported at boot** (log, `uptime`, `glitch`): that the last reset was the detector's, which
+  detectors fired, after how long.
+- **The guard:** three detector resets in a row, each within three minutes of starting, and
+  the next boot doesn't arm it, so the board stays reachable to turn the setting off.
+
 ## Watchdog (`wdog.c`)
 
 `wdog_start()` runs early in `main()`: it records whether the last reset was a watchdog

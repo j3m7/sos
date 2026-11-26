@@ -67,6 +67,26 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         cfg->rtc_offset = (int8_t)steps;
         return NULL;
     }
+    if (!strcmp(name, "glitch_detector")) {
+        if (!strcmp(value, "off")) {
+            cfg->glitch_detector = CONFIG_GLITCH_DETECTOR_OFF;
+            return NULL;
+        }
+        if (!strcmp(value, "default")) {        // as with no line at all: armed at the highest
+            cfg->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
+            return NULL;
+        }
+        // "<n>" arms at sensitivity n; "watch <n>" only logs triggers.
+        unsigned base = 1;
+        if (!strncmp(value, "watch ", 6)) {
+            base = 5;
+            value += 6;
+        }
+        if (value[0] < '0' || value[0] > '3' || value[1])
+            return "must be off, default, a sensitivity from 0 to 3, or 'watch' and a sensitivity";
+        cfg->glitch_detector = (uint8_t)(value[0] - '0' + base);
+        return NULL;
+    }
     if (!strcmp(name, "nts_sync_hours")) {
         char *end;
         unsigned long h = strtoul(value, &end, 10);

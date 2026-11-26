@@ -15,6 +15,7 @@
 
 #include "chat/chat.h"
 #include "core/fault.h"
+#include "core/glitchdet.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootflash.h"
@@ -136,6 +137,7 @@ static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 
 int main(void) {
     stackmon_paint();
+    glitchdet_boot();                   // why we last reset, before anything else changes it
     stdio_init_all();
     console_gate_set(true);             // the console is locked until shell/login.c says otherwise
 
@@ -166,6 +168,7 @@ int main(void) {
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
     rootflash_init();
     settings_init();
+    glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
     uint32_t hostkey_len;
@@ -200,6 +203,7 @@ int main(void) {
             sshd_failed = !sshd_start(hostkey, hostkey_len);
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
+        glitchdet_poll();
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
