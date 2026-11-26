@@ -141,7 +141,52 @@ TEST(glitch_detector_line) {
     CHECK(parse("wifi_ssid = net\nglitch_detector = on\n", &cfg) != NULL);
 }
 
+TEST(several_wifi_networks_in_order) {
+    sos_config_t cfg, back;
+    CHECK(!parse("wifi_ssid = home\n"
+                 "wifi_password = correct horse\n"
+                 "hostname = bench1\n"
+                 "wifi_ssid = phone\n"                  // open: no password line
+                 "wifi_ssid = work\n"
+                 "wifi_password = battery staple\n", &cfg));
+    static uint8_t image[MKCONFIG_IMAGE_SIZE];
+    CHECK(mkconfig_image(&cfg, image));
+    const config_store_t store = {rd, wr, image, NULL, false};
+    CHECK(config_load(&store, &back, NULL));
+    CHECK_EQ(config_wifi_count(&back), 3);
+    CHECK(!strcmp(back.wifi_ssid, "home"));
+    CHECK(!strcmp(back.wifi_password, "correct horse"));
+    CHECK(!strcmp(back.wifi_extra[0].ssid, "phone"));
+    CHECK_EQ(back.wifi_extra[0].password[0], 0);
+    CHECK(!strcmp(back.wifi_extra[1].ssid, "work"));
+    CHECK(!strcmp(back.wifi_extra[1].password, "battery staple"));
+}
+
+// As files written for one network had it: the password may come first.
+TEST(password_before_the_ssid) {
+    sos_config_t cfg;
+    CHECK(!parse("wifi_password = correct horse\nwifi_ssid = home\n", &cfg));
+    CHECK(!strcmp(cfg.wifi_ssid, "home"));
+    CHECK(!strcmp(cfg.wifi_password, "correct horse"));
+}
+
+TEST(bad_wifi_lists_name_the_line) {
+    sos_config_t cfg;
+    const char *e = parse("wifi_ssid = a\nwifi_ssid = a\n", &cfg);
+    CHECK(e && strstr(e, "line 2") && strstr(e, "already listed"));
+    e = parse("wifi_ssid = a\nwifi_password = 12345678\nwifi_password = 87654321\n", &cfg);
+    CHECK(e && strstr(e, "line 3") && strstr(e, "second wifi_password"));
+    e = parse("wifi_ssid = a\nwifi_ssid = b\nwifi_ssid = c\nwifi_ssid = d\nwifi_ssid = e\n"
+              "wifi_ssid = f\n", &cfg);
+    CHECK(e && strstr(e, "line 6") && strstr(e, "at most 5"));
+    e = parse("wifi_password = 12345678\n", &cfg);
+    CHECK(e && strstr(e, "without a wifi_ssid"));
+}
+
 TEST_MAIN(
+    RUN(several_wifi_networks_in_order);
+    RUN(password_before_the_ssid);
+    RUN(bad_wifi_lists_name_the_line);
     RUN(glitch_detector_line);
     RUN(console_password_line);
     RUN(full_file_loads_like_on_the_device);
