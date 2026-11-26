@@ -898,6 +898,181 @@ TEST(utf8_character_must_fit_the_line) {
     CHECK_EQ(strlen(executed[0]), SHELL_LINE_MAX - 1);
 }
 
+// --- command history (Up/Down) ---------------------------------------------------------------
+
+#define UP "\x1b[A"
+#define DOWN "\x1b[B"
+
+// Does the history hold this text anywhere?
+static bool history_has(const char *text) {
+    size_t n = strlen(text);
+    for (size_t i = 0; i + n <= sizeof(sh.history); i++)
+        if (!memcmp(sh.history + i, text, n))
+            return true;
+    return false;
+}
+
+// Is the line being typed exactly this?
+static bool line_is(const char *text) {
+    return sh.line_len == strlen(text) && !memcmp(sh.line, text, sh.line_len);
+}
+
+TEST(up_recalls_previous_commands) {
+    start(&io_plain);
+    type("one\rtwo\r");
+    clear_out();
+    type(UP);
+    CHECK_OUT("\r\x1b[Ksos> two");                 // the line is cleared and redrawn
+    CHECK(line_is("two"));
+    type(UP);
+    CHECK(line_is("one"));
+    type("\r");
+    CHECK_EQ(n_executed, 3);
+    CHECK(!strcmp(executed[2], "one"));
+}
+
+TEST(up_stops_at_the_oldest) {
+    start(&io_plain);
+    type("one\rtwo\r" UP UP);
+    clear_out();
+    type(UP);                                        // nothing older: nothing happens
+    CHECK_OUT("");
+    CHECK(line_is("one"));
+}
+
+TEST(down_goes_forward_then_back_to_the_draft) {
+    start(&io_plain);
+    type("one\rtwo\rdra");
+    type(UP UP);
+    CHECK(line_is("one"));
+    type(DOWN);
+    CHECK(line_is("two"));
+    clear_out();
+    type(DOWN);                                      // past the newest: what was being typed
+    CHECK_OUT("\r\x1b[Ksos> dra");
+    CHECK(line_is("dra"));
+    clear_out();
+    type(DOWN);                                      // and no further
+    CHECK_OUT("");
+    type("ft\r");
+    CHECK(!strcmp(executed[2], "draft"));
+}
+
+TEST(up_and_down_with_no_history_do_nothing) {
+    start(&io_plain);
+    type("ab" UP DOWN "c\r");
+    CHECK(!strcmp(executed[0], "abc"));
+    CHECK_OUT("abc\n<abc>\nsos> ");
+}
+
+TEST(history_keeps_commands_trimmed_and_skips_repeats) {
+    start(&io_plain);
+    type("  ls  \rls\r\r   \rpwd\rpwd\r");
+    type(UP);
+    CHECK(line_is("pwd"));
+    type(UP);
+    CHECK(line_is("ls"));                            // one "ls", one "pwd"; no empty lines
+    clear_out();
+    type(UP);
+    CHECK_OUT("");
+}
+
+TEST(an_edited_recalled_line_is_a_new_command) {
+    start(&io_plain);
+    type("one\rtwo\r" UP "\x7f" "o\r");             // "two" recalled, edited to "two" -> "tw" + "o"
+    CHECK(!strcmp(executed[2], "two"));
+    type(UP "x\r");
+    CHECK(!strcmp(executed[3], "twox"));
+    type(UP);
+    CHECK(line_is("twox"));
+    type(UP);
+    CHECK(line_is("two"));                           // the repeat of "two" wasn't stored twice
+    type(UP);
+    CHECK(line_is("one"));
+}
+
+TEST(ctrl_c_after_up_starts_again_from_the_newest) {
+    start(&io_plain);
+    type("one\rtwo\r" UP UP "\x03");
+    CHECK_EQ(sh.line_len, 0);
+    type(UP);
+    CHECK(line_is("two"));
+}
+
+TEST(answers_are_not_in_the_history) {
+    start_ask(&io_plain);
+    type("passwd\r");
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    type("hunter22\r");
+    shell_ask(&sh, "Name: ", false, on_answer, NULL);
+    clear_out();
+    type(UP);                                        // during a question: nothing
+    CHECK_OUT("");
+    CHECK_EQ(sh.line_len, 0);
+    type("bob\r");
+    CHECK_EQ(n_answers, 2);
+    type(UP);
+    CHECK(line_is("passwd"));                        // only the command
+    clear_out();
+    type(UP);
+    CHECK_OUT("");
+    CHECK(!history_has("hunter22"));
+    CHECK(!history_has("bob"));
+}
+
+TEST(history_is_per_session_and_wiped) {
+    start(&io_plain);
+    type("secret-cmd\r");
+    start(&io_plain);                                // a new session (shell_init)
+    clear_out();
+    type(UP);
+    CHECK_OUT("");
+    type("again\r");
+    shell_discard_input(&sh);                        // the console locking itself
+    type(UP);
+    CHECK_EQ(sh.line_len, 0);
+    CHECK_EQ(sh.history_len, 0);
+    type("third\r");
+    shell_clear_history(&sh);                        // `logout` on the console
+    type(UP);
+    CHECK_EQ(sh.line_len, 0);
+    for (size_t i = 0; i < sizeof(sh.history); i++)
+        CHECK(sh.history[i] == 0);
+}
+
+TEST(oldest_commands_make_room) {
+    start(&io_plain);
+    char cmd[120];
+    for (int i = 0; i < 20; i++) {                   // each 101 bytes stored: 10 fit in 1024
+        snprintf(cmd, sizeof(cmd), "c%02d%097d\r", i, 0);
+        type_n(cmd, strlen(cmd));
+    }
+    CHECK(sh.history_len <= sizeof(sh.history));
+    int seen = 0;
+    char newest[4] = "", oldest[4] = "";
+    for (;;) {
+        clear_out();
+        type(UP);
+        if (!fake.out_len)
+            break;
+        if (!seen)
+            memcpy(newest, sh.line, 3);
+        memcpy(oldest, sh.line, 3);
+        seen++;
+    }
+    CHECK_EQ(seen, 10);
+    CHECK(!memcmp(newest, "c19", 3));
+    CHECK(!memcmp(oldest, "c10", 3));
+}
+
+TEST(history_on_a_crlf_channel) {
+    start(&io_crlf);
+    type("one\r");
+    clear_out();
+    type(UP);
+    CHECK_OUT("\r\x1b[Ksos> one");
+}
+
 TEST_MAIN(
     RUN(utf8_characters_are_taken);
     RUN(utf8_byte_at_a_time);
@@ -962,4 +1137,15 @@ TEST_MAIN(
     RUN(shell_end_cancels_raw_job);
     RUN(raw_mode_and_redraw);
     RUN(plain_job_after_raw_job_still_stashes);
+    RUN(up_recalls_previous_commands);
+    RUN(up_stops_at_the_oldest);
+    RUN(down_goes_forward_then_back_to_the_draft);
+    RUN(up_and_down_with_no_history_do_nothing);
+    RUN(history_keeps_commands_trimmed_and_skips_repeats);
+    RUN(an_edited_recalled_line_is_a_new_command);
+    RUN(ctrl_c_after_up_starts_again_from_the_newest);
+    RUN(answers_are_not_in_the_history);
+    RUN(history_is_per_session_and_wiped);
+    RUN(oldest_commands_make_room);
+    RUN(history_on_a_crlf_channel);
 )
