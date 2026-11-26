@@ -196,9 +196,15 @@ and merged before anything is burned.
 1. **The key provider's OTP backend.** Reads the root secret from an OTP page as Secure code,
    and on `keyprov_lock()` advances that page's Secure lock in the `SW_LOCK` register so nothing
    can read it until the next reset. Today's backend reads a flash sector.
-   - **Which backend a board uses depends on whether a valid root secret is in OTP, and on
-     nothing else.** Not on secure boot: the board is set up in step 3.5, after the burn and
-     before secure boot is on, and what is sealed then has to open after step 4.
+   - **Which backend a board uses depends on whether a valid root secret is in OTP,** not on
+     secure boot: the board is set up in step 3.5, after the burn and before secure boot is
+     on, and what is sealed then has to open after step 4.
+   - **On a sealed-only board the root secret comes from OTP or not at all.** The flash record
+     is never read, never created and never a fallback there. Otherwise the marker would be
+     hollow: someone with a cable could write a root secret record of their own into flash,
+     with a configuration sealed under it, and the board would load both as its own.
+     Refusing unsealed records (#84) doesn't cover that; this rule does, with a host test. A
+     sealed-only board with no usable secret in OTP has no keys and keeps its console locked.
    - **Finding the page.** The firmware has a short fixed list of pages (say three), tried in
      order. A page holds a complete secret only if a marker row, written last, is there and a
      check over the secret matches; the secret alone has no magic number. A page that is
@@ -325,7 +331,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
 | 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
 | 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
-| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only | Read the three rows back. Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
+| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only. **Never before the firmware on the board has the OTP key provider with the "OTP or not at all" rule (item 1), and `rootsecret` reports the secret in OTP:** with older firmware a sealed-only board still takes its root secret from flash, which an attacker can write | Read the three rows back. **If `version` still says `sealed-only: no` after the write and a reboot, stop: do not go on to 4.7.** Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
@@ -344,7 +350,7 @@ issue.
 | `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
 | `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no host key |
 | Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
-| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked |
+| Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked. **Its SSH host key is still there** (it is in another sector, sealed under the same root secret), so the board set up again by whoever is at the console presents the old host key: see the open question below |
 | Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
 | `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
 | Console without the password | Nothing but the prompt |
@@ -570,5 +576,13 @@ This list is a gate: the document is not final, and nothing is burned, while any
 5. Glitch detector: the week-long test's results; and that the detector's `LOCK` register
    stops software from disarming it.
 6. Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
-7. Which free OTP page to use (pages 3 to 60 are free for user data), and that a failed write
-   leaves the next page usable.
+7. Which free OTP pages the root secret uses (pages 3 to 60 are free for user data), and that
+   a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
+   sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
+   the root secret's list starts at page 4 or later.
+8. **Open question for the owner: the host key after a wipe.** Erasing or provisioning the
+   configuration of a sealed-only board empties it, and whoever is then at its console can
+   set it up as theirs. The SSH host key survives that, so their board answers SSH as the old
+   one did, and a client that trusted the old host key trusts it. Proposed: a board that
+   starts with no configuration makes a new host key when it is first set up, so that a new
+   owner is a new identity, as it already is for encrypted cards. Not built; to be decided.
