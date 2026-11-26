@@ -400,6 +400,10 @@ def console_answer(w, line, state):
             w["otp"][str(0xF81 + 2 * page)] = 0x3D3D3D
         text = ("rehearsal: stopped on purpose before the check and the marker; that page is now spent"
                 if rehearse else "the root secret is written, verified and its page locked")
+        if "burn_silent" in w["faults"]:
+            w["faults"].remove("burn_silent")
+            state["mute"] = True             # the page is written and locked; nothing is said
+            return "", True
         if "burn_says_other" in w["faults"]:
             text = "what was written didn't verify: that page is spent"
         locked = "locked against the bootloader" if "burn_leaves_unlocked" not in w["faults"] else "NOT LOCKED"
@@ -493,7 +497,10 @@ def serve_console(master_fd, stop):
                     with world_lock():
                         now = load_world()
                         now["otp"] = w["otp"]
+                        now["faults"] = w["faults"]
                         save_world(now)
+                if state.pop("mute", None):
+                    continue
                 text = text.replace("\n", "\r\n")
                 if not state:
                     text += "sos> "

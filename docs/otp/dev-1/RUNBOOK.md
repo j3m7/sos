@@ -70,12 +70,20 @@ The script tells you when. Nothing else is typed by hand.
 `SECUREBOOT` is the step with no way back: after it the board runs only firmware signed with
 one of the two keys, for ever.
 
-## If the burn image says STOP HERE
+## If a burn goes wrong
 
-The script stops and leaves a file `BURN-FAILED` next to its records. While that file is there
-the script refuses to run on this board at all. Don't remove it until the cause is understood.
-A burn that failed part way leaves its page spent without a secret; the script says so when it
-finds one, and going on from there is a decision, not a retry.
+Two files can appear next to the script's records
+(`~/.local/state/sos/boards/F94525FD61D9A1CC/`). While either is there the script refuses to
+run on this board at all:
+
+- `BURN-FAILED`: the burn image said STOP HERE.
+- `BURN-UNFINISHED`: a burn was started and the script never finished checking its result (it
+  timed out, was closed, or the board reset).
+
+In both cases a page may be spent and locked, and the board can't say whether it holds what
+the next step assumes. Don't remove the file until the cause is understood. A burn that failed
+part way leaves its page spent without a secret; the script says so when it finds one, and
+going on from there is a decision, not a retry.
 
 ## Last: set the board up (you, on the console)
 

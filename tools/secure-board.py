@@ -108,7 +108,8 @@ def checkout_problem():
     def git(*args):
         return subprocess.run(["git", "-C", ROOT] + list(args), capture_output=True, text=True, timeout=60)
     try:
-        st = git("status", "--porcelain")
+        # Tracked files only: untracked ones (editor and tool directories) are not the code.
+        st = git("status", "--porcelain", "--untracked-files=no")
         if st.returncode != 0:
             return "`git status` failed here: %s" % st.stderr.strip()
         if st.stdout.strip():
@@ -877,12 +878,16 @@ class Run:
             if h not in listed:
                 raise Stop("The flash guard's key list (%s) does not hold the key for slot %d:\n  %s" % (keys, slot, h))
         say("  ok: the flash guard's key list holds this board's key hashes")
-        failed = os.path.join(self.record.board_dir, "BURN-FAILED")
-        if os.path.exists(failed):
-            with open(failed) as f:
-                raise Stop("An earlier run on this board ended with the burn image saying STOP HERE:\n%s\n"
-                           "Nothing is run on this board until that is understood. When it is, a person "
-                           "removes %s." % (indent(f.read()), failed))
+        for name, what in (("BURN-FAILED", "ended with the burn image saying STOP HERE"),
+                           ("BURN-UNFINISHED", "started a burn and never got to the end of checking it "
+                                               "(it timed out, was killed, or the board reset)")):
+            brake = os.path.join(self.record.board_dir, name)
+            if os.path.exists(brake):
+                with open(brake) as f:
+                    raise Stop("An earlier run on this board %s:\n%s\nA page may be spent and locked "
+                               "without being what the next step assumes; the board can't say.\n"
+                               "Nothing is run on this board until that is understood. When it is, a "
+                               "person removes %s." % (what, indent(f.read()), brake))
         if self.mode == "run" and not self.pretend:
             problem = checkout_problem()
             if problem:
@@ -996,6 +1001,15 @@ class Run:
                        self.con.command("rootsecret burn plan"))
         self.permanent("%s (on the board's console: `%s`)" % ("the rehearsal" if rehearse else "the root secret", command),
                        word, changes, "console: " + command)
+        # From here until every check of the result has passed, a file says a burn is under
+        # way. If this script dies, times out or the board resets in between, the page may be
+        # locked just as after a good burn, and only this file knows the result was never seen.
+        unfinished = os.path.join(self.record.board_dir, "BURN-UNFINISHED")
+        with open(unfinished, "w") as f:
+            f.write("%s, `%s` on OTP page %d, record %s\n"
+                    % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), command, page, self.record.dir))
+            f.flush()
+            os.fsync(f.fileno())
         say("\nHold the BOOTSEL button NOW and keep it held until this says to let go.")
         self.record.note("console> " + command)
         self.con.send(command + "\r")
@@ -1020,9 +1034,11 @@ class Run:
             with open(os.path.join(self.record.board_dir, "BURN-FAILED"), "w") as f:
                 f.write("%s, `%s`, record %s\n" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                                                     command, self.record.dir))
+            os.unlink(unfinished)            # its result was seen; BURN-FAILED now holds the board
             raise Stop("The burn image said STOP HERE. Do not run this again, on this board or another, "
                        "until the cause is understood.")
         if "nothing was written" in out and "writing OTP" not in out:
+            os.unlink(unfinished)            # the image itself says it wrote nothing
             raise Stop("The burn did not start (was the button held in time?). Nothing was written.")
         want = RESULT_REHEARSED if rehearse else RESULT_BURNED
         self.expect_in("the burn ended as it should", want, out)
@@ -1033,6 +1049,7 @@ class Run:
         self.con.close()
         self.read_state()
         self.expect("page %d's lock word" % page, "0x%06x" % LOCK_BURNED, "0x%06x" % self.state["lock"][page])
+        os.unlink(unfinished)                # result, lock line and read-back all checked
 
     def step_rehearsal(self):
         self.burn(True)

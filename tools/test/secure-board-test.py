@@ -129,6 +129,8 @@ class Board(unittest.TestCase):
         prompt asks for (a word, DONE, YES) to what is typed instead; the default types what
         is asked. Returns (exit status, everything it printed)."""
         answers = answers or {}
+        if self.world().get("button"):
+            self.change(button=False)        # a new run starts with hands off the button
         pid, fd = pty.fork()
         if pid == 0:
             os.execvpe(sys.executable, [sys.executable, os.path.join(ROOT, "tools", "secure-board.py"), mode, "test-board"], self.env)
@@ -149,7 +151,7 @@ class Board(unittest.TestCase):
             # the person's hands: the button follows the last thing the script said about it,
             # and the board is put in its bootloader when the script asks for that
             hold = max(out.rfind("Hold the BOOTSEL button now, and keep it held until this says"),
-                       out.rfind("Hold the BOOTSEL button NOW"))
+                       -1 if "no_hold_for_burn" in answers else out.rfind("Hold the BOOTSEL button NOW"))
             let_go = max(out.rfind("Let go."), out.rfind("You can let go"))
             want = hold > let_go and "never_hold" not in answers
             if want != held:
@@ -161,6 +163,10 @@ class Board(unittest.TestCase):
                     self.change(mode="bootsel")
             if "PRETEND RUN" not in out and len(out) > 200 and "REFUSED" not in out:
                 self.fail("a pretend run did not say so at the top:\n" + out[:300])
+            if "kill_once_burning" in answers and "Hold the BOOTSEL button NOW" in out \
+                    and fake.row(self.world(), 0xF81 + 2 * 4) == 0x3D3D3D:
+                os.kill(pid, 9)                  # the script dies mid-burn: no goodbye, no cleanup
+                break
             m = re.search(r"Type (\w+) to do it \(anything else stops\): $", new) or \
                 re.search(r"Type (DONE) when it is \(anything else stops\): $", new) or \
                 re.search(r"Type (YES) or NO: $", new)
@@ -660,6 +666,54 @@ class FailedBurn(Board):
         rc, out = self.without_terminal("check")
         self.assertEqual(rc, 0, out)
         self.assertIn("not confirmed (the console is locked", out)
+
+
+class UnfinishedBurn(Board):
+    """A burn whose result the script never saw must not be taken for a good one: the page is
+    locked exactly as after a good rehearsal, and the next step would be the real burn."""
+
+    def refuses_afterwards(self):
+        w = self.world()
+        self.assertEqual(fake.row(w, 0xF81 + 2 * 4), 0x3D3D3D)      # page 4 looks like a done rehearsal
+        before = self.otp_written()
+        for mode in ("run", "check"):
+            rc, out = self.script(mode) if mode == "run" else self.without_terminal(mode)
+            self.assertEqual(rc, 2, out)
+            self.assertIn("started a burn and never got to the end of checking it", out)
+            self.assertNotIn("Type BURN to do it", out)
+            self.assertEqual(self.otp_written(), before)
+        # A person who has understood it removes the file; only then does the run go on.
+        os.unlink(os.path.join(self.tmp, "state", "sos", "boards", SERIAL, "BURN-UNFINISHED"))
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+
+    def test_the_console_goes_silent_after_the_word(self):
+        self.fault("burn_silent")
+        rc, out = self.script("run")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("The burn did not finish", out)
+        self.refuses_afterwards()
+
+    def test_the_script_is_killed_during_the_burn(self):
+        # Killed once the board has written and locked the page, before the script has
+        # finished checking the result (the read-back of the lock word comes last).
+        rc, out = self.script("run", answers={"kill_once_burning": True})
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("STOPPED.", out)
+        self.assertNotIn("ok: page 4's lock word", out)
+        self.refuses_afterwards()
+
+    def test_a_burn_that_did_not_start_leaves_no_brake(self):
+        rc, out = self.script("run", answers={"no_hold_for_burn": True})
+        self.assertEqual(rc, 2, out)
+        self.assertIn("Nothing was written", out)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "state", "sos", "boards", SERIAL, "BURN-UNFINISHED")))
+
+    def test_a_good_run_leaves_no_brake(self):
+        rc, out = self.script("run")
+        self.assertEqual(rc, 0, out)
+        left = os.listdir(os.path.join(self.tmp, "state", "sos", "boards", SERIAL))
+        self.assertEqual([n for n in left if n.startswith("BURN-")], [])
 
 
 class Smaller(Board):
