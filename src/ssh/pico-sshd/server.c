@@ -74,6 +74,7 @@
      can tell which of its trusted keys a session uses.
 */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
