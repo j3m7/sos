@@ -239,11 +239,12 @@ and merged before anything is burned.
    - *A field in the sealed configuration* disappears when someone erases the configuration
      over USB, which is exactly when it is needed.
    - *An OTP row* can't be cleared by rewriting the flash, and is the same for every image.
-   The row holds a fixed pattern, stored three times and read by vote like the chip's own
-   flags, through the read aliases of #79. A row that can't be read counts as **set**: here
-   the safe direction is to refuse. Which page and row, and the pattern, are for the pull
-   request that builds it. Firmware older than that pull request ignores the marker; that is
-   the rollback case decision 8 leaves open.
+   Built in #84: rows 0x0c0, 0x0c1 and 0x0c2 (the start of page 3), each the raw 24-bit value
+   0x5ea1ed, read by a two-of-three vote through the read aliases of #79. It fails closed:
+   only blank rows mean "not sealed-only"; rows that can't be read, or that are neither blank
+   nor the marker, count as **set**. Firmware older than #84 ignores the marker; that is the
+   rollback case decision 8 leaves open. Page 3 is therefore taken: the root secret's page
+   list starts elsewhere.
 4. **Checking the boot key on the board:** the `bootkey` command (#79). It hashes the public
    key from the running image's own signature block, compares it with the boot key slots in
    OTP, and says `MATCH`, `NOT YET` (slot written, not marked valid), `NO MATCH` or
@@ -324,7 +325,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
 | 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
 | 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
-| 4.6a | The sealed-only marker row (firmware item 3). Production boards only | `version` shows the board as sealed-only. An unsealed configuration written with `ninja provision` is ignored and the sealed one still loads; `rootsecret forget` is refused | From here the board can only be set up on its console |
+| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only | Read the three rows back. Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
@@ -342,7 +343,7 @@ issue.
 | Load the signed build | Runs |
 | `picotool otp get` and `otp dump` on the root-secret page | Refused or empty |
 | `picotool save` of the whole flash | Succeeds (if the bootloader was kept), and shows only sealed records: no network name, no key comment, no host key |
-| Write an unsealed configuration image (`ninja provision`) | The board ignores it and keeps its sealed configuration |
+| Write an unsealed configuration image (`ninja provision`) | The board refuses it and says so in its log. Its own sealed configuration is gone all the same, because provisioning overwrites both configuration sectors: the board comes up with no configuration, to be set up on its console, and its cards stay locked. The attacker's configuration is not loaded. (Run this last: it empties the board) |
 | Erase the configuration sectors over USB | The board starts as new, with an open console asking for a password, and the old card stays locked |
 | Put back an older copy of the sealed configuration sectors | It loads: rollback is accepted in #64 |
 | `picotool otp load` and `picotool otp set` of a harmless row | Record what the chip answers |
