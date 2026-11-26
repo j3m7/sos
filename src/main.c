@@ -19,6 +19,7 @@
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootflash.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -166,6 +167,7 @@ int main(void) {
 
     // The root secret, then configuration and host key: all three may write flash, which is
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
+    sealedonly_init();                  // before anything loads a record from flash
     rootflash_init();
     settings_init();
     glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise

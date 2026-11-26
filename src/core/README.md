@@ -171,6 +171,29 @@ debug off) and the hashes of the keys its firmware must be signed with.
 - **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
   that can't be read. Reading the root secret from OTP will need the guarded ones.
 
+## Sealed-only boards (`sealedonly.c`, `sealedonly_board.c`)
+
+An open board loads an unsealed configuration or host key from flash and seals it; that is how
+`ninja provision` works. A sealed-only board refuses them: anyone with a cable can write the
+flash, and an unsealed configuration naming their own SSH key would otherwise let them in.
+
+- **The marker** is three OTP rows, 0x0c0 to 0x0c2 (the start of page 3, the first page the
+  chip leaves to the user), each holding the raw value 0x5ea1ed, read by a two-of-three vote.
+  It is not secure boot: a development board can have secure boot and stay provisionable.
+- **It fails closed.** Blank rows mean no. The marker means yes. Rows that can't be read, or
+  that are neither blank nor the marker, also mean yes, and the log and `version` say which.
+  OTP bits can be set but not cleared, so the marker can be damaged but not removed.
+- **What it changes:** `core/settings.c` and `ssh/hostkey.c` refuse unsealed records
+  (`refuse_plain`); `rootsecret forget` is refused. An unsealed record that was refused is
+  reported in the log and left in flash. If it replaced the sealed one, the board has no
+  configuration and is set up on its console: an attacker with a cable can wipe a sealed-only
+  board, as they can erase its flash, but can't give it a configuration.
+- **The firmware only reads the rows.** Writing them is a step of `docs/securing-a-board.md`,
+  for production boards, done by the owner with `picotool`.
+- **`-DSOS_FORCE_SEALED_ONLY=ON`** builds an image that treats every board as sealed-only, to
+  try the behaviour on a development board without touching its OTP. It can only add the
+  restriction. `sealedonly_decide()` has no hardware in it and is unit tested on the host.
+
 ## Glitch detector (`glitchdet.c`)
 
 The RP2350 has four detector circuits that reset the chip when its clock or core supply is
