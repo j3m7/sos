@@ -44,6 +44,7 @@
 #include "lua/lua_host.h"
 #include "net/http.h"
 #include "net/wifi.h"
+#include "ssh/hostkey.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
 #include "time/timeconv.h"
@@ -697,8 +698,12 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     }
     bool erased = settings_reset();
     // The live configuration is gone either way, the owner secret with it: an encrypted card
-    // doesn't stay open under it.
+    // doesn't stay open under it, and the SSH host key was that owner's. SSH stops now (it
+    // would otherwise go on answering with the old key until a reboot) and starts again, with
+    // a new host key, once the board is set up.
     sdcard_owner_gone();
+    sshd_stop();
+    hostkey_owner_gone();
     if (erased)
         shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run "
                          "'setup'\n");
