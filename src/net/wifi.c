@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "lwip/dhcp.h"
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
 #include "lwip/stats.h"
@@ -83,6 +84,12 @@ static unsigned cur;                    // the network of this attempt (index in
 static bool cur_seen;                   // ...and whether the scan saw it
 static uint32_t failed;                 // networks given up on in this round, one bit each
 static uint8_t tries[CONFIG_WIFI_NETS]; // failed attempts per network since the last connection
+// The network whose DHCP address the interface holds (empty: none yet). The address stays on
+// the interface after leaving, and the driver counts the link as up as soon as there's one, so
+// joining another network with it would look connected at once, with an address that isn't
+// that network's, until DHCP there refused it (and the link seemed lost). Seen on dev-1 going
+// from a phone hotspot back to the home network.
+static char addr_ssid[CONFIG_SSID_MAX + 1];
 
 // Access points of our networks, as scanned. scan_rx is written by scan_result() in the
 // driver's context; the main loop changes it, and copies it to scan_aps, only while holding the
@@ -193,6 +200,19 @@ static void log_aps(void) {
     log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", nets[cur].ssid, list);
 }
 
+// Joining another network than the one the address is from: drop the address and the lease,
+// so the link counts as up only once DHCP there has given one. (The same network again keeps
+// it: DHCP asks to keep the address, and connections on it may survive.)
+static void forget_address_unless_same_network(void) {
+    if (!addr_ssid[0] || !strcmp(addr_ssid, nets[cur].ssid))
+        return;
+    cyw43_arch_lwip_begin();
+    dhcp_release_and_stop(sta());       // removes the address; not associated, so nothing is sent
+    dhcp_start(sta());                  // starts over (discover) once the link is up
+    cyw43_arch_lwip_end();
+    addr_ssid[0] = '\0';
+}
+
 static void start_join(void) {
     join_bssid_set = prefer_bssid;      // move_to_strongest() chose join_bssid, in nets[cur]
     if (!prefer_bssid) {
@@ -210,6 +230,7 @@ static void start_join(void) {
             log_aps();
         else            // not seen (out of reach, or a hidden network): the chip looks for it by name
             log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", nets[cur].ssid);
+        forget_address_unless_same_network();
     }
     int err = join();
     if (err) {
@@ -321,6 +342,7 @@ static void connected(void) {
     state = W_UP;
     attempt = 0;
     reset_failures();
+    strcpy(addr_ssid, nets[cur].ssid);
     next_keepalive = make_timeout_time_ms(KEEPALIVE_MS);
 }
 
