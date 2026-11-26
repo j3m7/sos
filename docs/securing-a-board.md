@@ -51,6 +51,7 @@ is what the dev-1 runbook does. The production column is what was recorded earli
 | 9 | Settings from a file over USB (`ninja provision`) | Accepted | Refused: the board is set up on its console only |
 | 10 | The board's SSH host key after its settings are wiped | A new one is made at the next setup (in the firmware, merged) | Same |
 | 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page | Deferred until dev-1 is done |
+| 12 | Code that writes OTP | In a separate burn image, flashed once to write the root secret and then replaced | Same |
 
 #### The reasons, and what each costs
 
@@ -122,6 +123,14 @@ to a blank slot. On dev-1 only the root secret's pages (locked by the burn) and 
 page are locked; the boot-flag and boot-key pages stay open for later OTP tests, knowingly. For
 a production board the question is deferred: locking the boot-flag page also blocks the later
 writes that decisions 2, 5 and 8 leave for "later". See "Production board, step 4.8".
+
+**12. Code that writes OTP.** The firmware a board runs every day has no code that can write
+one-time-programmable memory, so no bug in it can reach OTP. The one command that writes the
+root secret is in a separate burn image, flashed for that job and replaced by the everyday
+firmware afterwards (#87). The cost is one more build and two more flashes, once per board.
+It does not protect against someone with a cable, who can write OTP with `picotool` anyway;
+it is about the firmware's own mistakes. The alternative, one firmware with the command always
+present, was considered and not chosen.
 
 ### The glitch detector
 

@@ -49,6 +49,13 @@ You should see: a file of a few hundred lines. Keep it.
 
 ### 2. Build the four images, and check each one
 
+| Directory | What it is | Used in |
+|---|---|---|
+| `build` | The everyday firmware, signed with the first key. What the board runs before and after | Steps 3, 7, 12, 14 |
+| `build-burn` | The burn image: the everyday firmware plus the one command that writes the root secret into OTP. On the board only for steps 4 to 6 | Steps 4, 5, 6 |
+| `build-key2` | The everyday firmware signed with the second key, for one check that the spare key works | Step 12 |
+| `build-unsigned` | The everyday firmware not signed at all, for one check that the board refuses it | Step 14 |
+
 ```sh
 cmake --preset debug && cmake --build build                                        # everyday firmware
 cmake --preset debug -B build-burn -DSOS_BURN_IMAGE=ON && cmake --build build-burn   # the burn image
