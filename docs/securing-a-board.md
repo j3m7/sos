@@ -211,8 +211,8 @@ and merged before anything is burned.
      check over the secret matches; the secret alone has no magic number. A page that is
      neither blank nor complete is spent and is skipped. A blank page ends the search: no
      secret yet.
-2. **Writing the root secret, on the board.** A console command (working name `rootsecret
-   burn`) that takes 32 bytes from the TRNG and writes them to the first blank page of the list.
+2. **Writing the root secret, on the board** (#87, in review; never yet run on a chip). A
+   console command (`rootsecret burn`, with `plan` and `rehearse`) that takes 32 bytes from the TRNG and writes them to the first blank page of the list.
    The secret never leaves the board and is never shown. In order:
    - the data rows, with error correction;
    - the chaff the datasheet recommends against imaging (section 13.8.2): for each data row
@@ -384,8 +384,10 @@ that). The same goes for page 2 and a later change of boot keys. The lock check 
 firmware (#86) is also no proof of history: lock words can be written from the bootloader, so
 a board that was ever out of its owner's hands unlocked can't be shown clean by reading them.
 
-Not decided. Until it is, 4.8 covers what loses nothing: page 3, the root secret's list
-pages, and nothing else.
+**Deferred, by the owner's word (2026-11-25): "We are not working with a production board
+until dev-1 is tested and working."** This is a question for the production board, to be
+taken up then. It blocks nothing now. On dev-1, 4.8 covers page 3 and the root secret's list
+pages only (see the dev variant).
 
 ## Afterwards: trying the attacks
 
@@ -409,6 +411,10 @@ issue.
 Not possible to try here: the glitch attacks, the flash swap and chip imaging.
 
 ## Variant for the development board (dev-1)
+
+**What dev-1 is for, in the owner's words:** "what we are testing on dev-1 is that the
+mechanisms work. We don't really care about protecting the data on the board." And: "We are
+not working with a production board until dev-1 is tested and working."
 
 **Status: draft, for review. No OTP write on dev-1 is approved by this section.** The owner
 chose on 2026-11-25 to run steps 3 and 4 on dev-1 with the development signing key ("lets test
@@ -572,25 +578,22 @@ signature verified by `picotool`, and both keys shown to match.
 After D4.7 the checks of "Afterwards: trying the attacks" are run on dev-1 except the debug
 probe (which is expected to attach) and the reboot-into-BOOTSEL row (which is expected to work).
 
-### dev-1 and step 4.8: a decision for the owner
+### dev-1 and step 4.8 (decided by the owner, 2026-11-25)
 
-Step 4.8 collides with what was decided for dev-1. Key slots 2 and 3 are left blank there "for
-room to add a key later". While page 2 and the boot flags stay writable from the bootloader,
-anyone with a cable can use that room too: write their own key into slot 2, mark it valid, and
-dev-1 runs their firmware. And they can mark the dev keys invalid and end dev-1's life.
+"For dev-1 leave them open for later OTP tests, what we are testing on dev-1 is that the
+mechanisms work. We don't really care about protecting the data on the board."
 
-- **Lock them on dev-1 as well:** after it, no key can be added over USB by anyone, the owner
-  included, and no cable-holder can mark the dev keys invalid. A later key change would have
-  to be done by signed firmware written for the purpose, if the Secure-side lock is left open
-  for that, or not at all.
-- **Leave pages 1, 2 and the lock pages open on dev-1, and lock only page 3 and the list
-  pages** (the reviewer's view): debug stays on on dev-1, so locking these pages protects no
-  secret there; it only costs flexibility on the one board where things are still being
-  tried.
+So on dev-1 **only page 3 and the root secret's list pages are locked against writes from the
+bootloader.** Pages 1 and 2 (boot flags, boot keys) and the lock pages stay open, for later
+OTP tests. The list pages are locked by the burn itself; page 3 by the owner with `picotool`.
 
-The two views differ on one point: whether "anyone with a cable can end dev-1's life with one
-command" is worth closing on the only board. It protects nothing secret either way. Not
-decided. Nothing in 4.8 beyond page 3 and the list pages is written on dev-1 until it is.
+| # | Write (the owner runs it) | Check |
+|---|---|---|
+| D4.8 | Page 3's lock word: bootloader read-only | Read it back. From BOOTSEL, `picotool otp set` of a row in page 3 or in a list page is **refused**; `picotool otp get` of a row in page 1 or 2 is **answered**, showing those pages were left open as intended |
+
+What stays possible on dev-1 as a result, knowingly: anyone with a cable can add a boot key to
+a blank slot and run their own firmware, or mark the dev keys invalid and end the board's
+life. Neither loses anything the owner cares about on this board.
 
 ### Living with it afterwards
 
