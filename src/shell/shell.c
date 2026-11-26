@@ -867,11 +867,16 @@ static int console_check_step(void) {
 // With no usable root secret nothing sealed can be read, the password included. The console
 // must not be open because of that: it stays locked, with only the commands that deal with it.
 static const char *console_no_keys(void) {
-    return rootsource_ok()
-               ? NULL
-               : "this board's root secret can't be used, so nothing it stores can be read.\n"
+    if (rootsource_ok())
+        return NULL;
+    // Only a flash record can be cleared and made again from here. A secret that should be in
+    // OTP and isn't usable is not something a command puts right.
+    return rootsource() == ROOTSRC_FLASH
+               ? "this board's root secret can't be used, so nothing it stores can be read.\n"
                  "`rootsecret` says more, `rootsecret forget` starts over (what was stored is "
-                 "lost), `reboot` restarts.";
+                 "lost), `reboot` restarts."
+               : "this board has no root secret it can use, so nothing it stores can be read.\n"
+                 "`rootsecret` says why, `reboot` restarts.";
 }
 
 static bool console_rescue_allowed(const char *cmd) {
