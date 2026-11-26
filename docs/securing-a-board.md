@@ -318,9 +318,19 @@ set up fresh after step 3, never before.
 | 3.5 | `setup` on the console (password, network, trusted key), then format the card | Configuration saves and loads across a reboot; the card mounts | yes |
 
 If 3.2 fails partway (power lost, a read-back mismatch), that page is spent: it has no marker,
-so the firmware skips it, and the command is run again for the next page of the list. With the
-list used up the board can't be given a root secret by this firmware. This is part of what the
-rehearsal tests.
+so the firmware skips it. With the list used up the board can't be given a root secret by this
+firmware.
+
+**A burn that ends in an error is a full stop, not a cue to run it again.** The command says
+"STOP HERE" and the image refuses further runs until the board is restarted. The cause is
+found first: a fault in how OTP is written (the boot ROM call, the read-back) would spend the
+second and third page exactly as it spent the first. The one error that isn't a stop is
+"the button wasn't held". If the very first write fails and nothing landed, the page is left
+blank and unlocked, and is the page the next run uses; that is still a stop.
+
+If the board restarts during a burn while the BOOTSEL button is held, it comes up in the USB
+bootloader. That is the button, not damage: `picotool reboot` brings the firmware back, and
+`rootsecret burn plan` then says what state the pages are in.
 
 At the end of step 3 the board still boots anything and still has debug: the secret can be read
 by loading other firmware. It is protected only once step 4 is done. **Steps 3 and 4 are done in
@@ -482,9 +492,15 @@ below still apply and the owner names each write.
    the image used on a production board is built without it. (A real power cut partway
    through a row is a different case and is not covered by this run: said here so that nobody
    takes it as tested.)
-2. The firmware must then report that page as spent and not use it. The burn is run again,
-   without the rehearsal argument, and lands in the second page. That is dev-1's root secret.
-3. The read attempt from BOOTSEL is step 3.4 on that page.
+2. **The rehearsal must end with "rehearsal: stopped on purpose", and the page locked. If it
+   ends any other way, the real burn is not run.** The rehearsal is the first time
+   `program()`, the boot ROM's write call and the read-back through the memory-mapped alias
+   run on a chip at all; a result of "a write failed or didn't read back" on some row means
+   one of them is wrong, and it would be wrong for the real secret too. The image enforces
+   this for the rest of that boot; the procedure enforces it after a restart.
+3. Only then: the burn is run again, without the rehearsal argument. It lands in the second
+   page. That is dev-1's root secret.
+4. The read attempt from BOOTSEL is step 3.4 on that page.
 
 **What the spent page then holds:** 32 random bytes with their chaff, complete, with no marker.
 They were never a root secret: nothing was ever derived from or sealed under them, and the
