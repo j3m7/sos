@@ -17,6 +17,7 @@
 #include "core/log.h"
 #include "core/random.h"
 #include "core/seal.h"
+#include "core/sealedonly.h"
 #include "ssh/hostkey_record.h"
 
 // The host key is the first page of the key sector (core/keysector.h), which survives
@@ -26,9 +27,9 @@
 
 _Static_assert(HOSTREC_PAGE == FLASH_PAGE_SIZE, "the record is one flash page");
 
-// An open board takes over a plain host key from older firmware and seals it. A secured board
-// must not (issue #64 step 4): together with the configuration's refuse_plain (core/settings.c).
-static const bool refuse_plain = false;
+// An open board takes over a plain host key from older firmware and seals it. A sealed-only
+// board must not (core/sealedonly.h), like the configuration's refuse_plain (core/settings.c).
+#define refuse_plain sealedonly()
 
 static uint8_t key_der[HOSTREC_PAGE];       // the private key in use
 static uint8_t page[HOSTREC_PAGE];          // a record being built

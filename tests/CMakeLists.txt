@@ -75,6 +75,12 @@ add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
 target_include_directories(test_bootkey PRIVATE ${SOS_ROOT}/src)
 add_test(NAME bootkey COMMAND test_bootkey)
 
+# src/core/sealedonly.c: whether the board refuses unsealed records, from its marker's OTP rows.
+add_executable(test_sealedonly test_sealedonly.c ${SOS_ROOT}/src/core/sealedonly.c
+    ${SOS_ROOT}/src/core/bootkey.c)
+target_include_directories(test_sealedonly PRIVATE ${SOS_ROOT}/src)
+add_test(NAME sealedonly COMMAND test_sealedonly)
+
 # tools/flash.sh: the guard that refuses to flash an image not signed with an accepted key.
 find_program(BASH_EXE bash)
 if (BASH_EXE)

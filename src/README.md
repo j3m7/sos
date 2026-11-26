@@ -7,7 +7,7 @@ subsystems is visible at the top of the file.
 
 | Directory | Subsystem |
 |---|---|
-| [`core/`](core/README.md) | System log, configuration (format and flash storage), root secret and key provider, wrong-password count, key sector, heap, build version, chip revision name, OTP reading and the boot key check, glitch detector, watchdog, fault record, stack monitor |
+| [`core/`](core/README.md) | System log, configuration (format and flash storage), root secret and key provider, wrong-password count, key sector, heap, build version, chip revision name, OTP reading and the boot key check, the sealed-only marker, glitch detector, watchdog, fault record, stack monitor |
 | [`shell/`](shell/README.md) | Command shell: line editing, questions, long-running jobs, the commands |
 | [`net/`](net/README.md) | Wi-Fi station connection, HTTPS client |
 | [`ssh/`](ssh/README.md) | SSH server (shell sessions and SFTP), host key; `pico-sshd/` is the adapted upstream server |

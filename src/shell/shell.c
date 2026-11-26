@@ -31,6 +31,7 @@
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
+#include "core/sealedonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -82,7 +83,27 @@ static void cmd_version(shell_t *sh) {
                      : "off (open board: any firmware starts)");
     shell_printf(sh, "debug port: %s\n", otp.debug_disabled ? "disabled"
                      : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
-    // Those two are what the chip latched at reset. Its OTP rows should say the same.
+    switch (sealedonly_state()) {
+    case SEALEDONLY_NO:
+        shell_printf(sh, "sealed-only: no (unsealed configuration from flash is accepted, as "
+                         "`ninja provision` writes it)\n");
+        break;
+    case SEALEDONLY_YES:
+        shell_printf(sh, "sealed-only: yes%s (unsealed records in flash are refused; set up on "
+                         "the console only)\n",
+                     sealedonly_forced() ? ", forced by this test build, not by the board" : "");
+        break;
+    case SEALEDONLY_YES_UNREADABLE:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP can't be read\n");
+        break;
+    case SEALEDONLY_YES_DAMAGED:
+        shell_printf(sh, "sealed-only: yes, because its marker in OTP is neither blank nor "
+                         "whole (rows 0x%06lx 0x%06lx 0x%06lx)\n",
+                     (unsigned long)sealedonly_rows()[0], (unsigned long)sealedonly_rows()[1],
+                     (unsigned long)sealedonly_rows()[2]);
+        break;
+    }
+    // Secure boot and debug are what the chip latched at reset. Its OTP rows should say the same.
     if (!otp.rows_readable)
         shell_printf(sh, "(the OTP rows behind those flags are unreadable, so they couldn't be "
                          "cross-checked)\n");
@@ -765,6 +786,11 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
     }
     if (!sh->io->admin) {
         shell_printf(sh, "the root secret can only be cleared on the serial console\n");
+        return;
+    }
+    if (sealedonly()) {
+        shell_printf(sh, "this is a sealed-only board: its root secret record isn't cleared "
+                         "from here\n");
         return;
     }
     if (state != ROOTSECRET_INVALID || !rootflash_usable()) {
