@@ -14,12 +14,9 @@
 - SSH server glue in `src/ssh/`, derived from [pico-sshd](https://github.com/tjko/pico-sshd)
   (see [`THIRD_PARTY.md`](../THIRD_PARTY.md))
 
-wolfSSL, wolfSSH, the SD card library and Lua are git submodules in `lib/`.
-
-The source code is grouped by subsystem under `src/`; [`src/README.md`](../src/README.md) gives
-the overview (main loop, interrupt context, core 1) and each directory's README explains how
-its subsystem works. Reference documentation (datasheets, SDK manuals) lives in
-[`docs/`](README.md).
+wolfSSL, wolfSSH, the SD card library and Lua are git submodules in `lib/`. The source layout
+is described in [`src/README.md`](../src/README.md); datasheets and SDK manuals are listed in
+[docs/README.md](README.md).
 
 ## Setup
 

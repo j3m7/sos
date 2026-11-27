@@ -61,8 +61,8 @@ network, the log shows its address and SSH host key fingerprint, and you can log
 ssh <device-ip>
 ```
 
-`help` lists the commands and `man <command>` explains one ([manual pages](docs/editor.md#manual-pages)).
-If [just](https://github.com/casey/just) is installed, `just` lists shortcuts for building,
+`help` lists the commands. `man <command>` explains one once the manual pages are on the SD
+card: `man install` fetches them ([manual pages](docs/editor.md#manual-pages)). If [just](https://github.com/casey/just) is installed, `just` lists shortcuts for building,
 flashing, provisioning and testing.
 
 ## Documentation

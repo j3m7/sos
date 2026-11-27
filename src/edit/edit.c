@@ -31,7 +31,7 @@
 // Memory: the editor's buffer is allocated whole when the file is opened (editor_open()), for
 // the file plus GROWTH of typing room, so a small file costs little while an editor sits open
 // for an hour. Less when the heap has less to spare: HEAP_RESERVE is left free (a TLS handshake
-// needs about this much, see the README), so an editor can't take what SSH and HTTPS need to
+// needs about this much, see docs/tls.md), so an editor can't take what SSH and HTTPS need to
 // keep working; and if a block that size can't be had (the heap is fragmented), the room is
 // halved down to MIN_ROOM before giving up. Save and open again for more room.
 #define HEAP_RESERVE    (64 * 1024)
