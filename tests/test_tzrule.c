@@ -4,7 +4,7 @@
 // Unit tests for src/time/tzrule.c: POSIX TZ rules and local time from them. Besides fixed
 // cases, every rule in tz/zones.bundle is checked against the host C library's own TZ handling
 // (glibc reads the same POSIX strings, RFC 9636's extensions included) over five years, at each
-// change and a second either side.
+// change (tzrule's and the C library's, each found by search) and a second either side.
 
 #define _DEFAULT_SOURCE     // setenv, tzset, localtime_r, tm_gmtoff, tm_zone
 #include <stdint.h>
@@ -182,8 +182,19 @@ TEST(format_offset) {
     CHECK(!strcmp(buf, "+00:00"));
     tzrule_format_offset(20730, buf, sizeof(buf));
     CHECK(!strcmp(buf, "+05:45:30"));
-    tzrule_format_offset(INT32_MIN, buf, sizeof(buf));      // nonsense, but no overflow
-    CHECK(buf[0] == '-');
+    tzrule_format_offset(INT32_MIN, buf, sizeof(buf));      // nonsense: hours shown as 99
+    CHECK(!strcmp(buf, "-99:14:08"));
+    char small[10];
+    tzrule_format_offset(-(99 * 3600 + 59 * 60 + 59), small, sizeof(small));
+    CHECK(!strcmp(small, "-99:59:59"));                     // the longest fits 10 bytes
+}
+
+// The C library's offset at t, with TZ set to the rule.
+static long libc_offset(int64_t t) {
+    time_t tt = (time_t)t;
+    struct tm tm;
+    localtime_r(&tt, &tm);
+    return tm.tm_gmtoff;
 }
 
 // One instant under the C library with TZ set to the rule, against tzrule_at().
@@ -246,6 +257,22 @@ TEST(bundle_against_libc) {
                             while (hi - lo > 1) {
                                 int64_t mid = lo + (hi - lo) / 2;
                                 if (tzrule_at(&r, mid).offset == tzrule_at(&r, lo).offset)
+                                    lo = mid;
+                                else
+                                    hi = mid;
+                            }
+                            ok = agrees(zone, &r, hi - 1) && agrees(zone, &r, hi) &&
+                                 agrees(zone, &r, hi + 1);
+                        }
+                        // And each change the C library has, found the same way, so a change
+                        // tzrule lacks or puts elsewhere is caught too.
+                        for (int64_t t = t0; ok && t < t1; t += 3600) {
+                            if (libc_offset(t) == libc_offset(t + 3600))
+                                continue;
+                            int64_t lo = t, hi = t + 3600;
+                            while (hi - lo > 1) {
+                                int64_t mid = lo + (hi - lo) / 2;
+                                if (libc_offset(mid) == libc_offset(lo))
                                     lo = mid;
                                 else
                                     hi = mid;

@@ -60,7 +60,7 @@ typedef struct {
 tzrule_local_t tzrule_at(const tzrule_t *r, int64_t t);
 
 // An offset as "+01:00", "-03:30", "+05:45:30" (seconds only when there are any) into buf (at
-// least 10 bytes).
+// least 10 bytes). Parsed offsets are within 24 hours; hours beyond 99 are shown as 99.
 void tzrule_format_offset(int32_t offset, char *buf, unsigned buflen);
 
 #endif

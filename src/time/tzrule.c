@@ -199,7 +199,7 @@ tzrule_local_t tzrule_at(const tzrule_t *r, int64_t t) {
 void tzrule_format_offset(int32_t offset, char *buf, unsigned buflen) {
     char sign = offset < 0 ? '-' : '+';
     uint32_t a = offset < 0 ? (uint32_t)-(int64_t)offset : (uint32_t)offset;
-    unsigned h = a / 3600 % 1000, m = a / 60 % 60, s = a % 60;
+    unsigned h = a / 3600 > 99 ? 99 : a / 3600, m = a / 60 % 60, s = a % 60;   // parsed: <= 24
     if (s)
         snprintf(buf, buflen, "%c%02u:%02u:%02u", sign, h, m, s);
     else
