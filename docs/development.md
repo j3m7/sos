@@ -196,6 +196,24 @@ include errors for this project. `--query-driver` assumes the toolchain is in `/
 it in `.vscode/settings.json` if yours is elsewhere. Run `cmake --preset debug` once so the
 compile database exists.
 
+## Git hooks
+
+`.githooks/pre-commit` refuses a commit whose generated files are stale. Today that is the
+manual pages: `man/pages.bundle` and `docs/commands.md` are built from `man/*.txt` by
+`tools/man-bundle.sh`, and `man install` downloads the bundle from GitHub as committed. Turn it
+on once per clone (every worktree of the clone shares the setting):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It runs `tools/man-bundle.sh --check` on the staged files, not the working tree, and only when
+the commit touches `man/`, `docs/commands.md` or the two scripts. If it refuses, run
+`tools/man-bundle.sh` and stage `man/pages.bundle` and `docs/commands.md`. After merging a branch
+that also changed the pages, regenerate the two files instead of resolving their conflicts by
+hand. `git commit --no-verify` skips the hook. Nothing checks this on GitHub; the host test
+`man-bundle` (`ctest`) runs the same check.
+
 ## Developing in a VM
 
 With the source on a host folder shared into a libvirt VM (for example virtiofs), the Pico's
