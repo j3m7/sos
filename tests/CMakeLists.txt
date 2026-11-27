@@ -34,10 +34,12 @@ add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
-# src/files/files.c: the file commands' words (`cat 'my file'`), with FatFs and the SD card
-# stood in for (tests/stubs, a card in memory); and src/shell/cmdcheck.c, the command tables' rule.
+# src/files/files.c: the file commands' words (`cat 'my file'`), ls's listing, and the card side
+# of tee and `>` under the real src/shell/pipe.c (when a file being written is synced), with FatFs
+# and the SD card stood in for (tests/stubs, a card in memory); and src/shell/cmdcheck.c, the
+# command tables' rule.
 add_executable(test_files test_files.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}/src/files/path.c
-    ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
+    ${SOS_ROOT}/src/shell/pipe.c ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
 target_include_directories(test_files PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
 add_test(NAME files COMMAND test_files)
 
