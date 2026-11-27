@@ -12,6 +12,8 @@
 #ifndef SOS_FAULT_H
 #define SOS_FAULT_H
 
+#include <stdint.h>
+
 // Read and clear the record left by the previous run. Call once, early in main().
 void fault_boot(void);
 
@@ -25,5 +27,11 @@ void fault_test(const char *how);
 
 // The SDK's panic() (PICO_PANIC_FUNCTION in CMakeLists.txt): records the panic and resets.
 void sos_panic(const char *fmt, ...) __attribute__((noreturn));
+
+#ifdef SOS_TEST_COMMANDS
+// Test builds only: reset now, leaving a record that says `sd fault reboot` fired before card
+// write `write_no` (files/sdfault.h). The next boot reports it like a fault: "last reset: ...".
+void fault_test_reset(uint32_t write_no) __attribute__((noreturn));
+#endif
 
 #endif

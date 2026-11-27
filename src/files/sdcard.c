@@ -33,6 +33,10 @@
 #include "files/cardkey.h"
 #include "files/fsck.h"
 #include "files/sdcrypt.h"
+#ifdef SOS_TEST_COMMANDS
+#include "core/fault.h"
+#include "files/sdfault.h"
+#endif
 
 // --- hardware configuration (called by the library) ------------------------------------------
 
@@ -112,8 +116,18 @@ static block_dev_err_t read_blocks_logged(sd_card_t *c, uint8_t *buf, uint32_t s
     return r;
 }
 
+#ifdef SOS_TEST_COMMANDS
+static block_dev_err_t fault_fire(sd_card_t *c, sdfault_action_t a, uint32_t sector,
+                                  uint32_t count);
+#endif
+
 static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32_t sector,
                                         uint32_t count) {
+#ifdef SOS_TEST_COMMANDS
+    sdfault_action_t fault = sdfault_write();      // `sd fault`: test builds only
+    if (fault != SDFAULT_PASS)
+        return fault_fire(c, fault, sector, count);
+#endif
     block_dev_err_t r = lib_write_blocks(c, buf, sector, count);
     io_stats.writes++;
     io_stats.sectors += count;
@@ -1082,6 +1096,96 @@ void sdcard_owner_gone(void) {
     crypt_off();
 }
 
+#ifdef SOS_TEST_COMMANDS
+// --- `sd fault`: injected write faults, test builds only (files/sdfault.h) --------------------
+
+// Write N of an armed fault, from write_blocks_fed() before the driver sees it. `sector` and
+// `count` are the card's (on an encrypted card, past the header).
+static block_dev_err_t fault_fire(sd_card_t *c, sdfault_action_t a, uint32_t sector,
+                                  uint32_t count) {
+    uint32_t n = sdfault_state()->writes;
+    if (a == SDFAULT_DO_REBOOT) {
+        // As after a power cut: every write before this one is on the card, this one and later
+        // ones aren't. The driver can leave a multi-block write open between calls (CMD25
+        // without its stop token, continued if the next write is contiguous): close it, as
+        // FatFs's sync does, so the card has finished programming and isn't left mid-transfer,
+        // still powered, across the reset. Each driver call waits for its own SPI transfers, so
+        // nothing else is in flight. Nothing is logged: the log files are on this card. The
+        // next boot says why it reset (fault_last()).
+        c->sync(c);
+        fault_test_reset(n);
+    }
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+            "sd: fault: write %lu (%lu sectors at %lu) not written, failed on purpose (sd fault)",
+            (unsigned long)n, (unsigned long)count, (unsigned long)sector);
+    return SD_BLOCK_DEVICE_ERROR_WRITE;
+}
+
+static bool fault_count(const char *s, uint32_t *n) {
+    size_t len = s ? strlen(s) : 0;
+    if (!len || len > 9 || strspn(s, "0123456789") != len)
+        return false;
+    unsigned long v = strtoul(s, NULL, 10);
+    if (v == 0 || v > SDFAULT_MAX_N)
+        return false;
+    *n = (uint32_t)v;
+    return true;
+}
+
+static void fault_show(shell_t *sh) {
+    const sdfault_state_t *f = sdfault_state();
+    if (!f->counting) {
+        shell_printf(sh, "no fault armed\n");
+        return;
+    }
+    if (f->armed != SDFAULT_OFF)
+        shell_printf(sh, "armed: %s at write %lu; %lu since arming\n",
+                     f->armed == SDFAULT_FAIL ? "fail" : "reboot", (unsigned long)f->at,
+                     (unsigned long)f->writes);
+    else    // a reboot that fired reset the board
+        shell_printf(sh, "fired: write %lu failed; %lu since arming (later writes go through)\n",
+                     (unsigned long)f->at, (unsigned long)f->writes);
+}
+
+// `sd fault [fail <N>|reboot <N>|off]`.
+static void cmd_fault(shell_t *sh, const char *what, const char *count) {
+    if (!sh->io->admin) {
+        shell_printf(sh, "sd fault works only on the serial console\n");
+        return;
+    }
+    uint32_t n = 0;
+    bool extra = strtok(NULL, " ") != NULL;
+    if (!what && !extra) {
+        fault_show(sh);
+        return;
+    }
+    if (what && !strcmp(what, "off") && !count && !extra) {
+        sdfault_off();
+        shell_printf(sh, "no fault armed\n");
+        return;
+    }
+    sdfault_mode_t mode = !what ? SDFAULT_OFF
+                        : !strcmp(what, "fail") ? SDFAULT_FAIL
+                        : !strcmp(what, "reboot") ? SDFAULT_REBOOT : SDFAULT_OFF;
+    if (mode == SDFAULT_OFF || extra || !fault_count(count, &n) || !sdfault_arm(mode, n)) {
+        shell_printf(sh, "usage: sd fault [fail <N>|reboot <N>|off]  (N: 1 to %lu, counting card "
+                         "writes from now)\n", (unsigned long)SDFAULT_MAX_N);
+        return;
+    }
+    if (mode == SDFAULT_FAIL)
+        shell_printf(sh, "armed: card write %lu from now fails and isn't written; "
+                         "later writes go through\n", (unsigned long)n);
+    else
+        shell_printf(sh, "armed: the board resets before card write %lu from now\n",
+                     (unsigned long)n);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: fault: %s armed at card write %lu (test command)",
+            what, (unsigned long)n);
+}
+#define SD_USAGE_FAULT "|fault [fail N|reboot N|off]"
+#else
+#define SD_USAGE_FAULT ""
+#endif
+
 // --- dispatch ------------------------------------------------------------------------------------
 
 void sdcard_command(shell_t *sh, char *args) {
@@ -1106,6 +1210,10 @@ void sdcard_command(shell_t *sh, char *args) {
         cmd_format(sh, arg, arg2);
     else if (!strcmp(sub, "check"))
         cmd_check(sh, arg);
+#ifdef SOS_TEST_COMMANDS
+    else if (!strcmp(sub, "fault"))
+        cmd_fault(sh, arg, arg2);
+#endif
     else if (!strcmp(sub, "unmount")) {
         if (files_in_use(sh))
             return;
@@ -1123,5 +1231,5 @@ void sdcard_command(shell_t *sh, char *args) {
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
-                         "unmount|check]\n");
+                         "unmount|check" SD_USAGE_FAULT "]\n");
 }

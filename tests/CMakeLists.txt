@@ -335,6 +335,13 @@ else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()
 
+# src/files/sdfault.c: `sd fault`'s count and decision (test builds only, so built here with
+# SOS_TEST_COMMANDS like the firmware's test image).
+add_executable(test_sdfault test_sdfault.c ${SOS_ROOT}/src/files/sdfault.c)
+target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
+add_test(NAME sdfault COMMAND test_sdfault)
+
 # src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
 # ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
 # for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).

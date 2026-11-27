@@ -180,3 +180,14 @@ back as bits with `*_text()` lines. `fsck_exfat.h` lists the rules decided here.
 - **Tests:** `tests/test_fsck_exfat.c` tests the pieces on their own, on images FatFs makes and
   fills and on hand-made entries; `fuzz_fsck_exfat` fuzzes the parsers. The damage cases
   (`tests/fuzz/exfat_damage.h`) run through the whole checker in `tests/test_fsck.c`.
+
+## `sdfault.c`: injected write faults (test builds only, host tested)
+
+`sd fault fail <N>` and `sd fault reboot <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
+only, for testing repair on a board ([design §10.4](../../docs/design/sd-check.md#104-fault-injection),
+usage in [development.md](../../docs/development.md#test-commands-sd-card-write-faults)).
+`sdfault.c` counts writes and decides. `write_blocks_fed()` in `sdcard.c`, through which every
+card write reaches the driver (FatFs's, the layer's chunks, the header writes), asks it once per
+write. It fails the write, or closes the driver's open multi-block write and resets the board
+(`fault_test_reset()` in `core/fault.c`, so the next boot says why). In other images, neither
+the hook nor the file is built. `tests/test_sdfault.c` covers the counting.
