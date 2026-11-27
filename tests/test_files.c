@@ -480,8 +480,8 @@ TEST(ls_takes_at_most_one_word) {
     run("ls 'my file'");
     CHECK_OUT("           6  my file\n");
     run("ls");                      // the card's directories list now (#218): setup()'s two files
-    CHECK_OUT("           6  2026-11-27 17:42  my file\n"
-              "           6  2026-11-27 17:42  plain\n"
+    CHECK_OUT("           6  2026-11-27 17:42 UTC  my file\n"
+              "           6  2026-11-27 17:42 UTC  plain\n"
               "2 files, 0 directories, 12 bytes\n");
     CHECK(!strcmp(listing, "/"));
     run("ls a b");
@@ -509,8 +509,8 @@ TEST(ls_says_being_written_for_a_zero_date_and_keeps_the_columns) {
     card_add("/sub", true, NULL);
     card[card_find("/sub")].fdate = 0;
     run("ls");
-    CHECK(strstr(out, "           0  being written     new\n") != NULL);
-    CHECK(strstr(out, "       <dir>                    sub/\n") != NULL);   // no date, no phrase
+    CHECK(strstr(out, "           0  being written         new\n") != NULL);
+    CHECK(strstr(out, "       <dir>                        sub/\n") != NULL);   // no date, no phrase
     const char *a = ls_line("plain"), *b = ls_line("new");
     CHECK(a && b && strchr(a, '\n') - a - 5 == strchr(b, '\n') - b - 3);   // names line up
     CHECK(strstr(out, "3 files, 1 directories, 12 bytes\n") != NULL);
@@ -522,7 +522,7 @@ TEST(redirect_syncs_the_file_once_a_second_and_not_before) {
     CHECK(open_stages("> /log"));
     pipe_write(&sh.pipe, "a\n", 2);  // opens the file: the second starts now
     run("ls");
-    CHECK(strstr(out, "           0  being written     log\n") != NULL);
+    CHECK(strstr(out, "           0  being written         log\n") != NULL);
     now += 999999;
     pipe_write(&sh.pipe, "b\n", 2);
     CHECK_EQ(nsyncs, 0);            // not before a second has passed
@@ -531,7 +531,7 @@ TEST(redirect_syncs_the_file_once_a_second_and_not_before) {
     CHECK_EQ(nsyncs, 1);
     CHECK_EQ(syncs[0].len, 6);
     run("ls");
-    CHECK(strstr(out, "           6  2026-11-28 09:05  log\n") != NULL);
+    CHECK(strstr(out, "           6  2026-11-28 09:05 UTC  log\n") != NULL);
     out_clear();
     for (int k = 0; k < 50; k++) {  // a fast producer: no sync until the next second's mark
         now += 10000;
@@ -569,7 +569,7 @@ TEST(a_typed_redirect_writes_the_file_and_dates_it) {
     CHECK(!strcmp(card[card_find("/f")].data, "hello there\n"));
     CHECK_EQ(nsyncs, 0);            // a short line: the close writes it out
     run("ls");
-    CHECK(strstr(out, "          12  2026-11-28 09:05  f\n") != NULL);
+    CHECK(strstr(out, "          12  2026-11-28 09:05 UTC  f\n") != NULL);
 }
 
 static void fill(char *buf, size_t n) {

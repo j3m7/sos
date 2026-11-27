@@ -125,14 +125,14 @@ static const log_hooks_t log_hooks = {
 
 static uint64_t chat_now(void) { return time_us_64(); }
 
-// Message times: UTC hours and minutes, as `time` shows, or time since boot before the clock
-// is set.
+// Message times: UTC hours and minutes, marked as UTC ("14:03 UTC"), or time since boot before
+// the clock is set.
 static void chat_stamp(char *buf, size_t len) {
     if (timesync_clock_set()) {
         time_t t = time(NULL);
         struct tm tm;
         gmtime_r(&t, &tm);
-        snprintf(buf, len, "%02d:%02d", tm.tm_hour, tm.tm_min);
+        snprintf(buf, len, "%02d:%02d UTC", tm.tm_hour, tm.tm_min);
     } else {
         uint64_t m = time_us_64() / 60000000;
         snprintf(buf, len, "+%lluh%02llum", m / 60, m % 60);

@@ -66,7 +66,7 @@ DESCRIPTION
     Joins the chat room: shows the last few lines and who is there, then each
     line typed at the 'chat> ' prompt goes to everyone else in the room, as
 
-        [14:03] alice@laptop: hi
+        [14:03 UTC] alice@laptop: hi
 
     Lines typed in the room are sent as they are: unlike a command line
     (QUOTING in 'man intro'), quotes, '|' and '>' in them are plain text.
@@ -1591,13 +1591,14 @@ SYNOPSIS
 DESCRIPTION
     Shows the message in every other shell at once, as
 
-        [wall 14:02 alice@laptop] message
+        [wall 14:02 UTC alice@laptop] message
 
-    and says how many shells it was sent to. Times are UTC, or time since boot
-    ('+1h02m') until the clock is set. A message arrives between the reader's
-    keystrokes: their line is cleared, the message printed, and the prompt and
-    their typing redrawn; during a running command it appears on its own line.
-    A full-screen program (edit, more, man) holds messages until it quits.
+    and says how many shells it was sent to. Times are UTC and say so, or time
+    since boot ('+1h02m') until the clock is set. A message arrives between the
+    reader's keystrokes: their line is cleared, the message printed, and the
+    prompt and their typing redrawn; during a running command it appears on its
+    own line. A full-screen program (edit, more, man) holds messages until it
+    quits.
 
     Messages are kept only in memory (the last 16), never in the log or on the
     card. A reader whose client has stopped reading doesn't hold the sender up
