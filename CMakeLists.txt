@@ -226,6 +226,7 @@ set(SOS_SOURCES
     src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/fsck.c
+    src/files/fsck_exfat.c
     src/files/files.c
     src/files/path.c
     src/files/sdcrypt.c
