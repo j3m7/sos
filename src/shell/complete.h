@@ -53,9 +53,9 @@ typedef struct {
 // the entries of the directory it names that start with what follows its last '/' match too
 // (only directories with SHELL_DIR), and *start is just after that '/'; otherwise *start is
 // where the last word begins. Words that come from a function (SHELL_VALUES_OF, shell.h) are
-// offered like the others, when they pass the same check as file names. After a SHELL_REDIRECT
-// command (echo) only the text after the line's last '>' is completed, as a path, and only
-// while it has no space in it.
+// offered like the others, when they pass the same check as file names. After a '>' or '>>'
+// (the shell's redirect, on any command) only the text after the line's last '>' is completed,
+// as a path, and only while it has no space in it.
 //
 // Calls `fn` with each match that starts with the text from *start (file names ignoring the
 // case of ASCII letters, as FAT does; words exactly), and returns how many.

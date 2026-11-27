@@ -79,10 +79,14 @@ PIPES
     command is stopped,
     as head stops it.
 
-    A '|' starts a stage only when a stage name follows it (grep, head,
-    tail, wc, tee, more); any other '|' is part of the command's text ('ls |
-    morex' runs ls with those words). A stage that doesn't parse ('x | grep',
-    'x | head y') prints its usage and the command doesn't run. Ctrl-C drops
+    A '|' is always a pipe, and the word after it must be a stage name
+    (grep, head, tail, wc, tee, more): 'ls | morex' says "morex: not a
+    filter" and runs nothing. A '|' that is text is quoted ('echo "a|b"';
+    QUOTING in 'man intro'). A line may end with '> <path>' (or '>>'), which
+    writes what the stages let through to the file instead of the screen, as
+    a tee that passes nothing on ('man tee'); it can't go with '| more'. A
+    stage that doesn't parse ('x | grep', 'x | head y') prints its usage and
+    the command doesn't run. Ctrl-C drops
     what the filters hold (tail's lines, wc's count); a command that asks a
     question or draws its own screen runs as if there were no pipe. Tab
     completes the stage names after '| ', and grep's options.

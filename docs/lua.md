@@ -9,6 +9,11 @@ lua /scripts/report.lua          # a file (relative paths start at the working d
 lua                              # an interactive prompt
 ```
 
+Quote the code after `-e` with `'...'`: the shell splits a line into words and takes quotes,
+`|` and `>` for itself (QUOTING in `man intro`), so `lua -e print("hi")` would lose its quotes
+and `lua -e print(2 > 1)` would write a file named `1)`. `lua -e 'print("hi")'` passes the
+code as typed.
+
 At the prompt (`>`), each line runs as you enter it, in one Lua state for the whole session, so
 variables and loaded modules stay. An expression's value is printed (`> 2^10` prints `1024.0`),
 and a statement that isn't finished continues on the next line (`>>`). Ctrl-C interrupts the

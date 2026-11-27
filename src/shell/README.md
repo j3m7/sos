@@ -39,9 +39,10 @@ translation (`crlf`), and `admin` (true for the console only).
   main loop waits) for the directory named up to the last `/`, and offers its entries that start
   with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
   name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
-  `SHELL_DIR` keeps to directories. `SHELL_REDIRECT` (echo) makes only the text after the line's
-  last `>` a path, a `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and
-  a word list that is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers,
+  `SHELL_DIR` keeps to directories. After a `>` or `>>` (the shell's redirect, any command) only
+  the text after the line's last `>` is a path, a `SHELL_NOSPACE` word (`https://`) ends with
+  nothing instead of a space, and a word list that is a `shell_values_t` (`SHELL_VALUES_OF`)
+  comes from a function: key numbers,
   saved networks, hosts. Those values pass the file-name check; their notes (a key's comment, an
   SSID) show only in the list, one match a line, through `termtext`. Names that aren't valid
   UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or hold what
@@ -65,11 +66,15 @@ translation (`crlf`), and `admin` (true for the console only).
   messages back (`log_hooks_t.hold`) until the program ends.
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
-- **Pipes:** `<command> | grep x | head 5 | more` (`pipe.c`, pure C, host tested; design in
-  `docs/design/shell-pipes.md`). `run_line()` finds the stages with `pipe_split()`: a `|` starts
-  one only before `grep`, `head`, `tail`, `wc` or `more`, so `ls | morex` and `lua -e
-  "print(1|2)"` run as typed. `pipe_open()` parses them all before the command runs (one that
-  doesn't parse prints its usage and nothing runs). The command is the only job; `write_out()`
+- **Words:** `run_line()` splits the line with `words_split()` (`words.c`, pure C, host tested
+  and fuzzed; design in `docs/design/shell-quoting.md`): sh-style quotes and backslashes, and
+  `|`, `>`, `>>` outside quotes are operators. The command's words go to `shell_execute()`,
+  which joins them with single spaces (`words_join()`) for the handler's flat string.
+- **Pipes:** `<command> | grep x | head 5 | more` and `<command> > file` (`pipe.c`, pure C, host
+  tested; design in `docs/design/shell-pipes.md`). `|` is always a pipe and the word after it
+  must be a stage name; `> file` / `>> file` at the end is a quiet `tee`. `pipe_open()` checks
+  the line and opens every stage from its words before the command runs (one that doesn't
+  parse prints why and nothing runs). The command is the only job; `write_out()`
   hands what it prints to the filters, on its call stack, and the last one emits to the sink:
   the terminal, or the capture for `more` (a HEAP_EDIT block up to `SHELL_PIPE_MAX` = 32 KB,
   paged through `shell_page()` when the command ends). A command that became a job is paged as
@@ -106,8 +111,9 @@ The console asks for the console password before it takes any command (issue #64
   driver's boot banner includes the MAC address). While the console is locked `main.c` selects
   a stdio driver that is never registered (`stdio_filter_driver()`), so nothing is sent or
   read; the shell's own reads and writes open that gate for as long as they take.
-- **The gate:** `shell_execute()` calls `login_gate()` for every console command line, and it
-  refuses while locked. So the lock doesn't depend on the question staying pending.
+- **The gate:** `run_line()` calls `login_gate()` for every console command line, on the line as
+  typed and before it is split into words, and it refuses while locked. So the lock doesn't
+  depend on the question staying pending.
 - **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
   root-derived key). It runs as a shell job, a slice per main-loop pass, through
   `login_hooks_t`; `core/settings.c` holds the verifier and the key.

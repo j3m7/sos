@@ -11,5 +11,8 @@ DESCRIPTION
     the name as 'who' shows it. At most 10 a second; beyond that it says the
     message wasn't logged. Lua scripts log the same way with sos.log().
 
+    Quote a message that holds an apostrophe, a '|' or '>' (an '->' too) or
+    repeated spaces: logger "it's 40 -> 41" (QUOTING in 'man intro').
+
 SEE ALSO
     dmesg, log, who

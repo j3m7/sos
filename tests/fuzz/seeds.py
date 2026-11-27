@@ -155,5 +155,14 @@ def terminal():
     write("terminal", "text", b"\x05caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80 \xc3 \x1b]0;title\x07\r\n\xed\xa0\x80")
 
 
-for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal):
+# --- words: a typed command line --------------------------------------------------------------
+
+def words():
+    write("words", "quotes", b"echo \"a   b\" 'x|y' a\\ b \"\\\"q\\\\\" a\"b c\"d '' \"\"")
+    write("words", "pipes", b"dmesg|grep -i 'no route'|head 3 >> /log/d.txt")
+    write("words", "lua", b"lua -e 'print(\"hi\" .. 1 > 0)' > /out")
+    write("words", "errors", b"wall don't \\")
+
+
+for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words):
     f()

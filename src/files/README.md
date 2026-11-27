@@ -76,7 +76,8 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
 
 ## `files.c`: the file commands
 
-`ls`, `cd`, `pwd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `echo > / >>`, in any shell. Each shell has
+`ls`, `cd`, `pwd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `echo`, in any shell (`> file` is the
+shell's redirect, a quiet `tee`: `pipe_file_*()` here). Each shell has
 its own working directory (`shell_t.cwd`).
 
 - **Jobs:** `ls`, `cat` and `cp` run as shell jobs, a bounded amount of work per main-loop pass

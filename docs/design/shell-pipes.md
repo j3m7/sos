@@ -24,6 +24,10 @@ in `shell_t.pipe` rather than in `view_t`, and steps it through `shell_pipe_feed
 shell_core.c), the code and its header comments are the reference; this note records the
 decision and why. Issues: #182 (the investigation).
 
+Since 2026-11-27 (#205, phase 1 of [shell-quoting.md](shell-quoting.md)) the stage-name rule of
+§2 is retired: the line is split into words first, `|` is always a pipe, and quoting decides
+whether a `|` is text. `pipe_split()` and `next_stage()` are gone; stages open from words.
+
 ## 1. What exists today
 
 - `run_line()` in [src/shell/shell_core.c](../../src/shell/shell_core.c) recognises one suffix,

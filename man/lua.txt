@@ -21,6 +21,10 @@ DESCRIPTION
     that started the script, and Ctrl-C stops it, as does ending the session.
     One script runs at a time.
 
+    Quote the code after -e with '...': the shell takes quotes, '|' and '>'
+    for itself (QUOTING in 'man intro'). So: lua -e 'print("hi")', and
+    lua -e 'print(2 > 1)'.
+
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the
     rest counted as dropped), and its end is logged. 'lua ps' shows the

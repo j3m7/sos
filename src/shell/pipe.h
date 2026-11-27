@@ -7,14 +7,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// Pipelines: `<command> | grep x | head 5 | more` (docs/design/shell-pipes.md). The command is
+#include "shell/words.h"
+
+// Pipelines: `<command> | grep x | head 5 | more` and `<command> > file`
+// (docs/design/shell-pipes.md, docs/design/shell-quoting.md §3). The command is
 // the producer, run by shell_execute() as any other line; every byte it writes passes through
 // the filters as it is written (on the producer's call stack, inside shell_core.c's
 // write_out()), and the last stage hands it to the sink: the terminal, or the capture that
 // `more` pages. Nothing is buffered between stages. Pure C over the heap and shell_printf(), so
 // it builds on the host for unit tests.
 
-#define PIPE_STAGES_MAX 4       // filters in one line (the sink `more` not counted)
+#define PIPE_STAGES_MAX 4       // filters in one line (the sink `more` and a redirect not counted)
 #define PIPE_LINE_MAX   512     // grep's partial-line buffer; a longer line is cut into pieces
 #define PIPE_PATTERN_MAX 64     // grep's text
 #define TAIL_MAX        4096    // tail's ring: it keeps at most this many bytes
@@ -25,8 +28,9 @@ typedef struct pipeline pipeline_t;
 
 typedef struct {
     const char *name;
-    // Parse `args` (NULL for none) into a new stage on HEAP_EDIT; NULL after printing why.
-    pipe_stage_t *(*open)(shell_t *sh, const char *args);
+    // Parse the stage's words (argv[0] is its name, argv[argc] NULL) into a new stage on
+    // HEAP_EDIT; NULL after printing why. The words are the line's: copy what is kept.
+    pipe_stage_t *(*open)(shell_t *sh, int argc, char **argv);
     // Bytes from the stage before; pass on what it keeps with pipe_emit(st, buf, len).
     void (*write)(pipe_stage_t *st, const char *buf, size_t len);
     // The producer has finished: flush what is held (tail's lines, wc's counts, grep's partial
@@ -107,21 +111,18 @@ const char *pipe_file_close(pipe_file_t *f);
 // The stages after `|` for Tab, with each one's options, are pipe_stage_table (declared in
 // complete.h, which knows shell_cmd_t).
 
-// Is `word` (up to a space or the end) the name of a stage: grep, head, tail, wc, tee or more?
-bool pipe_is_stage(const char *word);
-
-// Find the stages of `line`: the first '|' followed by a stage name (spaces between allowed)
-// starts them, and a '|' followed by anything else is ordinary text (`ls | morex` and
-// `lua -e "print(1|2)"` have none; in `x | grep a|b`, "a|b" is grep's text). NUL-terminates the
-// producer's text in place (spaces before the '|' dropped) and returns the text after that
-// first '|', or NULL when the line has no stage. Doesn't allocate.
-char *pipe_split(char *line);
-
-// Build the chain for the stage text pipe_split() returned ("grep x | more"): the filters on
-// HEAP_EDIT, and the sink (`more` last: the pager; otherwise the terminal). False if a stage
-// doesn't parse (its usage printed) or memory ran out: then nothing is allocated. Sets
-// `first`, `sink`, `sh`, and clears `done`; the caller sets `out`.
-bool pipe_open(shell_t *sh, pipeline_t *p, char *stages);
+// Build the chain from the words after the command: w->v[start] is the line's first operator
+// (a '|' or a redirect; words.h), and the rest follows the grammar of shell-quoting.md §3:
+//   [ '|' stage ]* [ ('>' | '>>') path ]
+// '|' is always a pipe, and the word after it must be a stage name (grep, head, tail, wc, tee,
+// more); `more` only last and never with a redirect; a redirect takes one path and ends the
+// line, and becomes a quiet tee (the file only, nothing passed on) after the last filter. The
+// whole line is checked before any stage opens. The filters go on HEAP_EDIT, and the sink is
+// the pager with `more` last, else the terminal. False after printing why (a grammar error, a
+// stage's usage, a refused path) or when memory ran out: then nothing is allocated. Sets
+// `first`, `sink`, `sh`, and clears `done`; the caller sets `out`. The stages copy what they
+// keep of the words.
+bool pipe_open(shell_t *sh, pipeline_t *p, words_t *w, int start);
 
 // Bytes from the producer, into the first stage (or the sink when there is none). Dropped once
 // `done`.

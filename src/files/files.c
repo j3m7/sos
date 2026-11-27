@@ -273,49 +273,9 @@ static void cmd_mv(shell_t *sh, char *args) {
         shell_printf(sh, "mv: %s\n", files_error(fr));
 }
 
-// echo <text> [> file | >> file]
+// echo <text>: prints it. `echo <text> > file` is the shell's redirect (shell/pipe.h).
 static void cmd_echo(shell_t *sh, char *args) {
-    if (!args) {
-        shell_printf(sh, "\n");
-        return;
-    }
-    char *text = args;
-    char *redir = strrchr(text, '>');
-    if (!redir) {
-        shell_printf(sh, "%s\n", text);
-        return;
-    }
-    bool append = redir > text && redir[-1] == '>';
-    char *name = redir + 1;
-    char *end = append ? redir - 1 : redir;
-    while (*name == ' ')
-        name++;
-    while (end > text && end[-1] == ' ')
-        end--;
-    *end = '\0';
-    char path[PATH_LEN];
-    if (!*name) {
-        shell_printf(sh, "usage: echo <text> [> file | >> file]\n");
-        return;
-    }
-    if (!resolve(sh, name, path) || !may_write(sh, "echo", path))
-        return;
-    FIL f;
-    FRESULT fr = f_open(&f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
-    if (fr == FR_OK) {
-        UINT bw;
-        size_t n = strlen(text);
-        text[n] = '\n';
-        fr = f_write(&f, text, (UINT)n + 1, &bw);
-        text[n] = '\0';
-        if (fr == FR_OK && bw != n + 1)
-            fr = FR_DENIED;         // card full
-        FRESULT cr = f_close(&f);
-        if (fr == FR_OK)
-            fr = cr;
-    }
-    if (fr != FR_OK)
-        shell_printf(sh, "echo: %s: %s\n", name, files_error(fr));
+    shell_printf(sh, "%s\n", args ? args : "");
 }
 
 // --- tee (a pipeline stage, shell/pipe.h) -----------------------------------------------------
@@ -561,7 +521,7 @@ const shell_cmd_t files_commands[] = {
     {"mv", cmd_mv, NULL, SHELL_PATH},
     {"rm", run_rm, NULL, SHELL_PATH},
     {"mkdir", run_mkdir, NULL, SHELL_PATH | SHELL_DIR},
-    {"echo", cmd_echo, NULL, SHELL_REDIRECT},
+    {"echo", cmd_echo, NULL, 0},
     {0},
 };
 
@@ -573,5 +533,5 @@ void files_help(shell_t *sh) {
     shell_printf(sh, "mv <from> <to>    move or rename\n");
     shell_printf(sh, "rm <path>         delete a file or an empty directory\n");
     shell_printf(sh, "mkdir <dir>       create a directory\n");
-    shell_printf(sh, "echo <text> [> file | >> file]  print, or write/append a line\n");
+    shell_printf(sh, "echo <text>       print the text (> file, >> file: into a file)\n");
 }
