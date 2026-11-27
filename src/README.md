@@ -68,5 +68,5 @@ and rewritten over USB; the rest of issue #64 is what closes that.
 ## Tests
 
 Modules marked *pure C* in their READMEs have no Pico SDK dependency and are unit tested on the
-host (`tests/`, see the top-level README). Platform access goes through small interfaces
+host (`tests/`, see [docs/building.md](../docs/building.md#unit-tests)). Platform access goes through small interfaces
 (`config_store_t`, `log_hooks_t`, `shell_io_t`), so the logic runs without the hardware.

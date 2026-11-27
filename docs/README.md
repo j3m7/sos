@@ -1,5 +1,10 @@
 # Reference Documentation
 
+The guides to using and building SOS (building, configuration, remote access, files, time, TLS,
+the editor, Lua, logging, securing a board) are listed in the
+[Documentation index](../README.md#documentation) of the top-level README. This page lists the
+datasheets and manuals.
+
 For development environment options (dependencies outside the repository, developing in a VM,
 SWD debugging), see [development.md](development.md).
 
