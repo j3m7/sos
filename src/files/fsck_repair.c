@@ -140,7 +140,7 @@ static int fix_end_mark(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c
 }
 
 static void fix_lost(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c) {
-    if ((x->write && !x->frees))
+    if (x->write && !x->frees)
         return;
     x->lost++;
     if (!x->write)
