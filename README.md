@@ -108,6 +108,10 @@ cmake --preset debug          # or: release
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
 
+The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
+flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
+is installed: `just` lists them. It is optional: each recipe runs the commands documented here.
+
 ## Flashing
 
 ```sh
@@ -260,6 +264,12 @@ machine instead of typed:
 ninja -C build provision          # from provision.conf, or the file named by $SOS_PROVISION_FILE
 tools/provision.sh other.conf     # the same, from another file; -n only builds and checks it
 ```
+
+With more than one board on USB, name the board by its serial (`version` on its console, or
+`picotool info`): `tools/provision.sh -s <serial>`, or `SOS_FLASH_SERIAL=<serial>`, the
+variable `ninja flash` uses, which `ninja provision` follows too. It is required when the
+machine has a flash key list (see [Flashing, and the flash guard](docs/development.md#flashing-and-the-flash-guard));
+without a list and without a serial, picotool writes to whichever board is attached.
 
 `provision.conf` (git-ignored; see `provision.conf.example`) lists the console password, the Wi-Fi network, hostname,
 trusted keys and the optional settings. The script builds the saved record on this
