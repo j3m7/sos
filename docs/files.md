@@ -16,6 +16,7 @@ working directory:
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
+| `sd check` | console only, on an unmounted card: check its file system, reporting problems without writing (FAT32 only for now) |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -34,6 +35,49 @@ working directory:
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
+
+## Checking the card
+
+FatFs keeps no journal, so a power cut during a write (and the log writer writes all the time)
+can leave lost clusters, a file whose size doesn't match its clusters, or clusters two files
+share. `sd check` looks for these, on the console, on an unmounted card:
+
+```
+sd unmount
+sd check
+```
+
+It refuses while the card is mounted (`the card is mounted: run 'sd unmount' first`) or a file
+is open. While it runs, nothing else reaches the card: file commands, SFTP and Lua fail as when
+there's no card, an `http` request has no TLS roots, the log writer keeps its lines in memory,
+and the other `sd` commands say `the card is being checked (sd check)`. It prints one line per
+problem and a summary, which also goes to the log (`sd: check: ...`). It reads only; repair is
+a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
+next file command mounts it again, and the log writer's once-a-minute retry doesn't. The report
+can't be written to a file on the card: `sd check > file` opens the file first, which mounts the
+card, so the check refuses and its "the card is mounted" line is what lands in the file.
+`sd check | more` works, as the pager keeps its lines in memory.
+
+The output looks like this (design: [docs/design/sd-check.md](design/sd-check.md)):
+
+```
+checking FAT32, 29.7 GB, 970752 clusters of 32 KB, encrypted (8 passes)
+pass 1/8
+/var/log/messages: 3 clusters for 70000 bytes, chain has 2
+pass 2/8
+...
+pass 8/8
+1 problem; 0 bytes lost, 0 cross-linked
+```
+
+Lines starting `note:` (a stale FSInfo free count, a chain longer than its file, the volume's
+dirty flag) are notes, not problems.
+
+A card has about a million clusters, too many to track at once beside Wi-Fi, TLS and SSH, so
+the clusters are checked a window at a time, one pass over the directory tree per window: 16 KB
+of memory gives 8 passes on a 32 GB card, and less memory more passes (it needs about 10 KB at
+least). Only FAT32 is checked so far: an exFAT card (what `sd format` makes by default) ends with
+`not checked: exFAT is not checked yet`.
 
 ## Encrypted cards
 

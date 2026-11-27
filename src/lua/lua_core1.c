@@ -27,6 +27,7 @@
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
+#include "lua/lua_date.h"
 #include "lua/lua_health.h"
 #include "lua/lua_info.h"
 #include "net/http.h"
@@ -181,12 +182,52 @@ static int l_log(lua_State *L) {
     return 0;
 }
 
+// sos.reboot([why]): restart the board (refused in the first LUA_REBOOT_MIN_S after boot). Returns
+// only when refused: nil and why.
+static int l_reboot(lua_State *L) {
+    size_t len = 0;
+    const char *why = luaL_optlstring(L, 1, "", &len);
+    if (len > LUA_REBOOT_WHY_MAX)
+        len = LUA_REBOOT_WHY_MAX;
+    lua_req.type = LR_REBOOT;
+    memcpy(lua_req.data, why, len);
+    lua_req.data[len] = '\0';
+    request();
+    if (lua_job.cancel)
+        return interrupt(L);
+    return fail(L);
+}
+
+// sos.time(): seconds since 1970 (UTC), or nil and why if the clock isn't set. sos.time(table):
+// that date and time in seconds, as os.time() (lua_date.c; no clock needed).
 static int l_time(lua_State *L) {
+    if (!lua_isnoneornil(L, 1)) {
+        lua_pushinteger(L, (lua_Integer)lua_date_from_table(L, 1));
+        return 1;
+    }
     lua_req.type = LR_TIME;
     request();
     if (lua_req.result <= 0)
         return fail(L);
     lua_pushinteger(L, (lua_Integer)lua_req.result);
+    return 1;
+}
+
+// sos.date([format [, t]]): like os.date, in UTC (lua_date.c). Without t, the time now: nil and
+// why if the clock isn't set.
+static int l_date(lua_State *L) {
+    const char *fmt = luaL_optstring(L, 1, LUA_DATE_DEFAULT);
+    int64_t t;
+    if (lua_isnoneornil(L, 2)) {
+        lua_req.type = LR_TIME;
+        request();
+        if (lua_req.result <= 0)
+            return fail(L);
+        t = lua_req.result;
+    } else {
+        t = (int64_t)luaL_checkinteger(L, 2);
+    }
+    lua_date_push(L, fmt, t);
     return 1;
 }
 
@@ -703,6 +744,7 @@ static int l_version(lua_State *L) { return info(L, LH_VERSION); }
 static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
+static int l_clock(lua_State *L) { return info(L, LH_CLOCK); }
 
 // Core 0's figures, and the script's own allocation, which core 1 keeps.
 static int l_mem(lua_State *L) {
@@ -770,7 +812,7 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
-    {NULL, NULL},
+    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops

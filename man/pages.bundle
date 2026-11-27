@@ -711,12 +711,14 @@ DESCRIPTION
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
     and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
-    sos.time, sos.uptime, sos.sleep, sos.log; timers sos.every/after/cancel
-    (a background script keeps going while timers are left);
+    sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
+    sos.sleep, sos.log; timers sos.every/after/cancel (a background script
+    keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
     request took); tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status; and
-    sos.dmesg for the system log (with a cursor, for only the newer lines).
+    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;
+    sos.dmesg for the system log (with a cursor, for only the newer lines);
+    and sos.reboot([why]), refused until the board has been up 10 minutes.
     There is no io, os or debug. Failures return nil and a message. Each
     script may allocate up to 128 KB. Full details: docs/lua.md in the
     repository.
@@ -1093,13 +1095,14 @@ SEE ALSO
     version, config, bootkey
 @@ sd
 NAME
-    sd - the SD card: information, speed, unmounting, benchmark and format
+    sd - the SD card: information, speed, unmounting, checks, benchmark, format
 
 SYNOPSIS
     sd
     sd info
     sd speed [<MHz>]                      (change: console only)
     sd unmount                            (console only)
+    sd check                              (console only)
     sd test [<KB> [keep]]                 (console only)
     sd format [exfat | fat32] [plain]     (console only)
 
@@ -1113,6 +1116,23 @@ DESCRIPTION
     file is open. No card-detect switch is wired by default, so the board
     doesn't notice a swap: unmount, swap, and the next file command mounts
     the new card.
+
+    'sd check' checks the card's file system (FAT32) for damage,
+    such as a power cut during a write leaves: lost clusters, files whose
+    size doesn't match their clusters, clusters two files share, broken
+    directory entries. It runs only on an unmounted card: run 'sd unmount'
+    first. While it runs nothing else uses the card: file commands, SFTP,
+    Lua and the TLS roots fail as if there were no card, the log files wait,
+    and the other 'sd' commands refuse. It prints one line per problem, then
+    a summary, which also goes to the log. It never writes to the card;
+    repairing is a later command. Ctrl-C stops it. Afterwards the card is
+    left as 'sd unmount' leaves it: the next file command mounts it.
+    The report can't go to a file on the card: 'sd check > file' opens the
+    file first, which mounts the card, so the check refuses ('the card is
+    mounted') and that line is what lands in the file. 'sd check | more'
+    works.
+    Only FAT32 is checked so far: on an exFAT card (what 'sd format' makes by
+    default) it ends with 'not checked: exFAT is not checked yet'.
 
     'sd test [<KB> [keep]]' is a write and read benchmark: 4 to 65536 KB,
     default 256; everything else waits until it finishes. 'keep' leaves

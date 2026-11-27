@@ -14,9 +14,27 @@ still refers to.
   command, SFTP, or the TLS root certificates. Tab completion never mounts it
   (`sdcard_mounted()`): it lists directories only once the card is mounted.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
+- **`card_open()`:** the part of a mount before `f_mount`: `disk_initialize(0)` (which
+  detects the card's kind on a real initialization), then the retries for a card locked for
+  lack of a key or of memory and the detection of a forgotten kind, and the refusal of a
+  locked or unsupported card. `mount()` and `sd check` both start with it; afterwards
+  `disk_read(0, ...)` reads the volume, decrypted on an encrypted card.
+- **`sd check`** ([design](../../docs/design/sd-check.md)): console only, refused while the
+  card is mounted or files are held. It sets `checking` for the whole check: `sdcard_mount()`
+  and `sdcard_mount_retry()` then return false without touching the card, and the other `sd`
+  subcommands refuse. It unregisters FatFs's volume (a failed mount leaves it registered, and
+  any `f_*` call would remount from it), opens the card with `card_open()`, allocates the
+  checker's state and a 16 KB cluster window (8 KB, then 4 KB, if memory is short) from
+  `HEAP_FILES`, and runs as a shell job of about 20 ms a step, reading through
+  `disk_read(0)`. `sdcard_owner_gone()` (`config reset`) sets `check_stop`, tested before every
+  step. Every end (finished, Ctrl-C, stopped, or refused once started) goes through
+  `check_end()`: the memory wiped and freed, `crypt_off()`, `STA_NOINIT`, `checking` cleared,
+  `unmounted_by_hand` set, and the last line printed and logged. The job's budget (sector
+  reads per `fsck_step()`) doubles or halves to keep a step near 20 ms. Report lines lose
+  their control characters on the way to the terminal (names come from the card).
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
-  end).
+  end), unmounting and checking.
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
 
@@ -108,3 +126,25 @@ its own working directory (`shell_t.cwd`).
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
+
+## `fsck.c`: checking the card (pure C, host tested)
+
+The checker behind `sd check` ([design](../../docs/design/sd-check.md)), which runs it only
+while the card is unmounted (see `sdcard.c` above).
+
+- **Shape:** it reads sectors through a callback and hands back report lines, so it knows
+  nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
+  5.9 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
+  reads, so a check can run as a shell job a slice at a time.
+- **What it checks (FAT32 for now; exFAT is recognised and refused):** the volume is found and
+  its boot sector judged as FatFs finds and mounts it; then the backup boot sector, FSInfo, the
+  FAT copies, every chain (range, loops, end mark, size against chain), the directory tree
+  (depth, loops, "." and "..", long-name sequences, names FatFs refuses, repeated names), and
+  the clusters: cross-linked, lost, bad. `fsck.h` lists the rules the design note left open.
+- **Windows:** a bit per cluster for a whole card doesn't fit beside everything else, so the
+  clusters are accounted a window at a time, one pass over the tree per window. The report is
+  the same whatever the window size; the tests check that.
+- **Tests:** `tests/test_fsck.c` builds FatFs for the host over a RAM disk and makes its images
+  with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
+  sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
+  checks mutated images twice with different windows and requires the same answer.

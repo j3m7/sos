@@ -4,6 +4,9 @@
 #include "core/wdog.h"
 
 #include "hardware/watchdog.h"
+#include "pico/stdlib.h"
+
+#include "core/logfile.h"
 
 #if SOS_WATCHDOG_MS > 16777
 #error "SOS_WATCHDOG_MS exceeds the RP2350 maximum of 16777 ms"
@@ -28,4 +31,12 @@ void wdog_feed(void) {
 
 bool wdog_caused_reset(void) {
     return timed_out;
+}
+
+void wdog_reboot(void) {
+    logfile_flush();                    // what the log files haven't written yet
+    sleep_ms(100);
+    watchdog_reboot(0, 0, 0);
+    for (;;)
+        tight_loop_contents();          // until the watchdog resets the chip
 }

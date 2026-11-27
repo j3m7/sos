@@ -326,8 +326,34 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_info PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_info PRIVATE lua_host)
     add_test(NAME lua_info COMMAND test_lua_info)
+    add_executable(test_lua_date test_lua_date.c ${SOS_ROOT}/src/lua/lua_date.c
+                   ${SOS_ROOT}/src/time/timeconv.c)
+    target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_date PRIVATE lua_host)
+    add_test(NAME lua_date COMMAND test_lua_date)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
+endif()
+
+# src/files/fsck.c: the card checker, on images made by FatFs itself (ff.c and ffunicode.c,
+# built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as for the
+# firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
+if (NOT DEFINED SDCARD_ROOT)
+    set(SDCARD_ROOT "${SOS_ROOT}/lib/sdcard" CACHE PATH "SD card library source")
+endif()
+set(FATFS_DIR ${SDCARD_ROOT}/src/ff15/source)
+if (EXISTS ${FATFS_DIR}/ff.c)
+    add_library(fatfs_host STATIC ${FATFS_DIR}/ff.c ${FATFS_DIR}/ffunicode.c)
+    target_include_directories(fatfs_host PUBLIC ${FATFS_DIR} ${SDCARD_ROOT}/src/include)
+    target_compile_options(fatfs_host PRIVATE -w)     # the library's code, not ours to warn about
+    add_executable(test_fsck test_fsck.c ${SOS_ROOT}/src/files/fsck.c)
+    target_include_directories(test_fsck PRIVATE ${SOS_ROOT}/src)
+    target_compile_definitions(test_fsck PRIVATE
+        FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
+    target_link_libraries(test_fsck PRIVATE fatfs_host)
+    add_test(NAME fsck COMMAND test_fsck)
+else()
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck is skipped")
 endif()
 
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
@@ -367,3 +393,4 @@ sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
+sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c)

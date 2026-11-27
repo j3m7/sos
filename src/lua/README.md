@@ -76,6 +76,11 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   `/autorun.lua` if the card has one, unless the last reset was a fault (`fault_last()`) or the
   watchdog (`wdog_caused_reset()`): a script that brings the device down then doesn't run again
   at every boot.
+- **`sos.reboot`** (`LR_REBOOT`): `serve_reboot()` logs the script's tag and reason (kern, so
+  it's in the same log as `reboot`) and restarts with `wdog_reboot()`, which `reboot` uses too.
+  It refuses in the first `LUA_REBOOT_MIN_S` (10 minutes) after boot, logging the refusal: a
+  normal restart doesn't count as a crash, so `/autorun.lua` runs again, and without the wait a
+  script that reboots at once would loop.
 - **The prompt** (`lua` alone) is a question (`shell_ask_eof`) whose answers are lines of Lua.
   Each line runs as a short shell job (`repl_step`): it hands the line to core 1
   (`lua_job.repl_line`, then `repl_cmd`), shows the output, and asks again (`>` or `>>`).
@@ -134,6 +139,14 @@ empty name is appended to its table as a list item. Core 0 (`dmesg_table()`) wri
 entries as fit (`log_history_entry()`, which also says whether entries after the cursor were
 overwritten), with the cursor after the last one and `more`; core 1 asks again from that cursor
 while `more` is set (at most 8 pages) and joins the pages into one list.
+
+## Dates: `lua_date.c`
+
+`sos.date` and `sos.time(table)` are computed on core 1 (`lua_date.c`, on `time/timeconv.c`);
+only the time now comes from core 0 (`LR_TIME`). The formatter is SOS's own, with the C locale's
+conversions, so core 1 needs neither newlib's `strftime` nor its time zone code. It's tested
+against the host's `strftime()` over years 1 to 9999 (`tests/test_lua_date.c`). `sos.clock` is a
+health table (`LH_CLOCK`) from `timesync_info()`.
 
 ## `lua_port.h`
 
