@@ -351,10 +351,12 @@ TEST(otp_warn_ecc) {
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(says("boot key slot 1 row 0x091: ECC mismatch"));
     o = dev1();
-    o.key_ecc[3] ^= 1;                      // the corrected alias differs from the stored data
+    // The corrected alias differs from the stored data, in slot 1: not the image's key, whose
+    // changed hash would be the FAIL that comes first.
+    o.key_ecc[19] ^= 1;
     statecheck_judge_otp(&o, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
-    CHECK(says("row 0x083: corrected"));
+    CHECK(says("row 0x093: corrected"));
 }
 
 TEST(otp_warn_crit1) {
@@ -515,7 +517,7 @@ TEST(failcount_fail_unusable) {
 // --- hostkey ---------------------------------------------------------------------------------
 
 TEST(hostkey_paths) {
-    statecheck_hostkey_t h = {true, true, false, false, true, "SHA256:abcdef"};
+    statecheck_hostkey_t h = {true, true, false, false, true, "SHA256:abcdef", false};
     statecheck_judge_hostkey(&h, &r);
     CHECK_EQ(r.status, HEALTH_PASS);
     CHECK(!strcmp(r.text, "sealed, as loaded; SHA256:abcdef"));
@@ -531,7 +533,7 @@ TEST(hostkey_paths) {
     statecheck_judge_hostkey(&h, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(!strcmp(r.text, "erased: new key at next boot; sshd serves the old one"));
-    statecheck_hostkey_t none = {true, false, true, false, false, NULL};
+    statecheck_hostkey_t none = {true, false, true, false, false, NULL, false};
     statecheck_judge_hostkey(&none, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
     CHECK(says("sshd isn't running"));
@@ -542,7 +544,7 @@ TEST(hostkey_paths) {
     statecheck_judge_hostkey(&none, &r);
     CHECK_EQ(r.status, HEALTH_SKIP);
     CHECK(says("not set up"));
-    statecheck_hostkey_t nosshd = {true, true, false, false, true, NULL};
+    statecheck_hostkey_t nosshd = {true, true, false, false, true, NULL, false};
     statecheck_judge_hostkey(&nosshd, &r);
     CHECK(says("sshd not started"));
 }
