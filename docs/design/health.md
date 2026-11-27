@@ -13,7 +13,7 @@ reference.
 Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware and crypto checks,
 built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in §9.2, and waits for
 the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
-waiting for its board run.
+waiting for its board run. Phase 4, the background tier: designed in §9.5, for review.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -913,6 +913,565 @@ buffer).
 
 **Board run:** as §9.3 lists, with the texts above.
 
+### 9.5 Phase 4 design: the background tier
+
+Status: designed, for Reviewer's review (#233); nothing built yet. Phase 4 adds three
+background checks (`rtc-drift`, `heap-walk`, `core1`), widens two existing ones (`resets`, with
+every reset reason the chip can name and a reset history; `supply`, with the brownout
+detector's setting), adds one flash sector (the history sector), and wraps `health state-dump`'s
+long lines. §10 item 4 listed five things; where this design does them differently it says so,
+and the list is at the end of this section.
+
+**Common rules.**
+
+- **Read only, as in phase 3.** No check writes flash or the RTC (`heap-walk` allocates and frees
+  one small block, once, for its known answer). The writes this phase
+  adds (a record in the history sector at each boot and at each time sync) belong to the boot
+  path and to `timesync.c`, not to a check, so §2.4 still holds.
+- **No gates.** None of the new checks holds KEYS or CRYPTO. A drifting crystal, a past
+  brownout, a damaged heap or a stuck core 1 doesn't make the means of making keys less
+  trustworthy: `trng` and `crypto` test those directly. A damaged heap threatens everything, but
+  refusing to seal or make keys wouldn't protect anything, and it would stop the repair
+  (`reboot` is the repair, and it needs nothing). Each FAIL text says what the board does.
+- **Texts are ASCII and under 63 characters**, as §9.4 settled (the tests fail a text that
+  reaches 63). Uncertainties are written `+-`.
+- **Judging is pure and host tested**, in a new `src/core/bgcheck.c` (`tests/test_bgcheck.c`),
+  as `statecheck.c` is for phase 3; the reads are in `bgcheck_board.c`. The heap walk's own
+  logic is pure too (`heapwalk.c`, run over synthetic arenas on the host). The history sector's
+  format is pure (`history.c`, `tests/test_history.c`), with its flash access in
+  `history_board.c`, the way `failcount.c` and `failflash.c` are split.
+
+| Check | Tier | First run | Period | Steps | Estimated longest step |
+|---|---|---|---|---|---|
+| `resets` (widened) | boot | — | — | 1 | about 0.3 ms (the history sector scanned in place, 4 KB) |
+| `supply` (widened) | background | 60 s | 60 s | 1 | one more register read |
+| `core1` | background | 10 s | 10 s | 1 | under 10 us (three words read) |
+| `heap-walk` | background | 70 s | 5 min | 1 | 0.1 to 3 ms (estimate), capped at 8 ms |
+| `rtc-drift` | background | 100 s | 10 min | 1 | under 10 us (reads what `timesync.c` recorded) |
+
+First runs avoid phase 3's (40 to 90 s). The registry then holds 22 checks with the two
+test-only gate checks, within `HEALTH_MAX` (24); phase 5 will need it raised.
+
+#### Reset reasons: what the chip can say
+
+Today three places work out the last reset's reason, each a little differently: `main.c`'s boot
+log line (fault or watchdog only), `uptime` (fault, glitch detector, watchdog) and the log
+files' boot marker (`logfile_board.c`: those three or `power-on or reboot`); `resets` judges the
+same three. Phase 4 puts the decoding in one pure function, `resetwhy_decode()` (new
+`src/core/resetwhy.c`, host tested), and all four use its result.
+
+**What the registers hold** (RP2350 datasheet §6.4 CHIP_RESET, §7.3 table 560, §12.9 watchdog):
+
+- **POWMAN CHIP_RESET** latches which chip-level reset happened last: HAD_POR (power-on),
+  HAD_BOR (brownout), HAD_RUN_LOW (the RUN pin), HAD_DP_RESET_REQ and HAD_RESCUE (the debugger),
+  HAD_GLITCH_DETECT, HAD_HZD_SYS_RESET_REQ, HAD_SWCORE_PD and the HAD_WATCHDOG_RESET_* variants.
+  The bits are read-only and stay until the next chip-level reset that resets POWMAN. POR, BOR,
+  RUN and the debugger's requests hard-reset POWMAN, so after one of those only its own bit is
+  set. A glitch detector reset doesn't reset POWMAN, so an older HAD_POR may still be set beside
+  HAD_GLITCH_DETECT.
+- **The SDK's watchdog reset** (every `reboot`, a picotool reboot or flash, `fault.c`'s reset and
+  a real timeout) resets the PSM but not POWMAN: CHIP_RESET keeps the bits of the reset before
+  it. That is why `glitchdet_boot()` already requires `watchdog_hw->reason == 0` before it
+  believes HAD_GLITCH_DETECT. The watchdog's REASON register (TIMER, FORCE) is cleared by every
+  chip-level reset, so a non-zero REASON means this boot came from the watchdog.
+- **A past brownout is latched**, in HAD_BOR, and readable at the next boot. That answers
+  Reviewer's question: the BOD register (POWMAN offset 0x1c) is only the detector's setting
+  (EN and the threshold VSEL); there is no live status bit, and while DVDD is under the
+  threshold the chip is held in reset, so there is nothing to read until it boots again.
+- **A brownout clears the POWMAN scratch registers** (table 560: "AON scratch: reset" for POR,
+  BOR and RUN) as well as the watchdog's. So after a brownout the glitch detector's counts, the
+  uptime before the reset and the last temperature and supply readings (`glitchdet.h`, scratch 0
+  to 4) are gone, as after a power cycle. Only the history sector (below) keeps anything across
+  it.
+
+**The order of decoding** (pure, so each case is a host test with register values):
+
+1. A fault record in the watchdog scratch (`fault_last()`): `fault` with its text, as today.
+2. Watchdog REASON non-zero: `watchdog` if `wdog_caused_reset()` (a real timeout), else
+   `reboot` (asked for: `reboot`, picotool, the boot ROM).
+3. Otherwise CHIP_RESET, first the bits of resets that leave older bits standing:
+   HAD_GLITCH_DETECT `glitch detector`; HAD_HZD_SYS_RESET_REQ, HAD_DP_RESET_REQ or HAD_RESCUE
+   `debugger`; HAD_WATCHDOG_RESET_* or HAD_SWCORE_PD `watchdog` (SOS sets none of the modes that
+   cause them); then HAD_BOR `brownout`, HAD_RUN_LOW `reset pin`, HAD_POR `power-on`.
+4. None of them: `unknown (CHIP_RESET 0x...)`.
+
+`main.c` logs `last reset: brownout (core supply under 0.95 V)` at warning (a fault and the
+glitch detector stay at err, a watchdog timeout at warning), `uptime` adds
+`(last reset: brownout)`, and the log files' marker names any reason, so `power-on or reboot`
+becomes one or the other. `power-on`, `reboot` and `reset pin` are not logged as a line of their
+own (they are ordinary).
+
+**Is the brownout detector on?** Yes, and SOS doesn't need to turn it on: the BOD register's
+reset value is EN = 1 with VSEL = 0b01011 (0.946 V; the datasheet's VSEL table marks 0.860 V as
+"default", but the reset value column, the §7.6.2.2 text and the SDK's header agree on 0x0b), it
+is re-enabled by every reset, and neither SOS nor the SDK writes it (no use of `powman_hw->bod`
+or `POWMAN_BOD` outside the SDK's register headers). So
+"turn on the brownout detector" in §10 item 4 is already true, and **nothing changes on USB
+power**. Raising VSEL nearer DVDD's 1.1 V would only make resets more likely on the dips a
+Wi-Fi transmission causes; the datasheet warns against going above 1.1 V. The threshold stays.
+
+**What the detector watches is DVDD, the 1.1 V core supply**, made from 3.3 V by the on-chip
+regulator, not VSYS. DVDD holds while the board's buck-boost regulator keeps 3.3 V, which it
+does well below the VSYS figures `supply` judges. So no VSYS threshold predicts a brownout, and
+a dip short enough to cause one (the detector asserts after 3 to 10 us) is invisible to
+`sensors_poll()`, which reads VSYS every 10 s. The `supply` thresholds of phase 1 stay as they
+are; a brownout is reported by its reset reason.
+
+**No separate `brownout` check.** A past brownout is a reset reason (`resets`), and how many
+there were is reset history (below); the detector's setting is one register, which `supply`
+reads:
+
+| Check | Change | Status | Text |
+|---|---|---|---|
+| `resets` | a brownout, the reset pin, the debugger and unknown join fault, watchdog and glitch detector | WARN for brownout, debugger and unknown, as for fault, watchdog and glitch; PASS for power-on, reboot and reset pin | `last reset: brownout (core supply under 0.95 V)` |
+| `supply` | the BOD register: EN = 1 and VSEL = 0x0b | WARN otherwise (nothing in SOS writes it, so this is an invariant, like `rootsecret`'s console-only FAIL) | `brownout detector off or moved (BOD 0x000000b0)` |
+| `supply` PASS | the BOD state named | — | `on USB, VSYS min 4.61 V; BOD on at 0.946 V` |
+
+#### Reset history and boot loops
+
+**Decision proposed, for review: a new flash sector, the history sector**, written the failcount
+way (records programmed into erased flash, the sector erased only when full). §11's other
+option, a POWMAN scratch register for counts plus the `--- boot` lines in
+`/var/log/kern.log`, can't see the resets that matter most here: a brownout, a power cycle and
+the reset pin all clear the POWMAN scratch registers (table 560), so a board browning out over
+and over would show no count and no loop. The log lines exist only with a card mounted, are
+written lazily (a run that crashes before the card is mounted, or before the next write, leaves
+none), and reading them back would mean parsing files on the card from a check. The scratch
+option's cost is low (no flash, no format), but it answers the wrong question.
+
+**Where it goes.** The sixth sector from the end of flash, `PICO_FLASH_SIZE_BYTES -
+6 * FLASH_SECTOR_SIZE` (0x3fa000 on dev-1's 4 MB), directly below the failcount sector. The end
+of flash then holds, from the top: keys (-1), configuration B and A (-2, -3), root secret (-4),
+failcount (-5), history (-6). (`docs/system.md`'s layout table lacks the failcount sector; phase 4
+adds both rows.) **Why it can't collide:**
+
+- **The image.** SOS's image is about 1.24 MB (debug build) and grows from the start of flash;
+  it would have to grow by about 2.7 MB to reach the sector. As `failflash.c` does,
+  `history_board.c` checks `__flash_binary_end <= XIP_BASE + HISTORY_OFFSET` at boot and, if
+  not, never reads or writes the sector (`resets` then says `history off: the image overlaps
+  its sector`), so even an image that big damages nothing it didn't already overwrite.
+- **The root secret.** Its sector is -4, two sectors up; the offsets are each a constant times
+  the sector size from the end, and a `_Static_assert` in `history_board.c` checks that
+  `HISTORY_OFFSET` is below `FAIL_OFFSET`, which is below `ROOT_OFFSET` (the offsets move to a
+  shared header, `flashlayout.h`, so the assertion sees all five).
+- **Other writers.** SOS has no partition table; picotool's `load` erases and writes only the
+  image's sectors; the boot ROM writes no flash. Only a whole-chip erase clears it, and then it
+  reads as erased, which is a valid empty history.
+
+**What older firmware does with it: nothing.** No earlier image reads or writes the sixth sector
+from the end, so a downgrade can't damage it and it can't confuse older firmware (the "config
+downgrade hazard" was about records older firmware reads). Two effects remain, both gaps rather
+than damage: boots under older firmware aren't recorded, and an older image's time sync rewrites
+the RTC without a record, which spoils the next drift measurement (see `rtc-drift`). For the
+future, the sector's header carries a format version: firmware that finds a version newer than
+its own never writes the sector and says `history sector of a newer format: not written`, so a
+later phase can change the format without the downgrade problem the config records had.
+
+**Format** (pure, `history.c`):
+
+- Page 0: a header, 16 bytes: a magic word, the format version (1), the rest 0xff.
+- Pages 1 to 15: records of 16 bytes, 240 in all, appended in order into erased slots:
+
+| Bytes | Boot record (kind 1) | RTC record (kind 2) |
+|---|---|---|
+| 0 | kind; 0xff = free | kind |
+| 1 | reason (`resetwhy` code) | calibration steps in force (int8) |
+| 2-3 | boot number (wraps at 65536) | 0 |
+| 4-7 | uptime before the reset, s; 0xffffffff unknown | 0 |
+| 8-11 | wall time at boot (Unix s), 0xffffffff if the RTC had none | the time written to the RTC (Unix s) |
+| 12 | glitch detectors fired, or the fault kind | 0 |
+| 13 | 0xff | 0xff when written; programmed to 0x00 once the RTC took the time |
+| 14-15 | CRC-16 (CCITT) over bytes 0-12 | the same |
+
+- **The uptime before a reset** comes from `glitchdet.c`'s uptime register (POWMAN scratch 2,
+  kept to the second), which survives a watchdog reset, a fault and a glitch detector reset; a
+  new accessor `glitchdet_prev_uptime_s()` returns it for any reason, where today it is kept only
+  after a detector reset. After a power-on, brownout or reset pin it is unknown.
+- **The boot record is written** once per boot, right after `timesync_boot()` (so the RTC's time
+  is known) and before `health_boot()` (so `resets` sees it): one page program, about 1 ms with
+  interrupts off, core 1 not started yet. It goes through `flashop_run()`, so `uptime`'s count of
+  flash writes counts it.
+- **Full:** the sector is erased (about 45 ms typical for this chip, 400 ms at most, well inside
+  the 8 s watchdog), the header written again, and the newest 16 boot records and the newest
+  confirmed RTC record copied back from RAM. A power cut between the erase and the copy loses the
+  history (not the board's ability to keep one): the next boot finds an erased or header-only
+  sector and starts again.
+- **Damage:** a record with a wrong CRC or an unknown kind is skipped and counted; a record past
+  the first free slot is stray (counted). Neither is used. A sector with no magic and not erased
+  (old image data, say) is erased before its first record, as the failcount sector is.
+- **Wear.** One erase per 240 boots and syncs. A boot loop of one boot every 3 s (SOS waits up to
+  2 s for USB at boot) erases it about 120 times a day, so 100 000 cycles last over two years of
+  continuous looping; a loop nobody notices for that long has worse problems. So there is no
+  loop throttling, which would need a counter somewhere else.
+
+**Boot loops.** A run is **short** when it ended within `GLITCHDET_STABLE_S` (180 s): by its
+uptime before the reset when that is known, else by the wall times of its boot record and the
+next one when both are set, else it doesn't count as short. A loop is the last
+`GLITCHDET_GUARD_RESETS` (3) resets in a row, none of them a `reboot` (one asked for), each
+ending a short run. Any reason counts, the brownout first among them; the glitch detector's own
+guard stays as it is (it decides whether to arm the detector; this only reports).
+
+**Shown where.** The judging joins `resets` (boot tier: it reads the history in place, about
+0.3 ms), whose text stays one line:
+
+| Status | When | Text |
+|---|---|---|
+| WARN | a loop | `3 short runs in a row (brownout, brownout, power-on)` |
+| WARN | the last reset was a fault, watchdog, glitch detector, brownout, debugger or unknown (as above) | `last reset: brownout (core supply under 0.95 V)` |
+| WARN | the history has damaged or stray records | `history: 2 damaged records skipped; last reset: reboot` |
+| WARN | the image overlaps the sector, or the sector is of a newer format | `reboot; history off: the image overlaps its sector` |
+| PASS | otherwise | `power-on; 41 boots recorded, no loop` |
+
+The list itself is a new subcommand, `uptime history` (any shell; reads only): one line per
+recorded boot, newest first, with its time, reason, the uptime before it and the boot number, and
+the RTC records marked. `man/uptime.txt` gets it. (The name is a question for Reviewer.)
+
+#### `rtc-drift`: the RTC's rate and the crystal's
+
+**Two clocks, two measurements.** Between syncs the system clock (`gettimeofday()`, the always-on
+timer) counts the RP2350's 12 MHz crystal (XOSC); the RTC is read only at boot. So the step a
+sync makes (`timesync_info().step_ms`) measures the XOSC when the last sync was in this uptime,
+and a mix of the RTC (until the boot) and the XOSC (since) when the board restarted in between.
+That is why `docs/time.md`'s calibration procedure restarts the board before the second sync.
+The check measures each clock separately:
+
+- **The RTC:** at every accepted sync, before `apply_time()` writes the RTC, it reads the RTC
+  (`rtc_read()`, one I2C read, about 1 ms) at the NTS second boundary that `apply_time()`
+  already waits for. The RTC's error is its reading minus that second; the interval is that
+  second minus the time written at the previous sync, from the newest confirmed RTC record in
+  the history sector. Rate in ppm = error / interval, positive when the RTC runs fast (as
+  `docs/time.md` defines it).
+- **The XOSC:** when the previous accepted sync was in this uptime, its rate is minus the step
+  over the time between the two syncs (a negative step means the clock had run ahead).
+
+This also covers what phase 2's `clocks` can't see (§9.2): FC0 measures every clock against
+clk_ref, which comes from the same crystal, so a crystal that is off moves everything together.
+The XOSC measurement is the first that compares the crystal with an outside reference.
+
+**How exact.** The RTC counts whole seconds, so one reading is good to 1 s. Its calibration adds
+a sawtooth: in its default mode the PCF8523 applies the whole correction once every two hours
+(a pulse a minute until done), so between corrections it runs at the uncorrected rate, and its
+error swings by up to |steps| x 4.34 ppm x 7200 s, 31 ms a step (0.66 s for dev-1's 21 steps).
+The uncertainty is taken as 1000 ms + 32 ms x |steps|, plus half of each sync's round trip
+(tens of ms). Polling the seconds register for its tick during `apply_time()`'s wait would take
+the 1 s down to a millisecond only when the tick falls in that wait, and the sawtooth would stay,
+so it isn't done. The XOSC's uncertainty is half the sum of the two syncs' round trips.
+
+**The record.** `timesync.c` keeps the latest measurement in RAM for `timesync_drift()`:
+whether each part is valid, the error and its uncertainty (ms), the interval (s) and the
+calibration steps in force. It is computed in `apply_time()` because only there are the NTS
+time and the RTC's reading taken at the same moment; the check reads it (a callback from
+`timesync.c` into `health` would need a second way of starting a check, for no gain: a
+measurement waits at most 10 minutes to be judged, and `health run rtc-drift` judges it at once).
+The pure arithmetic (ppm, uncertainty, the suggested `time cal` value) goes in `timeconv.c`
+beside the calibration steps; the judging in `bgcheck.c`.
+
+**The baseline across restarts** is the RTC record in the history sector, written before
+`rtc_write()` and confirmed (byte 13 programmed to 0) after it read back. A record left
+unconfirmed (the write failed, or power went in between) ends the baseline: the next sync only
+starts a new one. The baseline is also unusable, and the next sync starts a new one, when the RTC
+reported its oscillator stopped (`RTC_NOT_SET`) or was absent, or when the calibration steps
+differ from the record's (`time cal` changed the rate in between).
+
+**Thresholds.**
+
+- **RTC: WARN beyond 20 ppm** (about 1.7 s a day). A 32.768 kHz tuning-fork crystal is typically
+  specified to +-20 ppm at 25 C, and its temperature curve (about -0.034 ppm/C^2) costs at most
+  about 3.4 ppm between 15 and 35 C, so a healthy RTC, calibrated or within its crystal's
+  tolerance, stays inside it; beyond it the crystal's load doesn't match (the PCF8523's CAP_SEL,
+  which `rtc.c` leaves as it finds it) or the calibration is wrong. The Adalogger's crystal part
+  isn't documented in this repository; the board run's figure checks the assumption. The WARN
+  text suggests the `time cal` value that would correct it: the calibration in force plus the
+  measured rate.
+- **RTC beyond `time cal`'s range** (-277.76 to 273.42 ppm, `timeconv_cal_steps()`): still WARN,
+  saying so. No FAIL: nothing on the board depends on the RTC's accuracy beyond what a sync
+  repairs.
+- **XOSC: WARN beyond 65 ppm.** The Pico 2 W's crystal is the ABM8-272-T3 (the hardware design
+  guide; datasheet §8.2.1.1): +-30 ppm tolerance, +-30 ppm stability
+  over temperature, +-5 ppm aging in the first year.
+- **XOSC: FAIL beyond 1000 ppm**: the RP2350's clocks are designed with margin for up to 1000 ppm
+  of XOSC error (datasheet §8.1.2.3); clk_sys runs at its 150 MHz maximum, so beyond that it runs
+  out of specification. Nothing is gated.
+- **Judged only when sure.** A part is WARN only when |rate| minus its uncertainty is over the
+  threshold, PASS only when |rate| plus its uncertainty is within it, and otherwise "too short to
+  judge". With a 1 s reading, an uncalibrated RTC 92 ppm fast shows as WARN after about 4 hours
+  between syncs; a calibrated one passes after about a day (1.7 s over 20 ppm is 85 000 s).
+
+| Status | When | Text (dev-1 or example) |
+|---|---|---|
+| PASS | the RTC within 20 ppm, sure; the XOSC within 65 ppm or not measured | `RTC +0.9+-19 ppm in 24 h, cal 91.1; XOSC -1.8+-0.6 ppm` |
+| WARN | the RTC surely beyond 20 ppm | `RTC +92.1+-13 ppm in 22 h, no cal: try time cal 92` |
+| WARN | the same, calibrated | `RTC +23.4+-19 ppm in 24 h, cal 91.1: try time cal 114.5` |
+| WARN | beyond `time cal`'s range | `RTC beyond time cal's range: +310+-12 ppm in 22 h` |
+| WARN | the XOSC surely beyond 65 ppm | `XOSC +71.2+-0.9 ppm in 26 h (crystal: 30+30 ppm)` |
+| FAIL | the XOSC surely beyond 1000 ppm | `XOSC +1210+-3 ppm: beyond the chip's 1000 ppm clock margin` |
+| SKIP | the latest measurement too short to judge | `RTC +5+-45 ppm in 6 h, no cal: too short to judge` |
+| SKIP | one sync since the baseline began (or none) | `one sync since the RTC was set: drift after the next` |
+| SKIP | the calibration changed since the baseline | `calibration changed since the RTC was set; next sync` |
+| SKIP | no RTC; the XOSC part alone, judged as above when measured | `no RTC (Adalogger not answering): XOSC -1.8+-0.6 ppm` |
+
+The calibration in force is always in the text, as Reviewer asked: `no cal`, or the value as
+`time cal` takes it (positive slows the RTC). The XOSC part is dropped from a text that wouldn't
+fit, and `health state-dump` prints both parts in full. `time` gains a `drift:` line with the
+same figures, so the procedure in `docs/time.md` no longer needs the arithmetic by hand (the doc
+is updated with it).
+
+**Expected on dev-1.** Its configuration was reset on 2026-11-25, which cleared the calibration
+(`time` shows `cal: off`), and the RTC was 92 ppm fast before. So after a sync, a wait of four
+hours or more (a restart in between is fine) and a second sync: WARN
+`RTC +92+-13 ppm in 22 h, no cal: try time cal 92`, if the crystal is as it was. After
+`time cal 92` and a day between two more syncs: PASS with `cal 91.1`. That is the verification of
+`time cal` that the earlier work couldn't do. Before two syncs it is SKIP.
+
+**A known limit, from the dev-1 queue.** An older image that syncs rewrites the RTC with no
+record. Back on a phase 4 image, the first measurement then uses the stale baseline and reads too
+small (the RTC was set right in between). Nothing can detect it (older firmware leaves no trace
+in the sector or the RTC). The board run starts its baseline with a `time sync` on the phase 4
+image, and `docs/time.md` says to sync twice after running older firmware.
+
+#### `heap-walk`: newlib's heap, checked in one bounded step
+
+**What the allocator is.** The firmware links Arch's arm-none-eabi newlib 4.6.0 (full newlib, not
+nano: `nm` shows `__malloc_av_`, `__malloc_sbrk_base` and `_mallinfo_r` in `sos.elf`), wrapped
+by the SDK's `pico_malloc` (its own mutex around malloc, calloc, realloc and free). Inside,
+newlib's `mallocr.c` (Doug Lea's malloc 2.6.4) takes `__malloc_lock()`, which `heap.c` makes a
+recursive mutex. Chunks lie end to end from the start of the arena to the top chunk; each starts
+with a size word whose bit 0 says whether the chunk before it is in use; a free chunk also holds
+the doubly linked list pointers of its bin and repeats its size at its end.
+
+**The options**, as asked, with Reviewer's pointer that walking allocator metadata while core 1
+allocates is unsafe unless the walk holds the allocator's lock and stays under 10 ms:
+
+1. **`heaptag` and `mallinfo()` consistency only.** Safe and simple: the sum of the tags' bytes
+   can't exceed what `mallinfo()` says is in use; in use plus free must equal the arena; the arena
+   can't exceed the heap. But these catch accounting mistakes, not damage: a block overrun that
+   overwrites its neighbour's size word changes none of the totals until malloc trips over it.
+   And `mallinfo()` itself already walks every bin without checking a pointer, under the same
+   lock (`heap` calls it every minute): damage to a free list shows today as a hard fault inside
+   `mallinfo()`, with `fault.c`'s record, not as a finding.
+2. **Canaries on `heaptag` blocks** (a word before and after each block, checked on release and
+   by a walk of a list of live blocks). It needs no newlib internals, but it changes `heaptag`'s
+   design (blocks carry no header today, and freeing needs no size), costs 8 to 16 bytes on each
+   of the thousands of small blocks a Lua script makes, needs a list of live blocks to walk
+   (more memory, and its own lock between cores), and sees only tagged blocks: wolfSSL's are
+   tagged, but newlib's own and the SDK's aren't.
+3. **A validated walk of newlib's chunks and bins, under its lock, in one step.** It needs
+   newlib's internals (the chunk layout, the bin array `__malloc_av_`, `__malloc_sbrk_base`),
+   which a newlib change could alter. It is the only one that finds damage before malloc does.
+
+**Recommended: option 3, with option 1's totals added and three guards that turn a silent
+breakage into a loud one.** The internals it needs have not changed in newlib's `mallocr.c` for
+over twenty years, and every one is checked:
+
+- **At build time:** `_NEWLIB_VERSION`'s major must be 4 and `MALLOC_ALIGNMENT` 8, or the check
+  isn't built and reports SKIP `not newlib 4: walk not built`; another minor version than the
+  one tested (4.6) gives a compiler `#warning` naming it, which the strict-warnings build shows
+  (picolibc, which the SDK can also use, has no `_NEWLIB_VERSION` and gets the SKIP).
+- **At its first run, a known answer:** outside the lock, the check allocates a block of a known
+  size (and frees it after the walk); the walk must find that block's chunk, in use, with the
+  size newlib's rounding gives. If it doesn't, the layout isn't what the code assumes: the check
+  logs it once at warning and reports SKIP `newlib's heap layout not recognised: walk off` from
+  then on, and never FAILs on it.
+- **Every run cross-checks two views:** the address-order walk and the bin lists must agree on
+  the number and total size of free chunks, and the top chunk must end where `sbrk(0)` says the
+  heap ends. A layout misread can't agree with itself by chance.
+
+**Why one step and not several.** §10 item 4 said "in steps". A walk can only be trusted while
+nothing allocates, so it holds the lock; a walk resumed after releasing it would continue from a
+chunk that may have been merged, split or freed meanwhile, by core 1's script or by core 0's own
+main loop between two passes (the mutex is recursive and owned by the core, so core 0 never even
+waits for it). Restarting whenever anything allocated, with a counter in `__malloc_lock()`,
+would never finish under a busy script. A whole walk is cheap: about 10 to 20 cycles a chunk in
+SRAM, so the worst case, the heap's 380 KB cut into 16-byte chunks (about 24 000), is about 3 ms
+at 150 MHz, and an idle board's few hundred chunks take tens of microseconds. So one step holds
+the lock for the whole walk, checks the time every 256 chunks, and if it has taken 8 ms it
+releases the lock and reports SKIP `walk over 8 ms at N chunks: not judged; next run`. While it
+runs, core 1 blocks only if its script allocates, for at most those 8 ms.
+
+**Lock order, which the code must keep:** the walk takes `__malloc_lock()`'s mutex alone and must
+not call malloc or free while holding it. `pico_malloc` takes its own mutex first and then
+newlib's, so core 1 may hold the SDK's mutex and wait for newlib's while core 0 walks; if the walk
+then called malloc, core 0 would wait for the SDK's mutex: a deadlock. The known-answer block is
+allocated before the lock is taken and freed after it is released. Nothing allocates from an
+interrupt (`heap.c`), so an interrupt on core 0 during the walk can't touch the heap.
+
+**What it checks**, every chunk from the arena's start to the top:
+
+- the size is a multiple of 8, at least 16, and the chunk ends inside the arena;
+- a chunk marked free (by the next chunk's in-use bit) has its size repeated at its end, and two
+  free chunks are never neighbours (newlib merges them);
+- the walk lands exactly on the top chunk, which ends at `sbrk(0)`;
+- then each of the 128 bins' lists: every pointer inside the arena and aligned, pointing at a
+  chunk the walk saw as free, each node's back pointer naming the node before it, and no more
+  nodes than the walk's free chunks (so a cycle ends);
+- free chunks: the walk's count and bytes equal the bins'; the sum of `heaptag`'s tags is at most
+  the walk's bytes in use (a tag that underflowed, from a double release, shows as a huge sum).
+
+| Status | When | Text (example) |
+|---|---|---|
+| PASS | every rule holds | `1312 chunks, 41 free (301 KB, largest 280 KB); 0.4 ms` |
+| FAIL | a chunk's size or end is wrong | `heap damaged: chunk 0x2001f3a8 size 0x00000003; reboot` |
+| FAIL | a bin's pointer is outside the heap, misaligned, or names a chunk in use | `free list: bin 34 points outside the heap (0x00000c41)` |
+| FAIL | the two views disagree | `free chunks: walk 41 (88 KB), bins 40 (86 KB); reboot` |
+| WARN | the tags' sum is over the bytes in use | `tags hold 312 KB, heap in use 120 KB: a double release?` |
+| SKIP | the walk took 8 ms | `walk over 8 ms at 9216 chunks: not judged; next run` |
+| SKIP | the layout isn't recognised, or the build has no newlib 4 | `newlib's heap layout not recognised: walk off` |
+
+A FAIL also logs, at err, the chunk's address and the four words around it, so the record
+survives the reboot it asks for (in `/var/log/kern.log`, if a card is in). The check doesn't
+reboot by itself (§2.4). The PASS text gives the **largest free block**, which nothing shows today
+(`mem` gives free bytes, and a TLS handshake needs its memory in blocks, not in total).
+
+**Expected on dev-1:** PASS with a few hundred chunks and a large top chunk, well under 1 ms; the
+figures are measured by the board run.
+
+#### `core1`: a heartbeat while a script runs
+
+**What a stuck core 1 does to the board today** (Reviewer's question), from `lua_core1.c` and
+`lua_host.c`:
+
+- **Nothing on core 0 waits for core 1.** Core 0 answers a script's requests from the main loop
+  and never blocks on it (`lua_host_poll()` polls `lua_req`; the shell job polls the job's state).
+- **Ctrl-C and `lua stop`** only set `lua_job.cancel`; the instruction-count hook (every 1000
+  Lua instructions, `HOOK_EVERY`) raises the error. A shell job stops waiting at once on Ctrl-C
+  (the prompt comes back; the script is then "stopping" in `lua ps`), but a script inside a long
+  C call (a pathological `string.find` pattern, `string.rep` of megabytes) runs no Lua
+  instruction, so the hook doesn't run and it doesn't stop until the call returns.
+- **What stays blocked:** no other script can start (`a script is already running`) until it
+  ends, and its memory (the Lua state and the 32 KB stack) stays held. Flash writes still work:
+  core 0 pauses core 1 with the lockout interrupt, which core 1 takes even inside a C loop (Lua
+  never turns interrupts off).
+- **The watchdog doesn't cover core 1, and shouldn't:** it is fed by core 0's main loop, which
+  keeps running, and a stuck script is no reason to restart a board that serves SSH. If core 1
+  ever held the heap's lock for good, core 0's next malloc would block, the loop would stop, and
+  the watchdog would reset the board with `last reset: watchdog timeout`. A hard fault on core 1
+  already resets the chip with `fault.c`'s record (`hard fault on core 1 at ...`).
+
+So the check's FAIL says what the user loses: scripts, until the call returns or a reboot.
+
+**The heartbeat.** A new shared word pair in `lua_bridge.h`: `beats`, which core 1 increments in
+the hook (every 1000 instructions, or every instruction after a stop) and in its own wait loops
+(`sos.sleep()`'s 5 ms loop, the timers' wait), and `waiting`, which core 1 sets while it waits
+for core 0 (`request()`: an HTTP request, a ping of up to 100 s, a file read), for room in the
+output buffer, or for the prompt's next line, and clears after. One increment per 1000
+instructions costs nothing measurable. Core 0's check reads `lua_job.state`, `lua_job.cancel`,
+`beats` and `waiting`, and keeps in its own state the last `beats` seen and when it last moved.
+
+**Rules.** A long C call (`sos.http` waiting on core 0) reads as waiting, not as a hang; a silent
+core 1 not waiting is a long C call or stuck, which the check can't tell apart until a stop is
+asked for. The 30 s WARN line is three runs with no beat; a normal C call in a script (sorting,
+JSON, hashing a few hundred KB) is well under a second.
+
+| Status | When | Text (example) |
+|---|---|---|
+| PASS | a script runs and `beats` moved since the last run | `loop.lua running 42 s, 9800 hooks/s` |
+| PASS | core 1 is waiting for core 0, the output or a line | `loop.lua waiting for core 0 (http) for 12 s` |
+| WARN | no beat for 30 s, not waiting, no stop asked | `loop.lua in one C call for 31 s: Ctrl-C waits for it` |
+| FAIL | a stop was asked 10 s ago or more, and no beat since and still running | `core 1 ignored stop for 40 s: no scripts until reboot` |
+| PASS | the script ended after this check had WARNed or FAILed (logged as the change back) | `core 1 free again: script ended after 52 s` |
+| SKIP | no script running (the usual case) | `no script running` |
+
+**Expected on dev-1:** SKIP, unless a script runs (`/autorun.lua` would show as running).
+
+#### `health state-dump`'s long lines
+
+`dump()` in `statecheck_board.c` formats into a 112-byte buffer, so the root secret, failcount,
+host key and boot-key-slot lines lose their tails. Phase 4 formats into 256 bytes and prints
+through a pure `statecheck_wrap()` that breaks a line at the last `; ` or `, ` before column 79,
+continuing with a two-space indent (a word longer than the line is cut hard), host tested. Phase
+4's own dump lines (CHIP_RESET and the watchdog's REASON as read, the reason decoded, the BOD
+register, the last 8 history records, the drift record, the heap walk's figures and `core1`'s
+counters) go through the same function.
+
+#### Test commands and tests
+
+**Test commands** (`SOS_TEST_COMMANDS`):
+
+- **`crash brownout`**: a real brownout reset, by writing the BOD register's VSEL to 0b10001
+  (1.204 V, above DVDD's 1.1 V; with the POWMAN password). The detector resets the chip within
+  about 40 us (programming and assertion delays, datasheet §7.6.2.3), and the reset puts the
+  register back to its default, so the next boot is ordinary. That is exactly why the datasheet
+  says not to set it above the supply; Reviewer should confirm that a deliberate reset this way
+  is acceptable on dev-1 (it is the same reset as a power dip, and clears what a power cycle
+  clears).
+- **`sos.spin(ms)`** in Lua, test builds only: a C loop on core 1 that runs no Lua instruction,
+  to make a long C call on purpose.
+- **`mem smash`**: overwrites the size word of a block held with `mem hold`, so `heap-walk` has
+  real damage to find. The board is rebooted right after the check, before anything frees near
+  that block.
+- **`health history-fill`**: appends test records (kind 0x7f, shown as `test`, never judged)
+  until one slot is left, so the next boots exercise the erase and the copy back.
+
+**Host tests:** `resetwhy_decode()` for every CHIP_RESET bit alone, with a stale HAD_POR beside
+HAD_GLITCH_DETECT, and under each watchdog REASON; the history format (append, full and the copy
+back, damaged and stray records, a newer version left unwritten, an unconfirmed RTC record); the
+boot-loop rule (known and unknown uptimes, a `reboot` breaking the row); the drift arithmetic
+(signs, the sawtooth term, "too short to judge" at its edges, the suggested `time cal` value, the
+range); the heap walk over synthetic arenas built in newlib's layout (a clean one, then each
+rule broken in turn: a size not a multiple of 8, a missing footer, neighbouring free chunks, a
+bin pointer outside, a cycle, a back pointer wrong, a top chunk short of `sbrk(0)`), and its
+8 ms cut-off with a fake clock; `core1`'s rules with made-up counters and times; the wrapping.
+
+**Board run** (dev-1 slot; no OTP writes; config untouched):
+
+1. `health run` and `health state-dump`: the new rows as above; CHIP_RESET and REASON as read
+   after the flash (expect `reboot`: picotool goes through the watchdog). `ssh` "longest" and
+   `mem` before and after.
+2. **Reset reasons:** `reboot` (`reboot`, no WARN), `crash fault` (`fault`), `crash hang`
+   (`watchdog`), `crash brownout` (`last reset: brownout` in the boot log and `uptime`, `resets`
+   WARN, HAD_BOR in `state-dump`, REASON 0). If the user can unplug and replug the board: the next
+   boot must read `power-on`; this also shows whether an ordinary plug-in ever sets HAD_BOR (if it
+   did, the decoder would call a plug-in a brownout; question below).
+3. **History and loops:** `uptime history` lists the boots of step 2 with their reasons and
+   uptimes; three `crash fault`s, each within 3 minutes of its boot: `resets` WARN
+   `3 short runs in a row (fault, fault, fault)`; a fourth boot left up: the next boot PASSes.
+   `health history-fill`, then two reboots: the erase, and the last 16 boots copied back.
+4. **`heap-walk`:** idle; then with a script allocating hard on core 1
+   (`lua -b` of a loop building and dropping tables) and an SFTP transfer: PASS each time, with
+   the walk's time; then `mem hold`, `mem smash`, `health run heap-walk`: FAIL with the chunk
+   named and the err line in `dmesg`; reboot at once.
+5. **`core1`:** a `while true do end` script: PASS with hooks/s; `sos.http.get` of
+   https://letsencrypt.org/: PASS waiting; `sos.spin(45000)`: WARN after 30 s; `sos.spin(60000)`
+   then `lua stop` at once: FAIL after 10 s, then PASS `core 1 free again` when the spin returns.
+6. **`rtc-drift`** (spans the slot, or two): `time sync` (baseline), wait four hours or more
+   (rebooting is fine), `time sync`: WARN with the uncalibrated rate (`no cal`); then
+   `time cal <that rate>`, `time sync`, a day, `time sync`: PASS with the calibration named. The
+   XOSC part needs two syncs in one uptime, an hour or more apart.
+
+**Cost estimate:** text about +6 KB, bss under 200 bytes (the drift record, the heartbeat words,
+the history's RAM copy of the newest 16 records, 256 bytes, kept static), one 4 KB flash sector.
+
+#### Changes to §10 item 4, and questions for Reviewer
+
+**Changes from §10 item 4:**
+
+- **"The brownout detector" needs no turning on:** it is on from reset at 0.946 V and nothing
+  writes it. The phase reports brownout resets and checks the setting instead, and adds no
+  `brownout` check: reasons go to `resets`, the setting to `supply`, the count to the history.
+  No new VSYS threshold, since the detector watches DVDD.
+- **The heap walk is one bounded step, not a stepwise walk**, because a walk resumed after the
+  lock is released can't be trusted. It still follows the 10 ms rule (cut off at 8 ms).
+- **RTC drift measures two clocks**: the RTC against NTS, and the RP2350's crystal from the steps
+  between syncs in one uptime, which is the measurement §9.2 left to this phase.
+- **Reset history is not a check of its own:** it is judged by `resets`, listed by
+  `uptime history`, and stored in a new sector that also holds the RTC's baseline.
+
+**Questions:**
+
+1. The history sector (sector -6) as proposed, or the POWMAN scratch option despite what it
+   can't see?
+2. A newlib-internal heap walk with the guards above, or only option 1's totals (and no walk)?
+3. `crash brownout` by raising VSEL above DVDD: acceptable on dev-1?
+4. If the board run finds HAD_BOR set after an ordinary USB plug-in, should `resets` treat a
+   brownout in the first boot after power-up as a power-on (losing real brownouts at plug-in), or
+   keep reporting it?
+5. `uptime history` as the command's name, or something else (`resets`)?
+6. RTC WARN at 20 ppm and XOSC at 65 ppm: right, or should dev-1's measurements set them?
+7. dev-1's 92 ppm suggests the PCF8523's CAP_SEL (7 pF from reset) doesn't match the Adalogger's
+   crystal (a crystal loaded with less capacitance than it is cut for runs fast, by tens of
+   ppm or more). Changing CAP_SEL is outside
+   `health`; should phase 4's board run try it, or leave it for a separate issue?
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -927,7 +1486,8 @@ buffer).
    flags against `version`. Reads only, never writes OTP. Design: §9.3; as built: §9.4.
 4. **Background tier:** RTC drift as ppm after each NTS sync, the brownout detector and
    `last reset: brownout`, a heap free-list walk in steps, a core 1 heartbeat while a script
-   runs, and reset history.
+   runs, and reset history. Design: §9.5 (the walk is one bounded step, the detector needs no
+   turning on, and the reset history is judged by `resets`; §9.5 lists the changes).
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check.
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
@@ -939,4 +1499,7 @@ buffer).
   have one).
 - **Reset history (phase 4):** either a flash sector written like the failcount sector (bits
   cleared, rarely erased), or a POWMAN scratch register for the count plus the `--- boot`
-  lines already in `/var/log/kern.log`.
+  lines already in `/var/log/kern.log`. *Decision proposed, for review (§9.5):* the flash
+  sector, the sixth from the end of flash, below the failcount sector, because a brownout, a
+  power cycle and the reset pin clear the POWMAN scratch registers, and the log lines need a
+  mounted card. It also keeps the RTC drift check's baseline across restarts.
