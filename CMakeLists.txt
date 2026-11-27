@@ -225,6 +225,7 @@ set(SOS_SOURCES
     src/ssh/sftp_fs.c
     src/files/sd_stubs.c
     src/files/sdcard.c
+    src/files/fsck.c
     src/files/files.c
     src/files/path.c
     src/files/sdcrypt.c
