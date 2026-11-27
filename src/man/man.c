@@ -6,7 +6,8 @@
 // `man install`, which downloads them from GitHub over HTTPS. The firmware holds no page.
 //
 // `man <topic>` shows a page in the pager (edit_view_file: the file is read as you move, so a
-// page can't send the terminal a sequence). `man` alone lists the pages: a job (shell/shell.h)
+// page can't send the terminal a sequence). When the output is piped (`man wifi | head 12`) it
+// prints the page as `cat` does instead (files_cat, a job). `man` alone lists the pages: a job (shell/shell.h)
 // that reads the directory, sorts the names and prints each page's one-line description from
 // its NAME section, a few pages per pass. Without any pages, both offer to download them.
 //
@@ -529,6 +530,10 @@ static void show_page(shell_t *sh, const char *topic) {
     }
     if ((fi.fattrib & AM_DIR) || fi.fsize == 0) {
         shell_printf(sh, "man: %s: not a page\n", path);
+        return;
+    }
+    if (shell_output_piped(sh)) {           // `man wifi | head 12`: the text, not the pager
+        files_cat(sh, "man", path);         // a job: a page can be long
         return;
     }
     char name[MAN_TOPIC_MAX + 8];
