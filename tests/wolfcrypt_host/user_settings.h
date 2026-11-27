@@ -3,7 +3,8 @@
 //
 // wolfCrypt built for the host tests: only what the device code under test uses (AES-XTS and
 // AES-GCM for src/files/sdcrypt.c, HKDF-SHA256 for src/core/keyprov.c, SHA-1/256/384/512 and
-// HMAC for src/lua/lua_hash.c), with the same AES options as config/user_settings.h.
+// HMAC for src/lua/lua_hash.c, and Ed25519 and X25519 for src/core/selftest.c's known answers),
+// with the same AES and Curve25519 options as config/user_settings.h.
 
 #define WOLFCRYPT_ONLY
 // Align wolfCrypt's internal buffers. Without it, GHASH's 64-bit loads from a local byte array
@@ -29,3 +30,9 @@
 #define NO_PWDBASED
 #define HAVE_HKDF
 #define NO_SIG_WRAPPER
+#define HAVE_CURVE25519     // and Ed25519 (which needs SHA-512): src/core/selftest.c
+#define HAVE_ED25519
+#define HAVE_ED25519_KEY_IMPORT
+#define HAVE_ED25519_KEY_EXPORT
+#define HAVE_ED25519_MAKE_KEY
+#define WOLFSSL_ED25519_STREAMING_VERIFY
