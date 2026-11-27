@@ -529,8 +529,8 @@ DESCRIPTION
     The pages live on the SD card as /man/<topic>.txt; the firmware holds
     none. When there are none, 'man' offers to download them. 'man install'
     downloads them from the SOS repository on GitHub over HTTPS (the board
-    needs the network and the time): one file, man/pages.bundle, from the
-    commit this firmware was built from so the pages match it, or from main
+    needs the network): one file, man/pages.bundle, from the commit this
+    firmware was built from so the pages match it, or from main
     if that commit's pages aren't on GitHub. Each page is written to
     /man/<topic>.~new and renamed into place when complete, so a download
     that fails midway leaves the earlier pages whole. The other way is
@@ -692,6 +692,29 @@ DESCRIPTION
 
 SEE ALSO
     logout, setup, config
+@@ ping
+NAME
+    ping - is a host reachable?
+
+SYNOPSIS
+    ping <host> [<count>]
+
+DESCRIPTION
+    Sends ICMP echo requests to a name or an IPv4 address, one a second: 4 of
+    them, or <count> (1 to 65535). Each reply prints a line with the address
+    it came from, its sequence number, TTL and round-trip time:
+
+        reply from 192.168.1.1: seq=1 ttl=64 time=4.2 ms
+
+    A request with no reply within the second prints 'seq=2 timeout', and a
+    later reply to it is ignored. Then a summary: sent, received, loss, and
+    the lowest, average and highest round-trip time. A job: Ctrl-C stops it
+    and prints the summary. Every shell can run one at the same time, and the
+    board still answers pings itself meanwhile. Refused while Wi-Fi isn't
+    connected.
+
+SEE ALSO
+    net, wifi
 @@ pwd
 NAME
     pwd - show the working directory
