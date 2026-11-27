@@ -18,7 +18,7 @@
 // (docs/securing-a-board.md, decision 5). A DETECTOR RESET NOBODY FORCED IS THEREFORE A FINDING:
 // see "Glitch detector resets" in docs/development.md.
 //
-// What it keeps across a detector reset is in the POWMAN scratch registers 0 to 3, which that
+// What it keeps across a detector reset is in the POWMAN scratch registers 0 to 4, which that
 // reset doesn't clear (it does clear the watchdog's, and with them the fault record):
 // the count of detector resets since power-on, the count of them in a row soon after boot, the
 // uptime, so the next boot can say how long the board had been up, and the latest chip
