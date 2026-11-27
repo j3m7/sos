@@ -16,7 +16,7 @@ typedef enum {
                     // network or not: card encryption, sealed records, passwords, the RNG
     HEAP_LUA,       // the script's state, its source and core 1's stack
     HEAP_EDIT,      // the editor's text
-    HEAP_FILES,     // ls, cat, cp, format
+    HEAP_FILES,     // ls, cat, cp, format, sd check
     HEAP_HTTP,      // http requests
     HEAP_TIME,      // NTS time sync
     HEAP_PING,      // ping runs

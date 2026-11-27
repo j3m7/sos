@@ -302,6 +302,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
         shell_printf(sh, "                  showing the card's key once, to store offline\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
+        shell_printf(sh, "sd check          check the unmounted card's file system (reads only)\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -2243,6 +2244,7 @@ static const shell_word_t sd_words[] = {
     {"test", NULL, SHELL_ADMIN},
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
+    {"check", NULL, SHELL_ADMIN},
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
