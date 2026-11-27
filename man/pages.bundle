@@ -451,10 +451,12 @@ DESCRIPTION
     Over SSH, ends the session. On the console, locks it: it asks for the
     console password again before taking any command (not possible while no
     password is set). The console also locks itself when the USB terminal
-    disconnects (the terminal program drops DTR or the cable is unplugged) and
-    after 10 minutes with nothing typed; either lock ends whatever the console
-    was running: a copy, 'sd test', a Lua script, the chat, the editor (unsaved
-    text is lost). The command history of the session is wiped.
+    stays disconnected for a second (the terminal program drops DTR or the
+    cable is unplugged; a shorter drop, as around a port being reopened,
+    doesn't lock) and after 10 minutes with nothing typed. Either lock ends
+    whatever the console was running: a copy, 'sd test', a Lua script, the
+    chat, the editor (unsaved text is lost). The command history of the
+    session is wiped.
 
 SEE ALSO
     passwd, intro
@@ -770,11 +772,18 @@ DESCRIPTION
         reply from 192.168.1.1: seq=1 ttl=64 time=4.2 ms
 
     A request with no reply within the second prints 'seq=2 timeout', and a
-    later reply to it is ignored. Then a summary: sent, received, loss, and
-    the lowest, average and highest round-trip time. A job: Ctrl-C stops it
-    and prints the summary. Every shell can run one at the same time, and the
-    board still answers pings itself meanwhile. Refused while Wi-Fi isn't
-    connected.
+    later reply to it is ignored. If a router or the host sends back an ICMP
+    error about a request instead (destination unreachable, time exceeded),
+    that prints in its place and the request counts as lost:
+
+        error from 192.168.1.1: seq=2 host unreachable
+
+    A host on the LAN that is off or missing sends nothing, so that is still a
+    timeout. Then a summary: sent, received, loss, how many ICMP errors came
+    back, and the lowest, average and highest round-trip time. A job: Ctrl-C
+    stops it and prints the summary. Every shell can run one at the same time,
+    and the board still answers pings itself meanwhile. Refused while Wi-Fi
+    isn't connected.
 
 SEE ALSO
     net, wifi

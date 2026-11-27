@@ -9,7 +9,9 @@
 #include <string.h>
 
 #define ICMP_ECHO_REPLY   0
+#define ICMP_UNREACHABLE  3
 #define ICMP_ECHO_REQUEST 8
+#define ICMP_TIME_EXCEEDED 11
 #define IP_PROTO_ICMP     1
 
 static const char usage[] = "usage: ping <host> [<count>]";
@@ -101,16 +103,24 @@ void ping_build_request(uint8_t *buf, uint16_t id, uint16_t seq) {
     buf[3] = (uint8_t)c;
 }
 
-bool ping_parse_reply(const uint8_t *pkt, size_t len, uint16_t id, uint16_t *seq, uint8_t *ttl) {
+// The ICMP part of pkt, an IPv4 packet of len bytes, if its header and length hold together and
+// it is ICMP; NULL if not. Sets *icmp_len.
+static const uint8_t *icmp_part(const uint8_t *pkt, size_t len, size_t *icmp_len) {
     if (len < 20 || pkt[0] >> 4 != 4)
-        return false;
+        return NULL;
     size_t ihl = (size_t)(pkt[0] & 0x0f) * 4;
-    if (ihl < 20 || len != ihl + PING_ICMP_SIZE || ((size_t)pkt[2] << 8 | pkt[3]) != len ||
+    if (ihl < 20 || len < ihl + 8 || ((size_t)pkt[2] << 8 | pkt[3]) != len ||
         pkt[9] != IP_PROTO_ICMP)
-        return false;
-    const uint8_t *icmp = pkt + ihl;
-    if (icmp[0] != ICMP_ECHO_REPLY || icmp[1] != 0 || ((uint16_t)(icmp[4] << 8 | icmp[5])) != id ||
-        ping_checksum(icmp, PING_ICMP_SIZE) != 0)
+        return NULL;
+    *icmp_len = len - ihl;
+    return pkt + ihl;
+}
+
+bool ping_parse_reply(const uint8_t *pkt, size_t len, uint16_t id, uint16_t *seq, uint8_t *ttl) {
+    size_t n;
+    const uint8_t *icmp = icmp_part(pkt, len, &n);
+    if (!icmp || n != PING_ICMP_SIZE || icmp[0] != ICMP_ECHO_REPLY || icmp[1] != 0 ||
+        (uint16_t)(icmp[4] << 8 | icmp[5]) != id || ping_checksum(icmp, n) != 0)
         return false;
     for (size_t i = 0; i < PING_DATA_SIZE; i++)
         if (icmp[8 + i] != data_byte(i))
@@ -118,6 +128,59 @@ bool ping_parse_reply(const uint8_t *pkt, size_t len, uint16_t id, uint16_t *seq
     *seq = (uint16_t)(icmp[6] << 8 | icmp[7]);
     *ttl = pkt[8];
     return true;
+}
+
+bool ping_parse_error(const uint8_t *pkt, size_t len, uint16_t id, ping_error_t *e) {
+    size_t n;
+    const uint8_t *icmp = icmp_part(pkt, len, &n);
+    if (!icmp || (icmp[0] != ICMP_UNREACHABLE && icmp[0] != ICMP_TIME_EXCEEDED) ||
+        ping_checksum(icmp, n) != 0)
+        return false;
+    // The quoted datagram: its IP header, then at least 8 bytes of our echo request.
+    const uint8_t *q = icmp + 8;
+    size_t qn = n - 8;
+    if (qn < 20 || q[0] >> 4 != 4)
+        return false;
+    size_t qihl = (size_t)(q[0] & 0x0f) * 4;
+    if (qihl < 20 || qn < qihl + 8 || q[9] != IP_PROTO_ICMP)
+        return false;
+    const uint8_t *req = q + qihl;
+    if (req[0] != ICMP_ECHO_REQUEST || req[1] != 0 || (uint16_t)(req[4] << 8 | req[5]) != id)
+        return false;
+    e->seq = (uint16_t)(req[6] << 8 | req[7]);
+    e->type = icmp[0];
+    e->code = icmp[1];
+    return true;
+}
+
+void ping_error_text(uint8_t type, uint8_t code, char out[40]) {
+    static const char *const unreachable[16] = {
+        [0] = "network unreachable",
+        [1] = "host unreachable",
+        [2] = "protocol unreachable",
+        [3] = "port unreachable",
+        [4] = "fragmentation needed",
+        [5] = "source route failed",
+        [6] = "network unknown",
+        [7] = "host unknown",
+        [9] = "network prohibited",
+        [10] = "host prohibited",
+        [13] = "administratively prohibited",
+    };
+    static const char *const exceeded[2] = {
+        [0] = "time to live exceeded",
+        [1] = "reassembly time exceeded",
+    };
+    const char *name = NULL;
+    if (type == ICMP_UNREACHABLE && code < 16)
+        name = unreachable[code];
+    else if (type == ICMP_TIME_EXCEEDED && code < 2)
+        name = exceeded[code];
+    if (name)
+        snprintf(out, 40, "%s", name);
+    else
+        snprintf(out, 40, "%s (code %u)",
+                 type == ICMP_TIME_EXCEEDED ? "time exceeded" : "destination unreachable", code);
 }
 
 void ping_stats_reply(ping_stats_t *s, uint32_t rtt_us) {
@@ -149,14 +212,17 @@ void ping_loss_text(const ping_stats_t *s, char out[8]) {
 }
 
 int ping_summary(const ping_stats_t *s, char *out, size_t size) {
-    char loss[16] = "", errors[24] = "", rtt[80] = "";
+    char loss[16] = "", icmp[32] = "", errors[24] = "", rtt[80] = "";
     if (s->sent) {
         char pct[8];
         ping_loss_text(s, pct);
         snprintf(loss, sizeof(loss), ", %s loss", pct);
     }
-    if (s->errors)
-        snprintf(errors, sizeof(errors), ", %lu not sent", (unsigned long)s->errors);
+    if (s->icmp_errors)
+        snprintf(icmp, sizeof(icmp), ", %lu ICMP error%s", (unsigned long)s->icmp_errors,
+                 s->icmp_errors == 1 ? "" : "s");
+    if (s->not_sent)
+        snprintf(errors, sizeof(errors), ", %lu not sent", (unsigned long)s->not_sent);
     if (s->received) {
         char lo[16], avg[16], hi[16];
         ping_ms_text(s->min_us, lo);
@@ -164,6 +230,6 @@ int ping_summary(const ping_stats_t *s, char *out, size_t size) {
         ping_ms_text(s->max_us, hi);
         snprintf(rtt, sizeof(rtt), "; round trip min/avg/max %s/%s/%s ms", lo, avg, hi);
     }
-    return snprintf(out, size, "%lu sent, %lu received%s%s%s", (unsigned long)s->sent,
-                    (unsigned long)s->received, loss, errors, rtt);
+    return snprintf(out, size, "%lu sent, %lu received%s%s%s%s", (unsigned long)s->sent,
+                    (unsigned long)s->received, loss, icmp, errors, rtt);
 }

@@ -51,6 +51,25 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 - **`ssh` command:** `sshd_status()` prints the host key fingerprint, statistics (including the
   longest single wolfSSH step, the guide to watchdog margin) and the active sessions.
 
+## Key exchange, and what the post-quantum part costs
+
+The server offers `mlkem768x25519-sha256` as well as plain Curve25519. It is a hybrid: the
+session key comes from both an X25519 exchange and an ML-KEM-768 one, so it stays secret
+unless both are broken. The point is traffic recorded today: someone who keeps a capture of an
+SSH session and later has a machine that breaks elliptic curves still can't read it. Which
+exchange a login uses is the client's choice: SSH takes the first one on the client's list
+that the server also has. OpenSSH 10.0 and later put this one first (9.9 added it), so
+logins from them use it; older clients use `curve25519-sha256` here. OpenSSH 10.1 and later
+also warn at every login to a server that has no post-quantum key exchange, so a board
+without it would show that warning to anyone with a current client. The login itself (the
+host key and the client's key) is Ed25519 either way.
+
+It costs about 30 KB of flash (ML-KEM and the SHA-3 it needs; measured by building without
+them, issue #120) and a few KB of heap during the exchange. To build without it, turn off
+the `WOLFSSL_HAVE_MLKEM` block and `WOLFSSL_SHA3` in `config/user_settings.h`; clients then
+fall back to `curve25519-sha256`. That is a decision about what the board protects against,
+not a tuning knob, which is why it is on.
+
 ## Host key (`hostkey.c`)
 
 The Ed25519 host key is the first page of the key sector, the last 4 KB of flash

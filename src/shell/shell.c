@@ -139,8 +139,9 @@ static void print_hash(shell_t *sh, const uint8_t *hash) {
 
 // `bootkey`: would this firmware still start with secure boot on? It finds the public key the
 // running image is signed with, hashes it as the boot ROM does, and compares that with the boot
-// key slots in OTP. Reads only. docs/securing-a-board.md runs it before the bit that turns
-// secure boot on is written, because a wrong hash in OTP then means a board that runs nothing.
+// key slots in OTP. Reads only. The runbooks (docs/security/README.md) run it before the bit
+// that turns secure boot on is written, because a wrong hash in OTP then means a board that
+// runs nothing.
 static void cmd_bootkey(shell_t *sh) {
     extern char __flash_binary_start, __flash_binary_end;
     // The signature's block is added after linking, just past what the linker calls the end.
@@ -556,8 +557,10 @@ static void utc_text(char *buf, size_t len, int64_t unix_s) {
     time_t t = (time_t)unix_s;
     struct tm tm;
     gmtime_r(&t, &tm);
-    snprintf(buf, len, "%04d-%02d-%02d %02d:%02d UTC", tm.tm_year + 1900, tm.tm_mon + 1,
-             tm.tm_mday, tm.tm_hour, tm.tm_min);
+    // Fields bounded to their digits, so the compiler sees the text fits; same result.
+    snprintf(buf, len, "%04u-%02u-%02u %02u:%02u UTC", (unsigned)(tm.tm_year + 1900) % 10000u,
+             (unsigned)(tm.tm_mon + 1) % 100u, (unsigned)tm.tm_mday % 100u,
+             (unsigned)tm.tm_hour % 100u, (unsigned)tm.tm_min % 100u);
 }
 
 static void show_rotation(shell_t *sh, const logfile_status_t *st) {
@@ -1249,7 +1252,7 @@ static bool burn_job(shell_t *sh, void *arg, bool cancel) {
     glitchdet_apply(config_glitch_mode(settings()->glitch_detector));
     burn_report(sh, &rep);
     // How long OTP programming takes on this chip isn't known until it has been done once:
-    // worth writing down (docs/securing-a-board.md).
+    // worth writing down (dev-1's was not: docs/otp/dev-1/RECORD.md, #100).
     shell_printf(sh, "It took %lu ms.\n", (unsigned long)took_ms);
     log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "rootsecret burn: took %lu ms", (unsigned long)took_ms);
     shell_printf(sh, "You can let go of the button.\n");

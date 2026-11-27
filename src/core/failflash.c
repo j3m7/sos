@@ -22,10 +22,8 @@ static bool usable, write_failed_logged;
 
 static const uint8_t *store_read(void *ctx) {
     (void)ctx;
-    if (!usable) {                      // never read the firmware image as a count
-        static const uint8_t blank[FAILCOUNT_SECTOR];   // zeros: no marker, so a count of zero
-        return blank;
-    }
+    if (!usable)                        // never read the firmware image as a count
+        return NULL;
     return (const uint8_t *)(XIP_BASE + FAIL_OFFSET);
 }
 

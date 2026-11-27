@@ -124,10 +124,49 @@ static void fail(tls_conn_t *c, const char *fmt, ...) {
     c->state = TLS_FAILED;
 }
 
+// What a wolfSSL error means, for the ones a person meets and can act on. wolfSSL's own table
+// of error texts is not built (NO_ERROR_STRINGS in config/user_settings.h: about 20 KB for
+// some hundreds of messages, nearly all about things this firmware doesn't do). Any other
+// error is reported by its number, which wolfSSL's documentation lists.
+static const char *error_text(int err) {
+    switch (err) {
+    case ASN_NO_SIGNER_E:
+        return "the server's certificate isn't signed by a root this firmware trusts";
+    case ASN_AFTER_DATE_E:
+        return "the server's certificate has expired (or this board's clock is ahead)";
+    case ASN_BEFORE_DATE_E:
+        return "the server's certificate isn't valid yet (is this board's clock set?)";
+    case DOMAIN_NAME_MISMATCH:
+        return "the server's certificate is for another host name";
+    case ASN_SIG_CONFIRM_E:
+    case VERIFY_CERT_ERROR:
+        return "the server's certificate failed verification";
+    case ASN_SELF_SIGNED_E:
+        return "the server's certificate is self-signed";
+    case FATAL_ERROR:
+        return "the server sent a fatal TLS alert";
+    case SOCKET_ERROR_E:
+    case SOCKET_PEER_CLOSED_E:
+        return "the connection failed or was closed";
+    case VERSION_ERROR:
+    case UNSUPPORTED_PROTO_VERSION:
+        return "the server doesn't offer TLS 1.3";
+    case MATCH_SUITE_ERROR:
+    case ECC_CURVE_ERROR:
+        return "no cipher suite or key exchange group in common with the server";
+    case MEMORY_E:
+        return "out of memory";
+    default:
+        return NULL;
+    }
+}
+
 static void wolf_error(tls_conn_t *c, const char *what, int err) {
-    char reason[WOLFSSL_MAX_ERROR_SZ];
-    wolfSSL_ERR_error_string_n((unsigned long)err, reason, sizeof(reason));
-    fail(c, "%s: %s (%d)", what, reason, err);
+    const char *text = error_text(err);
+    if (text)
+        fail(c, "%s: %s (%d)", what, text, err);
+    else
+        fail(c, "%s failed: wolfSSL error %d", what, err);
     // Servers give up on slow clients (time.cloudflare.com: 2 s without progress), so say how
     // long this one waited. A time at such a limit means our side stalled: a lost packet not
     // yet resent (see LWIP_TCP_RTO_TIME in lwipopts.h), or a blocked main loop.
