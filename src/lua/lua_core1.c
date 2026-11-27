@@ -27,6 +27,8 @@
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
+#include "lua/lua_health.h"
+#include "lua/lua_info.h"
 #include "net/http.h"
 
 #define HOOK_EVERY 1000             // instructions between cancel checks
@@ -676,11 +678,52 @@ static int run_timers(lua_State *L) {
     }
 }
 
+// --- read-only tables: sos.sensors, sos.mem, ... (lua_health.c on core 0) ---------------------
+
+// Ask core 0 for table `which` and push it, or push nil and the error.
+static int info(lua_State *L, lua_health_table_t which) {
+    lua_req.type = LR_INFO;
+    lua_req.offset = (uint32_t)which;
+    request();
+    check_cancel(L);
+    if (lua_req.result < 0)
+        return fail(L);
+    if (!lua_info_push(L, lua_req.data, lua_req.len))
+        return luaL_error(L, "malformed answer from core 0");
+    return 1;
+}
+
+static int l_sensors(lua_State *L) { return info(L, LH_SENSORS); }
+static int l_version(lua_State *L) { return info(L, LH_VERSION); }
+static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
+static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
+static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
+
+// Core 0's figures, and the script's own allocation, which core 1 keeps.
+static int l_mem(lua_State *L) {
+    if (info(L, LH_MEM) != 1)
+        return 2;
+    lua_createtable(L, 0, 3);
+    lua_pushinteger(L, mem_used);
+    lua_setfield(L, -2, "used");
+    lua_pushinteger(L, mem_peak);
+    lua_setfield(L, -2, "peak");
+    lua_pushinteger(L, mem_limit);
+    lua_setfield(L, -2, "limit");
+    lua_setfield(L, -2, "script");
+    return 1;
+}
+
+static const luaL_Reg wifi_lib[] = {
+    {"status", l_wifi_status}, {NULL, NULL},
+};
+
 static const luaL_Reg sos_lib[] = {
     {"log", l_log},       {"time", l_time},     {"uptime", l_uptime}, {"sleep", l_sleep},
     {"read", l_read},     {"write", l_write},   {"append", l_append}, {"list", l_list},
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
-    {"cancel", l_cancel}, {NULL, NULL},
+    {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
+    {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -833,6 +876,8 @@ static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
     luaL_newlib(L, http_lib);
     lua_setfield(L, -2, "http");
+    luaL_newlib(L, wifi_lib);
+    lua_setfield(L, -2, "wifi");
     luaL_newmetatable(L, HTTP_CLOSER);
     lua_pushcfunction(L, http_closer);
     lua_setfield(L, -2, "__close");

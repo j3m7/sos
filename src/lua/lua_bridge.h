@@ -73,6 +73,7 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_INFO,                        // offset: a lua_health_table_t -> data/len: lua_info.h records
     // HTTPS (net/http.h), one request at a time, answered from the main loop once there's
     // something to say, so these can take a while. Ctrl-C answers them at once with an error.
     LR_HTTP_REQUEST,                // opts: an http_opts_t -> once the headers are in:
