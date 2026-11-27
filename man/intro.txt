@@ -1,0 +1,32 @@
+NAME
+    intro - the SOS shell: where it runs, typing a line, what is console only
+
+DESCRIPTION
+    The same shell runs on the serial console (USB, mirrored on UART0) and in
+    each SSH session. 'help' lists the commands this channel may use, 'man'
+    lists these pages, and 'man <topic>' shows one.
+
+    Console only means the command is refused over SSH. Anything that changes
+    the configuration or other protected state needs physical access to the
+    console. A command marked "console only to change" can still show its
+    value from SSH.
+
+    Typing a line: Enter runs it, Backspace deletes, Up and Down recall the
+    commands typed in this session (kept in RAM only, never answers such as
+    passwords). Ctrl-C discards the line, cancels a question (setup, wifi set,
+    ...) or stops a running job (ls, cat, cp, a Lua script). Ctrl-D on an empty
+    line logs out. Commands typed while a job runs are kept and run after it.
+
+    The console asks for its password before taking any command, once one is
+    set, and locks itself again on logout, when the USB terminal disconnects
+    and after 10 minutes with nothing typed; whatever it was running is ended.
+
+    Paths given to the file commands are relative to the shell's working
+    directory ('cd', 'pwd') unless they start with '/'. File names with spaces
+    aren't supported yet.
+
+    Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
+    a screen at a time, and 'man <topic>' shows a page in the same viewer.
+
+SEE ALSO
+    help, man, logout, passwd, setup, edit, more

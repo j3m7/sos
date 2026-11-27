@@ -1,0 +1,32 @@
+NAME
+    config - show the saved configuration, or erase it
+
+SYNOPSIS
+    config
+    config reset        (console only)
+
+DESCRIPTION
+    'config' shows what is saved: hostname, whether a console password is set,
+    the Wi-Fi networks, the number of trusted keys, the NTS server, the
+    periodic sync and the RTC calibration. Changes made by 'setup', 'wifi',
+    'key', 'hostname', 'time' and 'passwd' are saved in flash immediately,
+    survive reflashing, and only the console can make them.
+
+    The record is stored sealed under a key derived from the board's root
+    secret, in two alternating flash sectors with a sequence number and CRC, so
+    a power cut while saving keeps the previous version. Its format only grows
+    at the end: older firmware's records still load; firmware older than a
+    record ignores it and starts empty.
+
+    'config reset' erases everything, after you type 'yes': no Wi-Fi network,
+    no trusted keys (so no SSH), no console password, hostname 'sos'. It also
+    destroys the owner secret: the SSH host key becomes unreadable and a new
+    one is made at the next setup (clients will warn), and SD cards this board
+    encrypted can then only be read on a PC with the key shown when each was
+    formatted; setting the board up again does not bring them back. The
+    command says so before asking. A mounted encrypted card is unmounted. Set
+    the board up again with 'setup', or provision it from the development
+    machine (ninja provision).
+
+SEE ALSO
+    setup, wifi, key, hostname, time, passwd, rootsecret, sd

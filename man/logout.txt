@@ -1,0 +1,19 @@
+NAME
+    logout - end this session, or lock the console
+
+SYNOPSIS
+    logout
+    exit
+    Ctrl-D (on an empty line)
+
+DESCRIPTION
+    Over SSH, ends the session. On the console, locks it: it asks for the
+    console password again before taking any command (not possible while no
+    password is set). The console also locks itself when the USB terminal
+    disconnects (the terminal program drops DTR or the cable is unplugged) and
+    after 10 minutes with nothing typed; either lock ends whatever the console
+    was running: a copy, 'sd test', a Lua script, the chat, the editor (unsaved
+    text is lost). The command history of the session is wiped.
+
+SEE ALSO
+    passwd, intro

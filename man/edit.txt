@@ -1,0 +1,54 @@
+NAME
+    edit - full-screen text editor
+
+SYNOPSIS
+    edit <file>
+
+DESCRIPTION
+    Opens the file (up to 128 KB) in a full-screen editor, on the console or
+    over SSH; a file that doesn't exist is created on the first save. The text
+    can grow by 32 KB while the file is open (save, quit and open it again for
+    more), less while memory is short, and 'edit' says how much it can take.
+
+    It needs a VT100/xterm-compatible terminal and uses its alternate screen,
+    so the shell's output is back as it was afterwards. The screen size is
+    asked from the terminal at the start and on Ctrl-L (so resize the window,
+    then press Ctrl-L); without an answer it is 80x24. Up to 400 columns and
+    200 rows of a bigger window are used.
+
+KEYS
+    typing, Enter, Tab          insert (UTF-8 text is fine)
+    Backspace / Delete, Ctrl-D  delete before / at the cursor
+    arrows, Home/End (Ctrl-A/Ctrl-E), PgUp/PgDn
+                                move
+    Ctrl-Left/Right (Alt-Left/Right, Alt-B/F)
+                                a word back / forward (letters, digits, '_'
+                                and any non-ASCII text are word characters)
+    Ctrl-Home / Ctrl-End        start / end of the text
+    Ctrl-S (Ctrl-O)             save
+    Ctrl-Q (Ctrl-X)             quit; with unsaved changes, press it twice
+    Ctrl-F (Ctrl-W)             find: type the text, Enter finds the next
+                                match (empty: the last search again), Ctrl-C
+                                cancels
+    Ctrl-L                      redraw, and ask the terminal for its size
+
+NOTES
+    Saving writes <file>.~edit first, then replaces the file with it, so an
+    interrupted save never leaves half a file; after a power cut 'edit <file>'
+    picks the text up from the copy and says so. If two people edit the same
+    file, the last save wins.
+
+    Files with CRLF line ends keep them. Control characters, invalid UTF-8 and
+    invisible or bidi characters show as '?' and are kept as they are. Wide
+    characters take two columns and combining accents none; the cursor moves
+    over a letter and its accents (up to two) as one. Long lines scroll
+    sideways instead of wrapping.
+
+    Ctrl-C doesn't stop the editor; Ctrl-Q does. If the SSH session drops, or
+    the console locks itself, unsaved changes are lost. Log messages aren't
+    printed on the console while the editor runs there: the status bar counts
+    them and they appear when you quit. /certs can be opened from SSH but
+    only saved from the console.
+
+SEE ALSO
+    more, cat, echo

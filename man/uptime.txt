@@ -1,0 +1,22 @@
+NAME
+    uptime - time since boot, and what the last reset was
+
+SYNOPSIS
+    uptime
+
+DESCRIPTION
+    The time since the board started. If the last reset was not a power-on or
+    a 'reboot', it says what it was:
+
+        (last reset: watchdog)          the main loop stopped coming round
+        (last reset: glitch detector)   the detector reset the chip ('glitch')
+        last reset: hard fault ...      a fault or panic, with the addresses
+                                        to look up in build/sos.dis
+
+    Once flash has been written since boot (a configuration save, a console
+    login), a 'flash writes:' line says how many times, and how long the last
+    and the longest write held interrupts off, since nothing else runs during
+    one.
+
+SEE ALSO
+    version, glitch, reboot, crash

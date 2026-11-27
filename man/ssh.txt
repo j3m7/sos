@@ -1,0 +1,30 @@
+NAME
+    ssh - the SSH server: host key, sessions and refused connections
+
+SYNOPSIS
+    ssh
+
+DESCRIPTION
+    The host key fingerprint, the sessions in use and connections refused
+    because all were busy, connections refused from a penalized address or
+    dropped before login, logins so far, and each session: user and address,
+    state, shell or SFTP, how long. Yours is marked '*'. The longest single
+    SSH work step is shown too, a guide to the watchdog's margin.
+
+    The server starts once the board has a Wi-Fi network and at least one
+    trusted key. Only public-key login is accepted, with one of the keys 'key
+    list' shows; the user name doesn't matter and is only displayed. Up to 3
+    sessions at once; a connection has 30 s to log in (5 s while every session
+    is busy), and an address whose connections end without a login 30 times
+    within a minute is refused until it has stayed away for a minute.
+
+    The Ed25519 host key is made when the board is first set up and sealed in
+    flash for the board's owner: erasing the configuration ('config reset',
+    provisioning, erasing over USB) makes it unreadable and the next setup
+    makes a new one, so SSH clients warn that the host key changed. That is
+    intended: a wiped board set up again is a new identity.
+
+    SFTP is served on the same port with the same login, rooted at the card.
+
+SEE ALSO
+    key, who, config, net

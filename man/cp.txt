@@ -1,0 +1,15 @@
+NAME
+    cp - copy a file
+
+SYNOPSIS
+    cp <from> <to>
+
+DESCRIPTION
+    Copies a file. Copying to a directory keeps the name. A job: Ctrl-C stops
+    it and removes the partial copy, as does the console locking itself. About
+    580 KB/s on an unencrypted card, roughly half on an encrypted one. Files a
+    running command has open can't be deleted or renamed meanwhile, and the
+    card can't be unmounted or formatted.
+
+SEE ALSO
+    mv, rm, ls

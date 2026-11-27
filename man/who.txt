@@ -1,0 +1,17 @@
+NAME
+    who - who is logged in, and who is in the chat
+
+SYNOPSIS
+    who
+
+DESCRIPTION
+    One line per shell: its slot (0 is the console), the person's name, where
+    they are connected from, 'chat' if they are in the chat room, and how long
+    they have been logged in. Yours is marked '*'.
+
+    A person is named after the comment of the trusted key they logged in
+    with ('alice@laptop'; 'key <n>' if it has none), the console is 'console',
+    and a second login with the same key gets its slot added ('alice@laptop/2').
+
+SEE ALSO
+    wall, chat, ssh

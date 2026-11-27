@@ -1,0 +1,15 @@
+NAME
+    reboot - restart the device
+
+SYNOPSIS
+    reboot
+
+DESCRIPTION
+    Restarts the board at once. The configuration is in flash and the clock
+    comes back from the RTC, so nothing is lost but SSH sessions, running jobs
+    and the chat. A reboot doesn't count as a watchdog or fault reset in
+    'uptime'. After a crash or watchdog reset, '/autorun.lua' is skipped until
+    the next normal boot, which a reboot is.
+
+SEE ALSO
+    uptime, lua

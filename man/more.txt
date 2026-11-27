@@ -1,0 +1,41 @@
+NAME
+    more - read a file a screen at a time, whatever its size
+
+SYNOPSIS
+    more <file>
+
+DESCRIPTION
+    Shows the file a screen at a time, on the same kind of terminal as 'edit'
+    and with the same screen size handling (Ctrl-L after resizing). The file
+    can be of any size: only a 16 KB window of it is in memory, read from the
+    card as you move. Nothing in a file can send the terminal a sequence:
+    controls, invalid UTF-8 and invisible or bidi characters show as '?', and
+    long lines scroll sideways.
+
+    The bottom row shows the file name, the lines on screen ('lines 12-34',
+    with the total once it is known: after G, or once the end has been on
+    screen) and how far in you are, or END.
+
+KEYS
+    Space, f, PgDn / b, PgUp    a screen forward / back
+    d / u                       half a screen forward / back
+    j, Enter, Down / k, Up      a line forward / back
+    g, Home / G, End            the start / the end of the file (the first G
+                                on a large file counts its lines, about a
+                                second per megabyte)
+    Left / Right                half a screen sideways, for long lines
+    / (Ctrl-F)                  find: type the text, Enter finds the next
+                                match from the line after the top one (empty:
+                                the last search again), wrapping around to
+                                the start; Ctrl-C cancels
+    n                           the next match
+    Ctrl-L                      redraw, and ask the terminal for its size
+    h, ?                        list the keys
+    q (Ctrl-Q, Ctrl-C)          quit
+
+NOTES
+    'man <topic>' shows a manual page in this viewer. Log messages are held on
+    the console while it runs there, as for the editor.
+
+SEE ALSO
+    edit, cat, man

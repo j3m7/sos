@@ -22,6 +22,8 @@ this page is the reference.
 | Command | Where | What it does |
 |---|---|---|
 | `help` (or `?`) | any | List the commands this channel may use |
+| `man [<topic>]` | any | The manual: list the pages on the card, or read one in the pager. See [Manual pages](#manual-pages) |
+| `man install` | any | Download the pages from the SOS repository on GitHub to `/man` on the card |
 | `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset, `(last reset: glitch detector)` if the glitch detector did, or a `last reset:` line if a hard fault or panic did. Once flash has been written since boot (a configuration save, a console login), a `flash writes:` line: how many, and how long the last and the longest held interrupts off, since nothing else runs during one |
 | `version` | any | The commit the firmware was built from (12 hex digits, `-dirty` if the build had uncommitted changes, `unknown` if not built from a git checkout). It names the SOS commit only, not libraries a build takes from outside the tree through `local.cmake`. The commit is also shown above the first prompt on the console and after each SSH login. Two more lines follow: `board: serial …`, the board's serial number (the one it reports over USB and to `picotool`), and `chip: RP2350 A4 (revision 3, ROM 4)`, the chip revision named from the chip's revision field and the boot ROM version (`unknown revision` if the pair isn't one this firmware knows). Then what the chip's one-time-programmable memory says about how the board is secured: `secure boot: off` or `on`, and `debug port: enabled`, `Secure debug disabled` or `disabled`. These are the flags the chip latched at reset; a further line appears only if the OTP rows behind them can't be read or say something else. Then `root secret: in OTP`, `in flash (open board)` or `none`. And `console-only setup: no` or `yes`: whether the board takes its settings only from `setup` on its console, refusing a configuration or host key written to its flash over USB (unsealed records, as `ninja provision` writes them). It is a marker of its own in OTP, not secure boot; `yes` also when the marker can't be read or is damaged, and the line then says so |
 | `temp` | any | The chip's temperature, from the RP2350's own sensor, and the lowest and highest since boot with how long ago each was. Read every 10 s, and logged at boot, when it has moved a degree (at most once a minute) and at least once an hour. It's the chip's temperature, not the room's: the chip runs warmer than the air, more so under Wi-Fi load. Uncalibrated, it's a few degrees off, but good for change over time on one board |
@@ -228,6 +230,18 @@ far in you are, or `END`.
 | **q** (or **Ctrl-Q**, **Ctrl-C**) | Quit |
 
 Log messages are held on the console while the pager runs there, as for the editor.
+
+## Manual pages
+
+`man` lists the manual pages, one per command, and `man <topic>` shows one in the [pager](#pager)
+(`man intro` is a place to start). The pages are plain text files on the card, `/man/<topic>.txt`,
+written in the repository's `man/` directory; the firmware holds none. When there are none, `man`
+offers to download them. `man install` fetches one file, `man/pages.bundle`, from the repository
+on GitHub over HTTPS: the commit the firmware was built from, so the pages match the running
+firmware, or `main` if that commit's pages aren't there. Each page is written to
+`/man/<topic>.~new` and renamed into place when complete, so a download that fails midway leaves
+the earlier pages whole. Without network, `tools/man-install.sh <host>` copies the pages over SFTP.
+See [`man/README.md`](../man/README.md) for how a page is written.
 
 ## Lua
 

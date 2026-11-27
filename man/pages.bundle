@@ -1,0 +1,1138 @@
+# SOS manual pages, built by tools/man-bundle.sh from man/*.txt; '@@ <topic>' starts a page.
+@@ bootkey
+NAME
+    bootkey - would this firmware still start with secure boot on?
+
+SYNOPSIS
+    bootkey
+
+DESCRIPTION
+    Finds the public key the running firmware is signed with, hashes it as the
+    boot ROM does, and compares that with the four boot key slots in the
+    chip's one-time-programmable memory. It prints the firmware's key hash (or
+    'not signed'), each slot that isn't blank with its mark ('valid', 'not
+    marked valid', 'marked invalid'), whether secure boot is on, and a verdict:
+
+        MATCH         a valid slot holds the hash of this firmware's key
+        NOT YET       a slot holds it but isn't marked valid
+        NO MATCH      no slot holds it
+        NO VERDICT    the slots can't be read or the key can't be determined
+
+    MATCH compares keys; it doesn't check the signature over the firmware,
+    which 'picotool info -a' does. The command only reads. It exists for the
+    procedure that secures a board: turning secure boot on with the wrong key
+    hash in OTP leaves a board that runs nothing.
+
+SEE ALSO
+    version, rootsecret
+@@ cat
+NAME
+    cat - print a file
+
+SYNOPSIS
+    cat <file>
+
+DESCRIPTION
+    Prints the file to the terminal as it is. A job: Ctrl-C stops it, and a
+    slow SSH client slows it down instead of losing output (about 130 KB/s
+    over SSH). For reading a long file a screen at a time, with search, use
+    'more'; it also keeps a file from sending the terminal a sequence, which
+    'cat' doesn't.
+
+SEE ALSO
+    more, ls, echo
+@@ cd
+NAME
+    cd - change the working directory
+
+SYNOPSIS
+    cd [<dir>]
+
+DESCRIPTION
+    Changes this shell's working directory, to '/' without an argument. Each
+    shell (the console, every SSH session) has its own; paths given to the
+    file commands are relative to it unless they start with '/'.
+
+SEE ALSO
+    pwd, ls
+@@ chat
+NAME
+    chat - talk with the others in the chat room
+
+SYNOPSIS
+    chat
+
+DESCRIPTION
+    Joins the chat room: shows the last few lines and who is there, then each
+    line typed at the 'chat> ' prompt goes to everyone else in the room, as
+
+        [14:03] alice@laptop: hi
+
+    Joining and leaving are announced. In the room:
+
+        /who          who is in the room
+        /quit         leave (so do Ctrl-C, and Ctrl-D on an empty line)
+        //text        send a line that begins with '/'
+
+    Messages are kept only in memory (the last 16), never in the log or on the
+    card. See 'wall' for how messages arrive and what happens to a reader who
+    falls behind.
+
+SEE ALSO
+    wall, who
+@@ config
+NAME
+    config - show the saved configuration, or erase it
+
+SYNOPSIS
+    config
+    config reset        (console only)
+
+DESCRIPTION
+    'config' shows what is saved: hostname, whether a console password is set,
+    the Wi-Fi networks, the number of trusted keys, the NTS server, the
+    periodic sync and the RTC calibration. Changes made by 'setup', 'wifi',
+    'key', 'hostname', 'time' and 'passwd' are saved in flash immediately,
+    survive reflashing, and only the console can make them.
+
+    The record is stored sealed under a key derived from the board's root
+    secret, in two alternating flash sectors with a sequence number and CRC, so
+    a power cut while saving keeps the previous version. Its format only grows
+    at the end: older firmware's records still load; firmware older than a
+    record ignores it and starts empty.
+
+    'config reset' erases everything, after you type 'yes': no Wi-Fi network,
+    no trusted keys (so no SSH), no console password, hostname 'sos'. It also
+    destroys the owner secret: the SSH host key becomes unreadable and a new
+    one is made at the next setup (clients will warn), and SD cards this board
+    encrypted can then only be read on a PC with the key shown when each was
+    formatted; setting the board up again does not bring them back. The
+    command says so before asking. A mounted encrypted card is unmounted. Set
+    the board up again with 'setup', or provision it from the development
+    machine (ninja provision).
+
+SEE ALSO
+    setup, wifi, key, hostname, time, passwd, rootsecret, sd
+@@ cp
+NAME
+    cp - copy a file
+
+SYNOPSIS
+    cp <from> <to>
+
+DESCRIPTION
+    Copies a file. Copying to a directory keeps the name. A job: Ctrl-C stops
+    it and removes the partial copy, as does the console locking itself. About
+    580 KB/s on an unencrypted card, roughly half on an encrypted one. Files a
+    running command has open can't be deleted or renamed meanwhile, and the
+    card can't be unmounted or formatted.
+
+SEE ALSO
+    mv, rm, ls
+@@ crash
+NAME
+    crash - stop the firmware on purpose, to test the reset reporting
+
+SYNOPSIS
+    crash fault | stack | panic | hang      (console only)
+
+DESCRIPTION
+    Testing only. Stops the firmware with a hard fault (a bad memory access),
+    a stack overflow, an SDK panic, or a hang that the watchdog ends after
+    SOS_WATCHDOG_MS (default 8 s). The next boot's log and 'uptime' report
+    what happened, with the addresses to look up in build/sos.dis.
+
+SEE ALSO
+    uptime, dmesg
+@@ dmesg
+NAME
+    dmesg - the system log kept in memory
+
+SYNOPSIS
+    dmesg
+    dmesg -f <facility>
+
+DESCRIPTION
+    Prints the last 4 KB of log messages, from any shell. With -f, only one
+    facility's:
+
+        kern     boot, resets, faults, the glitch detector, the root secret
+        auth     console and SSH logins, passwords, every configuration change
+        daemon   Wi-Fi, the SSH server, time, HTTPS, the SD card, the chat
+        user     Lua scripts and 'logger'
+        none     messages not tagged with one (there should be none)
+
+    The console prints messages as they happen (at the 'console' level, see
+    'log'); 'history' decides what is kept for dmesg. Messages are not printed
+    while the console is locked or runs a full-screen program; they wait and
+    appear afterwards, and are in dmesg meanwhile. Only printable ASCII is
+    logged: other bytes in quoted text become spaces or '?'.
+
+SEE ALSO
+    log, logger, uptime
+@@ echo
+NAME
+    echo - print text, or write or append it to a file
+
+SYNOPSIS
+    echo <text>
+    echo <text> > <file>
+    echo <text> >> <file>
+
+DESCRIPTION
+    Prints the text, or with '>' writes it as a line to the file (replacing
+    it), or with '>>' appends it as a line. Only the console may write under
+    /certs.
+
+SEE ALSO
+    cat, edit
+@@ edit
+NAME
+    edit - full-screen text editor
+
+SYNOPSIS
+    edit <file>
+
+DESCRIPTION
+    Opens the file (up to 128 KB) in a full-screen editor, on the console or
+    over SSH; a file that doesn't exist is created on the first save. The text
+    can grow by 32 KB while the file is open (save, quit and open it again for
+    more), less while memory is short, and 'edit' says how much it can take.
+
+    It needs a VT100/xterm-compatible terminal and uses its alternate screen,
+    so the shell's output is back as it was afterwards. The screen size is
+    asked from the terminal at the start and on Ctrl-L (so resize the window,
+    then press Ctrl-L); without an answer it is 80x24. Up to 400 columns and
+    200 rows of a bigger window are used.
+
+KEYS
+    typing, Enter, Tab          insert (UTF-8 text is fine)
+    Backspace / Delete, Ctrl-D  delete before / at the cursor
+    arrows, Home/End (Ctrl-A/Ctrl-E), PgUp/PgDn
+                                move
+    Ctrl-Left/Right (Alt-Left/Right, Alt-B/F)
+                                a word back / forward (letters, digits, '_'
+                                and any non-ASCII text are word characters)
+    Ctrl-Home / Ctrl-End        start / end of the text
+    Ctrl-S (Ctrl-O)             save
+    Ctrl-Q (Ctrl-X)             quit; with unsaved changes, press it twice
+    Ctrl-F (Ctrl-W)             find: type the text, Enter finds the next
+                                match (empty: the last search again), Ctrl-C
+                                cancels
+    Ctrl-L                      redraw, and ask the terminal for its size
+
+NOTES
+    Saving writes <file>.~edit first, then replaces the file with it, so an
+    interrupted save never leaves half a file; after a power cut 'edit <file>'
+    picks the text up from the copy and says so. If two people edit the same
+    file, the last save wins.
+
+    Files with CRLF line ends keep them. Control characters, invalid UTF-8 and
+    invisible or bidi characters show as '?' and are kept as they are. Wide
+    characters take two columns and combining accents none; the cursor moves
+    over a letter and its accents (up to two) as one. Long lines scroll
+    sideways instead of wrapping.
+
+    Ctrl-C doesn't stop the editor; Ctrl-Q does. If the SSH session drops, or
+    the console locks itself, unsaved changes are lost. Log messages aren't
+    printed on the console while the editor runs there: the status bar counts
+    them and they appear when you quit. /certs can be opened from SSH but
+    only saved from the console.
+
+SEE ALSO
+    more, cat, echo
+@@ glitch
+NAME
+    glitch - the RP2350 glitch detector: setting, state and resets
+
+SYNOPSIS
+    glitch
+    glitch on <0-3>        (console only)
+    glitch watch <0-3>     (console only)
+    glitch off             (console only)
+    glitch default         (console only)
+    glitch trig            (console only)
+
+DESCRIPTION
+    The chip's glitch detector resets it when its clock or core supply is
+    disturbed, which is what a fault-injection attack does. 'glitch' shows its
+    setting, whether it is armed now, how many times it has reset the board
+    since power-on, and for the last such reset which detectors fired, how
+    long the board had been up and the chip's temperature then (the last
+    reading before the reset, taken every 10 s).
+
+    'glitch on <0-3>' arms it by software, now and at every boot, at that
+    sensitivity (0 lowest, 3 highest). 'on 3' is the default: a board is armed
+    at the highest sensitivity unless set otherwise. This is not protection:
+    it is armed a second or two into boot and software can disarm it; its
+    purpose is to see whether the detector resets a healthy board before it is
+    enabled for good in OTP. If it resets the board three times in a row
+    within three minutes of starting, the next boot leaves it unarmed and says
+    so. A detector reset loses the fault record.
+
+    'glitch watch <0-3>' runs the circuits at that sensitivity without arming
+    them: a trigger is logged with the chip's temperature and shown by
+    'glitch' ("armed, it would have reset the board"), nothing is reset. A
+    detector that has triggered may stay triggered until the next reset, so
+    each of the four is reported once per boot.
+
+    'glitch off' disarms it, now and at boot: the way out if it resets a
+    healthy board. 'glitch default' goes back to armed at 3. 'glitch trig'
+    makes one detector fire, to check that a detector reset is seen and
+    reported; it resets the board if the detector is armed.
+
+SEE ALSO
+    uptime, temp, version
+@@ help
+NAME
+    help - list the commands this channel may use
+
+SYNOPSIS
+    help
+    ?
+
+DESCRIPTION
+    Prints one line per command with a few words on each. Commands that only
+    the console may run are listed only on the console. For the full story on
+    a command, 'man <command>'.
+
+SEE ALSO
+    intro, man
+@@ hostname
+NAME
+    hostname - show or set the board's hostname
+
+SYNOPSIS
+    hostname
+    hostname <name>      (console only)
+
+DESCRIPTION
+    Shows the hostname, or sets it; the default is 'sos'. Saved; a new name
+    takes effect at the next Wi-Fi connect ('wifi connect').
+
+SEE ALSO
+    net, wifi, config
+@@ http
+NAME
+    http - HTTPS requests, for testing the client
+
+SYNOPSIS
+    http get <url>
+    http head <url>
+    http post <url> <text>
+
+DESCRIPTION
+    Makes one HTTPS request and prints the response: 'get' the status line and
+    the body, then its size and timings; 'head' the status line and headers;
+    'post' sends the text as text/plain (UTF-8) and prints the response as
+    'get' does. A job: Ctrl-C stops it.
+
+    URLs must start with https:// and the path must already be
+    percent-encoded (no spaces). The server's certificate must chain to a
+    built-in root or one in the approved /certs/roots.pem; redirects aren't
+    followed. What the server sends is filtered before it reaches the
+    terminal: control characters show as '.', including the C1 range, bidi
+    controls, zero-width and other invisible characters; other UTF-8 text
+    shows as itself.
+
+    Two HTTPS requests ('http' or a Lua script's sos.http, from any shells)
+    can run at once; a third is refused until one finishes, and one more TLS
+    connection is always kept free for time sync. A request is also refused
+    while the heap is too low for a TLS handshake (about 64 KB free).
+
+SEE ALSO
+    tls, lua, mem
+@@ intro
+NAME
+    intro - the SOS shell: where it runs, typing a line, what is console only
+
+DESCRIPTION
+    The same shell runs on the serial console (USB, mirrored on UART0) and in
+    each SSH session. 'help' lists the commands this channel may use, 'man'
+    lists these pages, and 'man <topic>' shows one.
+
+    Console only means the command is refused over SSH. Anything that changes
+    the configuration or other protected state needs physical access to the
+    console. A command marked "console only to change" can still show its
+    value from SSH.
+
+    Typing a line: Enter runs it, Backspace deletes, Up and Down recall the
+    commands typed in this session (kept in RAM only, never answers such as
+    passwords). Ctrl-C discards the line, cancels a question (setup, wifi set,
+    ...) or stops a running job (ls, cat, cp, a Lua script). Ctrl-D on an empty
+    line logs out. Commands typed while a job runs are kept and run after it.
+
+    The console asks for its password before taking any command, once one is
+    set, and locks itself again on logout, when the USB terminal disconnects
+    and after 10 minutes with nothing typed; whatever it was running is ended.
+
+    Paths given to the file commands are relative to the shell's working
+    directory ('cd', 'pwd') unless they start with '/'. File names with spaces
+    aren't supported yet.
+
+    Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
+    a screen at a time, and 'man <topic>' shows a page in the same viewer.
+
+SEE ALSO
+    help, man, logout, passwd, setup, edit, more
+@@ key
+NAME
+    key - the SSH public keys the board trusts
+
+SYNOPSIS
+    key
+    key list
+    key add [<line>]      (console only)
+    key del <n>           (console only)
+
+DESCRIPTION
+    'key list' numbers the trusted keys and shows their fingerprints. They are
+    what decides who may log in over SSH (and SFTP): any user name logs in
+    with a trusted key, and the name is only shown. The key's comment names
+    the person in 'who', 'wall' and the chat.
+
+    'key add' trusts one authorized_keys line (ssh-ed25519 or
+    ecdsa-sha2-nistp256; up to 8 keys); without a line it asks for one, to
+    paste. 'key del <n>' stops trusting key n. Changes apply at once: a new
+    key works for the next login.
+
+SEE ALSO
+    ssh, setup, who, config
+@@ logger
+NAME
+    logger - add a line to the system log
+
+SYNOPSIS
+    logger [-p <level>] <message>
+
+DESCRIPTION
+    Adds the message to the log under facility 'user', at level 'notice'
+    unless -p gives err, warning, notice, info or debug. The line says which
+    shell it came from: 'logger (console): ...' or 'logger (ssh <name>): ...',
+    the name as 'who' shows it. At most 10 a second; beyond that it says the
+    message wasn't logged. Lua scripts log the same way with sos.log().
+
+SEE ALSO
+    dmesg, log, who
+@@ logout
+NAME
+    logout - end this session, or lock the console
+
+SYNOPSIS
+    logout
+    exit
+    Ctrl-D (on an empty line)
+
+DESCRIPTION
+    Over SSH, ends the session. On the console, locks it: it asks for the
+    console password again before taking any command (not possible while no
+    password is set). The console also locks itself when the USB terminal
+    disconnects (the terminal program drops DTR or the cable is unplugged) and
+    after 10 minutes with nothing typed; either lock ends whatever the console
+    was running: a copy, 'sd test', a Lua script, the chat, the editor (unsaved
+    text is lost). The command history of the session is wiped.
+
+SEE ALSO
+    passwd, intro
+@@ log
+NAME
+    log - show or set the log levels
+
+SYNOPSIS
+    log
+    log console <level>      (console only)
+    log history <level>      (console only)
+
+DESCRIPTION
+    Two levels decide what the log does with a message: 'console' is what the
+    serial console prints as it happens (default notice), 'history' what is
+    kept in memory for 'dmesg' (default info). Levels, from most to least
+    important: err, warning, notice, info, debug. A change lasts until reboot
+    and is itself logged (facility auth).
+
+SEE ALSO
+    dmesg, logger
+@@ ls
+NAME
+    ls - list a directory on the SD card
+
+SYNOPSIS
+    ls [<path>]
+
+DESCRIPTION
+    Lists the directory (the working directory without a path): each entry
+    with its size and date. A job: it does a little work per pass of the main
+    loop, so the console, SSH and the watchdog keep going, and Ctrl-C stops it.
+    Files are dated with the system clock (UTC).
+
+    Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
+    used. Paths are relative to the shell's working directory unless they
+    start with '/'. File names with spaces aren't supported yet.
+
+SEE ALSO
+    cd, cat, sd, intro
+@@ lua
+NAME
+    lua - run Lua scripts on the second core
+
+SYNOPSIS
+    lua <file>
+    lua -e <code>
+    lua
+    lua -b <file>
+    lua ps
+    lua stop
+
+DESCRIPTION
+    Lua 5.4 runs on core 1, so a script can compute flat out without slowing
+    the console, SSH or the watchdog. 'lua <file>' runs a script from the card
+    (a relative path starts at the working directory); 'lua -e <code>' runs
+    the code given; 'lua' opens a prompt where each line runs as entered, in
+    one state for the session (an expression's value is printed; Ctrl-C
+    interrupts a line; Ctrl-D on an empty line or 'exit' leaves). The output
+    goes to the shell that started the script, and Ctrl-C stops it, as does
+    ending the session. One script runs at a time.
+
+    'lua -b <file>' runs a script in the background with no shell: its output
+    goes to the log, a line at a time (dmesg; at most 10 lines a second, the
+    rest counted as dropped), and its end is logged. 'lua ps' shows the
+    running script, 'lua stop' stops it wherever it runs. If the card has
+    /autorun.lua it starts in the background a few seconds after boot, except
+    after a crash or watchdog reset (then start it by hand). Use 'lua ./ps' to
+    run a file called ps.
+
+    Scripts have the base, string, table, math, utf8 and coroutine libraries,
+    'require' (modules from /lib and the working directory, Lua source only),
+    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files,
+    sos.time, sos.uptime, sos.sleep, sos.log, timers sos.every/after/cancel
+    (a background script keeps going while timers are left), and
+    sos.http.get/post/request for HTTPS. There is no io, os or debug. Failures
+    return nil and a message. Each script may allocate up to 128 KB. Full
+    details: README.md, "Lua scripts".
+
+SEE ALSO
+    dmesg, logger, http, mem
+@@ man
+NAME
+    man - the manual: list the pages, read one, or install them
+
+SYNOPSIS
+    man
+    man <topic>
+    man install
+
+DESCRIPTION
+    'man' lists the pages on the card with a line on each; 'man <topic>' shows
+    one in the pager (q quits, h lists the keys, / searches). A topic is a
+    command name ('man wifi'); 'man intro' is a place to start.
+
+    The pages live on the SD card as /man/<topic>.txt; the firmware holds
+    none. When there are none, 'man' offers to download them. 'man install'
+    downloads them from the SOS repository on GitHub over HTTPS (the board
+    needs the network and the time): one file, man/pages.bundle, from the
+    commit this firmware was built from so the pages match it, or from main
+    if that commit's pages aren't on GitHub. Each page is written to
+    /man/<topic>.~new and renamed into place when complete, so a download
+    that fails midway leaves the earlier pages whole. The other way is
+    tools/man-install.sh <host> on the development machine, which copies the
+    pages over SFTP.
+
+SEE ALSO
+    help, more, intro
+@@ mem
+NAME
+    mem - heap and stack use, by feature
+
+SYNOPSIS
+    mem
+
+DESCRIPTION
+    The heap: in use, peak and total, then what each feature holds and its
+    peak (ssh/tls, lua, editor, files, http, time, and 'other' for the rest),
+    lwIP's own pool, and core 0's peak stack use. After a Lua script has run,
+    also how deep the last script went into core 1's 32 KB stack.
+
+    The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
+    while transferring, a TLS handshake needs about 64 KB free, a Lua script
+    may take 128 KB, and the editor takes the file plus 32 KB of room.
+
+SEE ALSO
+    ssh, lua, edit
+@@ mkdir
+NAME
+    mkdir - create a directory
+
+SYNOPSIS
+    mkdir <dir>
+
+DESCRIPTION
+    Creates the directory. Only the console may create /certs, which holds the
+    extra TLS root certificates ('tls roots').
+
+SEE ALSO
+    rm, ls, tls
+@@ more
+NAME
+    more - read a file a screen at a time, whatever its size
+
+SYNOPSIS
+    more <file>
+
+DESCRIPTION
+    Shows the file a screen at a time, on the same kind of terminal as 'edit'
+    and with the same screen size handling (Ctrl-L after resizing). The file
+    can be of any size: only a 16 KB window of it is in memory, read from the
+    card as you move. Nothing in a file can send the terminal a sequence:
+    controls, invalid UTF-8 and invisible or bidi characters show as '?', and
+    long lines scroll sideways.
+
+    The bottom row shows the file name, the lines on screen ('lines 12-34',
+    with the total once it is known: after G, or once the end has been on
+    screen) and how far in you are, or END.
+
+KEYS
+    Space, f, PgDn / b, PgUp    a screen forward / back
+    d / u                       half a screen forward / back
+    j, Enter, Down / k, Up      a line forward / back
+    g, Home / G, End            the start / the end of the file (the first G
+                                on a large file counts its lines, about a
+                                second per megabyte)
+    Left / Right                half a screen sideways, for long lines
+    / (Ctrl-F)                  find: type the text, Enter finds the next
+                                match from the line after the top one (empty:
+                                the last search again), wrapping around to
+                                the start; Ctrl-C cancels
+    n                           the next match
+    Ctrl-L                      redraw, and ask the terminal for its size
+    h, ?                        list the keys
+    q (Ctrl-Q, Ctrl-C)          quit
+
+NOTES
+    'man <topic>' shows a manual page in this viewer. Log messages are held on
+    the console while it runs there, as for the editor.
+
+SEE ALSO
+    edit, cat, man
+@@ mv
+NAME
+    mv - move or rename a file or directory
+
+SYNOPSIS
+    mv <from> <to>
+
+DESCRIPTION
+    Moves or renames. Moving to a directory keeps the name. A file a running
+    command has open can't be moved. Only the console may move anything into
+    or out of /certs.
+
+SEE ALSO
+    cp, rm, ls
+@@ net
+NAME
+    net - Wi-Fi link state, address and ARP counters
+
+SYNOPSIS
+    net
+
+DESCRIPTION
+    The Wi-Fi link state and signal strength (RSSI), the IP address, gateway
+    and hostname, and the ARP packets received and sent with the keepalive
+    state. While connected the board announces its address once a minute (a
+    gratuitous ARP), without which a device that sends nothing stops receiving
+    broadcasts and clients get "no route to host" once the router forgets it;
+    'wifi keepalive off' turns the announcement off until reboot, for testing.
+
+SEE ALSO
+    wifi, hostname, ssh
+@@ nts
+NAME
+    nts - NTS state, and its two steps run by hand
+
+SYNOPSIS
+    nts
+    nts ke
+    nts ke <host>      (console only)
+    nts query
+
+DESCRIPTION
+    For diagnosing time sync. 'nts' shows the last key exchange (cookies held,
+    the NTP server it named) and the last query. 'nts ke' runs a key exchange
+    with the build-time default server (not the one set with 'time server');
+    'nts ke <host>' with another server. 'nts query' sends one authenticated
+    NTS time query; 'nts' then shows the offset. None of these sets the clock:
+    'time sync' does.
+
+SEE ALSO
+    time, tls
+@@ passwd
+NAME
+    passwd - set or change the console password
+
+SYNOPSIS
+    passwd        (console only)
+
+DESCRIPTION
+    Sets the console password, or changes it after asking for the current one:
+    8 to 64 printable ASCII characters, asked twice, not echoed. A board with
+    no console password opens straight into setting one (a new board: the
+    whole of 'setup', which starts with it). SSH sessions aren't affected;
+    they log in with their keys.
+
+    The console asks for the password before taking any command, and until it
+    is typed shows nothing: no greeting, no log lines, no messages. Each check
+    takes about 0.3 s by design, and after a wrong answer the next one waits
+    1 s, 2 s, 4 s ... up to 30 s; the count is kept in flash, so unplugging the
+    board between guesses skips no wait. An answer interrupted with Ctrl-C
+    counts as wrong. Wrong attempts are logged.
+
+    What is stored is not the password but a verifier in the sealed
+    configuration (PBKDF2, keyed under the root secret). If the password is
+    forgotten there is no way round it: erase the configuration over USB (or
+    provision the board again), which locks the board's encrypted SD cards.
+
+SEE ALSO
+    logout, setup, config
+@@ pwd
+NAME
+    pwd - show the working directory
+
+SYNOPSIS
+    pwd
+
+DESCRIPTION
+    Prints this shell's working directory.
+
+SEE ALSO
+    cd, ls
+@@ reboot
+NAME
+    reboot - restart the device
+
+SYNOPSIS
+    reboot
+
+DESCRIPTION
+    Restarts the board at once. The configuration is in flash and the clock
+    comes back from the RTC, so nothing is lost but SSH sessions, running jobs
+    and the chat. A reboot doesn't count as a watchdog or fault reset in
+    'uptime'. After a crash or watchdog reset, '/autorun.lua' is skipped until
+    the next normal boot, which a reboot is.
+
+SEE ALSO
+    uptime, lua
+@@ rm
+NAME
+    rm - delete a file or an empty directory
+
+SYNOPSIS
+    rm <path>
+
+DESCRIPTION
+    Deletes the file, or the directory if it is empty. A file a running
+    command has open can't be deleted. Only the console may delete anything
+    under /certs.
+
+SEE ALSO
+    mkdir, mv, ls
+@@ rootsecret
+NAME
+    rootsecret - the root secret the keys protecting stored data derive from
+
+SYNOPSIS
+    rootsecret
+    rootsecret forget      (console only)
+
+DESCRIPTION
+    The saved configuration and the SSH host key are sealed under keys derived
+    from the board's root secret, and so is the key that unlocks the board's
+    encrypted SD cards. 'rootsecret' says what state it is in and where it is:
+
+        in OTP            with whether its page is locked for this boot
+        in flash          an open board; not protected from someone who has
+                          the board
+        none              and why: a console-only board with none in OTP never
+                          uses its flash for one
+        unusable          present but damaged, or from newer firmware; kept as
+                          it is
+
+    It is stored twice; if one copy is damaged the other is used and this says
+    so.
+
+    'rootsecret forget' clears a record that can't be used, after you type
+    'yes': its whole flash sector is erased and the next boot makes a new one.
+    Refused while the root secret is usable, and always on a console-only
+    board. A configuration and host key sealed under the old one can't be read
+    again.
+
+SEE ALSO
+    version, config, bootkey
+@@ sd
+NAME
+    sd - the SD card: information, speed, unmounting, benchmark and format
+
+SYNOPSIS
+    sd
+    sd info
+    sd speed [<MHz>]                      (change: console only)
+    sd unmount                            (console only)
+    sd test [<KB> [keep]]                 (console only)
+    sd format [exfat | fat32] [plain]     (console only)
+
+DESCRIPTION
+    'sd' (or 'sd info') shows the card and volume information, the SPI clock,
+    and whether the card is encrypted, with its card id. 'sd speed' shows the
+    SPI clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
+    reinitializes the card; not saved.
+
+    'sd unmount' unmounts the card before it is taken out; refused while a
+    file is open. No card-detect switch is wired by default, so the board
+    doesn't notice a swap: unmount, swap, and the next file command mounts
+    the new card.
+
+    'sd test [<KB> [keep]]' is a write and read benchmark: 4 to 65536 KB,
+    default 256; everything else waits until it finishes. 'keep' leaves
+    /sos-test.txt on the card.
+
+    'sd format' erases the whole card (all partitions) and formats it with
+    one partition, exFAT by default, after you type 'yes'. The card is
+    ENCRYPTED (XTS-AES-128, with a new key this board keeps) unless 'plain'
+    is given; a PC sees an encrypted card as unformatted. When an encrypted
+    format finishes it shows the card's id and data key, ONCE: store the key
+    offline, it is the only way to read the card if the board is lost or its
+    configuration erased (tools/host/sdcrypt.c, or cryptsetup). It can't be
+    shown again later. Old files on the card aren't erased: what was written
+    unencrypted before stays readable until overwritten. SSH sessions pause
+    until the format finishes.
+
+    An encrypted card's key is stored on the card, wrapped with a key made
+    from the board's root secret and the owner secret in its configuration,
+    so the card unlocks at boot with nobody logged in and survives
+    reflashing. Erasing the configuration ('config reset', provisioning,
+    erasing over USB) locks the board's cards: that is deliberate. A card made
+    by another board is refused; 'sd format' erases it for use here.
+    Encryption is software AES: about 1.1 MB/s write and 1.0 MB/s read,
+    against 2.0 / 1.7 MB/s unencrypted.
+
+SEE ALSO
+    ls, config, rootsecret
+@@ setup
+NAME
+    setup - guided configuration of a new board
+
+SYNOPSIS
+    setup        (console only)
+
+DESCRIPTION
+    Asks, in order: a new console password if none is set (8 to 64 characters,
+    not echoed, twice), the Wi-Fi network (SSID) and its password (not echoed;
+    empty for an open network), and a public key to trust (paste one
+    authorized_keys line, e.g. ~/.ssh/id_ed25519.pub). Enter keeps the value
+    shown in brackets; Ctrl-C cancels without changing anything.
+
+    Each answer is saved in flash at once. Wi-Fi connects in the background,
+    and once the board has a network and a trusted key the SSH server starts;
+    the log shows the address and the host key fingerprint to check against
+    what your client prints.
+
+    The same settings can be written from the development machine over USB
+    (ninja provision), which replaces everything saved and makes the board a
+    new owner.
+
+SEE ALSO
+    passwd, wifi, key, config, ssh
+@@ ssh
+NAME
+    ssh - the SSH server: host key, sessions and refused connections
+
+SYNOPSIS
+    ssh
+
+DESCRIPTION
+    The host key fingerprint, the sessions in use and connections refused
+    because all were busy, connections refused from a penalized address or
+    dropped before login, logins so far, and each session: user and address,
+    state, shell or SFTP, how long. Yours is marked '*'. The longest single
+    SSH work step is shown too, a guide to the watchdog's margin.
+
+    The server starts once the board has a Wi-Fi network and at least one
+    trusted key. Only public-key login is accepted, with one of the keys 'key
+    list' shows; the user name doesn't matter and is only displayed. Up to 3
+    sessions at once; a connection has 30 s to log in (5 s while every session
+    is busy), and an address whose connections end without a login 30 times
+    within a minute is refused until it has stayed away for a minute.
+
+    The Ed25519 host key is made when the board is first set up and sealed in
+    flash for the board's owner: erasing the configuration ('config reset',
+    provisioning, erasing over USB) makes it unreadable and the next setup
+    makes a new one, so SSH clients warn that the host key changed. That is
+    intended: a wiped board set up again is a new identity.
+
+    SFTP is served on the same port with the same login, rooted at the card.
+
+SEE ALSO
+    key, who, config, net
+@@ temp
+NAME
+    temp - the chip's temperature, and the lowest and highest since boot
+
+SYNOPSIS
+    temp
+
+DESCRIPTION
+    The RP2350's own temperature sensor, read every 10 s, with the lowest and
+    highest readings since boot and how long ago each was taken. It is logged
+    at boot, when it has moved a degree (at most once a minute) and at least
+    once an hour.
+
+    It is the chip's temperature, not the room's: the chip runs warmer than
+    the air, more so under Wi-Fi load. The sensor is uncalibrated and can be a
+    few degrees off, but it is good for change over time on one board. The
+    glitch detector's report ('glitch') includes the last reading before a
+    detector reset.
+
+SEE ALSO
+    glitch, dmesg
+@@ time
+NAME
+    time - the clock, the RTC and time sync over NTS
+
+SYNOPSIS
+    time
+    time sync
+    time sync sntp                      (console only)
+    time auto [<hours> | off]           (change: console only)
+    time cal [<ppm> | off]              (change: console only)
+    time server [<name> | default]      (change: console only)
+
+DESCRIPTION
+    All times are UTC. The RTC (a PCF8523 on the Adalogger, with its coin
+    cell) is the source of truth: at boot the clock is set from it. Network
+    time comes from NTS (Network Time Security, authenticated NTP): a TLS key
+    exchange with the NTS server on port 4460, then NTP queries that only
+    accept replies that check out under the server's key. There is no
+    fallback to plain NTP: without NTS and without an RTC time, the clock
+    stays unset.
+
+    'time' shows the date and time and where it came from (RTC, NTS or SNTP),
+    the RTC's reading and backup-battery state, the calibration, the last sync
+    with its correction and round trip, a failed attempt and when it is
+    retried, the server and the periodic setting.
+
+    'time sync' syncs the clock and the RTC from NTS now. The board also syncs
+    by itself when the RTC has no valid time (retrying with doubling delays),
+    and periodically if 'time auto <hours>' (1 to 720; default off) is set:
+    one interval after the last successful sync, or after boot if there has
+    been none. A correction of more than 5 minutes is logged as a warning.
+    'time sync sntp' does one plain, unauthenticated SNTP sync on request.
+
+    'time server <name>' sets the NTS server (host name or IPv4 address);
+    'default' goes back to the build-time one (time.cloudflare.com). Its
+    certificate must chain to a trusted root ('tls roots').
+
+    'time cal <ppm>' corrects the RTC's rate. To measure: 'time sync', leave
+    the board for a day or more, restart it and 'time sync' again; 'time'
+    shows the step, e.g. 'clock stepped -5419 ms' (negative: the RTC ran
+    fast). ppm = milliseconds stepped / seconds waited x 1000, positive if
+    fast: 5419 ms in 59051 s is 92 ppm, so 'time cal 92'. The RTC is slowed or
+    sped up by the nearest step of 4.34 ppm and 'time' shows the rate applied
+    ('cal: slowed by 91.1 ppm'). The value replaces the previous one: after
+    measuring again, give the rate shown plus the new error. 'time cal off'
+    removes it. Saved, and written into the RTC at boot if the chip doesn't
+    have it.
+
+SEE ALSO
+    nts, tls, config
+@@ tls
+NAME
+    tls - the root certificates TLS trusts
+
+SYNOPSIS
+    tls roots
+    tls roots approve      (console only)
+    tls roots forget       (console only)
+
+DESCRIPTION
+    TLS (used by NTS and the HTTPS client) trusts the built-in roots (SSL.com
+    Root Certification Authority ECC, for Cloudflare's time server; ISRG Root
+    X1, Let's Encrypt) and, optionally, extra ones from the card in
+    /certs/roots.pem: a PEM bundle (text between the certificates is fine) or
+    DER certificates, up to 64 KB and 32 certificates. The file is used only
+    while it is exactly the file approved on the console:
+
+      1. Upload it anywhere with SFTP, e.g. 'put roots.pem incoming/roots.pem'.
+      2. On the console: 'mkdir /certs' (once), then
+         'mv /incoming/roots.pem /certs/roots.pem'.
+      3. On the console: 'tls roots approve'. It lists each certificate
+         (common name, key type, whether it is a CA, expiry, SHA-256
+         fingerprint), checks TLS can use it, and after 'yes' trusts exactly
+         that file; its SHA-256 is saved with the configuration.
+
+    Only the console can change anything under /certs, under any spelling.
+    A changed file isn't used until approved again: TLS then logs a warning
+    once and uses the built-in roots alone, as it does when the file or the
+    card is missing. A private key, or any PEM block other than a certificate,
+    makes the file invalid. 'tls roots' shows the built-in roots and the
+    file's state; 'tls roots forget' stops trusting it.
+
+    While the clock isn't set, certificate dates can't be checked: the first
+    key exchange accepts certificates whatever their dates (signatures and the
+    host name are still checked) and logs it.
+
+SEE ALSO
+    time, http, config
+@@ uptime
+NAME
+    uptime - time since boot, and what the last reset was
+
+SYNOPSIS
+    uptime
+
+DESCRIPTION
+    The time since the board started. If the last reset was not a power-on or
+    a 'reboot', it says what it was:
+
+        (last reset: watchdog)          the main loop stopped coming round
+        (last reset: glitch detector)   the detector reset the chip ('glitch')
+        last reset: hard fault ...      a fault or panic, with the addresses
+                                        to look up in build/sos.dis
+
+    Once flash has been written since boot (a configuration save, a console
+    login), a 'flash writes:' line says how many times, and how long the last
+    and the longest write held interrupts off, since nothing else runs during
+    one.
+
+SEE ALSO
+    version, glitch, reboot, crash
+@@ version
+NAME
+    version - firmware commit, board serial, chip revision, how it is secured
+
+SYNOPSIS
+    version
+
+DESCRIPTION
+    The first line names the commit the firmware was built from: 12 hex
+    digits, '-dirty' if the build had uncommitted changes, 'unknown' if it was
+    not built from a git checkout. It names the SOS commit only, not libraries
+    a build takes from outside the tree. The same line greets the console
+    above its first prompt and each SSH login.
+
+    Then:
+
+        board: serial ...     the serial number the board reports over USB
+                              and to picotool
+        chip: RP2350 A4 (revision 3, ROM 4)
+                              the chip revision, from its revision field and
+                              boot ROM version ('unknown revision' if the pair
+                              isn't one this firmware knows)
+        secure boot: on|off   as the chip latched it at reset
+        debug port: enabled | Secure debug disabled | disabled
+        root secret: in OTP | in flash (open board) | none
+        console-only setup: no|yes
+                              whether the board takes its settings only from
+                              'setup' on its console, refusing a configuration
+                              or host key written to its flash over USB (a
+                              marker of its own in OTP, not secure boot; 'yes'
+                              also when the marker can't be read)
+
+    A further line appears only if the OTP rows behind the flags can't be read
+    or say something else.
+
+SEE ALSO
+    bootkey, rootsecret, uptime
+@@ wall
+NAME
+    wall - send a message to every other shell
+
+SYNOPSIS
+    wall <message>
+
+DESCRIPTION
+    Shows the message in every other shell at once, as
+
+        [wall 14:02 alice@laptop] message
+
+    and says how many shells it was sent to. Times are UTC, or time since boot
+    ('+1h02m') until the clock is set. A message arrives between the reader's
+    keystrokes: their line is cleared, the message printed, and the prompt and
+    their typing redrawn; during a running command it appears on its own line.
+    A full-screen program (edit, more, man) holds messages until it quits.
+
+    Messages are kept only in memory (the last 16), never in the log or on the
+    card. A reader whose client has stopped reading doesn't hold the sender up
+    for more than 2 seconds; after that it misses messages and is told how many.
+
+SEE ALSO
+    chat, who
+@@ who
+NAME
+    who - who is logged in, and who is in the chat
+
+SYNOPSIS
+    who
+
+DESCRIPTION
+    One line per shell: its slot (0 is the console), the person's name, where
+    they are connected from, 'chat' if they are in the chat room, and how long
+    they have been logged in. Yours is marked '*'.
+
+    A person is named after the comment of the trusted key they logged in
+    with ('alice@laptop'; 'key <n>' if it has none), the console is 'console',
+    and a second login with the same key gets its slot added ('alice@laptop/2').
+
+SEE ALSO
+    wall, chat, ssh
+@@ wifi
+NAME
+    wifi - Wi-Fi networks, state and radio settings
+
+SYNOPSIS
+    wifi
+    wifi set | add | remove <n> | prefer <n> | connect     (console only)
+    wifi country <XX> | worldwide                          (console only)
+    wifi power [on | off]                            (change: console only)
+    wifi stats [chip]
+    wifi iovar <name> [<value>]                            (console only)
+    wifi keepalive on | off                                (console only)
+
+DESCRIPTION
+    'wifi' lists the saved networks, numbered in the order they are preferred,
+    each with whether a password is set and the connected one marked, then
+    the connection state, power saving and country.
+
+    'wifi set' changes the first network: it asks for the SSID and the
+    password (not echoed), saves them and reconnects. 'wifi add' saves another
+    (up to 5 in all), after the others. The board joins the first saved
+    network in reach when it connects; while connected it doesn't notice a
+    preferred network coming into reach until the link drops or 'wifi
+    connect'. 'wifi remove <n>' forgets network n and reconnects if it was in
+    use; 'wifi prefer <n>' moves it to the front, for the next connect. 'wifi
+    connect' reconnects now, trying the saved networks from the first again.
+
+    Wi-Fi connects in the background, retries after failures and reconnects
+    if the link drops; the console is usable throughout. On a network with
+    several access points the board ends up on the strongest; the log names
+    it.
+
+    'wifi country <XX>' sets the country whose radio rules to follow, as two
+    capital letters (US), or 'worldwide' for the chip's worldwide set (the
+    default). Saved; takes effect at the next boot.
+
+    'wifi power on|off' turns power saving on or off (saved; default off).
+    With it on the radio sleeps between beacons when idle: lower power, but
+    the first packet after a quiet spell can take a little longer.
+
+    'wifi stats' is for chasing packet loss: signal, noise floor, channel,
+    access point and transmit rate; packets sent, received and dropped per
+    protocol since boot; TCP segments resent; and how full lwIP's pools got.
+    'wifi stats chip' adds the Wi-Fi chip's own counters, raw (index: value);
+    their layout isn't published, so compare two readings.
+
+    'wifi iovar' reads or sets a 32-bit variable in the Wi-Fi chip (2g_rate,
+    ampdu_tx, qtxpower ...), for debugging; not saved, and an unknown name
+    reads back as a meaningless value, not an error. 'wifi keepalive off'
+    stops the once-a-minute address announcement until reboot, for testing
+    (see 'net').
+
+SEE ALSO
+    net, setup, hostname, config

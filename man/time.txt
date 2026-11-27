@@ -1,0 +1,49 @@
+NAME
+    time - the clock, the RTC and time sync over NTS
+
+SYNOPSIS
+    time
+    time sync
+    time sync sntp                      (console only)
+    time auto [<hours> | off]           (change: console only)
+    time cal [<ppm> | off]              (change: console only)
+    time server [<name> | default]      (change: console only)
+
+DESCRIPTION
+    All times are UTC. The RTC (a PCF8523 on the Adalogger, with its coin
+    cell) is the source of truth: at boot the clock is set from it. Network
+    time comes from NTS (Network Time Security, authenticated NTP): a TLS key
+    exchange with the NTS server on port 4460, then NTP queries that only
+    accept replies that check out under the server's key. There is no
+    fallback to plain NTP: without NTS and without an RTC time, the clock
+    stays unset.
+
+    'time' shows the date and time and where it came from (RTC, NTS or SNTP),
+    the RTC's reading and backup-battery state, the calibration, the last sync
+    with its correction and round trip, a failed attempt and when it is
+    retried, the server and the periodic setting.
+
+    'time sync' syncs the clock and the RTC from NTS now. The board also syncs
+    by itself when the RTC has no valid time (retrying with doubling delays),
+    and periodically if 'time auto <hours>' (1 to 720; default off) is set:
+    one interval after the last successful sync, or after boot if there has
+    been none. A correction of more than 5 minutes is logged as a warning.
+    'time sync sntp' does one plain, unauthenticated SNTP sync on request.
+
+    'time server <name>' sets the NTS server (host name or IPv4 address);
+    'default' goes back to the build-time one (time.cloudflare.com). Its
+    certificate must chain to a trusted root ('tls roots').
+
+    'time cal <ppm>' corrects the RTC's rate. To measure: 'time sync', leave
+    the board for a day or more, restart it and 'time sync' again; 'time'
+    shows the step, e.g. 'clock stepped -5419 ms' (negative: the RTC ran
+    fast). ppm = milliseconds stepped / seconds waited x 1000, positive if
+    fast: 5419 ms in 59051 s is 92 ppm, so 'time cal 92'. The RTC is slowed or
+    sped up by the nearest step of 4.34 ppm and 'time' shows the rate applied
+    ('cal: slowed by 91.1 ppm'). The value replaces the previous one: after
+    measuring again, give the rate shown plus the new error. 'time cal off'
+    removes it. Saved, and written into the RTC at boot if the chip doesn't
+    have it.
+
+SEE ALSO
+    nts, tls, config

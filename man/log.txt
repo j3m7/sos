@@ -1,0 +1,17 @@
+NAME
+    log - show or set the log levels
+
+SYNOPSIS
+    log
+    log console <level>      (console only)
+    log history <level>      (console only)
+
+DESCRIPTION
+    Two levels decide what the log does with a message: 'console' is what the
+    serial console prints as it happens (default notice), 'history' what is
+    kept in memory for 'dmesg' (default info). Levels, from most to least
+    important: err, warning, notice, info, debug. A change lasts until reboot
+    and is itself logged (facility auth).
+
+SEE ALSO
+    dmesg, logger

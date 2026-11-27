@@ -1,0 +1,25 @@
+NAME
+    bootkey - would this firmware still start with secure boot on?
+
+SYNOPSIS
+    bootkey
+
+DESCRIPTION
+    Finds the public key the running firmware is signed with, hashes it as the
+    boot ROM does, and compares that with the four boot key slots in the
+    chip's one-time-programmable memory. It prints the firmware's key hash (or
+    'not signed'), each slot that isn't blank with its mark ('valid', 'not
+    marked valid', 'marked invalid'), whether secure boot is on, and a verdict:
+
+        MATCH         a valid slot holds the hash of this firmware's key
+        NOT YET       a slot holds it but isn't marked valid
+        NO MATCH      no slot holds it
+        NO VERDICT    the slots can't be read or the key can't be determined
+
+    MATCH compares keys; it doesn't check the signature over the firmware,
+    which 'picotool info -a' does. The command only reads. It exists for the
+    procedure that secures a board: turning secure boot on with the wrong key
+    hash in OTP leaves a board that runs nothing.
+
+SEE ALSO
+    version, rootsecret

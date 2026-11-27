@@ -1,0 +1,20 @@
+NAME
+    temp - the chip's temperature, and the lowest and highest since boot
+
+SYNOPSIS
+    temp
+
+DESCRIPTION
+    The RP2350's own temperature sensor, read every 10 s, with the lowest and
+    highest readings since boot and how long ago each was taken. It is logged
+    at boot, when it has moved a degree (at most once a minute) and at least
+    once an hour.
+
+    It is the chip's temperature, not the room's: the chip runs warmer than
+    the air, more so under Wi-Fi load. The sensor is uncalibrated and can be a
+    few degrees off, but it is good for change over time on one board. The
+    glitch detector's report ('glitch') includes the last reading before a
+    detector reset.
+
+SEE ALSO
+    glitch, dmesg

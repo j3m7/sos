@@ -41,6 +41,7 @@
 #include "core/version.h"
 #include "core/wdog.h"
 #include "edit/edit.h"
+#include "man/man.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "lua/lua_core1.h"
@@ -252,6 +253,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "man [<topic>]     the manual: list the pages, or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
@@ -1776,6 +1778,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         edit_command(sh, args);
     else if (!strcmp(cmd, "more"))
         view_command(sh, args);
+    else if (!strcmp(cmd, "man"))
+        man_command(sh, args);
     else if (!strcmp(cmd, "http"))
         http_command(sh, args);
     else if (!strcmp(cmd, "passwd"))

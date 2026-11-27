@@ -1,0 +1,26 @@
+NAME
+    man - the manual: list the pages, read one, or install them
+
+SYNOPSIS
+    man
+    man <topic>
+    man install
+
+DESCRIPTION
+    'man' lists the pages on the card with a line on each; 'man <topic>' shows
+    one in the pager (q quits, h lists the keys, / searches). A topic is a
+    command name ('man wifi'); 'man intro' is a place to start.
+
+    The pages live on the SD card as /man/<topic>.txt; the firmware holds
+    none. When there are none, 'man' offers to download them. 'man install'
+    downloads them from the SOS repository on GitHub over HTTPS (the board
+    needs the network and the time): one file, man/pages.bundle, from the
+    commit this firmware was built from so the pages match it, or from main
+    if that commit's pages aren't on GitHub. Each page is written to
+    /man/<topic>.~new and renamed into place when complete, so a download
+    that fails midway leaves the earlier pages whole. The other way is
+    tools/man-install.sh <host> on the development machine, which copies the
+    pages over SFTP.
+
+SEE ALSO
+    help, more, intro

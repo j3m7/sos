@@ -1,0 +1,12 @@
+NAME
+    mkdir - create a directory
+
+SYNOPSIS
+    mkdir <dir>
+
+DESCRIPTION
+    Creates the directory. Only the console may create /certs, which holds the
+    extra TLS root certificates ('tls roots').
+
+SEE ALSO
+    rm, ls, tls

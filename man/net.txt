@@ -1,0 +1,16 @@
+NAME
+    net - Wi-Fi link state, address and ARP counters
+
+SYNOPSIS
+    net
+
+DESCRIPTION
+    The Wi-Fi link state and signal strength (RSSI), the IP address, gateway
+    and hostname, and the ARP packets received and sent with the keepalive
+    state. While connected the board announces its address once a minute (a
+    gratuitous ARP), without which a device that sends nothing stops receiving
+    broadcasts and clients get "no route to host" once the router forgets it;
+    'wifi keepalive off' turns the announcement off until reboot, for testing.
+
+SEE ALSO
+    wifi, hostname, ssh
