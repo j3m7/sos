@@ -12,8 +12,9 @@
 // disk over it (the image stays as it was), with the first run's window and budget: a repair
 // mustn't crash or hang either, no step may read past its budget or transfer more than
 // budget + 2 sectors, every write is one sector, and a repair that finishes leaves nothing its
-// final check would repair again. It only writes sectors that hold data, or their second FAT
-// copy, so the overlay never fills.
+// final check would repair again. FAT32 or exFAT alike. It only writes sectors that hold data,
+// their second FAT copy, or exFAT bitmap sectors (at most 32 on a device of FSCK_IMAGE_DEVICE_MAX
+// sectors), so the overlay never fills.
 
 #include <stdlib.h>
 #include <string.h>
@@ -169,7 +170,7 @@ static void repair(size_t window, uint32_t budget) {
         abort();
     if (st == FSCK_FAILED) {
         // No read or write fails here, so only the first check can fail (no volume, a boot
-        // sector FatFs refuses, exFAT), before anything is written.
+        // sector FatFs refuses), before anything is written.
         if (fsck_repair_phase(r) != FSCK_PHASE_FAILED || cow.writes || !fsck_repair_why(r))
             abort();
         return;

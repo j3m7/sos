@@ -32,9 +32,20 @@ still refers to.
   `unmounted_by_hand` set, and the last line printed and logged. The job's budget (sector
   reads per `fsck_step()`) doubles or halves to keep a step near 20 ms. Report lines lose
   their control characters on the way to the terminal (names come from the card).
+- **`sd check fix`** (design §10.3): the same command and job around `fsck_repair.h`
+  (`fsck_repair_state_size()` plus the same window). At `FSCK_PLAN` the step prints the check's
+  summary and the plan (`fsck_plan.c`), then asks `yes` with `shell_ask()` and ends the job;
+  `checking` stays set and the job's memory is kept (`fix_asking`). `on_fix_confirm()` ends it
+  through `check_end()` on anything but `yes` (or after `config reset`), else calls
+  `fsck_repair_confirm()` and runs the job again: the repair, then the final check. A question
+  the console drops unanswered (it locks itself, which ends what runs on it) is ended by
+  `check_orphaned()`, called from the `sd` commands, `sdcard_mount()` and the log writer's
+  retry. Writes go one sector at a time through `disk_write(0)`, so through the layer and
+  `sd fault`'s hook; the first that fails stops the repair. `check_end()` syncs the driver
+  after any write. Its lines are logged as `sd: check fix: ...`.
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
-  end), unmounting and checking.
+  end), unmounting, checking and repairing.
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
 
@@ -183,29 +194,41 @@ back as bits with `*_text()` lines. `fsck_exfat.h` lists the rules decided here.
 
 ## `fsck_repair.c`: repairing the card (pure C, host tested)
 
-The repairs behind the coming `sd check fix` ([design](../../docs/design/sd-check.md) §10), on
-top of `fsck.c`. Not in the firmware yet: phase 5b adds the command.
+The repairs behind `sd check fix` ([design](../../docs/design/sd-check.md) §10), on top of
+`fsck.c`. The command (`sdcard.c`) prints its plan and results with `fsck_plan.c`, below.
 
 - **Shape:** a job of checker runs over the same memory (`fsck_repair_state_size()` plus the
   window): a check whose findings are the plan, a wait for the caller's yes
   (`fsck_repair_confirm()`), a repair run that writes at the checker's hook points, and a final
   check. `fsck_repair_step()` takes the same budget as `fsck_step()`, writes counted in it.
   The hooks reach `fsck.c` through a table, so a plain check links without this file.
-- **What it repairs (FAT32; exFAT volumes are checked but not repaired yet):** lost clusters are
-  freed, chains longer than their file are ended at the file's last cluster (their tail is then
-  freed as lost), FSInfo's free count is set to unknown before anything else, and the second FAT
-  gets every change after the first (and the first's bytes where it differs). Nothing else is
-  changed. Trims are skipped when anything is cross-linked; nothing is freed or trimmed when
-  part of the tree couldn't be walked. `fsck_repair.h` lists the rules.
+- **What it repairs:** lost clusters are freed, and chains longer than their file are ended at
+  the file's last cluster (their tail is then freed as lost). On FAT32, FSInfo's free count is
+  set to unknown before anything else, and the second FAT gets every change after the first
+  (and the first's bytes where it differs). On exFAT, freeing clears bits in the allocation
+  bitmap, clusters reached but clear in it get their bit set, the end mark is 0xFFFFFFFF, and a
+  NoFatChain file's clusters past its run are simply lost clusters. Nothing else is changed.
+  Trims are skipped when anything is cross-linked; nothing is freed or trimmed when part of the
+  tree couldn't be walked (on exFAT also when a chain breaks on a free or bad entry).
+  `fsck_repair.h` lists the rules.
 - **Writes:** one sector each, ordered so that stopping after any of them leaves every file
-  reading the same bytes and the volume no worse; a failed read or write stops it at once.
-- **Tests:** `tests/test_fsck_repair.c` repairs FatFs-made images damaged by
+  reading the same bytes and the volume no worse; a failed read or write stops it at once. An
+  exFAT bitmap sector's sets and clears go in one write.
+- **Tests:** `tests/test_fsck_repair.c` repairs FatFs-made FAT32 and exFAT images damaged by
   `tests/fsck_damage.c`, one kind at a time and in seeded random mixes, and runs the fault
   harness (`tests/fsck_faults.c`) over them: a power cut after every write, every write failing,
   and reads failing. It checks the plan against the damage, what the volume and its files look
   like after every fault and after a full repair, and that a tiny window gives the same result.
   `tests/fuzz/fuzz_fsck.c` repairs mutated images on a copy-on-write disk when the selector's top
   bit is set.
+
+## `fsck_plan.c`: the words of `sd check fix` (pure C, host tested)
+
+What `sd check fix` prints and logs about a plan of `fsck_repair.h`: `fsck_plan_show()` the
+lines before the question (what is repaired, what is left alone and why), `fsck_plan_brief()`
+the plan on one log line, `fsck_done_line()` what a repair wrote. They follow
+`fsck_plan_writes()`'s rules (frees and trims skipped when the tree wasn't all read, trims when
+anything is cross-linked). `tests/test_fsck_plan.c` checks the lines.
 
 ## `sdfault.c`: injected write faults (test builds only, host tested)
 
