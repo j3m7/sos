@@ -96,7 +96,7 @@ void pager_set_log_waiting(pager_t *p, int n);
 // pager_grow() with the new size (larger than before; a smaller one is ignored). The line count
 // is extended, not redone; a view scrolled back doesn't move; a view on the end shows the new
 // lines on the next frame, and so does one in follow mode (the F key: stay on the end as text
-// arrives; any other key that moves the view leaves it). While growing, the status row shows
+// arrives; any other key, except h, ? and Ctrl-L, leaves it). While growing, the status row shows
 // the total as `...` and the end key goes to the end so far. pager_set_growing(p, false) says
 // the text is complete: the total is shown from then on, and follow mode ends.
 // Bytes already in the text must not change; only the end grows.

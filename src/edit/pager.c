@@ -496,6 +496,7 @@ pager_action_t pager_key(pager_t *p, int key) {
         return PAGER_RESIZE;
     case 'h':
     case '?':
+        // Growing: "F follow" takes the room of "d/u half"; d and u still work.
         pager_message(p, p->growing
                              ? "Space/b page, j/k line, g/G ends, F follow, / find, n next, q quit"
                              : "Space/b page, j/k line, d/u half, g/G ends, / find, n next, q quit");
