@@ -30,7 +30,9 @@ The timeout covers DNS, connect and handshake together. When ready, `tls_read()`
 `tls_write()` never block. `tls_error()` says why a connection failed, and `tls_stats()` gives
 timings and heap use.
 
-- **I/O:** the lwIP callbacks (interrupt context) only queue received data in a ring buffer.
+- **I/O:** the lwIP callbacks (interrupt context) only queue received data in a ring buffer
+  and set flags. They don't log: a close or a TCP error is logged from the main loop, by `io_recv`
+  when it next reads or in the warning when wolfSSL next fails.
   wolfSSL's custom I/O callbacks (`io_recv`, `io_send`) read and write it from the main loop.
 - **Handshake:**
   - TLS 1.3 only, with SNI, ALPN when given, and host-name verification.
