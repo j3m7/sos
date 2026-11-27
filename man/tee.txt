@@ -21,7 +21,13 @@ DESCRIPTION
 
 NOTES
     tee works only after a '|': typed on its own it says so. It takes one
-    path, without spaces. More about pipes in 'man more'.
+    path; quote one with spaces ('tee "my notes.txt"').
+
+    '<command> > <path>' is a quiet tee: the shell adds one as the last
+    stage that writes the file and passes nothing on, so nothing reaches the
+    screen ('dmesg | grep wifi > /w.txt'); '>>' appends. Its messages are
+    tee's. A '>' ends the line, and doesn't go with '| more'. More about
+    pipes in 'man more'.
 
 SEE ALSO
     echo, cat, more, head, grep

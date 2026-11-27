@@ -10,6 +10,8 @@ DESCRIPTION
 
         [14:03] alice@laptop: hi
 
+    Lines typed in the room are sent as they are: unlike a command line
+    (QUOTING in 'man intro'), quotes, '|' and '>' in them are plain text.
     Joining and leaving are announced. In the room:
 
         /who          who is in the room

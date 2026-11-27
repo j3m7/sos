@@ -1,17 +1,20 @@
 NAME
-    echo - print text, or write or append it to a file
+    echo - print text
 
 SYNOPSIS
     echo <text>
-    echo <text> > <file>
-    echo <text> >> <file>
 
 DESCRIPTION
-    Prints the text, or with '>' writes it as a line to the file (replacing
-    it), or with '>>' appends it as a line. Only the console may write under
-    /certs.
+    Prints the text and a newline. The words are printed with single spaces
+    between them; quote the text to keep its spaces or to print a '|', '>' or
+    an apostrophe: echo "a   b", echo "it's" (QUOTING in 'man intro').
 
-    To write a command's output to a file, use 'tee': 'dmesg | tee /d.txt'.
+    '> <file>' after it is the shell's, as after any command: 'echo hi >
+    /x.txt' writes the line to the file (replacing it), and '>> /x.txt'
+    appends it. The same works for every command: 'dmesg > /d.txt'. The file
+    is written even when the command prints nothing (it is then empty; 'echo
+    > /x.txt' gives it one empty line). Only the console may write under
+    /certs and /var/log.
 
 SEE ALSO
     cat, edit, tee

@@ -19,5 +19,8 @@ DESCRIPTION
     card. A reader whose client has stopped reading doesn't hold the sender up
     for more than 2 seconds; after that it misses messages and is told how many.
 
+    Quote a message that holds an apostrophe, a '|' or '>' or repeated spaces:
+    wall "don't reboot" (QUOTING in 'man intro').
+
 SEE ALSO
     chat, who
