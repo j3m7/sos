@@ -137,11 +137,13 @@ static void wolf_error(tls_conn_t *c, const char *what, int err) {
     err_t tcp_err = c->tcp_err;
     cyw43_arch_lwip_end();
     if (closed && connected && reset)       // with lwIP's error code: the callback doesn't log it
-        log_msg(SOS_LOG_WARNING, "tls: %s reset the connection (tcp error %d) %lu ms after "
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "tls: %s reset the connection (tcp error %d) %lu ms after "
                 "accepting it", c->host, (int)tcp_err,
                 (unsigned long)((closed - connected) / 1000));
     else if (closed && connected)
-        log_msg(SOS_LOG_WARNING, "tls: %s closed the connection %lu ms after accepting it",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "tls: %s closed the connection %lu ms after accepting it",
                 c->host, (unsigned long)((closed - connected) / 1000));
 }
 
@@ -219,7 +221,7 @@ static int io_recv(WOLFSSL *ssl, char *buf, int sz, void *ctx) {
         bool closed = fin || failed;
         // What the callbacks saw, said here: they run in interrupt context and don't log.
         if (closed)
-            log_msg(SOS_LOG_DEBUG,
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
                     "tls: recv: closed (peer_closed %d, tcp_failed %d, tcp error %d)", fin, failed,
                     (int)tcp_err);
         return closed ? WOLFSSL_CBIO_ERR_CONN_CLOSE : WOLFSSL_CBIO_ERR_WANT_READ;
@@ -285,7 +287,8 @@ static void start_connect(tls_conn_t *c) {
     uint64_t t0 = time_us_64();
     if (!setup_session(c))
         return;
-    log_msg(SOS_LOG_DEBUG, "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
+            "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
     if (ssh_ringbuffer_init(&c->rx, NULL, TCP_WND) != 0) {
         fail(c, "out of memory");
         return;
@@ -389,7 +392,7 @@ static void handshake_step(tls_conn_t *c) {
         }
         c->stats.handshake_us = time_us_64() - c->connected_us;
         const char *group = wolfSSL_get_curve_name(c->ssl);
-        log_msg(SOS_LOG_DEBUG, "tls: handshake done, key exchange group %s",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG, "tls: handshake done, key exchange group %s",
                 group ? group : "?");
         c->state = TLS_READY;
         return;

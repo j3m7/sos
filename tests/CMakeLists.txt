@@ -56,9 +56,14 @@ target_include_directories(test_charwidth PRIVATE ${SOS_ROOT}/src)
 add_test(NAME charwidth COMMAND test_charwidth)
 
 # src/edit/editor.c: the full-screen editor's text, keys and screen.
-add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
+add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/edit/screen.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
 target_include_directories(test_editor PRIVATE ${SOS_ROOT}/src)
 add_test(NAME editor COMMAND test_editor)
+
+# src/edit/pager.c: the pager's window, keys and screen.
+add_executable(test_pager test_pager.c ${SOS_ROOT}/src/edit/pager.c ${SOS_ROOT}/src/edit/screen.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
+target_include_directories(test_pager PRIVATE ${SOS_ROOT}/src)
+add_test(NAME pager COMMAND test_pager)
 
 # src/files/path.c: path resolution for the file commands.
 add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)

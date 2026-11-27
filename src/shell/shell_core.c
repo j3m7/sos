@@ -260,6 +260,7 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->line_len = 0;
     sh->last_was_cr = false;
     sh->keys = (keys_t)KEYS_INIT;
+    sh->logger_quota = (log_quota_t){0};    // a reused SSH slot starts with its own count
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;

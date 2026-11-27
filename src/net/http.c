@@ -44,13 +44,15 @@ static void fail(http_req_t *r, const char *fmt, ...) {
     va_end(ap);
     r->state = HTTP_FAILED;
     r->end_us = time_us_64();
-    log_msg(SOS_LOG_WARNING, "http: %s %s failed: %s", r->method, r->url.host, r->error);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+            "http: %s %s failed: %s", r->method, r->url.host, r->error);
 }
 
 static void finish(http_req_t *r) {
     r->state = HTTP_DONE;
     r->end_us = time_us_64();
-    log_msg(SOS_LOG_INFO, "http: %s %s: %d, %llu bytes, %u ms", r->method, r->url.host,
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO,
+            "http: %s %s: %d, %llu bytes, %u ms", r->method, r->url.host,
             r->resp.status, (unsigned long long)r->resp.body_received, (unsigned)http_elapsed_ms(r));
 }
 

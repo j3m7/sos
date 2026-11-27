@@ -60,7 +60,8 @@ void chiptemp_poll(void) {
     chiptemp_format(now_t, sizeof(now_t), stats.last);
     chiptemp_format(lo, sizeof(lo), stats.min);
     chiptemp_format(hi, sizeof(hi), stats.max);
-    log_msg(SOS_LOG_NOTICE, "chip temperature %s (since boot: lowest %s, highest %s)",
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+            "chip temperature %s (since boot: lowest %s, highest %s)",
             now_t, lo, hi);
     chiptemp_stats_logged(&stats);
 }

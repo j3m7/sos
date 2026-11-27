@@ -32,7 +32,7 @@ bool keysector_write(unsigned page, const uint8_t *data) {
     if (page >= KEYSECTOR_PAGES)
         return false;
     if ((uintptr_t)&__flash_binary_end > XIP_BASE + KEYSECTOR_OFFSET) {
-        log_msg(SOS_LOG_ERR, "keys: firmware image overlaps the key sector");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "keys: firmware image overlaps the key sector");
         return false;
     }
     memcpy(pages, keysector_page(0), sizeof(pages));

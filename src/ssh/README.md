@@ -31,6 +31,9 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 - **Disconnect:** queued output is sent, then the exit status and channel close, then the
   server waits briefly for the client to close the TCP connection.
 - **Authentication:** public key only (password support was removed).
+- **Log facility:** messages about connections and logins (accepted, refused, timed out,
+  disconnected, address penalized) carry syslog's `LOG_AUTH`; accepted and failed keys name the
+  client's address. `sshd.c`'s `log_cb` puts those in the auth log and the rest in daemon.
 
 ## `sshd.c`: SOS's side
 
