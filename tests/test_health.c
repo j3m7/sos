@@ -233,12 +233,12 @@ TEST(gates) {
     CHECK(health_gate_refuse(HEALTH_GATE_KEYS) == NULL);
     CHECK(!strcmp(health_refusal(), "trng"));       // the last refusal is remembered
     // A check added later holds its gate the same way.
-    static const health_check_t extra = {"inject-keys", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS,
+    static const health_check_t extra = {"inj-keys", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS,
                                          step5};
     CHECK(health_add(&extra));
     CHECK(!health_add(&extra));                     // once
-    CHECK(health_inject("inject-keys", HEALTH_FAIL, "by hand"));
-    CHECK(!strcmp(health_gate(HEALTH_GATE_KEYS), "inject-keys"));
+    CHECK(health_inject("inj-keys", HEALTH_FAIL, "by hand"));
+    CHECK(!strcmp(health_gate(HEALTH_GATE_KEYS), "inj-keys"));
 }
 
 // --- background scheduling -----------------------------------------------------------------------

@@ -77,7 +77,8 @@ static void save(shell_t *sh) {
     if (settings_save())
         return;
     if (settings_save_refused())
-        shell_printf(sh, SETTINGS_REFUSED_FMT, settings_save_refused());
+        shell_printf(sh, SETTINGS_REFUSED_FMT "the change holds only until a reboot\n",
+                     settings_save_refused());
     else
         shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
 }
@@ -2181,8 +2182,8 @@ static void health_inject_cmd(shell_t *sh, const char *what, const char *how) {
         return;
     }
     health_print_row(sh, (unsigned)health_find(!strcmp(what, "gate")
-                                               ? (!strcmp(how, "keys") ? "inject-keys"
-                                                                       : "inject-crypto")
+                                               ? (!strcmp(how, "keys") ? "inj-keys"
+                                                                       : "inj-crypto")
                                                : what));
 }
 #endif

@@ -107,10 +107,10 @@ static health_step_t check_injected(void **state, bool cancel, health_result_t *
 }
 
 static const health_check_t inject_keys = {
-    "inject-keys", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS, check_injected,
+    "inj-keys", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS, check_injected,
 };
 static const health_check_t inject_crypto = {
-    "inject-crypto", HEALTH_FULL, 0, 0, HEALTH_GATE_CRYPTO, check_injected,
+    "inj-crypto", HEALTH_FULL, 0, 0, HEALTH_GATE_CRYPTO, check_injected,
 };
 
 bool health_board_inject_gate(const char *gate) {

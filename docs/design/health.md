@@ -335,8 +335,8 @@ Where the build settled details this note left open, or differs from it:
   since its last run (`sensors_vsys_min_take()`); run again before a new reading (`health run`
   right after the background run), it takes the latest reading.
 - **`health inject <name> clear`** records PASS ("cleared by hand"), so the change is logged
-  like any other. The gate checks are full-tier checks named `inject-keys` and
-  `inject-crypto`; `health full` runs them and they pass, which opens the gate again.
+  like any other. The gate checks are full-tier checks named `inj-keys` and
+  `inj-crypto`; `health full` runs them and they pass, which opens the gate again.
 - **Full tier:** phase 1 has none (`sd check` is phase 5). `health full` is `health run` plus
   any test-only checks.
 - **SSH refusal:** `health run` and `health full` check `io->admin` themselves, to print this
