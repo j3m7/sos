@@ -10,7 +10,9 @@ This note sets the rules so that the phases (§10) can be built without deciding
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design. Tracking issue: #233.
+Status (2026-11-27): design. Tracking issue: #233. Revised after Reviewer's review of #235:
+§2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in place
+already.
 
 ## 1. What exists today
 
@@ -23,7 +25,8 @@ them instead of replacing them:
 - **Sensors:** `sensors_temp_stats()` and `sensors_vsys_stats()` (last, min, max and when),
   `sensors_usb_power()`. Read every 10 s by `sensors_poll()`.
 - **Memory:** `stackmon_peak()` for core 0 (painted at boot), `lua_core1_stack_peak()` for the
-  32 KB Lua stack on core 1 (painted when a script starts), `heap_info()`, `heap_free()`, and
+  32 KB Lua stack on core 1 (painted when a script starts). Core 0's stack is also guarded:
+  `PICO_USE_STACK_GUARDS` (MSPLIM), and `fault.c` reports a stack overflow. `heap_info()`, `heap_free()`, and
   use by feature from `heaptag.h`.
 - **Stored state:** the config records carry a CRC and are sealed (AES-GCM). `config.c` picks
   the newest valid record of the two but doesn't say whether the other one was valid.
@@ -40,8 +43,10 @@ nothing compares one store with another. Those are the new checks in phases 2 to
 1. **Boot FAIL: log it and refuse what depends on it** (§6). No check stops the boot. A board
    that refused to boot would also refuse the console you need to find out why.
 2. **`health` shows results in any shell, runs checks only on the console.** `health run` and
-   `health full` take the CPU for a while, and `health full` shuts the card out (`sd check`).
-   Lua reads results and doesn't run checks.
+   `health full` take the CPU for a while. Lua reads results and doesn't run checks.
+   `health full` doesn't unmount the card: its `sd check` step runs only on a card that was
+   unmounted first (`sd unmount`, as `sd check` requires, sd-check.md §2.1). On a mounted card
+   that step is SKIP with `card mounted: run sd unmount first`.
 3. **The latest result counts.** A gate follows the check's latest result: a check that fails
    at boot and passes on `health run` opens its gate again. Every change of status is logged,
    so a FAIL that cleared stays in the record.
@@ -175,12 +180,23 @@ refusal. These are the call sites:
 
 What a refusal means at each site, and why it is safe:
 
-- **Root secret:** the board runs with no root secret, as a board does today when the flash
-  record can't be written (`rootflash_degraded()`). Nothing that needs it works, and `version`
-  says so.
+- **Root secret:** this only matters on a fresh open board, one that has no root secret yet. A
+  board that already has one is unaffected, because reading it isn't gated. On a fresh board a
+  KEYS refusal at first boot leaves it with no root secret, and the console stays locked in its
+  rescue state (`console_no_keys()` in `shell.c`), offering only `rootsecret`,
+  `rootsecret forget` and `reboot`. Two changes make the real cause visible there:
+  - `health` (showing results only) is added to `console_rescue_allowed()`.
+  - The refusal records why, and `console_no_keys()` shows that instead of its root-secret
+    advice: `key making refused: health check trng failed`, followed by a pointer to `health`.
+
+  Once the check passes, a reboot makes the secret as usual.
 - **Owner secret and sealing:** the configuration isn't saved, and the command that wanted to
   save it says `the configuration wasn't saved: health check <name> failed`. What's already in
-  flash stays as it was.
+  flash stays as it was. That promise holds only if every caller of `settings_save()` checks
+  its result and says so. Phase 1 audits all four callers: `settings.c`, `shell.c`,
+  `tls/certstore.c` (`tls roots approve`) and `files/cardkey.c`. The last two matter most,
+  because nobody would expect approving a TLS root or setting up a card key to be refused by a
+  crypto self-test. A caller that ignores the result would drop the change silently.
 - **Host key:** `sshd` doesn't start. The console still works.
 - **Card format:** refused before anything is written to the card.
 - **Password:** refused, and the old password stays.
@@ -199,7 +215,8 @@ adds the gate API and the call sites, but none of its checks hold a gate. A test
 ```
 health                      results of every check (any shell)
 health run [<name>]         run the boot and background checks now, or one check (console only)
-health full                 also the slow checks: RAM, image hash, sd check (console only)
+health full                 also the slow checks: RAM, image hash, sd check (console only;
+                            sd check is SKIP unless the card was unmounted first)
 ```
 
 `health` prints one line per check in table order, then the boot tier's time:
@@ -248,11 +265,16 @@ tier and status on the board without new hardware code:
 | `resets` | boot | the last reset was a fault, watchdog or glitch detector reset (text says which) | — |
 | `glitch` | background, 60 s | the loop guard tripped (detector left off) | — |
 | `stack` | background, 60 s | core 0 peak over 75 % of its stack, or core 1 over 75 % of 32 KB | over 90 % |
-| `heap` | background, 60 s | free heap under 64 KB (a TLS handshake needs about 64 KB) | under 16 KB |
+| `heap` | background, 60 s | free heap under 64 KB (a TLS handshake needs about 64 KB); back to PASS only above 96 KB | under 16 KB |
 | `chip-temp` | background, 60 s | over 70 C | over 85 C |
 | `supply` | background, 60 s | on USB power, VSYS min since the last check under 4.3 V | under 3.0 V |
 
-None of these holds a gate. The temperature figures are starting points. The sensor reads the
+None of these holds a gate. `heap` has hysteresis because ordinary use comes near its WARN
+line: the heap is about 380 KB, an SSH session with an SFTP transfer takes about 100 KB
+(`docs/files.md`) and TLS about 24 KB more, so two sessions transferring at once approach
+64 KB free. Without hysteresis it would flip, and log a line, with every transfer. Both figures
+are provisional until the phase 1 slot measures free heap with two SFTP sessions running. The
+temperature figures are starting points. The sensor reads the
 die, a few degrees off when uncalibrated (`temp cal`), and dev-1 idles around 30 C. Phase 1
 checks them against the electrical ratings in the RP2350 datasheet before they are fixed. The
 thresholds are named constants in `health.h`, and the judging
@@ -299,10 +321,7 @@ test-only check holding that gate at FAIL. That way the board test can see each 
    runs, and reset history.
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check.
-6. **Stack guards:** `PICO_USE_STACK_GUARDS` for core 0, checked against the
-   `-Wstack-usage=1536` build. (#233 also listed painting core 1's stack, but that is done
-   already: `lua_core1_stack_peak()`.)
-7. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
+6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
 
 ## 11. Left open for later phases
 
