@@ -129,6 +129,12 @@ the format is tested on the host (`tests/test_lua_info.c`). Each table is read w
 (the sensors' latest readings, not new ones), so `LR_INFO` is answered in the same pass, from a
 shell job too. `sos.mem` adds `script`, the script's own allocation, which core 1 keeps.
 
+`sos.dmesg` is `LR_INFO` too (`LH_DMESG`), with its cursor in `lua_req.arg`. A record with an
+empty name is appended to its table as a list item. Core 0 (`dmesg_table()`) writes as many
+entries as fit (`log_history_entry()`, which also says whether entries after the cursor were
+overwritten), with the cursor after the last one and `more`; core 1 asks again from that cursor
+while `more` is set (at most 8 pages) and joins the pages into one list.
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).

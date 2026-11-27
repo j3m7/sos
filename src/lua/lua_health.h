@@ -19,11 +19,12 @@ typedef enum {
     LH_RESET,                   // sos.reset_reason()
     LH_GLITCH,                  // sos.glitch()
     LH_WIFI,                    // sos.wifi.status()
+    LH_DMESG,                   // sos.dmesg(): one page of the log, from cursor `arg`
     LH_TABLES
 } lua_health_table_t;
 
-// Write table `which` into buf (lua_info.h records). Returns the bytes used, or 0 if it didn't
-// fit or `which` is unknown.
-size_t lua_health_fill(lua_health_table_t which, uint8_t *buf, size_t cap);
+// Write table `which` into buf (lua_info.h records); `arg` is its argument (LH_DMESG's cursor).
+// Returns the bytes used, or 0 if it didn't fit or `which` is unknown.
+size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, size_t cap);
 
 #endif

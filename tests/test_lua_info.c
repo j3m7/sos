@@ -67,6 +67,33 @@ static void round_trip(void) {
     lua_settop(L, top);
 }
 
+static void unnamed_records_make_a_list(void) {
+    lua_info_t w;
+    lua_info_begin(&w, buf, sizeof(buf));
+    lua_info_open(&w, "entries");
+    for (int i = 1; i <= 3; i++) {
+        lua_info_open(&w, "");
+        lua_info_int(&w, "n", i);
+        lua_info_str(&w, "text", i == 2 ? "two" : "x");
+        lua_info_close(&w);
+    }
+    lua_info_close(&w);
+    lua_info_open(&w, "empty");
+    lua_info_close(&w);
+    lua_info_int(&w, "", 10);                   // scalars append too, at the top level here
+    lua_info_str(&w, "", "s");
+    lua_info_int(&w, "cursor", 77);
+    size_t n = lua_info_end(&w);
+    CHECK(n > 0);
+    int top = lua_gettop(L);
+    CHECK(lua_info_push(L, buf, n));
+    CHECK(holds("#t.entries == 3 and t.entries[1].n == 1 and t.entries[3].n == 3"));
+    CHECK(holds("t.entries[2].text == 'two' and t.entries[0] == nil and t.entries[4] == nil"));
+    CHECK(holds("next(t.empty) == nil"));
+    CHECK(holds("t[1] == 10 and t[2] == 's' and t.cursor == 77 and t[''] == nil"));
+    lua_settop(L, top);
+}
+
 static void empty_is_an_empty_table(void) {
     lua_info_t w;
     lua_info_begin(&w, buf, sizeof(buf));
@@ -149,6 +176,7 @@ TEST_MAIN(
     luaL_requiref(L, "math", luaopen_math, 1);
     lua_pop(L, 2);
     RUN(round_trip);
+    RUN(unnamed_records_make_a_list);
     RUN(empty_is_an_empty_table);
     RUN(writer_refuses_what_doesnt_fit);
     RUN(reader_refuses_malformed_records);

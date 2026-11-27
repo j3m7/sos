@@ -334,6 +334,28 @@ bool log_file_next(log_entry_t *e) {
     return ok;
 }
 
+bool log_history_entry(uint32_t *cursor, log_entry_t *e, bool *lost) {
+    if (lost)
+        *lost = false;
+    if (!hooks)
+        return false;
+    uint32_t saved = hooks->lock();
+    if (*cursor == 0 || before(*cursor, start)) {
+        if (*cursor != 0 && lost)
+            *lost = true;                       // the entries after it were overwritten
+        *cursor = start;
+    } else if (before(end, *cursor)) {
+        *cursor = end;                          // past the newest: not a cursor this log gave
+    }
+    bool ok = before(*cursor, end);
+    if (ok)
+        e->priority = copy_entry(cursor, e->text, sizeof(e->text));
+    hooks->unlock(saved);
+    if (ok)
+        split_line(e->text, e->priority & SOS_LOG_LEVEL_MASK, e);
+    return ok;
+}
+
 unsigned log_file_lost(void) {
     if (!hooks)
         return 0;

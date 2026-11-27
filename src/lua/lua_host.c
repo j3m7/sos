@@ -201,7 +201,8 @@ static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 // sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
 static void serve_info(void) {
     size_t n = lua_req.offset < LH_TABLES
-        ? lua_health_fill((lua_health_table_t)lua_req.offset, lua_req.data, LUA_REQ_DATA) : 0;
+        ? lua_health_fill((lua_health_table_t)lua_req.offset, lua_req.arg, lua_req.data,
+                          LUA_REQ_DATA) : 0;
     if (!n)
         req_error("no such table, or it didn't fit");
     lua_req.len = (uint32_t)n;
