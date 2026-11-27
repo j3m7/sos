@@ -4,9 +4,10 @@
 // `ping`: ICMP echo requests from a shell job, over an lwIP raw PCB. See ping.h; the packets,
 // arguments and statistics are in ping_msg.c (pure, host tested).
 //
-// One request at a time: request n goes out, then the run waits up to INTERVAL_US for its reply.
-// Request n+1 goes out INTERVAL_US after request n, so a missing reply costs no extra time. A
-// reply that comes later than that is dropped, not counted.
+// One request at a time: request n goes out, then the run waits up to INTERVAL_US for its reply,
+// or for an ICMP error about it (destination unreachable, time exceeded). Request n+1 goes out
+// INTERVAL_US after request n, so a missing reply costs no extra time. A reply or error that
+// comes later than that is dropped, not counted.
 
 #include "net/ping.h"
 
@@ -35,6 +36,12 @@ typedef enum {
     P_SETTLED,      // request `seq` was answered, timed out or not sent: next one, or the end
 } ping_state_t;
 
+typedef enum {
+    ANSWER_NONE,
+    ANSWER_REPLY,   // an echo reply
+    ANSWER_ERROR,   // an ICMP error about the request
+} ping_answer_t;
+
 typedef struct {
     uint32_t id;                    // for the DNS callback, which can come after the run ended
     struct raw_pcb *pcb;
@@ -50,10 +57,11 @@ typedef struct {
     uint16_t seq;                   // the latest request's sequence number (the first is 1)
     bool dns_done, dns_ok;
     ip_addr_t addr;
-    bool replied;                   // request `seq` was answered:
-    uint64_t reply_us;              //   when the reply arrived
-    uint8_t reply_ttl;
-    ip_addr_t reply_from;
+    ping_answer_t answer;           // what came back for request `seq`:
+    uint64_t reply_us;              //   when a reply arrived
+    uint8_t reply_ttl;              //   a reply's TTL
+    uint8_t error_type, error_code; //   an error's
+    ip_addr_t reply_from;           //   who sent it
     char host[PING_HOST_MAX + 1];
 } ping_run_t;
 
@@ -85,26 +93,39 @@ static void dns_found(const char *name, const ip_addr_t *addr, void *arg) {
 
 // Every ICMP packet the board receives comes here first (p starts at the IP header). Take the
 // replies to this run's requests; leave everything else to lwIP (return 0), which answers pings
-// to the board and passes other ICMP on. The pcb is removed before the run is freed, under the
+// to the board and passes other ICMP on. An ICMP error about the request in flight is recorded
+// but still left to lwIP, which counts it. The pcb is removed before the run is freed, under the
 // lock, so `arg` is always alive here.
 static u8_t recv_cb(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr) {
     (void)pcb;
     uint64_t now = time_us_64();
     ping_run_t *r = arg;
-    uint8_t buf[PING_REPLY_MAX];
-    uint16_t seq;
+    uint8_t buf[PING_RECV_MAX];                 // longer packets are neither (RFC 4884
+    uint16_t seq;                               // extensions included: they show as a timeout)
     uint8_t ttl;
-    if (p->tot_len > sizeof(buf) || pbuf_copy_partial(p, buf, p->tot_len, 0) != p->tot_len ||
-        !ping_parse_reply(buf, p->tot_len, r->icmp_id, &seq, &ttl) || seq == 0 || seq > r->seq)
+    ping_error_t e;
+    if (p->tot_len > sizeof(buf) || pbuf_copy_partial(p, buf, p->tot_len, 0) != p->tot_len)
         return 0;
-    if (r->state == P_WAITING && seq == r->seq && !r->replied) {
-        r->replied = true;
-        r->reply_us = now;
-        r->reply_ttl = ttl;
+    if (ping_parse_reply(buf, p->tot_len, r->icmp_id, &seq, &ttl)) {
+        if (seq == 0 || seq > r->seq)
+            return 0;
+        if (r->state == P_WAITING && seq == r->seq && r->answer == ANSWER_NONE) {
+            r->answer = ANSWER_REPLY;
+            r->reply_us = now;
+            r->reply_ttl = ttl;
+            r->reply_from = *addr;
+        }
+        pbuf_free(p);                           // ours, also when late or repeated
+        return 1;
+    }
+    if (ping_parse_error(buf, p->tot_len, r->icmp_id, &e) && r->state == P_WAITING &&
+        e.seq == r->seq && r->answer == ANSWER_NONE) {
+        r->answer = ANSWER_ERROR;
+        r->error_type = e.type;
+        r->error_code = e.code;
         r->reply_from = *addr;
     }
-    pbuf_free(p);                               // ours, also when late or repeated
-    return 1;
+    return 0;
 }
 
 // --- shell side ----------------------------------------------------------------------------------
@@ -147,7 +168,7 @@ static void send_next(shell_t *sh, ping_run_t *r) {
     err_t err = ERR_MEM;
     cyw43_arch_lwip_begin();
     r->seq = seq;
-    r->replied = false;
+    r->answer = ANSWER_NONE;
     r->sent_us = time_us_64();
     struct pbuf *p = pbuf_alloc(PBUF_IP, PING_ICMP_SIZE, PBUF_RAM);
     if (p) {
@@ -161,7 +182,7 @@ static void send_next(shell_t *sh, ping_run_t *r) {
         r->stats.sent++;
         return;
     }
-    r->stats.errors++;
+    r->stats.not_sent++;
     const char *why = send_error(err);
     if (why)
         shell_printf(sh, "seq=%u not sent: %s\n", seq, why);
@@ -169,27 +190,36 @@ static void send_next(shell_t *sh, ping_run_t *r) {
         shell_printf(sh, "seq=%u not sent: error %d\n", seq, (int)err);
 }
 
-// Request `seq` is out: has its reply come, or its time run out?
+// Request `seq` is out: has its reply or an error about it come, or its time run out?
 static void check_reply(shell_t *sh, ping_run_t *r, uint64_t now) {
-    bool replied;
+    ping_answer_t answer;
     uint64_t reply_us;
-    uint8_t ttl;
+    uint8_t ttl, type, code;
     ip_addr_t from;
     cyw43_arch_lwip_begin();
-    replied = r->replied;
+    answer = r->answer;
     reply_us = r->reply_us;
     ttl = r->reply_ttl;
+    type = r->error_type;
+    code = r->error_code;
     from = r->reply_from;
-    if (replied || now - r->sent_us >= INTERVAL_US)
-        r->state = P_SETTLED;                   // a later reply to it is dropped
+    if (answer != ANSWER_NONE || now - r->sent_us >= INTERVAL_US)
+        r->state = P_SETTLED;                   // a later reply or error is dropped
     cyw43_arch_lwip_end();
-    if (replied) {
-        uint32_t rtt = (uint32_t)(reply_us - r->sent_us);
-        char ip[IPADDR_STRLEN_MAX], ms[16];
+    char ip[IPADDR_STRLEN_MAX];
+    if (answer != ANSWER_NONE)
         ipaddr_ntoa_r(&from, ip, sizeof(ip));
+    if (answer == ANSWER_REPLY) {
+        uint32_t rtt = (uint32_t)(reply_us - r->sent_us);
+        char ms[16];
         ping_ms_text(rtt, ms);
         ping_stats_reply(&r->stats, rtt);
         shell_printf(sh, "reply from %s: seq=%u ttl=%u time=%s ms\n", ip, r->seq, ttl, ms);
+    } else if (answer == ANSWER_ERROR) {
+        char what[40];
+        ping_error_text(type, code, what);
+        r->stats.icmp_errors++;
+        shell_printf(sh, "error from %s: seq=%u %s\n", ip, r->seq, what);
     } else if (r->state == P_SETTLED) {
         shell_printf(sh, "seq=%u timeout\n", r->seq);
     }

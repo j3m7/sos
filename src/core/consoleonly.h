@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // "Console-only setup": a board that takes its settings only from `setup` on its console and
-// refuses unsealed records written to its flash (issues #64 and #91, docs/securing-a-board.md).
+// refuses unsealed records written to its flash (issues #64 and #91, docs/security/design.md).
 //
 // An open board loads an unsealed configuration or SSH host key from flash and seals it: that
 // is how `ninja provision` and firmware from before sealing hand over. On a board meant to keep

@@ -46,7 +46,8 @@
 
 typedef struct {
     void *ctx;
-    // The sector as it is now, FAILCOUNT_SECTOR bytes.
+    // The sector as it is now, FAILCOUNT_SECTOR bytes. NULL: there is no sector to use (it
+    // counts as holding nothing, and the count is then kept in RAM only).
     const uint8_t *(*read)(void *ctx);
     // Program one page (FAILCOUNT_PAGE bytes): bits can go from 1 to 0 only.
     bool (*program)(void *ctx, unsigned page, const uint8_t *data);

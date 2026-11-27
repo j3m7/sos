@@ -178,12 +178,22 @@ reply, and the statistics and their text (pure C, host tested).
   `contrib/apps/ping/ping.c` isn't used: it reports only through `LWIP_DEBUGF`, keeps a single
   static target, and paces itself with `sys_timeout`, of which there is one spare.
 - **Interrupt context:** lwIP hands every incoming ICMP packet to the raw PCBs before its own
-  ICMP code, in interrupt context. The callback copies the packet (at most 100 bytes) to the
+  ICMP code, in interrupt context. The callback copies the packet (at most 168 bytes) to the
   stack and takes it only if it is an echo reply of exactly our size, with the run's
   identifier, a sequence number already sent, our data and a correct checksum. It records the
   arrival time, TTL and sender for the request in flight, and nothing more: no heap, no
   logging, no output. Everything else goes back to lwIP (return 0), so the board keeps
   answering pings and other ICMP isn't lost.
+- **ICMP errors:** a destination unreachable or time exceeded (correct checksum) that quotes an
+  echo request with the run's identifier is recorded for the request in flight, like a reply,
+  with its type, code and sender, and the job prints it instead of a timeout. It still goes back
+  to lwIP, which counts it in its statistics. Routers quote at least the original IP header and
+  8 bytes of ICMP, which hold the identifier and sequence number; the parser reads no more. 168
+  bytes holds the longest error about our request (both IP headers with options, all of the
+  request quoted). A longer one, as with RFC 4884 extensions (MPLS labels on some ISP routers),
+  isn't read and shows as a timeout. A host on the LAN that doesn't answer ARP produces no error
+  at all (lwIP drops the queued packet), so that stays a timeout too. "Time exceeded" needs the
+  TTL to run out, and lwIP sends with 255.
 - **Several at once:** every run gets its own ICMP identifier (a counter, seeded at random once
   per boot), so runs in different shells don't take each other's replies. lwIP has 4 raw PCBs,
   one per shell (the console and 3 SSH sessions); a fifth run is refused.
@@ -191,8 +201,9 @@ reply, and the statistics and their text (pure C, host tested).
   pointer, and looks the run up: a run can be cancelled and freed before DNS answers. The raw
   PCB's callback can take a pointer, because the PCB is removed (under the lwIP lock) before the
   run is freed.
-- **Timing:** one request at a time. Each waits up to 1 s for its reply, and the next goes out
-  1 s after it, so a lost reply costs no extra time; a reply after that is dropped. The send
+- **Timing:** one request at a time. Each waits up to 1 s for its reply or an error, and the
+  next goes out 1 s after it, so a lost reply costs no extra time; a reply or error after that
+  is dropped. The send
   time is taken under the lwIP lock just before `raw_sendto()`, and the arrival time in the
   callback, so the main loop's pace (5 ms) doesn't count in the round trip.
 - **Ctrl-C** prints the summary. The same cancel ends a run when its SSH session goes away;

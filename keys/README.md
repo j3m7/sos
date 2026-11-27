@@ -12,7 +12,7 @@ that accepts them accepts anyone's firmware.
   matter.
 - **Never write these hashes into a production board's OTP.** That board would then run firmware
   from anyone, for good. A production board gets its own keys, made and kept off the
-  development machine (`docs/securing-a-board.md`, decision 4).
+  development machine (`docs/security/decisions.md`, decision 4).
 
 To sign a build with one: `cmake --preset debug -DSOS_SIGN_KEY=keys/dev-INSECURE-1.pem`.
 

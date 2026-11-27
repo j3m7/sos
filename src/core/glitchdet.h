@@ -15,7 +15,7 @@
 // A secured board gets the detector from the OTP flag CRIT1.GLITCH_DETECTOR_ENABLE instead:
 // armed from reset, with no off switch and no guard. The purpose here is to find out, in
 // normal use, whether the detector resets a healthy board, before that bit is burned
-// (docs/securing-a-board.md, decision 5). A DETECTOR RESET NOBODY FORCED IS THEREFORE A FINDING:
+// (docs/security/decisions.md, decision 5). A DETECTOR RESET NOBODY FORCED IS THEREFORE A FINDING:
 // see "Glitch detector resets" in docs/development.md.
 //
 // What it keeps across a detector reset is in the POWMAN scratch registers 0 to 4, which that
