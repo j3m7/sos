@@ -248,6 +248,7 @@ set(SOS_SOURCES
     src/lua/lua_date.c
     src/lua/lua_health.c
     src/lua/lua_info.c
+    src/lua/lua_json.c
 )
 # The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
 # Regenerated at every build rather than at configure time, so it follows checkouts and commits.

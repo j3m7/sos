@@ -148,6 +148,15 @@ conversions, so core 1 needs neither newlib's `strftime` nor its time zone code.
 against the host's `strftime()` over years 1 to 9999 (`tests/test_lua_date.c`). `sos.clock` is a
 health table (`LH_CLOCK`) from `timesync_info()`.
 
+## JSON: `lua_json.c`
+
+`sos.json` is pure computation on core 1. The decoder is a strict RFC 8259 recursive descent; the
+encoder writes into a userdata at a fixed stack slot, replaced by a bigger one as the text grows,
+so the collector frees it however the encoding ends (core 1 has no `__gc`). Both stop at 32
+levels, for core 1's C stack. Object keys are sorted (`qsort` over the keys, kept alive in a
+table). Tested on the host (`tests/test_lua_json.c`) and fuzzed (`tests/fuzz/fuzz_json.c`: any
+input decodes or is refused, and encoding what decodes is stable).
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).
