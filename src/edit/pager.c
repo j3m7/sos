@@ -23,9 +23,11 @@
 // --- the window ----------------------------------------------------------------------------------
 
 // The bytes from off on: a pointer into the window and how many are there (at least min(want,
-// what's left of the text, the window) of them), loading the window if needed: ending just past
-// off when `backward`, so a scan back from off has the most to go on, else starting at off. NULL
-// after a failed read. Past the end of the text, a valid pointer with 0 bytes.
+// what's left of the text, the window) of them), loading the window if it holds fewer: ending
+// just past off when `backward`, so a scan back from off has the most to go on, else starting at
+// off. A scan asks for 1 byte, so it gets whatever the window holds from off on and the window
+// is loaded only at its edge; a unit or a match asks for what it needs in one piece. NULL after
+// a failed read. Past the end of the text, a valid pointer with 0 bytes.
 static const unsigned char *at(pager_t *p, size_t off, size_t want, bool backward, size_t *avail) {
     const unsigned char *win = (const unsigned char *)p->win;
     if (off >= p->src.size) {
@@ -50,8 +52,7 @@ static const unsigned char *at(pager_t *p, size_t off, size_t want, bool backwar
         p->win_off = start;
         p->win_len = got;
         if (got < n && start + got <= off) {    // what was asked for didn't come
-            p->failed = true;
-            snprintf(p->msg, sizeof(p->msg), "read error: the text can't be read past here");
+            p->failed = true;                   // the status row says so from now on
             *avail = 0;
             return NULL;
         }
@@ -67,7 +68,7 @@ static const unsigned char *at(pager_t *p, size_t off, size_t want, bool backwar
 static size_t find_nl(pager_t *p, size_t off) {
     while (off < p->src.size) {
         size_t avail;
-        const unsigned char *s = at(p, off, p->win_cap, false, &avail);
+        const unsigned char *s = at(p, off, 1, false, &avail);
         if (!s || !avail)
             break;
         const unsigned char *q = memchr(s, '\n', avail);
@@ -114,7 +115,7 @@ static long count_lines(pager_t *p) {
     unsigned char last = '\n';
     while (off < size) {
         size_t avail;
-        const unsigned char *s = at(p, off, p->win_cap, false, &avail);
+        const unsigned char *s = at(p, off, 1, false, &avail);
         if (!s || !avail)
             break;
         for (const unsigned char *q = s, *stop = s + avail; (q = memchr(q, '\n', (size_t)(stop - q))) != NULL; q++)
@@ -124,7 +125,8 @@ static long count_lines(pager_t *p) {
     }
     if (size > 0 && last != '\n')
         n++;
-    p->lines = n;
+    if (!p->failed)                         // a count cut short by a read error isn't kept
+        p->lines = n;
     return n;
 }
 
@@ -262,7 +264,7 @@ static bool search(pager_t *p, size_t from, size_t stop, size_t *hit, long *nls)
     long count = 0;
     while (off < stop) {
         size_t avail;
-        const unsigned char *s = at(p, off, p->win_cap, false, &avail);
+        const unsigned char *s = at(p, off, 1, false, &avail);
         if (!s || !avail)
             return false;
         if (off + avail > stop)
@@ -435,8 +437,7 @@ pager_action_t pager_key(pager_t *p, int key) {
         return PAGER_RESIZE;
     case 'h':
     case '?':
-        pager_message(p, "Space/b page down/up, j/k line, d/u half page, g/G start/end, "
-                         "Left/Right sideways, / find, n next, q quit");
+        pager_message(p, "Space/b page, j/k line, d/u half, g/G ends, / find, n next, q quit");
         break;
     default:
         break;
@@ -474,6 +475,8 @@ static size_t status_row(pager_t *p, char *out, size_t n) {
     }
     if (p->msg[0])
         return screen_put_text(out, n, p->msg, cols, NULL);
+    if (p->failed)
+        return screen_put_text(out, n, "read error: the text can't be read past here (q quits)", cols, NULL);
     char left[96], right[96];
     snprintf(left, sizeof(left), " %s", p->name);
     int r = 0;
@@ -522,7 +525,7 @@ static size_t render_row(void *ctx, int r, char *out) {
             p->draw_pos = next_line(p, p->draw_pos);
             if (p->draw_pos >= p->src.size) {
                 p->draw_past_end = true;
-                if (p->lines < 0)           // the end is on screen: the count is known
+                if (p->lines < 0 && !p->failed)     // the end is on screen: the count is known
                     p->lines = p->top_line + p->shown;
             }
         }

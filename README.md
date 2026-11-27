@@ -620,8 +620,8 @@ See [docs/commands.md](docs/commands.md#https) and [`src/net/`](src/net/README.m
 `more <file>` reads a file of any size a screen at a time (a 16 KB window of it is in memory),
 with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches, q
 quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
-it is the viewer other commands use for long text (`edit_view()`, for the manual pages). See
-[docs/commands.md](docs/commands.md#pager).
+it is the viewer for any command with more text to show than a screen (`edit_view()`; the
+manual pages, when they come, will use it). See [docs/commands.md](docs/commands.md#pager).
 
 ## Lua scripts (prototype)
 

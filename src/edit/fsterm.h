@@ -41,8 +41,9 @@ bool fsterm_step(shell_t *sh, fsterm_t *t, int *log_waiting);
 void fsterm_send(shell_t *sh, fsterm_t *t, screen_t *scr);
 // On the way out: a row cut short goes out to its end (so the terminal never sees a cut
 // sequence), the bottom row is erased (the prompt goes there on a terminal without an alternate
-// screen), autowrap on, back to the shell's screen. With `cancel` (the session is gone) only on
-// the console, which cancels a job when it locks itself with the terminal possibly still there.
+// screen), the cursor is shown again, autowrap on, back to the shell's screen. With `cancel` (the
+// session is gone) only on the console, which cancels a job when it locks itself with the
+// terminal possibly still there.
 void fsterm_leave(shell_t *sh, const screen_t *scr, bool cancel);
 
 #endif

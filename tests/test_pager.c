@@ -132,6 +132,7 @@ TEST(pages_lines_and_ends) {
     key('h');
     draw();
     CHECK(strstr(status(), "Space/b page") != NULL);
+
     key(' ');
     draw();
     CHECK_LINE(0, "line 12");
@@ -217,6 +218,28 @@ TEST(a_small_window_reads_the_text_in_pieces) {
     free(text);
 }
 
+TEST(the_window_is_loaded_only_at_its_edge) {
+    char *text = numbered(300, " of the text");            // about 5.5 KB
+    open_text(text, 10, 40, 1024);
+    draw();
+    int reads = source.reads;
+    for (int i = 0; i < 40; i++)            // to the end, 9 lines a time
+        key(' ');
+    draw();
+    CHECK(strstr(status(), "END") != NULL);
+    // Forward through 5.5 KB in 1 KB windows, plus the walk back from the end: a handful of
+    // reads, not one per line.
+    CHECK(source.reads - reads < 20);
+    reads = source.reads;
+    for (int i = 0; i < 40; i++)
+        key('b');
+    draw();
+    CHECK_LINE(0, "line 1 of the text");
+    CHECK(source.reads - reads < 20);
+    pager_free(&pg);
+    free(text);
+}
+
 TEST(search_forward_wraps_and_fails) {
     char *text = numbered(60, "");
     open_text(text, 6, 40, 0);                 // 5 text rows
@@ -295,7 +318,10 @@ TEST(controls_and_wide_characters) {
 }
 
 TEST(quit_resize_and_log_messages) {
-    open_text("x\n", 5, 60, 0);
+    open_text("x\n", 5, 80, 0);
+    key('h');
+    draw();
+    CHECK(strstr(status(), "q quit") != NULL);     // the whole key list fits 80 columns
     CHECK_EQ(key('q'), PAGER_QUIT);
     CHECK_EQ(key('Q'), PAGER_QUIT);
     CHECK_EQ(key(0x11), PAGER_QUIT);        // Ctrl-Q
@@ -319,6 +345,10 @@ TEST(a_read_error_is_reported) {
     draw();
     CHECK(strstr(status(), "read error") != NULL);
     CHECK(pg.failed);
+    key('g');                               // the message stays, and no total was kept
+    draw();
+    CHECK(strstr(status(), "read error") != NULL);
+    CHECK_EQ(pg.lines, -1);
     pager_free(&pg);
     free(text);
 }
@@ -387,6 +417,7 @@ TEST_MAIN(
     RUN(no_newline_at_the_end_and_empty_text);
     RUN(pages_lines_and_ends);
     RUN(a_small_window_reads_the_text_in_pieces);
+    RUN(the_window_is_loaded_only_at_its_edge);
     RUN(search_forward_wraps_and_fails);
     RUN(long_lines_scroll_sideways);
     RUN(controls_and_wide_characters);

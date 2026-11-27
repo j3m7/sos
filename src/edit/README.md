@@ -3,7 +3,7 @@
 `edit <file>` (the editor) and `more <file>` (the pager) run full screen on the console or over
 SSH; see [docs/commands.md](../../docs/commands.md#editor) for the keys. The editor edits a file
 of up to 128 KB (less while the heap has less to spare); the pager reads a file of any size, or a
-text in RAM (`edit_view()`, for the manual pages).
+text in RAM (`edit_view()`).
 
 ## `screen.c`: what they share of the screen (pure C, host tested)
 
@@ -83,5 +83,5 @@ once a second, for the status bar; and giving the screen back at the end.
   can't be unmounted under it) and reads it through `f_lseek()`/`f_read()` as the window moves.
   Reads happen inside the job's step, so a search through a large file holds the main loop for
   as long as the card takes (about a second per megabyte).
-- `edit_view(sh, name, text, len)` copies the text to the heap and pages it: for the manual pages
-  (`man`) and any command with more to show than a screen.
+- `edit_view(sh, name, text, len)` copies the text to the heap and pages it: for any command with
+  more to show than a screen (the manual pages, once there are some; nothing calls it yet).

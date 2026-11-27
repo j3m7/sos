@@ -81,6 +81,8 @@ void fsterm_leave(shell_t *sh, const screen_t *scr, bool cancel) {
     if (scr->row_sent < scr->row_len)
         sh->io->write(sh->ctx, scr->row + scr->row_sent, (int)(scr->row_len - scr->row_sent));
     char bye[48];
-    snprintf(bye, sizeof(bye), "\x1b[%d;1H\x1b[K\x1b[?7h\x1b[?1049l", scr->rows);
+    // Bottom row, erased; the cursor shown again (hidden while a frame draws, and the pager keeps
+    // it hidden); autowrap on; back to the shell's screen.
+    snprintf(bye, sizeof(bye), "\x1b[%d;1H\x1b[K\x1b[?25h\x1b[?7h\x1b[?1049l", scr->rows);
     put(sh, bye);
 }

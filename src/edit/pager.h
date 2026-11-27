@@ -12,6 +12,8 @@
 // The pager's model and screen, without the card or the shell: a text of any size read through a
 // window, keys (keys.h codes) in, terminal output out (screen.h). Pure C, host tested; view.c
 // connects it to a shell, a file on the card or a text in RAM (`more <file>`, edit_view()).
+// A read that fails marks the pager failed: the status row says so until it quits, and no line
+// total is kept from a count cut short.
 //
 // The text is `size` bytes read on demand with `read`, a window (PAGER_WINDOW bytes, or the whole
 // text if smaller) of it held in RAM, so a file larger than memory can be read. Lines are
