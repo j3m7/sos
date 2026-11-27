@@ -10,7 +10,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
@@ -302,6 +301,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
         shell_printf(sh, "                  showing the card's key once, to store offline\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
+        shell_printf(sh, "sd check          check the unmounted card's file system (reads only)\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -2109,9 +2109,7 @@ static void run_reboot(shell_t *sh, char *args) {
     log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
             who && strcmp(who, sh->io->name) ? " " : "",
             who && strcmp(who, sh->io->name) ? who : "");
-    logfile_flush();                    // what the log files haven't written yet
-    sleep_ms(100);
-    watchdog_reboot(0, 0, 0);
+    wdog_reboot();
 }
 
 // --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
@@ -2243,6 +2241,7 @@ static const shell_word_t sd_words[] = {
     {"test", NULL, SHELL_ADMIN},
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
+    {"check", NULL, SHELL_ADMIN},
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
