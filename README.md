@@ -115,11 +115,12 @@ The three presets differ in how the compiler optimises (`build/`, `build-release
 |---|---|---|---|---|
 | `debug` (the default) | `-Og` | 1,168 KB | 260 to 285 ms | 284 ms |
 | `minsize` | `-Os` | 1,050 KB | 158 to 215 ms | 278 to 281 ms |
-| `release` | `-O3` | 1,386 KB | not measured | not measured |
+| `release` | `-O3` | 1,386 KB | not run on a board | not run on a board |
 
-`minsize` is 118 KB smaller than `debug` and no slower; the SSH and SFTP hardware tests pass
-with it. Its main-loop stack peak was a little higher (3,720 against about 3,550 of 8,192
-bytes). `debug` remains the default.
+`minsize` is 118 KB smaller than `debug` and no slower on the handshakes measured; the SSH and
+SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s against 8.6 s, a
+single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
+about 3,550 of 8,192 bytes). `debug` remains the default.
 
 The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
