@@ -23,7 +23,9 @@
 //   that reason. It stays locked and takes only the commands that deal with it
 //   (login_hooks_t.rescue_allowed).
 // - `logout` on the console locks it again. So does the console itself (login_poll): when the
-//   USB connection to the terminal drops, and after a time with nothing typed. Whoever plugs in
+//   USB connection to the terminal drops (and stays down for LOGIN_DISCONNECT_MS, so a glitch
+//   around a port being reopened doesn't lock a fresh login), and after a time with nothing
+//   typed. Whoever plugs in
 //   next, or walks up later, finds a locked console. A command that was still running (a long
 //   listing, the editor) is ended, and text typed but not entered is thrown away.
 //
@@ -39,6 +41,7 @@
 #include "shell/shell.h"
 
 #define LOGIN_PASSWORD_MAX 64           // longer answers are wrong without being checked
+#define LOGIN_DISCONNECT_MS 1000        // a terminal gone this long locks the console
 
 enum { LOGIN_MORE, LOGIN_RIGHT, LOGIN_WRONG };
 
