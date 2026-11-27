@@ -6,6 +6,10 @@
 // matching shell command (temp and power, mem, version, uptime, glitch, net and wifi) shows, and
 // all of it may be shown over SSH. None of it waits: the sensors' latest readings are used (taken
 // every SENSORS_SAMPLE_S by the main loop), not a new reading.
+//
+// A field the board doesn't know is left out, so the script sees nil: the temp() and volts()
+// helpers skip SENSORS_NONE, and lua_info_str() writes nothing for a NULL string (wifi_ssid()
+// when not connected, fault_last() when there was no fault).
 
 #include "lua/lua_health.h"
 

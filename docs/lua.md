@@ -179,7 +179,7 @@ field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
 | Field | |
 |---|---|
 | `cause` | why the board last started: `"fault"` (a crash), `"glitch"` (the glitch detector), `"watchdog"`, or `"other"` (power on, `reboot`, flashing, the reset button) |
-| `detail` | for a fault, what `uptime` prints after "last reset:" |
+| `detail` | for a fault, what `uptime` prints after "last reset:"; `nil` otherwise |
 
 **`sos.glitch()`**
 
