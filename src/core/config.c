@@ -27,6 +27,7 @@ _Static_assert(CONFIG_V6_LENGTH == 1676, "fields before console_iterations must 
 #define CONFIG_V7_LENGTH offsetof(sos_config_t, wifi_extra)       // + console fields, glitch_detector
 _Static_assert(CONFIG_V7_LENGTH == 1796, "fields before wifi_extra must not move");
 _Static_assert(offsetof(sos_config_t, glitch_detector) == 1793, "it takes a former padding byte");
+_Static_assert(offsetof(sos_config_t, temp_offset) == 1794, "it takes two former padding bytes");
 #define CONFIG_V8_LENGTH offsetof(sos_config_t, log_rotate_days)  // + wifi_extra
 _Static_assert(CONFIG_V8_LENGTH == 2184, "fields before log_rotate_days must not move");
 _Static_assert(sizeof(sos_config_t) == 2188, "the record's size is part of the format");
@@ -282,6 +283,9 @@ bool config_load(const config_store_t *store, sos_config_t *cfg, uint32_t *seq) 
     // "not chosen", which is the default.
     if (cfg->glitch_detector > CONFIG_GLITCH_DETECTOR_MAX)
         cfg->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
+    // And the temperature calibration: out of range means uncalibrated.
+    if (cfg->temp_offset < -CONFIG_TEMP_OFFSET_MAX || cfg->temp_offset > CONFIG_TEMP_OFFSET_MAX)
+        cfg->temp_offset = 0;
     if (seq)
         *seq = s.hdr[s.newest].seq;
     return true;

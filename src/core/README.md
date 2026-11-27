@@ -259,7 +259,7 @@ firmware reads it there; a separate image, used once per board, writes it.
 
 Writing a board's root secret into OTP is permanent and is not something everyday firmware can
 do: the code is compiled only with `-DSOS_BURN_IMAGE=ON`, into an image flashed for that one
-job (`docs/securing-a-board.md`, step 3). `rootburn_board.c` refuses to compile otherwise.
+job (`docs/security/design.md`, "Writing it"). `rootburn_board.c` refuses to compile otherwise.
 
 - **`rootsecret burn`** (console only): asks for the board's serial, then a typed word, then
   waits for the BOOTSEL button to be held. `rootsecret burn plan` says which page it would
@@ -354,8 +354,8 @@ debug off) and the hashes of the keys its firmware must be signed with.
   signature block (the block format of datasheet section 5.9; the last image definition in
   the block loop is the one the boot ROM uses) and compares its SHA-256 with the boot key
   slots. A slot counts when it is marked valid and not marked invalid.
-- **Shown by** `version` (secure boot, debug port) and `bootkey` (the verdict). The procedure
-  in `docs/securing-a-board.md` runs `bootkey` before the bit that turns secure boot on.
+- **Shown by** `version` (secure boot, debug port) and `bootkey` (the verdict). The runbooks
+  (`docs/security/README.md`) run `bootkey` before the bit that turns secure boot on.
 - **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
   that can't be read. Reading the root secret from OTP will need the guarded ones.
 
@@ -376,8 +376,8 @@ flash, and an unsealed configuration naming their own SSH key would otherwise le
   reported in the log and left in flash. If it replaced the sealed one, the board has no
   configuration and is set up on its console: an attacker with a cable can wipe a console-only
   board, as they can erase its flash, but can't give it a configuration.
-- **The firmware only reads the rows.** Writing them is a step of `docs/securing-a-board.md`,
-  for production boards, done by the owner with `picotool`.
+- **The firmware only reads the rows.** Writing them is step 4.6a of
+  `docs/security/production-runbook.md`, for production boards, done by hand with `picotool`.
 - **`-DSOS_FORCE_CONSOLE_ONLY=ON`** builds an image that treats every board as console-only, to
   try the behaviour on a development board without touching its OTP. It can only add the
   restriction. `consoleonly_decide()` has no hardware in it and is unit tested on the host.
@@ -387,7 +387,7 @@ flash, and an unsealed configuration naming their own SSH key would otherwise le
 The RP2350 has four detector circuits that reset the chip when its clock or core supply is
 disturbed (datasheet section 10.9). A secured board would arm them for good with an OTP bit.
 `glitchdet.c` arms them by software instead, from a setting, to find out in normal use
-whether they ever reset a healthy board (`docs/securing-a-board.md`).
+whether they ever reset a healthy board (`docs/security/decisions.md`, decision 5).
 
 - **On by default:** armed at sensitivity 3, the highest, unless the setting says otherwise
   (`glitch off`, `glitch on <0-3>`, `glitch watch <0-3>`; `glitch default` goes back). A
@@ -449,6 +449,13 @@ the Wi-Fi chip's VBUS sense pin. Nothing else uses the ADC; each reading selects
   it's the USB voltage less a diode's drop (about 0.35 V). Measured through a 1% divider
   against the same reference, it's within a few percent. A reading taken during a Wi-Fi
   transmission catches its dip, so the lowest since boot can be a brief one.
+- **Calibration** (`temp cal`): the configuration's `temp_offset`, tenths of a degree, is added
+  to every temperature reading, so the log line, `temp` and the glitch detector's reports all
+  carry it. `temp cal <degrees>` sets it to the reference minus a fresh uncalibrated reading.
+  When it changes (or `config reset` clears it), `sensors_temp_offset_changed()` moves the
+  lowest, highest and latest readings by the difference, so they stay comparable. It takes
+  two bytes of the configuration record that were padding, so the record's length doesn't
+  change. Offset only: the slope and the ADC reference stay as they are.
 - `sensors.c` (the conversions, text, lowest and highest, when to log, the scratch register
   form) has no hardware in it and is unit tested on the host.
 

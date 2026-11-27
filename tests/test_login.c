@@ -438,7 +438,7 @@ TEST(locking_wipes_the_command_history) {
     run_ms(20);
     CHECK(sh.history_len > 0);
     connected = false;                           // the terminal goes away
-    run_ms(20);
+    run_ms(LOGIN_DISCONNECT_MS + 10);
     CHECK(login_locked());
     CHECK_EQ(sh.history_len, 0);
 }
@@ -558,7 +558,9 @@ TEST(disconnecting_the_terminal_locks) {
     run_ms(1000);
     CHECK(!login_locked());                     // connected and no idle limit: stays open
     connected = false;
-    run_ms(10);
+    run_ms(LOGIN_DISCONNECT_MS - 10);
+    CHECK(!login_locked());                     // not yet: it may be a glitch (#153)
+    run_ms(20);
     CHECK(login_locked());
     CHECK_EQ(auto_locks, 1);
     CHECK(strstr(auto_why, "disconnected") != NULL);
@@ -571,6 +573,49 @@ TEST(disconnecting_the_terminal_locks) {
     run_ms(1500);
     CHECK(!login_locked());
     CHECK_EQ(auto_locks, 1);                    // reconnecting doesn't lock again
+}
+
+// The line state can read "disconnected" for a moment around a host reopening the port (#153):
+// a drop that ends within LOGIN_DISCONNECT_MS, even right after a login, doesn't lock, and the
+// next one is timed afresh.
+TEST(a_short_drop_does_not_lock) {
+    open_console();
+    connected = false;                          // a glitch just after the login
+    run_ms(20);
+    connected = true;
+    run_ms(2000);
+    CHECK(!login_locked());
+    CHECK_EQ(auto_locks, 0);
+    for (int i = 0; i < 5; i++) {               // several, each shorter than the limit
+        connected = false;
+        run_ms(LOGIN_DISCONNECT_MS - 100);
+        connected = true;
+        run_ms(50);
+    }
+    CHECK(!login_locked());
+    type("config\r");                           // the line runs as a command, not a password
+    run_ms(100);
+    CHECK_EQ(n_executed, 1);
+    connected = false;                          // a real unplug still locks
+    run_ms(LOGIN_DISCONNECT_MS + 10);
+    CHECK(login_locked());
+    CHECK_EQ(auto_locks, 1);
+}
+
+// A drop while locked doesn't count, so a login made while the terminal still reads
+// disconnected (a password typed on the UART) isn't locked by it.
+TEST(a_drop_while_locked_does_not_lock_the_next_login) {
+    open_console();
+    type("logout\r");
+    run_ms(100);
+    CHECK(login_locked());
+    connected = false;
+    run_ms(100);
+    type("open sesame\r");
+    run_ms(1500);
+    CHECK(!login_locked());
+    run_ms(3 * LOGIN_DISCONNECT_MS);
+    CHECK(!login_locked());
 }
 
 TEST(idle_console_locks) {
@@ -604,7 +649,7 @@ TEST(auto_lock_discards_input_and_ends_a_job) {
     type("key add ssh-ed25519 AAAA");           // half a command line
     run_ms(20);
     connected = false;
-    run_ms(10);
+    run_ms(LOGIN_DISCONNECT_MS + 10);
     CHECK(login_locked());
     CHECK_EQ(sh.line_len, 0);
     for (size_t i = 0; i < sizeof(sh.line); i++)
@@ -638,7 +683,7 @@ TEST(auto_lock_drops_a_pending_question) {
     answers = 0;
     shell_ask(&sh, "Wi-Fi network: ", false, on_answer, NULL);
     connected = false;
-    run_ms(10);
+    run_ms(LOGIN_DISCONNECT_MS + 10);
     connected = true;
     type("open sesame\r");
     run_ms(200);
@@ -851,6 +896,8 @@ TEST_MAIN(
     RUN(no_keys_locks_with_rescue_commands_only);
     RUN(tab_completes_nothing_while_locked);
     RUN(disconnecting_the_terminal_locks);
+    RUN(a_short_drop_does_not_lock);
+    RUN(a_drop_while_locked_does_not_lock_the_next_login);
     RUN(idle_console_locks);
     RUN(typing_restarts_the_idle_time);
     RUN(auto_lock_discards_input_and_ends_a_job);

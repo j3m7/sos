@@ -86,10 +86,10 @@ void __attribute__((noreturn)) sos_panic(const char *fmt, ...) {
 
 void fault_boot(void) {
     extern char __flash_binary_start, __flash_binary_end;
-    // Take over the hard fault vector. The SD card library defines isr_hardfault itself (its
-    // crash.c: it stops at a breakpoint, which without a debugger hangs until the watchdog), so
-    // the handler can't be replaced at link time; the vector table is in RAM and shared by both
-    // cores.
+    // Take over the hard fault vector at run time: the vector table is in RAM and shared by
+    // both cores. (It began this way because the SD card library's crash.c defined
+    // isr_hardfault itself, so the handler couldn't be replaced at link time. SOS no longer
+    // builds that file, but this still works for whatever is linked in.)
     ((uint32_t *)m33_hw->vtor)[3] = (uint32_t)(uintptr_t)hardfault_entry;
 
     uint32_t head = watchdog_hw->scratch[0];
