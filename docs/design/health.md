@@ -10,9 +10,10 @@ This note sets the rules so that the phases (§10) can be built without deciding
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design. Tracking issue: #233. Revised after Reviewer's review of #235:
-§2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in place
-already.
+Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware and crypto checks,
+built (§9.2) and waiting for its board run. Tracking issue: #233. Revised after Reviewer's review
+of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
+place already.
 
 ## 1. What exists today
 
@@ -35,8 +36,8 @@ them instead of replacing them:
 - **The card:** `sd check` (#213) checks the file system of an unmounted card.
 - **Time:** `timesync_info()` (source, last sync, step).
 
-Nothing checks clocks, SRAM, the running image, the TRNG, or the crypto code itself. And
-nothing compares one store with another. Those are the new checks in phases 2 to 7.
+Before phase 2, nothing checked clocks, SRAM, the running image, the TRNG, or the crypto code
+itself. And nothing compares one store with another. Those are the new checks in phases 2 to 6.
 
 ## 2. Decisions
 
@@ -225,8 +226,8 @@ health full                 also the slow checks: RAM, image hash, sd check (con
 
 ```
 check       status  when       result
-trng        PASS    boot       repetition 3/40, proportion 291/410
-clocks      PASS    boot       clk_sys 150.0 MHz, clk_ref 12.0 MHz, xosc 12.000 MHz
+trng        PASS    boot       run 12 (fails at 61), proportion 545/1024 (810), 1.3 ms
+clocks      PASS    boot       clk_sys 150.0 MHz; 5 clocks within 0.01%; lposc 32 kHz
 stack       WARN    12 s ago   core 0 peak 6.9 of 8 KB
 ram         -       never      (health full)
 otp         SKIP    boot       open board
@@ -315,10 +316,11 @@ Where the build settled details this note left open, or differs from it:
 - **Gates in pure modules** go through the module's existing ops: `rootsecret.c` and
   `rootburn.c` are untouched, and their board backends' random sources refuse. The burn image
   then reports `ROOTBURN_RANDOM`, and the log line before it names the check.
-- **`health_gate_refuse()` and `health_refusal()`:** a caller about to refuse asks
-  `health_gate_refuse()`, which also remembers the check; `console_no_keys()` shows
-  `key making refused: health check <name> failed` when there is no usable root secret and a
-  refusal was recorded.
+- **The rescue message:** `console_no_keys()` shows
+  `key making refused: health check <name> failed` when there is no usable root secret and the
+  root secret's store recorded a refusal (`rootflash_refused_by()`). Phase 1 first kept the last
+  refusal of any caller (`health_gate_refuse()`, `health_refusal()`); once the rescue message
+  blamed only the root secret's refusal, phase 2 removed both, and callers ask `health_gate()`.
 - **`settings_save_refused()`** names the check that stopped the last save. What the four
   callers did before: `shell.c`'s `save()` and `tls/certstore.c` (`tls roots approve` and
   `forget`) checked the result but always said `saving to flash failed`; `files/cardkey.c`
@@ -346,13 +348,140 @@ Where the build settled details this note left open, or differs from it:
   runs above ambient. Check them against the datasheet before relying on a FAIL.
 - **Cost** (debug build, `arm-none-eabi-size`): text +7.5 KB, bss +2.8 KB.
 
+### 9.2 As built (phase 2): the boot tier
+
+Phase 2 adds four boot checks. They run in `health_boot()` in this order, after `resets`, and
+`health run` runs them again:
+
+| Check | Gates | WARN | FAIL |
+|---|---|---|---|
+| `clocks` | — | a clock 1 % to 5 % off its setting; the LPOSC outside 18-54 kHz | a clock over 5 % off |
+| `flash` | — | unknown maker or size code; no JEDEC answer | smaller than `PICO_FLASH_SIZE_BYTES` |
+| `trng` | KEYS | — | either startup test; the TRNG's own autocorrelation error; over 8 CRNGT errors; under 16 blocks in 10 ms |
+| `crypto` | KEYS, CRYPTO | — | any known answer wrong, or a changed input accepted |
+
+The judging is pure and host tested: `hwtest.c` (the TRNG statistics, and the judging of
+`trng`, `clocks` and `flash`; `tests/test_hwtest.c`) and `selftest.c` (the crypto vectors,
+run against the host's wolfCrypt; `tests/test_selftest.c`). `health_board.c` reads the chip.
+The boot summary reads as before with five boot checks: `health: boot checks 5 pass in 38 ms`,
+or `health: boot checks 4 pass, 1 FAIL (trng) in 39 ms: key making refused`.
+
+**`crypto`.** Thirteen known-answer tests, stopping at the first that fails, whose phrase is the
+check's text (`ed25519 verify accepted a changed message`):
+
+| Test | Vector |
+|---|---|
+| SHA-256, SHA-512 | FIPS 180-2 "abc" (Appendix B.1, C.1) |
+| HMAC-SHA-256 | RFC 4231 test case 1 |
+| AES-256-GCM encrypt, decrypt, and refuse a ciphertext with one bit flipped | GCM specification (McGrew, Viega) test case 16: 256-bit key, 96-bit IV, 20 bytes of AAD |
+| XTS-AES-128 encrypt and decrypt, through `wc_AesXts*Sector` as `sdcrypt.c` calls it | IEEE 1619-2007 vector 2 (sequence number 0x3333333333) |
+| Ed25519 public key from the secret, signature (deterministic, so a known answer), verify, and refuse the message with one bit flipped | RFC 8032 §7.1 TEST 2 |
+| X25519 shared secret, little-endian as wolfSSH calls it | RFC 7748 §6.1 |
+
+The vectors were checked against OpenSSL's command line (all but GCM) and wolfSSL's own test
+suite (GCM). The host test also makes a fault in each test in turn (a flipped bit in what it
+computed, or a refusal test fed the unchanged input) and sees it caught by that test. Not
+covered: ChaCha20-Poly1305 and AES-CTR (SSH ciphers: a broken one breaks the session visibly),
+AES-SIV (NTS: the server's tag would fail), ML-KEM, ECDSA and RSA (the TLS or SSH peer checks
+those). wolfCrypt's Hash-DRBG runs its own health test when it is instantiated. X25519 has no
+refusal test: every input gives some secret, so only the comparison applies. The contexts take
+1.7 KB of heap (`HEAP_NET`) while it runs; on a board with no heap to spare (`health run` late
+in a busy session) it FAILs with `no memory to run the tests`, the conservative choice for a
+check holding gates.
+
+*Time.* Not measured yet: the board run will show it in the check's text (`13 known answers
+(...) in N ms`). Estimate for wolfCrypt's C field arithmetic (no assembly for Curve25519 here)
+on the 150 MHz M33: a variable-base scalar multiplication is about 2,800 field operations of
+roughly 370 cycles, about 1 M cycles or 7 ms. X25519 is one (7 ms), each Ed25519 verify about
+one (7.5 ms, twice), the signature and the public key each a table-driven base point
+multiplication (2 to 3 ms each); SHA, HMAC, GCM and XTS together well under 1 ms. About 25 to
+30 ms, and could be twice that. If the board measures over about 70 ms, the first thing to drop
+is the good-signature verify (`t_ed_verify`): a verifier that accepts everything is the
+dangerous fault, and the refusal test still catches it, while one that refuses everything
+breaks key logins visibly.
+
+**`trng`.** wolfCrypt is seeded from pico_rand, which mixes the TRNG with other sources, so a
+test of its output would test the mixing. The check reads the TRNG block itself:
+
+- **What it samples:** the ring oscillator's raw bits, one sample every 64 clk_sys cycles, the
+  shortest inverter chain, the von Neumann corrector bypassed (the datasheet's minimum sample
+  period without it is 17 cycles; longer periods give better bits, §12.12.2). The TRNG's own
+  CRNGT (two equal 16-bit blocks in a row) and autocorrelation tests stay on.
+- **How much:** 16 blocks of 192 bits, 3072 samples: about 1.3 ms at 150 MHz, with interrupts
+  off (it holds pico_rand's spin lock, `PICO_SPINLOCK_ID_RAND`, since Lua on core 1 may read
+  the TRNG through pico_rand at the same time). A timeout of 10 ms ends a TRNG that stopped.
+- **The tests:** SP 800-90B §4.4 as a startup test, assuming H = 0.5 bit of min-entropy per
+  sample and alpha = 2^-30 per test. Repetition Count: cutoff C = 1 + ceil(30 / H) = 61, so a
+  run of 61 identical samples fails. Adaptive Proportion over non-overlapping windows of
+  W = 1024: C = 1 + CRITBINOM(1024, 2^-H, 1 - 2^-30) = 810, so a window whose first sample
+  occurs 810 or more times fails. Three windows. The host test computes both cutoffs again.
+- **The hardware's own tests:** the autocorrelation error (it stops the TRNG until a reset)
+  FAILs; CRNGT errors throw a block away and the run goes on, and more than 8 in one run FAIL.
+  A good source makes about 12 CRNGT comparisons a block at 2^-16 each (2^-8 if H really were
+  0.5): a few in a run are possible, nine aren't.
+- **Afterwards:** the block is reset through RESETS before and after, so pico_rand finds it as
+  after any reset; its next refill sets every register it relies on (sample period 0, all
+  checks bypassed, the source on).
+
+What the H = 0.5 assumption means: it isn't an entropy assessment of this oscillator (none is
+published for RP2350 at this sample period). It sets how far from ideal the bits may be before
+the check fails: a source with that much entropy fails about three boots in a million (3072
+chances of 2^-30 each), a better one far less. A stuck oscillator fails at once (and the
+TRNG's CRNGT also stops it), a strongly biased one (over about 79 % of one value) fails the
+proportion test. A short repeating pattern (0101...) passes both tests; it is the CRNGT's to
+catch (two equal 16-bit blocks), and its errors fail the check. The first board run should
+look at the margins in the text (`run 12 (fails at 61), proportion 545/1024 (810)`).
+
+The sampling differs from pico_rand's: pico_rand takes one sample every clk_sys cycle with
+every check bypassed and hashes the result, which the datasheet's 17-cycle minimum rules out
+for a test of raw bits (the oscillator is slower than clk_sys, so at one sample a cycle the
+bits come in long runs, and the RCT would likely fail a healthy oscillator). The check tests the same oscillator, not the same sample
+stream.
+
+**`clocks`.** clk_sys, clk_peri, clk_usb, clk_adc and clk_hstx (those running) through the
+frequency counter, FC0 (`frequency_count_khz()`, about 1 ms each), against `clock_get_hz()`:
+WARN beyond 1 %, FAIL beyond 5 %. About 6 ms in all. **What it can't see:** FC0 counts against
+clk_ref, which comes from the crystal, so a crystal that drifts or is off moves every reading
+together and the ratios still match. The check finds a PLL or divider set wrong. clk_ref itself
+isn't measured (it would always match itself). The low-power oscillator (LPOSC, an RC
+oscillator, 32.768 kHz nominal) measured the same way is the cross-check on the crystal, with a
+wide band from the datasheet (§8.4.1: ±20 % untrimmed, ±14 % over temperature, ±20 % over
+supply: 18 to 54 kHz): only a crystal off by about 2x shows there, and only as a WARN, since
+the LPOSC is too loose to fail on. The ROSC isn't used: after the bootrom's quadrupling it can
+be anywhere from 18 to 96 MHz, too wide to show even that. Crystal drift belongs to phase 4's
+RTC drift check, against NTS time.
+
+**`flash`.** The JEDEC ID (command 0x9f) through the SDK's `flash_safe_execute()` (interrupts
+off, core 1 stopped) and `flash_do_cmd()`, as `flash_get_unique_id()` does: tens of
+microseconds. Not through `flashop_run()`, so `uptime`'s count of flash writes stays one. The text names the ID, the maker and the size (`JEDEC ef 40 16 (Winbond,
+4 MB)`). A chip smaller than `PICO_FLASH_SIZE_BYTES` FAILs: the configuration, the root secret
+record and the key sector are at the end of the size the build assumes. Bigger is fine.
+
+**Boot time.** The four checks above, estimated: `crypto` 25 to 30 ms, `clocks` 6 ms, `trng`
+1.3 ms, `flash` well under 1 ms, so about 35 to 40 ms of the 100 ms budget. `health` prints
+the tier's time (`boot checks: N ms`), and `crypto` and `trng` give their own in their text.
+
+**Deviations from the plan in §10:**
+
+- `clocks` doesn't measure clk_ref (circular) or the ROSC (its range is too wide), and the
+  LPOSC cross-check WARNs instead of FAILing.
+- `trng` samples every 64 cycles with the corrector bypassed and the hardware's CRNGT and
+  autocorrelation tests on, not in pico_rand's one-sample-a-cycle mode (above).
+- `crypto` also tests SHA-512 (Ed25519 hashes with it) and the Ed25519 public key; X25519 has
+  no refusal test.
+- `flash` WARNs on a size code outside 0x10 to 0x1f and on no answer (all ones or zeros).
+- `health_gate_refuse()` went with `health_refusal()`; callers ask `health_gate()` (§9.1).
+
+**Cost** (debug build, `arm-none-eabi-size`): text +7.0 KB (the vectors are about 600 bytes of
+it), bss unchanged; 1.7 KB of heap while `crypto` runs, 384 bytes of stack for `trng`.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
 2. **Boot tier:** crypto known-answer tests (AES-XTS, AES-GCM, SHA-256, HMAC, Ed25519 and
    Curve25519 as SSH uses them; run on core 0, KEYS + CRYPTO), TRNG startup test (repetition
    count and adaptive proportion on raw TRNG output, SP 800-90B style; KEYS), clocks (FC0
-   against the configured frequencies), and the flash JEDEC ID and size.
+   against the configured frequencies), and the flash JEDEC ID and size. As built: §9.2.
 3. **Stored state:** both config records (needs `config.c` to report each slot), root secret
    source against the OTP flags, the host key against its fingerprint, the card key unwraps,
    the failcount marker, `/var/log` and `/certs` present and protected, the man bundle and cert

@@ -14,9 +14,25 @@ DESCRIPTION
     for one that hasn't run) and the reason, then how long the boot checks
     took.
 
-    The checks so far read what SOS already keeps:
-        resets      boot: WARN if the last reset was a fault, the watchdog or
-                    the glitch detector (the text says which; see 'uptime')
+    The boot checks run before anything can make a key (in at most 100 ms):
+        resets      WARN if the last reset was a fault, the watchdog or the
+                    glitch detector (the text says which; see 'uptime')
+        clocks      each running clock measured against its setting: WARN
+                    beyond 1 %, FAIL beyond 5 %. They are measured against the
+                    crystal, so this finds a PLL or divider set wrong, not a
+                    crystal that drifts; the low-power oscillator's reading
+                    (WARN outside 18-54 kHz) shows only a crystal about 2x off
+        flash       the flash chip's JEDEC ID and size: FAIL if smaller than
+                    the build expects, WARN on an unknown maker
+        trng        raw bits from the random number generator's oscillator:
+                    the repetition count and adaptive proportion tests of NIST
+                    SP 800-90B, and the generator's own tests. FAIL refuses
+                    making keys
+        crypto      known answers for SHA-256, SHA-512, HMAC, AES-GCM, AES-XTS,
+                    Ed25519 and X25519, and that a changed GCM ciphertext or
+                    signed message is refused. FAIL refuses making keys and
+                    encrypting
+    The background checks read what SOS already keeps:
         glitch      every minute: WARN if the glitch detector's loop guard
                     left it off at this boot (see 'glitch')
         stack       every minute: WARN when core 0's stack peak is over 75 %
@@ -35,8 +51,8 @@ DESCRIPTION
     the SSH host key, an encrypted card, a console password's salt) or
     encrypting new data (saving the configuration). The refusal names the
     check, and the latest result counts: a check that passes again lifts it.
-    Reading what is already stored is never refused. None of the checks above
-    refuses anything yet.
+    Reading what is already stored is never refused. Only trng and crypto
+    refuse anything.
 
     A fresh board whose root secret was refused this way keeps its console
     locked, saying which check failed; 'health' and 'reboot' work there.

@@ -484,14 +484,17 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
-## Health checks (`health.c`, `health_board.c`)
+## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`)
 
 `health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
 with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
 registry, the results, the scheduling, the gates, the `health` table's text, the `sos.health()`
 record, and the functions that judge the seed checks' numbers. It reads the clock through the
 hook given to `health_init()`. `health_board.c` has the firmware's table and the steps that
-gather the numbers.
+gather the numbers. The boot tier's hardware and crypto checks keep their pure halves apart:
+`hwtest.c` (the TRNG's startup tests and the judging of `trng`, `clocks` and `flash`;
+`tests/test_hwtest.c`) and `selftest.c` (the crypto known answers over wolfCrypt, run against the
+host's wolfCrypt by `tests/test_selftest.c`).
 
 - **Tiers:** `health_boot()` runs the boot checks in `main()` right after `wolfCrypt_Init()`,
   before anything can make a key; each finishes in one call (a check that asks for a second is
@@ -505,20 +508,30 @@ gather the numbers.
   FAIL at err, WARN at warning, back to PASS at notice (`(was FAIL 3 min ago)`). NONE to PASS
   or SKIP isn't logged, so a healthy board logs only the boot summary.
 - **Gates:** `health_gate(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO)` names the first FAILed check
-  that holds the gate, or NULL. The callers that make keys or seal ask it first (via
-  `health_gate_refuse()`, which remembers the name for `health_refusal()`), refuse, and log the
-  refusal with the check's name: the root secret (`rootflash.c`'s random source, so
+  that holds the gate, or NULL. The callers that make keys or seal ask it first, refuse, and log
+  the refusal with the check's name: the root secret (`rootflash.c`'s random source, so
   `rootsecret.c` stays pure), the burn image's secret (`rootburn_board.c`'s random source), the
   owner secret and the sealing of the configuration (`settings.c`; `settings_save_refused()`
   lets each caller of `settings_save()` say `the configuration wasn't saved: health check
   <name> failed`), the console password's salt, the host key (`hostkey.c`, asked again once the
   gate opens), and an encrypted card format (`sdcard.c`, before anything is written). On a
-  fresh board whose root secret was refused, the console's rescue state names the check and
-  allows `health`. Reading what is stored is never gated.
+  fresh board whose root secret was refused, the console's rescue state names the check
+  (`rootflash_refused_by()`) and allows `health`. Reading what is stored is never gated.
 - **Seed checks** (phase 1): `resets` (boot), `glitch`, `stack`, `heap` (with hysteresis:
   WARN under 64 KB, PASS again only above 96 KB), `chip-temp`, `supply` (the lowest VSYS since
   its last run, `sensors_vsys_min_take()`), each every 60 s. They read state only and hold no
   gate. The thresholds are in `health.h`.
+- **Boot checks** (phase 2, docs/design/health.md §9.2), after `resets`: `clocks` (each running
+  clock through FC0 against `clock_get_hz()`, WARN past 1 %, FAIL past 5 %; FC0 counts against
+  the crystal, so only the LPOSC's wide band shows a crystal about 2x off), `flash` (the JEDEC
+  ID through `flash_safe_execute()` and `flash_do_cmd()`; FAIL if smaller than
+  `PICO_FLASH_SIZE_BYTES`), `trng` (holds KEYS: SP 800-90B repetition count and adaptive
+  proportion over 3072 raw oscillator bits read from the TRNG block under pico_rand's spin lock,
+  H = 0.5, alpha = 2^-30, plus the block's own CRNGT and autocorrelation errors; the block is
+  reset before and after), `crypto` (holds KEYS and CRYPTO: 13 known answers for SHA-256,
+  SHA-512, HMAC, AES-GCM, XTS, Ed25519 and X25519, with refusal tests for a changed GCM
+  ciphertext and a changed signed message; 1.7 KB of heap while it runs). Thresholds and
+  cutoffs are in `hwtest.h`. `crypto` and `trng` give their time in their text.
 - **Test builds** (`-DSOS_TEST_COMMANDS=ON`): `health inject <name> fail|clear` sets a result by
   hand; `health inject gate keys|crypto` adds a test-only full-tier check holding that gate at
   FAIL, to see each refusal on the board (`health full` runs it, and it passes, which opens the
