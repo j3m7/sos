@@ -272,9 +272,10 @@ the NTP target's stand-in AEAD accepts any tag, so the encrypted fields are fuzz
 `certbundle` (`/certs/roots.pem`), `config` (the configuration record in flash, which USB
 provisioning can write; the target writes a valid CRC around the fuzzed bytes), `ping` (ICMP
 replies and errors), `terminal` (key sequences and text for display), `words` (the shell's
-tokenizer: a typed line split into words, quotes removed in place) and `fsck` (the card
+tokenizer: a typed line split into words, quotes removed in place), `fsck` (the card
 checker, on a sparse disk image: `tests/fuzz/fsck_image.h`; each input is checked with two
-window sizes, which must agree).
+window sizes, which must agree) and `fsck_exfat` (a card's exFAT boot region, directory entries
+and up-case table, as the checker's exFAT parts read them).
 
 ```sh
 just fuzz nts_ntp 300        # five minutes; needs clang
