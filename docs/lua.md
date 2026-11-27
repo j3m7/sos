@@ -123,7 +123,7 @@ say). With no `max_body`, a download has no size limit (the error page still sto
 the transfer fails (the connection, the card, a body over `max_body`), the call returns `nil` and
 the message: a failure before the first piece of the body leaves a file already at `path` as it
 was, while one after it removes the half-written file. The first piece replaces an existing file,
-so a refresh that fails part way loses the old copy. Ctrl-C leaves what was written.
+so a refresh that fails part way (or at its first piece, say with the card full) loses the old copy. Ctrl-C leaves what was written.
 
 ```lua
 local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")
