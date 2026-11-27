@@ -83,7 +83,7 @@ highest sensitivity, on every board (#78; `glitch off` on the console turns it o
 not done anywhere yet is enabling it in OTP. Once enabled there it can't be turned off, and a
 detector too sensitive for the board would reset a healthy board for ever. So the OTP bit
 waits for a week-long test on a spare board, with battery hardware. That test records the
-chip's temperature throughout and with each detector event (#92, firmware still to be written);
+chip's temperature throughout and with each detector event (#92; `temp` shows it);
 its other conditions are still to be defined. Turned on by the firmware
 it starts a second or two into boot and firmware can turn it off again, so it shows whether
 the detector troubles a healthy board; it is not the protection the OTP bit would be. See "The
@@ -203,17 +203,18 @@ from the encrypted card. No detector reset.
 **What runs from now on (the owner's decision, 2026-11-25).** No multi-day soak yet. Instead
 SOS arms the detector by software at every boot, at sensitivity 3, by default (#78), so that
 ordinary development use shows whether it resets a healthy board. `glitch off` turns it off if
-it becomes a problem. A detector reset nobody forced is recorded on #64 (`docs/development.md`,
+it becomes a problem. A detector reset nobody forced is recorded on #100 (`docs/development.md`,
 "Glitch detector resets"). That is evidence gathered in passing, not a test: it says nothing for
 the conditions nobody happens to run. The week-long torture test comes later, with a more
 complete feature set, a spare board and battery hardware.
 
 **The week-long test records the chip's temperature** (the owner's decision, 2026-11-25),
 throughout the test and with each detector event, so that a detector reset can be set against
-how warm the chip was when it happened. The firmware for that comes before the test (#92): the
-chip's own temperature sensor, a reading logged with every detector trigger and kept across a
-detector reset, a periodic reading in the log, and the lowest and highest since boot. Two
-limits, to keep in mind when reading its numbers:
+how warm the chip was when it happened. The firmware for that is in place (#92): the chip's
+own temperature sensor, read every 10 s; a reading logged with every detector trigger and kept
+across a detector reset; a reading in the log at boot, on each degree of change and at least
+hourly, which a serial logger on the console records for the length of the test; and the
+lowest and highest since boot (`temp`). Two limits, to keep in mind when reading its numbers:
 
 - It is the chip's temperature, not the room's. It moves with what the chip is doing.
 - Uncalibrated, it is good for change over time on one board, not for an absolute figure or
@@ -325,9 +326,9 @@ and merged before anything is burned.
    after a wrong answer would give free guesses.
 6. **The glitch detector by software** (decision 5): done in #78. A setting arms the detector
    at a chosen sensitivity (by default the highest) or only watches it, and detector resets
-   are reported in the log, `uptime` and `glitch`. No OTP. Still to build: reporting the
-   chip's temperature with detector events (#92), which comes before the week-long test; and
-   the test itself (load, power and temperature conditions, and what counts as a pass).
+   are reported in the log, `uptime` and `glitch`, with the chip's temperature (#92). No OTP.
+   Still to build: the week-long test itself (load, power and temperature conditions, and
+   what counts as a pass).
 7. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build
    deliberately produces no OTP file.
 8. **The boot key hashes as a file we write by hand** (`docs/otp/dev-1/boot-keys.json`), in

@@ -75,6 +75,11 @@ add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
 target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chipinfo COMMAND test_chipinfo)
 
+# src/core/chiptemp.c: the chip temperature's conversion, text, lowest and highest, and when to log.
+add_executable(test_chiptemp test_chiptemp.c ${SOS_ROOT}/src/core/chiptemp.c)
+target_include_directories(test_chiptemp PRIVATE ${SOS_ROOT}/src)
+add_test(NAME chiptemp COMMAND test_chiptemp)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
