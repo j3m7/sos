@@ -18,23 +18,25 @@ Points not confirmed from those are listed under "To confirm" in
 
 ## What a secured board protects against
 
-The production board will be an RP2350 **A2**, because A4 boards can't be bought at the
-moment. That limits what securing it buys. The table assumes everything in the production
-column of the [decisions](decisions.md) is done.
+What securing a board buys depends on its chip revision. The production board's isn't settled:
+an **A4** is preferred, but A4s are hard to get, so it may well be an **A2**, like dev-1. The
+table assumes everything in the production column of the [decisions](decisions.md) is done,
+and shows the A2 case where the revisions differ.
 
-| Attacker | A secured A2 board |
+| Attacker | A secured board |
 |---|---|
 | A PC and a USB cable | Stopped: only signed firmware runs, the flash holds sealed records, the root secret can't be read over USB |
 | A debug probe (SWD) | Stopped: debug is disabled |
 | A flash reader, or rewriting the flash chip | Reads only sealed records; can erase or roll back the configuration, which locks the cards (erase) or restores an older state (rollback, accepted in #64) |
-| Glitching equipment (voltage or laser fault injection) | **Not stopped.** Four published attacks apply to A2: reading OTP through a disrupted supply (E16, no workaround), running unsigned code through the bootloader's reboot call (E20), reading locked OTP pages in BOOTSEL (E21), and swapping the flash contents during the signature check (E24, no workaround, also on A3) |
+| Glitching equipment (voltage or laser fault injection) | **On an A2: not stopped.** Four published attacks apply to A2: reading OTP through a disrupted supply (E16, no workaround), running unsigned code through the bootloader's reboot call (E20), reading locked OTP pages in BOOTSEL (E21), and swapping the flash contents during the signature check (E24, no workaround, also on A3) |
 | Someone who can solder a second flash chip behind a switch | **Not stopped, on any chip revision.** SOS runs from external flash. After the boot ROM has checked the signature, the flash the chip reads from can be switched to another one, with no glitching at all. The attacker's code then runs as Secure code and can read the root secret. Raspberry Pi's security white paper warns of this and says secure code should run from RAM; SOS is too large for that. Closing it is the "Later" section of #64 |
 | A lab that can decapsulate the chip | Not stopped (OTP imaging); storing the secret with chaff makes it harder |
 
-E20 and E21 have workarounds that cost features: decisions 2 and 3. E16 and E24 have none on
-A2. So a secured A2 raises the bar from "anyone with a cable" to "someone with a soldering
-iron and a second flash chip, or with fault-injection equipment", and no further. Moving to an
-A4 board later removes the four glitch attacks. It does not remove the flash swap.
+On an A2, E20 and E21 have workarounds that cost features (decisions 2 and 3), and E16 and E24
+have none. So a secured A2 raises the bar from "anyone with a cable" to "someone with a
+soldering iron and a second flash chip, or with fault-injection equipment", and no further. An
+A4 removes the four glitch attacks. It does not remove the flash swap, so on either revision
+the bar stops at the soldering iron.
 
 A development board (dev-1) has the mechanisms but not the protection: debug stays on and its
 signing keys are public. See [the dev-1 record](../otp/dev-1/RECORD.md).

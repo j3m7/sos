@@ -25,6 +25,13 @@ a production board until dev-1 is tested and working" (2026-11-25).
 | 11 | OTP pages locked against the bootloader | Only the root secret's pages and SOS's flag page (page 3) | **Deferred** until dev-1 is done |
 | 12 | Code that writes OTP | Only in a separate burn image (#87) | Same |
 
+**Not yet decided: the production board's chip revision.** An A4 is preferred, since it
+removes the four published A2 glitch attacks (E16, E20, E21, E24;
+[design.md](design.md#what-a-secured-board-protects-against)), but A4s are hard to get, so the
+production board may be an A2. Parts of decisions 2, 3 and 11 weigh A2 errata (E20, E21), so
+revisit them if it turns out to be an A4. The runbook records the revision from `version`
+before anything is written.
+
 ## The decisions
 
 ### 1. Debug port
