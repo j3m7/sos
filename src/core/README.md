@@ -125,7 +125,7 @@ Two layers:
     leaves the previous version.
   - **Append-only format:** new fields only go at the end, and the stored length says which
     version wrote the record. `record_lengths` lists every released size (1540, 1606, 1638,
-    ... 2184, and 2188 with the log rotation settings).
+    ... 2184, 2188 with the log rotation settings, and 2292 with the time zone).
     A record from older firmware loads with the newer fields at their defaults; firmware that
     doesn't know a record's length ignores it. `_Static_assert`s pin the offsets of released
     fields.
