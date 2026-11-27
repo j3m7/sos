@@ -1,0 +1,27 @@
+NAME
+    tee - write a command's output to a file and pass it on
+
+SYNOPSIS
+    <command> | tee [-a] <path>
+
+DESCRIPTION
+    Writes everything the command prints to the file, and passes it on
+    unchanged, so the screen (or the next stage) still gets it: 'dmesg | tee
+    /dmesg.txt' shows dmesg and saves it, and 'dmesg | tee /d.txt | more'
+    pages it as well. The file is replaced; with -a the output is appended
+    to it. The path is relative to the working directory, as for the file
+    commands, and the same paths are protected as for 'echo': only the
+    console may write under /certs and /var/log.
+
+    The file is written as the output comes, and a command stopped with Ctrl-C
+    leaves what it had written, as on Unix. Stages before tee decide what it
+    sees: 'dmesg | grep wifi | tee /w.txt' saves only the matching lines.
+    If the card refuses a write (it is full, say) tee says so once and stops
+    the command, as head does.
+
+NOTES
+    tee works only after a '|': typed on its own it says so. It takes one
+    path, without spaces. More about pipes in 'man more'.
+
+SEE ALSO
+    echo, cat, more, head, grep

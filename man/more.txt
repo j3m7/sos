@@ -67,15 +67,17 @@ PIPES
 
     The filters are grep (lines with a text), head (the first lines; it
     stops the command once it has them), tail (the last lines) and wc
-    (counts); see their pages. 'more' can only come last, and at most four
-    filters fit in a line. The output streams through: grep shows lines as
-    the command prints them, and with '| more' only what the filters let
-    through is kept, so 'cat big.log | grep error | more' isn't cut at 32 KB
-    unless the matches are. When the 32 KB are full the command is stopped,
+    (counts); see their pages. 'tee [-a] <path>' also writes what passes it
+    to a file ('dmesg | tee /dmesg.txt | more'). 'more' can only come last,
+    and at most four filters fit in a line. The output streams through:
+    grep shows lines as the command prints them, and with '| more' only what
+    the filters let through is kept, so 'cat big.log | grep error | more'
+    isn't cut at 32 KB unless the matches are. When the 32 KB are full the
+    command is stopped,
     as head stops it.
 
     A '|' starts a stage only when a stage name follows it (grep, head,
-    tail, wc, more); any other '|' is part of the command's text ('ls |
+    tail, wc, tee, more); any other '|' is part of the command's text ('ls |
     morex' runs ls with those words). A stage that doesn't parse ('x | grep',
     'x | head y') prints its usage and the command doesn't run. Ctrl-C drops
     what the filters hold (tail's lines, wc's count); a command that asks a
