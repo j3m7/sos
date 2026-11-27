@@ -283,10 +283,8 @@ def fsck():
     write("fsck", "mbr", b"\0" + sparse(70000, fat32_image(70000, 2048)))
     write("fsck", "sfd-2fat", b"\x25" + sparse(70000, fat32_image(70000, 0, nfats=2, layout="sfd")))
     write("fsck", "gpt", b"\x4a" + sparse(72000, fat32_image(72000, 2048, layout="gpt")))
-    exfat = bytearray(512)
-    exfat[0:11] = b"\xEB\x76\x90EXFAT   "
-    exfat[510:512] = b"\x55\xAA"
-    write("fsck", "exfat", b"\0" + sparse(70000, {0: exfat}))
+    write("fsck", "exfat", b"\x13" + sparse(131072, exfat_image(131072, 0)))
+    write("fsck", "exfat-mbr", b"\x61" + sparse(131072, exfat_image(131072, 2048)))
 
 
 # --- words: a typed command line --------------------------------------------------------------
@@ -375,6 +373,133 @@ def fsck_exfat():
     write("fsck_exfat", "upcase", b"\x02" + struct.pack("<IB", len(upcase_table), 63) + upcase_table)
     write("fsck_exfat", "window", b"\x03" + struct.pack("<IH", 2, 256) +
           bytes([0xFF, 0x0F, 0, 0xF0] * 4) + bytes([0xFF, 0xFF, 0, 0x30] * 4))
+
+
+# fsck.c's case folding (fsck_upcase(): FatFs's for ASCII, Latin-1, Latin Extended-A, Greek and
+# Cyrillic), which the checker uses when given no ff_wtoupper(), as the fuzz target is.
+FOLD_BLOCKS = [(0x0061, 26, -32), (0x00E0, 23, -32), (0x00F8, 7, -32), (0x0100, 48, 0),
+               (0x0132, 6, 0), (0x0139, 16, 0), (0x014A, 46, 0), (0x0179, 6, 0),
+               (0x03B1, 17, -32), (0x03C4, 8, -32), (0x03D8, 24, 0), (0x0430, 32, -32),
+               (0x0450, 16, -80), (0x0460, 34, 0), (0x048A, 54, 0), (0x04C1, 14, 0),
+               (0x04D0, 68, 0)]
+FOLD_SINGLE = {0x00FF: 0x0178, 0x037B: 0x03FD, 0x037C: 0x03FE, 0x037D: 0x03FF, 0x03AC: 0x0386,
+               0x03AD: 0x0388, 0x03AE: 0x0389, 0x03AF: 0x038A, 0x03C2: 0x03A3, 0x03C3: 0x03A3,
+               0x03CC: 0x038C, 0x03CD: 0x038E, 0x03CE: 0x038F, 0x03F2: 0x03F9, 0x03F8: 0x03F7,
+               0x03FB: 0x03FA, 0x04CF: 0x04C0}
+
+
+def fold(c):
+    for base, count, shift in FOLD_BLOCKS:
+        if base <= c < base + count:
+            return c + shift if shift else c - ((c - base) & 1)
+    return FOLD_SINGLE.get(c, c)
+
+
+def upcase_table():
+    """fold() as a compressed up-case table (0xFFFF, n: n characters map to themselves); the
+    characters past its end map to themselves too."""
+    last = max(c for c in range(0x10000) if fold(c) != c)
+    units, c = [], 0
+    while c <= last:
+        n = 0
+        while c + n <= last and fold(c + n) == c + n:
+            n += 1
+        if n > 1:
+            units += [0xFFFF, n]
+            c += n
+        else:
+            units.append(fold(c))
+            c += 1
+    return struct.pack("<%dH" % len(units), *units)
+
+
+def exfat_image(sectors, part_lba):
+    """An exFAT volume of 2 KB clusters laid out as f_mkfs lays one out (boot regions, FAT,
+    then bitmap, up-case table and root at the heap's start), with a FAT-chained file, a
+    NoFatChain file across window boundaries and a subdirectory. {lba: bytearray(512)}."""
+    sec = {}
+
+    def put(lba, off, data):
+        s = sec.setdefault(lba, bytearray(512))
+        s[off:off + len(data)] = data
+
+    shift, vol = 2, sectors - part_lba
+    fat_off = 32
+    fat_len = ((vol >> shift) + 2) * 4 // 512 + 1
+    heap = (fat_off + fat_len + 7) // 8 * 8
+    count = (vol - heap) >> shift
+    csize = 1 << shift
+    table = upcase_table()
+    tsum = 0
+    for b in table:
+        tsum = rotr_add(32, tsum, b)
+    bm_clusters = ((count + 7) // 8 + 2047) // 2048
+    up_first = 2 + bm_clusters
+    up_clusters = (len(table) + 2047) // 2048
+    root = up_first + up_clusters
+    readme, dirc, inner = root + 1, root + 2, root + 3       # inner: 3 clusters
+    longf = [root + 6, root + 7, root + 9]                    # fragmented: a FAT chain
+    big_first, big_n = 15000, 5000                            # over cluster 16386
+    chains = {2: list(range(2, up_first)), up_first: list(range(up_first, root)), root: [root],
+              longf[0]: longf}
+    used = set(range(2, root + 1)) | {readme, dirc} | set(range(inner, inner + 3)) | set(longf)
+    used |= set(range(big_first, big_first + big_n))
+
+    s0 = bytearray(512)
+    s0[0:11] = b"\xEB\x76\x90EXFAT   "
+    struct.pack_into("<QQIIIIIIHHBBBB", s0, 64, part_lba, vol, fat_off, fat_len, heap, count,
+                     root, 0x12345678, 0x100, 0, 9, shift, 1, 0x80)
+    s0[120:122] = b"\xEB\xFE"
+    s0[510:512] = b"\x55\xAA"
+    ext = bytearray(512)
+    ext[510:512] = b"\x55\xAA"
+    region = [bytes(s0)] + [bytes(ext)] * 8 + [bytes(512)] * 2
+    bsum = 0
+    for k, b512 in enumerate(region):
+        for i, b in enumerate(b512):
+            if k or i not in (106, 107, 112):
+                bsum = rotr_add(32, bsum, b)
+    region.append(struct.pack("<I", bsum) * 128)
+    for copy in (0, 12):
+        for k, b512 in enumerate(region):
+            if any(b512):
+                put(part_lba + copy + k, 0, b512)
+
+    fat = {0: 0xFFFFFFF8, 1: 0xFFFFFFFF}
+    for chain in chains.values():
+        for a, b in zip(chain, chain[1:] + [0xFFFFFFFF]):
+            fat[a] = b
+    for c, v in fat.items():
+        put(part_lba + fat_off + c // 128, c % 128 * 4, struct.pack("<I", v))
+
+    def clus(c):
+        return part_lba + heap + (c - 2) * csize
+
+    bitmap = bytearray((count + 7) // 8)
+    for c in used:
+        bitmap[(c - 2) // 8] |= 1 << ((c - 2) % 8)
+    for i in range(0, len(bitmap), 512):
+        if any(bitmap[i:i + 512]):
+            put(clus(2) + i // 512, 0, bitmap[i:i + 512])
+    for i in range(0, len(table), 512):
+        put(clus(up_first) + i // 512, 0, table[i:i + 512])
+    label = bytes([0x83, 3]) + "SOS".encode("utf-16-le") + bytes(24)
+    bm_e = bytes([0x81]) + bytes(19) + struct.pack("<IQ", 2, len(bitmap))
+    up_e = bytes([0x82, 0, 0, 0]) + struct.pack("<I", tsum) + bytes(12) + struct.pack(
+        "<IQ", up_first, len(table))
+    put(clus(root), 0, label + bm_e + up_e + exfat_set("README.txt", readme, 100)
+        + exfat_set("A long name with more than thirty characters", longf[0], 5000,
+                    contiguous=False)
+        + exfat_set("dir", dirc, 2048, attr=0x10)
+        + exfat_set("big.bin", big_first, big_n * 2048)
+        + exfat_set("empty", 0, 0))
+    put(clus(dirc), 0, exfat_set("inner.bin", inner, 5000) + exfat_set("Empty Too", 0, 0))
+    for c in (readme, inner, longf[0]):
+        put(clus(c), 0, b"x")
+    if part_lba:
+        put(0, 446, struct.pack("<B3sB3sII", 0, b"\0\1\0", 0x07, b"\xFE\xFF\xFF", part_lba, vol))
+        put(0, 510, b"\x55\xAA")
+    return sec
 
 
 for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat):

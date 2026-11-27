@@ -333,7 +333,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     add_library(fatfs_host STATIC ${FATFS_DIR}/ff.c ${FATFS_DIR}/ffunicode.c)
     target_include_directories(fatfs_host PUBLIC ${FATFS_DIR} ${SDCARD_ROOT}/src/include)
     target_compile_options(fatfs_host PRIVATE -w)     # the library's code, not ours to warn about
-    add_executable(test_fsck test_fsck.c ${SOS_ROOT}/src/files/fsck.c)
+    add_executable(test_fsck test_fsck.c ${SOS_ROOT}/src/files/fsck.c
+        ${SOS_ROOT}/src/files/fsck_exfat.c)
     target_include_directories(test_fsck PRIVATE ${SOS_ROOT}/src)
     target_compile_definitions(test_fsck PRIVATE
         FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
@@ -386,5 +387,5 @@ sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
-sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c)
+sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)

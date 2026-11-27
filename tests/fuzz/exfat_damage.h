@@ -3,8 +3,8 @@
 //
 // Damage for exFAT images: each exd_*() function breaks one thing in a volume FatFs wrote, as
 // a power cut, a bad writer or a bad card might, so that a checker test can expect the exact
-// problem. Used by tests/test_fsck_exfat.c, and meant for test_fsck.c and fuzz_fsck.c once
-// fsck.c walks exFAT (design note §8, §10.4).
+// problem. Used by tests/test_fsck.c, which runs each case through the whole checker, and by
+// tests/test_fsck_exfat.c to find entry sets (design note §8, §10.4).
 //
 // The image is reached through a callback that returns a sector's 512 bytes, writable (a
 // sector never written may be created as zeros), so any RAM disk can serve. Entry sets are
