@@ -1122,8 +1122,9 @@ DESCRIPTION
     size doesn't match their clusters, clusters two files share, broken
     directory entries. It runs only on an unmounted card: run 'sd unmount'
     first. While it runs nothing else uses the card: file commands, SFTP,
-    Lua and the TLS roots fail as if there were no card, the log files wait,
-    and the other 'sd' commands refuse. It prints one line per problem, then
+    Lua fail as if there were no card, TLS roots not loaded yet can't be
+    read (roots already in memory still work), the log files wait, and the
+    other 'sd' commands refuse. It prints one line per problem, then
     a summary, which also goes to the log. It never writes to the card;
     repairing is a later command. Ctrl-C stops it. Afterwards the card is
     left as 'sd unmount' leaves it: the next file command mounts it.

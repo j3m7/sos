@@ -49,7 +49,8 @@ sd check
 
 It refuses while the card is mounted (`the card is mounted: run 'sd unmount' first`) or a file
 is open. While it runs, nothing else reaches the card: file commands, SFTP and Lua fail as when
-there's no card, an `http` request has no TLS roots, the log writer keeps its lines in memory,
+there's no card, an `http` request works only if the TLS roots were already loaded (they stay
+in memory once read), the log writer keeps its lines in memory,
 and the other `sd` commands say `the card is being checked (sd check)`. It prints one line per
 problem and a summary, which also goes to the log (`sd: check: ...`). It reads only; repair is
 a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
