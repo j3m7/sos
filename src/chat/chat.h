@@ -55,4 +55,20 @@ void chat_cmd_who(shell_t *sh, char *args);
 // For tests: the peer's display name, or NULL if not registered.
 const char *chat_name(const shell_t *sh);
 
+// A wall from something that isn't a shell (a Lua script): `name` is shown as the sender. It's
+// posted at once or not at all: -1 if the ring is full of messages someone hasn't had yet (try
+// again shortly), else the number of shells it goes to (0: nobody is logged in; nothing posted).
+int chat_wall_from(const char *name, const char *text);
+
+// Who is logged in, as `who` lists them (in slot order), into out (at most max); returns the
+// number written.
+typedef struct {
+    unsigned slot;
+    char name[CHAT_NAME_MAX + 1];
+    char from[CHAT_FROM_MAX + 1];
+    uint32_t since_s;           // logged in this long
+    bool in_chat;
+} chat_peer_t;
+unsigned chat_peers(chat_peer_t *out, unsigned max);
+
 #endif

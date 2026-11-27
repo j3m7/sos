@@ -77,6 +77,9 @@ bool wifi_up(void);
 void wifi_names_start(void);
 bool wifi_names_each(void (*fn)(const char *ssid, int rssi, void *arg), void *arg);
 void wifi_names_stop(void);
+// Are names being collected (a question's Tab, or a script's scan)? So a script's scan stops only
+// a collection it started itself.
+bool wifi_names_active(void);
 
 // The SSID of the network connected to, or NULL while not connected.
 const char *wifi_ssid(void);

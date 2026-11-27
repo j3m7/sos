@@ -613,6 +613,27 @@ bool sdcard_mount_retry(void) {
     return ok;
 }
 
+bool sdcard_info(sdcard_info_t *info) {
+    *info = (sdcard_info_t){0};
+    if (!sdcard_mount(NULL))
+        return false;
+    FATFS *fs;
+    DWORD free_clusters;
+    FRESULT fr = f_getfree(sd_get_drive_prefix(&card), &free_clusters, &fs);
+    info->card = card_type();
+    info->card_bytes = (uint64_t)card.state.sectors * 512;
+    info->encrypted = card_kind == KIND_ENCRYPTED;
+    info->fs = fs_type(card.state.fatfs.fs_type);
+    if (fr == FR_OK) {
+        uint64_t csize = (uint64_t)fs->csize * 512;
+        info->total = (uint64_t)(fs->n_fatent - 2) * csize;
+        info->free = (uint64_t)free_clusters * csize;
+        info->cluster = (uint32_t)csize;
+        info->free_ok = true;
+    }
+    return true;
+}
+
 bool sdcard_mounted(void) {
     return card.state.mounted;
 }

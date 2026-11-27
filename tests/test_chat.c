@@ -196,6 +196,44 @@ TEST(wall_alone_and_usage) {
     CHECK(has(3, "can't send"));
 }
 
+TEST(wall_from_a_script) {
+    setup();
+    CHECK_EQ(chat_wall_from("/autorun.lua", "nobody here"), 0);   // nobody: nothing posted
+    chat_register(&sh[0], 0, "console", "console");
+    chat_register(&sh[1], 1, "alice", "ssh 10.0.0.2");
+    for (int i = 0; i < N; i++)
+        clear(i);
+    CHECK_EQ(chat_wall_from("/autorun.lua", "disk \x1b[2Jalmost full"), 2);
+    pass();
+    CHECK(has(0, "[wall t1 /autorun.lua] disk .[2Jalmost full\n"));   // filtered like any wall
+    CHECK(has(1, "[wall t1 /autorun.lua] disk .[2Jalmost full\n"));
+    CHECK(!has(0, "nobody here"));
+    // A stalled reader: once the ring is full of what it hasn't had, a script's wall is refused
+    // (-1) instead of waiting; after CHAT_WAIT_US it goes through, overwriting.
+    fk[1].space = 0;
+    for (int k = 0; k < CHAT_RING; k++)
+        CHECK_EQ(chat_wall_from("lua -e", "more"), 2);
+    CHECK_EQ(chat_wall_from("lua -e", "one too many"), -1);
+    fake_now += CHAT_WAIT_US;
+    CHECK_EQ(chat_wall_from("lua -e", "now"), 2);
+}
+
+TEST(peers_listed_as_who_shows_them) {
+    setup();
+    chat_peer_t p[CHAT_MAX_PEERS];
+    CHECK_EQ(chat_peers(p, CHAT_MAX_PEERS), 0);
+    chat_register(&sh[2], 2, "bob", "ssh 10.0.0.3");
+    fake_now = 5000000;
+    chat_register(&sh[0], 0, "console", "console");
+    fake_now = 65000000;
+    CHECK_EQ(chat_peers(p, CHAT_MAX_PEERS), 2);
+    CHECK(p[0].slot == 0 && !strcmp(p[0].name, "console") && p[0].since_s == 60);
+    CHECK(p[1].slot == 2 && !strcmp(p[1].from, "ssh 10.0.0.3") && p[1].since_s == 65);
+    CHECK(!p[0].in_chat && !p[1].in_chat);
+    CHECK_EQ(chat_peers(p, 1), 1);              // no more than asked for
+    CHECK(p[0].slot == 0);
+}
+
 TEST(chat_only_reaches_the_room) {
     setup();
     chat_register(&sh[0], 0, "console", "console");
@@ -558,6 +596,8 @@ TEST(who_lists_shells) {
 TEST_MAIN(
     RUN(wall_reaches_everyone_else);
     RUN(wall_alone_and_usage);
+    RUN(wall_from_a_script);
+    RUN(peers_listed_as_who_shows_them);
     RUN(chat_only_reaches_the_room);
     RUN(chat_slash_lines);
     RUN(tab_completes_names_and_commands_in_the_room);
