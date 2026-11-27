@@ -120,8 +120,10 @@ does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script
 2xx response is written: the response then has `size` (the bytes written) instead of `body`. Any
 other status leaves the file alone and comes back with its `body` as `get` would (an error page,
 say). With no `max_body`, a download has no size limit (the error page still stops at 32 KB). If
-the transfer fails part way (the connection, the card, a body over `max_body`), the half-written
-file is removed and the call returns `nil` and the message; Ctrl-C leaves what was written.
+the transfer fails (the connection, the card, a body over `max_body`), the call returns `nil` and
+the message: a failure before the first piece of the body leaves a file already at `path` as it
+was, while one after it removes the half-written file. The first piece replaces an existing file,
+so a refresh that fails part way loses the old copy. Ctrl-C leaves what was written.
 
 ```lua
 local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")

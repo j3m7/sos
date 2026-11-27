@@ -497,13 +497,16 @@ static bool file_piece(const char *file, bool first) {
     return lua_req.result >= 0;
 }
 
-// Remove a file that a failed download left half written; return nil and `why`.
-static int drop_file(lua_State *L, const char *file, const char *why) {
+// A download failed: remove the file if this download wrote to it (`wrote`; a file that was there
+// before and never touched stays as it was), and return nil and `why`.
+static int drop_file(lua_State *L, const char *file, bool wrote, const char *why) {
     char err[sizeof(lua_req.error)];
     snprintf(err, sizeof(err), "%s", why);
-    memcpy(lua_req.path, file, strlen(file) + 1);
-    lua_req.type = LR_REMOVE;
-    request();
+    if (wrote) {
+        memcpy(lua_req.path, file, strlen(file) + 1);
+        lua_req.type = LR_REMOVE;
+        request();
+    }
     lua_pushnil(L);
     lua_pushstring(L, err);
     return 2;
@@ -580,7 +583,7 @@ static int http_request(lua_State *L, int t, const char *file) {
         if (lua_req.result < 0) {               // core 0 has dropped the request
             http_open = false;
             luaL_pushresult(&b);
-            return to_file ? drop_file(L, file, lua_req.error) : fail(L);
+            return to_file ? drop_file(L, file, total > 0, lua_req.error) : fail(L);
         }
         if (lua_req.len == 0) {                 // the end: core 0 has dropped it
             http_open = false;
@@ -592,7 +595,7 @@ static int http_request(lua_State *L, int t, const char *file) {
             const char *why = lua_pushfstring(L, "response body larger than %I bytes (max_body)",
                                               limit);
             if (to_file)
-                return drop_file(L, file, why);
+                return drop_file(L, file, total > 0, why);
             lua_pushnil(L);
             lua_insert(L, -2);
             return 2;
@@ -600,7 +603,7 @@ static int http_request(lua_State *L, int t, const char *file) {
         if (to_file) {
             if (!file_piece(file, total == 0)) {
                 luaL_pushresult(&b);
-                return drop_file(L, file, lua_req.error);
+                return drop_file(L, file, total > 0, lua_req.error);
             }
         } else {
             luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
