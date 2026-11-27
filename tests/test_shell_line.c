@@ -133,10 +133,25 @@ static const shell_word_t t_time[] = {
     {0}};
 static const shell_word_t t_url[] = {{"https://", NULL, SHELL_NOSPACE}, {0}};
 static const shell_word_t t_http[] = {{"get", t_url, 0}, {0}};
+// Values from a function, as shell.c's key numbers: notes from outside, one with an escape
+// sequence and a line break; a value with a space, which can't be offered.
+static void t_key_numbers(shell_t *s, shell_value_fn fn, void *arg) {
+    (void)s;
+    char buf[8];
+    static const char *const notes[] = {"laptop", "evil\x1b[2J\nx", NULL};
+    for (int i = 0; i < 3; i++) {
+        snprintf(buf, sizeof(buf), "%d", i == 2 ? 12 : i + 1);
+        fn(buf, notes[i], arg);         // the buffer is reused: Tab must copy
+    }
+    fn("a b", NULL, arg);
+}
+static const shell_values_t t_keys = SHELL_VALUES_INIT(t_key_numbers);
+static const shell_word_t t_key[] = {{"del", SHELL_VALUES_OF(t_keys), 0}, {0}};
 static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
 static const shell_cmd_t t_commands[] = {
     C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
-    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0}, {0}};
+    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0},
+    {"key", NULL, t_key, 0}, {0}};
 static const shell_word_t t_lua[] = {{"-b", NULL, SHELL_PATH}, W("ps"), {0}};
 static const shell_cmd_t t_files[] = {
     C("ls"), {"lua", NULL, t_lua, SHELL_PATH}, {"log", NULL, t_log, 0},
@@ -1239,12 +1254,12 @@ TEST(tab_on_an_empty_line_lists_the_commands) {
     start(&io_plain);
     type("\t\t");
     // Not setup (admin only), not ? (hidden).
-    CHECK_OUT("\a\nhelp      hostname  time      web       ls        lua       log       cat\n"
-              "cd        echo\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      web       key       ls        lua       log\n"
+              "cat       cd        echo\nsos> ");
     start(&io_admin);
     type("\t\t");
-    CHECK_OUT("\a\nhelp      hostname  time      setup     web       ls        lua       log\n"
-              "cat       cd        echo\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      setup     web       key       ls        lua\n"
+              "log       cat       cd        echo\nsos> ");
 }
 
 TEST(tab_list_wraps_rows_on_a_crlf_channel) {
@@ -1525,6 +1540,27 @@ TEST(tab_a_word_that_ends_with_nothing) {
     CHECK_OUT("");
 }
 
+TEST(tab_values_from_a_function) {
+    start(&io_plain);
+    type("key del 2\t");
+    CHECK(line_is("key del 2 "));
+    start(&io_plain);
+    type("key del 1\t");                             // 1 and 12
+    CHECK_OUT("key del 1\a");
+    start(&io_plain);
+    type("key del \t");
+    clear_out();
+    type("\t");
+    // One a line with notes; the note's escape and line break can't reach the terminal.
+    CHECK_OUT("\n1   laptop\n2   evil.[2J x\n12\nsos> key del ");
+    start(&io_plain);
+    type("key del a\t");                             // "a b": not one word
+    CHECK_OUT("key del a\a");
+    start(&io_plain);
+    type("key del 2 \t");                            // nothing after a value
+    CHECK_OUT("key del 2 \a");
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1683,6 +1719,7 @@ TEST_MAIN(
     RUN(tab_completes_the_file_after_echo_redirect);
     RUN(tab_echo_text_is_free);
     RUN(tab_a_word_that_ends_with_nothing);
+    RUN(tab_values_from_a_function);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);

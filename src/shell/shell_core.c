@@ -9,6 +9,7 @@
 #include "core/version.h"
 #include "shell/charwidth.h"
 #include "shell/complete.h"
+#include "shell/termtext.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -463,10 +464,13 @@ typedef struct {
     char first_end;             // what follows it: ' ', '/' or nothing ('\0')
     size_t common;              // bytes all matches have in common
     size_t widest;              // columns of the widest, with its '/'
+    bool notes;                 // some match has a note: list one a line, the note beside it
 } tab_matches_t;
 
-static void tab_collect(const char *word, char end, void *arg) {
+static void tab_collect(const char *word, char end, const char *note, void *arg) {
     tab_matches_t *m = arg;
+    if (note && *note)
+        m->notes = true;
     size_t n = strlen(word);
     if (!m->have) {
         memcpy(m->first, word, n + 1);  // fits: complete.h offers no longer word
@@ -489,8 +493,27 @@ typedef struct {
     size_t width, per_row, in_row, last;   // `last`: columns of the match printed before
 } tab_list_t;
 
-// One match of the list, in columns `width` wide; no spaces at the end of a row.
-static void tab_print(const char *word, char end, void *arg) {
+// A note from outside (a key comment, an SSID), as termtext shows outside text: nothing in it
+// reaches the terminal as a control or an invisible character. Line breaks and tabs become
+// spaces, so it stays on its line.
+static void tab_note(shell_t *sh, const char *note) {
+    termtext_t t = TERMTEXT_INIT;
+    char out[32 + 3];
+    size_t len = strlen(note);
+    for (size_t i = 0; i < len; i += 32) {
+        size_t n = len - i < 32 ? len - i : 32;
+        size_t got = termtext_filter(&t, (const uint8_t *)note + i, n, out);
+        for (size_t j = 0; j < got; j++)
+            if (out[j] == '\n' || out[j] == '\t')
+                out[j] = ' ';
+        write_out(sh, out, got);
+    }
+    write_out(sh, out, termtext_flush(&t, out));
+}
+
+// One match of the list, in columns `width` wide; no spaces at the end of a row. With notes
+// (per_row 1), the note after the column.
+static void tab_print(const char *word, char end, const char *note, void *arg) {
     tab_list_t *l = arg;
     if (l->in_row == l->per_row) {
         write_out(l->sh, "\n", 1);
@@ -503,6 +526,10 @@ static void tab_print(const char *word, char end, void *arg) {
     if (end == '/')
         write_out(l->sh, "/", 1);
     l->last = text_columns(word, strlen(word)) + (end == '/');
+    if (note && *note) {
+        shell_printf(l->sh, "%*s", (int)(l->width - l->last), "");
+        tab_note(l->sh, note);
+    }
 }
 
 static void line_tab(shell_t *sh, bool again) {
@@ -553,7 +580,7 @@ static void line_tab(shell_t *sh, bool again) {
         return;
     }
     tab_list_t l = {.sh = sh, .width = m.widest + 2};
-    l.per_row = TAB_LIST_COLUMNS / l.width;
+    l.per_row = m.notes ? 1 : TAB_LIST_COLUMNS / l.width;
     if (!l.per_row)
         l.per_row = 1;
     write_out(sh, "\n", 1);

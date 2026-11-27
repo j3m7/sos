@@ -17,9 +17,12 @@ this page is the reference.
 - **Tab** completes the command name, and the subcommand words after it (`time s` Tab Tab
   lists `sync server`; `wifi st` Tab gives `wifi stats `). When the matches agree no further,
   the terminal beeps; a second Tab lists them. Words only the console takes are offered only
-  there. Some values are offered too: the sensitivity `0` to `3` after `glitch watch|on`, the
-  default server after `nts ke`, and `https://` after `http get|head|post` (with no space
-  after it, so the URL goes on). Tab does nothing at a password or other question.
+  there. Some values are offered too: the sensitivity `0` to `3` after `glitch watch|on`,
+  `https://` after `http get|head|post` (with no space after it, so the URL goes on), and what
+  the board knows now: the key numbers after `key del` and the saved networks' numbers after
+  `wifi remove|prefer` (the list shows each key's comment and each network's SSID beside its
+  number), the NTS servers after `nts ke` and `time server`, and those servers and the gateway
+  after `ping`. Tab does nothing at a password or other question.
 - After a file command (`ls`, `cd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `edit`, `more`, `lua`,
   `lua -b`), and after the `>` or `>>` of `echo`, Tab completes **file names** on the SD card:
   `cat do` Tab gives `cat docs/`, and the next Tab goes on inside it. `cd` and `mkdir` offer
