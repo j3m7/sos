@@ -41,7 +41,7 @@ heap_info_t heap_info(void) {
     extern char __end__, __HeapLimit;
     struct mallinfo mi = mallinfo();
     heap_info_t h = {
-        .total = (size_t)(&__HeapLimit - &__end__),
+        .total = (size_t)((uintptr_t)&__HeapLimit - (uintptr_t)&__end__),
         .used = mi.uordblks,
         .arena = mi.arena,
     };

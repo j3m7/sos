@@ -68,20 +68,22 @@ static bool name_is(const char *c, size_t n, const char *want) {
 }
 
 bool path_is_protected(const char *path) {
-    char raw[512], norm[512];
+    // norm zeroed: what's read below always ends in a NUL, whatever path_resolve() leaves.
+    char raw[512], norm[512] = {0};
     size_t len = strlen(path);
     if (len >= sizeof(raw))
         return true;                            // too long to check: refuse
-    for (size_t i = 0; i <= len; i++) {
+    for (size_t i = 0; i < len; i++) {
         char c = path[i];
         if (c == ':')
             return true;                        // drive prefix ("0:/certs"); invalid in names
         // FatFs ends the path at any control character ("/certs\x01" is "/certs" to it), so
         // what follows wouldn't be what gets checked here: refuse.
-        if (c != '\0' && ((unsigned char)c < 0x20 || c == 0x7f))
+        if ((unsigned char)c < 0x20 || c == 0x7f)
             return true;
         raw[i] = c == '\\' ? '/' : c;
     }
+    raw[len] = '\0';
     if (!path_resolve("/", raw, norm, sizeof(norm)))
         return true;
 

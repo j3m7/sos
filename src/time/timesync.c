@@ -162,7 +162,6 @@ static void nts_done(void) {
     if (st == NTS_SYNC_OK) {
         int64_t t_us = now_us() + offset_us;
         if (!plausible(t_us / 1000000)) {
-            st = NTS_SYNC_FAILED;
             err = "server time earlier than this firmware's build";
         } else {
             if (source != SRC_NONE && (offset_us > LARGE_STEP_S * 1000000LL ||
