@@ -41,9 +41,9 @@ SEE ALSO
 - Every line below a heading is indented four spaces; a line that isn't is a heading, in
   capitals (the generator stops on anything else).
 - After adding or changing a page, run `tools/man-bundle.sh` (bash and python3): it checks the
-  pages and rebuilds
-  `man/pages.bundle` and `docs/commands.md` (`tools/man-docs.py`), both committed. The host tests
-  (`just test`) fail while either is out of date or a page breaks a rule above.
+  pages and rebuilds `man/pages.bundle` and `docs/commands.md` (`tools/man-docs.py`), both
+  committed. The host tests (`just test`) fail while either is out of date or a page breaks a
+  rule above.
 
 ## On the board
 
