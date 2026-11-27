@@ -177,6 +177,9 @@ static void apply_time(int64_t t_us, time_source_t src) {
     uint32_t delay_ms = src == SRC_NTS ? (uint32_t)(synced_delay_us / 1000) : SNTP_DELAY_MS;
     measure(next / 1000000, step_ms, prev_sync_us, prev_set, delay_ms);
     bool rtc_ok = rtc_write(next / 1000000);
+    // A flash write: usually one page (about 1 ms), but once every 240 records the history sector
+    // is full and this erases it first, up to about 400 ms with XIP stalled on both cores. So a
+    // sync now and then pauses core 1 (a running Lua script) for that long; nothing is wrong.
     int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset);
     if (rtc_ok)
         history_rtc_done(slot);

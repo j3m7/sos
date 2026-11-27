@@ -2199,6 +2199,8 @@ static void crash_brownout(shell_t *sh) {
     log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "crash brownout (test): the detector's threshold raised "
             "above the core supply");
     logfile_flush();
+    // Holds the main loop on purpose, as wdog_reboot() does: the flush above hands the log lines
+    // to the card, and this gives them time to reach it before the reset loses what's in RAM.
     sleep_ms(100);
     uint32_t was = powman_hw->bod;
     powman_hw->bod = POWMAN_PASSWORD_BITS | (0x11u << POWMAN_BOD_VSEL_LSB) | POWMAN_BOD_EN_BITS;
