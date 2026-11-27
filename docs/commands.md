@@ -24,7 +24,7 @@ this page is the reference.
   as typed (upper and lower case differ, although the card doesn't mind), and names with
   spaces or control characters aren't offered. Tab doesn't mount the card: it completes names
   once a file command (or the boot) has. In a directory of more than 256 entries it reads the
-  first 256 only, and says so when it lists them.
+  first 256 only: there it doesn't complete, it only lists what it read and says there's more.
 - **Ctrl-C** discards the line, cancels a question (`setup`, `wifi set`, …), or stops a running
   job (`ls`, `cat`, `cp`, a Lua script).
 - **Ctrl-D** on an empty line logs out, like `logout`.
