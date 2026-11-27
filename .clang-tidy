@@ -1,0 +1,84 @@
+# clang-tidy for SOS's own sources: `just tidy` (tools/tidy.sh). Third-party code (Lua, wolfSSL,
+# wolfSSH, the SD card driver, the copied pico-sshd) isn't checked.
+#
+# The clang static analyzer, plus the bug-finding groups. Turned off, and why:
+#   bugprone-easily-swappable-parameters  most (buf, len) pairs; style, hundreds of hits
+#   bugprone-narrowing-conversions        what -Wconversion already reports (cmake/warnings.cmake)
+#   bugprone-implicit-widening-of-multiplication-result  sizes that can't overflow; noise
+#   bugprone-signed-bitwise               hundreds of hits on hardware register flags
+#   bugprone-suspicious-string-compare    `if (strcmp(a, b))` is the house style
+#   bugprone-switch-missing-default-case, bugprone-unhandled-code-paths
+#                                         a default would hide -Wswitch's missing-enum warning
+#   bugprone-branch-clone                 branches kept apart on purpose, each with its comment
+#   bugprone-reserved-identifier, cert-dcl37-c, cert-dcl51-cpp
+#                                         __wrap_ names (-Wl,--wrap) and the SDK's __ symbols
+#   bugprone-assignment-in-if-condition   `while ((n = read(...)) > 0)` idioms
+#   bugprone-not-null-terminated-result   flags every memcpy that builds a string in pieces,
+#                                         terminated by the last piece
+#   bugprone-unchecked-string-to-number-conversion, cert-err34-c
+#                                         atoi/sscanf whose callers range-check the result
+#   bugprone-signed-char-misuse, cert-str34-c
+#                                         signed settings fields widened on purpose
+#   cert-err33-c                          unchecked snprintf/printf returns, by design
+#   cert-int09-c                          enums with deliberately sparse values (key codes)
+#   misc-include-cleaner                  include-what-you-use; not a bug finder
+#   misc-no-recursion                     the few recursive functions are bounded
+#   misc-use-anonymous-namespace, misc-use-internal-linkage
+#                                         C++ advice / functions reached through --wrap
+#   misc-header-include-cycle             only in wolfSSL's headers
+#   misc-redundant-expression             _Static_asserts comparing macros that are equal today
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#                                         "use snprintf_s": C11 Annex K, which newlib lacks
+#   clang-analyzer-security.insecureAPI.strcpy
+#                                         every strcpy copies a string already checked to fit
+#                                         (config fields are validated as terminated on load)
+#   clang-analyzer-optin.performance.Padding  struct layouts fixed by the stored formats
+#   clang-analyzer-unix.Stream            host tools that exit right after an error
+#   clang-analyzer-optin.core.FixedAddressDereference
+#                                         hardware registers are fixed addresses
+#   bugprone-suspicious-memory-comparison, cert-exp42-c, cert-flp37-c
+#                                         memcmp of a struct copied whole from the other one
+#
+# A finding that is wrong in one place gets `// NOLINT(<check>): <why>` on that line.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  cert-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-signed-bitwise,
+  -bugprone-suspicious-string-compare,
+  -bugprone-switch-missing-default-case,
+  -bugprone-unhandled-code-paths,
+  -bugprone-branch-clone,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-not-null-terminated-result,
+  -bugprone-unchecked-string-to-number-conversion,
+  -cert-err34-c,
+  -bugprone-signed-char-misuse,
+  -cert-str34-c,
+  -cert-err33-c,
+  -cert-int09-c,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -misc-header-include-cycle,
+  -misc-redundant-expression,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-security.insecureAPI.strcpy,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-unix.Stream,
+  -clang-analyzer-optin.core.FixedAddressDereference,
+  -bugprone-suspicious-memory-comparison,
+  -cert-exp42-c,
+  -cert-flp37-c
+# tools/tidy.sh passes --header-filter with the repository's own path, so findings in SOS's
+# headers are reported and the libraries' (pico-sdk/src, the SD driver's src) aren't.
+WarningsAsErrors: ''

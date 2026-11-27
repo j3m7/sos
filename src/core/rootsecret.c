@@ -168,7 +168,8 @@ int rootsecret_ensure(const rootsecret_store_t *store, bool *created) {
 
     // One valid copy and the other page blank (a record made before there were two copies):
     // fill it in. A failure only leaves the board with one copy, as before.
-    classify(store->read(store->ctx), &use, NULL);
+    if (classify(store->read(store->ctx), &use, NULL) != S_OK)
+        return ROOTSECRET_INVALID;              // can't happen: nothing was written since
     unsigned other = use == store->read(store->ctx) ? PAGE_B : PAGE_A;
     if (blank(store->read(store->ctx) + other * ROOTSECRET_PAGE, ROOTSECRET_PAGE)) {
         memcpy(page, use, sizeof(page));

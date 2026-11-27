@@ -378,6 +378,8 @@ TEST(quota_limits_each_second) {
     CHECK_EQ(log_quota_dropped(&q), 1);
 }
 
+static void vlog_prefixed(int level, const char *prefix, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
 static void vlog_prefixed(int level, const char *prefix, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
