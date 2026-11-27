@@ -21,7 +21,13 @@
 // (lwIP reuses the oldest TIME_WAIT pcb when this runs out).
 #define MEMP_NUM_TCP_PCB            8
 #define MEMP_NUM_ARP_QUEUE          10
-#define PBUF_POOL_SIZE              24
+// Buffers for received frames, about 1.5 KB each. A frame is copied out of its buffer and the
+// buffer freed as soon as it is delivered, so few are in use at once: under the SSH and SFTP
+// hardware tests on dev-1 the most was 3 (`wifi stats` shows it). They pile up only when lwIP
+// must hold segments: ones that arrived out of order after a loss, up to one window (TCP_WND,
+// 8 segments) on a connection. 12 covers one connection in that state and the rest in passing.
+// When the pool is empty a received frame is dropped and TCP sends it again.
+#define PBUF_POOL_SIZE              12
 
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
