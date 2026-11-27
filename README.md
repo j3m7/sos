@@ -104,23 +104,28 @@ To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over S
 ## Building
 
 ```sh
-cmake --preset debug          # or: release, minsize
-cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
+cmake --preset minsize          # or: debug, release
+cmake --build --preset minsize  # produces build/sos.uf2 and build/sos.elf
 ```
 
-The three presets differ in how the compiler optimises (`build/`, `build-release/` and
-`build-minsize/`). Measured on 2026-11-26, on dev-1 where a board was involved:
+The three presets differ in how the compiler optimises. `minsize` is the one to use: it
+builds in `build/`, where the flashing and provisioning commands look. `debug` (`build-debug/`)
+is for stepping through code with a debugger, and `release` (`build-release/`) is there for
+comparison. Measured on 2026-11-26, on dev-1 where a board was involved:
 
 | Preset | Compiler | Image | SSH login handshake | TLS handshake |
 |---|---|---|---|---|
-| `debug` (the default) | `-Og` | 1,168 KB | 260 to 285 ms | 284 ms |
-| `minsize` | `-Os` | 1,050 KB | 158 to 215 ms | 278 to 281 ms |
+| `minsize` (the default) | `-Os` | 1,050 KB | 158 to 215 ms | 278 to 281 ms |
+| `debug` | `-Og` | 1,168 KB | 260 to 285 ms | 284 ms |
 | `release` | `-O3` | 1,386 KB | not run on a board | not run on a board |
 
 `minsize` is 118 KB smaller than `debug` and no slower on the handshakes measured; the SSH and
 SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s against 8.6 s, a
 single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
-about 3,550 of 8,192 bytes). `debug` remains the default.
+about 3,550 of 8,192 bytes).
+
+A `build/` directory from before `minsize` became the default (2026-11-27) holds a debug
+build: run `cmake --preset minsize` once to switch it over.
 
 The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
@@ -129,7 +134,7 @@ is installed: `just` lists them. It is optional: each recipe runs the commands d
 ## Flashing
 
 ```sh
-cmake --build --preset debug --target flash
+cmake --build --preset minsize --target flash
 ```
 
 This runs `picotool load -f -v -x`, which reboots a running SOS image into BOOTSEL over USB,
@@ -431,7 +436,7 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
   each way, for testing this.
 - `ssh` shows the longest single SSH work step (`longest ... ms`), a guide to how much margin
   the timeout has.
-- Set the timeout when configuring, e.g. `cmake --preset debug -DSOS_WATCHDOG_MS=12000`; the
+- Set the timeout when configuring, e.g. `cmake --preset minsize -DSOS_WATCHDOG_MS=12000`; the
   RP2350 maximum is 16777 ms and `0` disables the watchdog. It pauses while a debugger halts
   the core.
 

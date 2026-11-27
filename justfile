@@ -14,17 +14,16 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list --unsorted
 
-# Configure (if needed) and build the firmware; preset: debug, release or minsize
-build preset="debug":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir={{ if preset == "release" { "build-release" } else if preset == "minsize" { "build-minsize" } else { "build" } }}
-    [[ -f $dir/build.ninja ]] || cmake --preset {{ quote(preset) }}
+# Configure and build the firmware; preset: minsize (the default, in build/), debug or release
+build preset="minsize":
+    # Configured every time: it is quick, and a build/ left from when it held the debug build
+    # would otherwise go on being built that way.
+    cmake --preset {{ quote(preset) }}
     cmake --build --preset {{ quote(preset) }}
 
 # Configure and build in another directory: `just build-in build-unsigned -DSOS_SIGN_KEY=none`
 build-in dir *cmake_args:
-    cmake --preset debug -B {{ quote(dir) }} {{ cmake_args }}
+    cmake --preset minsize -B {{ quote(dir) }} {{ cmake_args }}
     cmake --build {{ quote(dir) }}
 
 # Host unit tests; extra arguments go to ctest, e.g. `just test -R config`

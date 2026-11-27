@@ -14,6 +14,6 @@ that accepts them accepts anyone's firmware.
   from anyone, for good. A production board gets its own keys, made and kept off the
   development machine (`docs/security/decisions.md`, decision 4).
 
-To sign a build with one: `cmake --preset debug -DSOS_SIGN_KEY=keys/dev-INSECURE-1.pem`.
+To sign a build with one: `cmake --preset minsize -DSOS_SIGN_KEY=keys/dev-INSECURE-1.pem`.
 
 To check a hash: `openssl ec -in <key>.pem -pubout -outform DER | tail -c 64 | sha256sum`.

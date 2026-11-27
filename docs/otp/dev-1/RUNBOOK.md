@@ -46,7 +46,7 @@ in step 13.
 
 ```sh
 picotool otp dump -f --ser $SOS_FLASH_SERIAL > dev-1-otp-before.txt
-cmake --preset debug -DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-1.pem && cmake --build build
+cmake --preset debug -B build -DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-1.pem && cmake --build build
 cmake --preset debug -B build-burn -DSOS_BURN_IMAGE=ON -DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-1.pem && cmake --build build-burn
 cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-2.pem && cmake --build build-key2
 cmake --preset debug -B build-unsigned -DSOS_SIGN_KEY=none && cmake --build build-unsigned

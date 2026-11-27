@@ -69,8 +69,8 @@ A key given on the command line wins over `local.cmake`, for that build director
 key or an unsigned image can be built beside the everyday one without editing anything:
 
 ```sh
-cmake --preset debug -B build-key2 -DSOS_SIGN_KEY=<keys-dir>/other.pem    # signed with another key
-cmake --preset debug -B build-unsigned -DSOS_SIGN_KEY=none                 # not signed
+cmake --preset minsize -B build-key2 -DSOS_SIGN_KEY=<keys-dir>/other.pem    # signed with another key
+cmake --preset minsize -B build-unsigned -DSOS_SIGN_KEY=none                 # not signed
 ```
 
 CMake says which it is when it configures (`SOS: the image is signed with ...` or `is not
@@ -103,7 +103,7 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
 
 ## Flashing, and the flash guard
 
-`ninja flash` (`cmake --build --preset debug --target flash`) loads `build/sos.bin` over USB
+`ninja flash` (`cmake --build --preset minsize --target flash`) loads `build/sos.bin` over USB
 with `tools/flash.sh`. Set `SOS_FLASH_SERIAL` to a board's serial number (`version` on its
 console, or `picotool info`) to say which board; with a key list (below) it is required.
 `tools/provision.sh` (`ninja provision`) writes to the same board when it is set, and with a
@@ -192,7 +192,7 @@ can't be turned off again
 `llvm-vs-code-extensions.vscode-clangd`) with the compile database CMake writes to
 `build/compile_commands.json`, and disables Microsoft C/C++ IntelliSense, which reports bogus
 include errors for this project. `--query-driver` assumes the toolchain is in `/usr/bin`; adjust
-it in `.vscode/settings.json` if yours is elsewhere. Run `cmake --preset debug` once so the
+it in `.vscode/settings.json` if yours is elsewhere. Run `cmake --preset minsize` once so the
 compile database exists.
 
 ## Developing in a VM
@@ -246,6 +246,11 @@ USB access for the probe, without root:
 # /etc/udev/rules.d/99-rpi-debugprobe.rules
 SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000c", MODE="660", GROUP="plugdev", TAG+="uaccess"
 ```
+
+`build/` holds the size-optimised build (the `minsize` preset), which runs the same but is
+harder to follow line by line. For stepping through code, build the `debug` preset
+(`cmake --preset debug && cmake --build --preset debug`, in `build-debug/`), flash that, and
+give gdb `build-debug/sos.elf`.
 
 ```sh
 openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 5000"
