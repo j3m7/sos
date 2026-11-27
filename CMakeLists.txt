@@ -131,6 +131,7 @@ set(SOS_SOURCES
     src/core/rootsource.c
     src/core/failcount.c
     src/core/failflash.c
+    src/core/flashop.c
     src/core/keyprov.c
     src/core/seal.c
     src/core/pwverify.c

@@ -6,9 +6,9 @@
 #include <string.h>
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/flashop.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/pwverify.h"
@@ -52,9 +52,10 @@ static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t 
     size_t padded = (len + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE * FLASH_PAGE_SIZE;
     memset(page_buf, 0xff, padded);
     memcpy(page_buf, data, len);
-    // Interrupts (Wi-Fi, USB) pause while the sector is erased and programmed: tens of ms.
+    // Interrupts (Wi-Fi, USB) pause while the sector is erased and programmed: tens of ms
+    // (core/flashop.h times it).
     write_job_t job = { slot, page_buf, padded };
-    return flash_safe_execute(do_write, &job, 1000) == PICO_OK;
+    return flashop_run(do_write, &job);
 }
 
 // The key the configuration is sealed under (KEYPROV_CONFIG_SEAL), derived once in

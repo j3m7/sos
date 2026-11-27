@@ -26,6 +26,7 @@
 #include "core/config.h"
 #include "core/failflash.h"
 #include "core/fault.h"
+#include "core/flashop.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
@@ -295,6 +296,14 @@ static void cmd_uptime(shell_t *sh) {
                                     : wdog_caused_reset() ? " (last reset: watchdog)" : "");
     if (fault_last())
         shell_printf(sh, "last reset: %s\n", fault_last());
+    // Each flash write stops everything else for as long as it takes (core/flashop.h).
+    flashop_stats_t f = flashop_stats();
+    if (f.count)
+        shell_printf(sh, "flash writes: %lu, interrupts off %lu.%lu ms for the last, %lu.%lu ms "
+                         "for the longest\n",
+                     (unsigned long)f.count, (unsigned long)(f.last_us / 1000),
+                     (unsigned long)(f.last_us / 100 % 10), (unsigned long)(f.max_us / 1000),
+                     (unsigned long)(f.max_us / 100 % 10));
 }
 
 // `temp`: the chip's temperature now, and the lowest and highest since boot (core/chiptemp.h).
