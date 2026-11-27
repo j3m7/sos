@@ -178,7 +178,7 @@ static void ssh_server_log_msg(int priority, const char *format, ...)
 	int len;
 	uint core = get_core_num();
 
-	if (priority > global_log_level)
+	if ((priority & LOG_PRIMASK) > global_log_level)
 		return;
 
 	if (!(buf = heap_alloc(HEAP_NET, LOG_MAX_MSG_LEN)))
@@ -289,7 +289,7 @@ static err_t ssh_server_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err
 
 	if (!p) {
 		/* Connection closed by client: tear down in ssh_server_service(). */
-		LOG_MSG(LOG_NOTICE, "SSH client closed connection from %s:%u",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH client closed connection from %s:%u",
 			ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port);
 		ss->peer_closed = true;
 		return ERR_OK;
@@ -478,7 +478,7 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	if (penalized) {
 		char ip[IPADDR_STRLEN_MAX];
 		ipaddr_ntoa_r(&ss->remote_ip, ip, sizeof(ip));
-		LOG_MSG(LOG_NOTICE, "SSH: %u connections from %s without a login; refusing it until"
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH: %u connections from %s without a login; refusing it until"
 			" it has been quiet for %u s", SSH_PENALTY_FAILS, ip,
 			(unsigned)(SSH_PENALTY_WINDOW_US / 1000000));
 	}
@@ -648,7 +648,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 
 	if (st->allow_connect_cb) {
 		if (st->allow_connect_cb(&pcb->remote_ip) <= 0) {
-			LOG_MSG(LOG_ERR, "SSH connection rejected from %s",
+			LOG_MSG(LOG_AUTH | LOG_ERR, "SSH connection rejected from %s",
 				ip4addr_ntoa(&pcb->remote_ip));
 			return ERR_MEM;
 		}
@@ -666,7 +666,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 		return ssh_server_reject_busy(st, pcb);
 	}
 
-	LOG_MSG(LOG_NOTICE, "SSH accepted connection from %s:%u (session %u)",
+	LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH accepted connection from %s:%u (session %u)",
 		ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port, ss->index + 1);
 
 	/* The wolfSSH session is created by ssh_session_setup() in thread context: wolfSSH_new()
@@ -837,21 +837,25 @@ static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 		ssh_server_get_pubkey_hash(auth_data->sf.publicKey.publicKey,
 					auth_data->sf.publicKey.publicKeySz,
 					hash, sizeof(hash));
+		/* Where from, so a line in the auth log stands on its own. */
+		char ip[IPADDR_STRLEN_MAX];
+		ipaddr_ntoa_r(&ss->remote_ip, ip, sizeof(ip));
 		if (ret == WOLFSSH_USERAUTH_SUCCESS) {
 			if (auth_data->sf.publicKey.hasSignature)
-				LOG_MSG(LOG_NOTICE, "SSH accepted publickey for %s (SHA256:%s) (session %u)",
-					auth_data->username, hash, ss->index + 1);
+				LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH accepted publickey for %s"
+					" (SHA256:%s) from %s (session %u)",
+					auth_data->username, hash, ip, ss->index + 1);
 		} else if (ret == WOLFSSH_USERAUTH_INVALID_USER) {
-			LOG_MSG(LOG_INFO, "SSH failed publickey authentication for invalid user"
-				" %s (SHA256:%s)", auth_data->username, hash);
+			LOG_MSG(LOG_AUTH | LOG_INFO, "SSH failed publickey authentication for invalid user"
+				" %s (SHA256:%s) from %s", auth_data->username, hash, ip);
 		} else {
-			LOG_MSG(LOG_INFO, "SSH failed publickey authentication for user"
-				" %s (SHA256:%s)", auth_data->username, hash);
+			LOG_MSG(LOG_AUTH | LOG_INFO, "SSH failed publickey authentication for user"
+				" %s (SHA256:%s) from %s", auth_data->username, hash, ip);
 		}
 	}
 	else if (auth_type == WOLFSSH_USERAUTH_NONE && !st->auth_enabled) {
 		ret = WOLFSSH_USERAUTH_SUCCESS;
-		LOG_MSG(LOG_NOTICE, "SSH unauthenticated connection accepted for user %s",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH unauthenticated connection accepted for user %s",
 			auth_data->username);
 	}
 	else {
@@ -863,7 +867,7 @@ static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 	if (ret != WOLFSSH_USERAUTH_SUCCESS && ret != WOLFSSH_USERAUTH_INVALID_AUTHTYPE) {
 		ss->auth_tries++;
 		if (st->max_auth_tries > 0 && ss->auth_tries >= st->max_auth_tries) {
-			LOG_MSG(LOG_NOTICE, "SSH too many failed authentication attempts for %s",
+			LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH too many failed authentication attempts for %s",
 				auth_data->username);
 			ret = WOLFSSH_USERAUTH_REJECTED;
 		}
@@ -1262,7 +1266,7 @@ static void ssh_session_service(ssh_session_t *ss)
 			ip_addr_t ip;
 			uint16_t port;
 			if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-				LOG_MSG(LOG_NOTICE, "SSH login timed out for %s:%u (session %u)",
+				LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH login timed out for %s:%u (session %u)",
 					ip4addr_ntoa(&ip), port, ss->index + 1);
 			ssh_close_session(ss);
 			return;
@@ -1317,7 +1321,7 @@ static void ssh_session_service(ssh_session_t *ss)
 				ip_addr_t ip;
 				uint16_t port;
 				if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-					LOG_MSG(LOG_NOTICE, "SSH connection rejected from %s:%u",
+					LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH connection rejected from %s:%u",
 						ip4addr_ntoa(&ip), port);
 			} else {
 				LOG_MSG(LOG_INFO, "wolfSSH_accept(): failed: %d (%d)", err, res);
@@ -1364,10 +1368,10 @@ static void ssh_busy_log_service(ssh_server_t *st)
 		return;
 	st->busy_log_next_us = now + SSH_BUSY_LOG_INTERVAL_US;
 	if (count == 1) {
-		LOG_MSG(LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
+		LOG_MSG(LOG_AUTH | LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
 			ip, port, st->max_sessions);
 	} else {
-		LOG_MSG(LOG_ERR, "%lu SSH connections rejected, the last from %s:%u: all %u"
+		LOG_MSG(LOG_AUTH | LOG_ERR, "%lu SSH connections rejected, the last from %s:%u: all %u"
 			" sessions in use", (unsigned long)count, ip, port, st->max_sessions);
 	}
 }
@@ -1651,7 +1655,7 @@ err_t ssh_session_disconnect(ssh_session_t *ss)
 		return ERR_OK;
 
 	if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-		LOG_MSG(LOG_NOTICE, "SSH user (%s) disconnected from %s:%u (session %u)",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH user (%s) disconnected from %s:%u (session %u)",
 			ss->login[0] ? ss->login : "<unknown>", ip4addr_ntoa(&ip), port,
 			ss->index + 1);
 

@@ -106,11 +106,13 @@ static void compute_host_fingerprint(const uint8_t *der, uint32_t der_len) {
 // Server messages go to the system log. pico-sshd's levels are syslog's, like the log module's.
 // Called in interrupt context too (the server's lwIP callbacks), so nothing is formatted here:
 // the log drops a message above its level before formatting, formats the others once, and
-// defers printing (#105).
+// defers printing (#105). pico-sshd marks the messages about logins and connections with
+// syslog's LOG_AUTH: those go to the auth log, the rest to daemon.
 static __attribute__((format(printf, 2, 3))) void log_cb(int priority, const char *format, ...) {
+    int facility = (priority & ~LOG_PRIMASK) == LOG_AUTH ? SOS_LOG_AUTH : SOS_LOG_DAEMON;
     va_list ap;
     va_start(ap, format);
-    log_vmsg_prefixed(priority, "sshd: ", format, ap);
+    log_vmsg_prefixed(facility | (priority & LOG_PRIMASK), "sshd: ", format, ap);
     va_end(ap);
 }
 
@@ -139,7 +141,7 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
     compute_host_fingerprint(hostkey, hostkey_len);
 
     if (!(server = ssh_server_new(SOS_SSH_MAX_SESSIONS, 4096, 8192))) {
-        log_msg(SOS_LOG_ERR, "sshd: out of memory");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sshd: out of memory");
         return false;
     }
     server->auth_enabled = true;
@@ -152,18 +154,19 @@ bool sshd_start(const uint8_t *hostkey, uint32_t hostkey_len) {
     server->max_auth_tries = 6;
 
     if (ssh_server_add_priv_key(server, WOLFSSH_FORMAT_ASN1, hostkey, hostkey_len) != 0) {
-        log_msg(SOS_LOG_ERR, "sshd: failed to load host key");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sshd: failed to load host key");
         ssh_server_destroy(server);
         server = NULL;
         return false;
     }
     if (!ssh_server_start(server)) {
-        log_msg(SOS_LOG_ERR, "sshd: failed to start");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sshd: failed to start");
         ssh_server_destroy(server);
         server = NULL;
         return false;
     }
-    log_msg(SOS_LOG_NOTICE, "sshd: listening on port %u (up to %u sessions), host key %s %s",
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+            "sshd: listening on port %u (up to %u sessions), host key %s %s",
             server->port, server->max_sessions, SSH_KEY_TYPE, hostkey_fingerprint);
     return true;
 }
@@ -232,7 +235,8 @@ static void session_register(shell_t *sh, ssh_session_t *ss) {
         snprintf(from, sizeof(from), "ssh %s", ipstr);
     }
     if (!chat_register(sh, ss->index + 1, name, from))
-        log_msg(SOS_LOG_WARNING, "chat: no room to register session %u", ss->index + 1);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "chat: no room to register session %u", ss->index + 1);
 }
 
 static void session_end(unsigned i) {
@@ -261,7 +265,7 @@ void sshd_stop(void) {
     ssh_server_destroy(server);         // closes the connections and the listener
     server = NULL;
     hostkey_fingerprint[0] = '\0';
-    log_msg(SOS_LOG_NOTICE, "sshd: stopped");
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sshd: stopped");
 }
 
 void sshd_poll(void) {

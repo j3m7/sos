@@ -29,9 +29,10 @@ this page is the reference.
 | `mem` | any | Heap in use, peak and total, and core 0's peak stack use. After a Lua script has run, also how much of core 1's 32 KB stack the last script used |
 | `net` | any | Wi-Fi link state and signal strength (RSSI), IP address, gateway, hostname, and ARP packet counts with the keepalive state |
 | `ssh` | any | Host key fingerprint; sessions in use and connections refused because all were busy; connections refused from a penalized address or dropped before login; logins; and each session (user and address, state, shell or SFTP, how long), yours marked `*` |
-| `dmesg` | any | The system log kept in memory |
+| `dmesg [-f <facility>]` | any | The system log kept in memory; with `-f`, only one facility's messages: `kern` (boot, resets, faults, glitch detector, root secret), `auth` (console and SSH logins, passwords, every configuration change), `daemon` (Wi-Fi, SSH server, time, HTTPS, SD card, chat), `user` (Lua scripts, `logger`), or `none` (messages not tagged with one, which should be none) |
+| `logger [-p <level>] <message>` | any | Add a line to the log: facility `user`, level `notice` unless `-p` gives `err`, `warning`, `notice`, `info` or `debug`. The line says which shell it came from (`logger (console): ...`, `logger (ssh <name>): ...`, the name as `who` shows it). At most 10 a second; beyond that it says the message wasn't logged |
 | `log` | any | Show the log levels: `console` (printed on the serial console) and `history` (kept for `dmesg`) |
-| `log console\|history <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug` |
+| `log console\|history <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug`. The change is logged (facility `auth`) |
 | `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set). The console also locks itself when the USB terminal disconnects and after 10 minutes with nothing typed; a running command is ended |
 | `reboot` | any | Restart the device |
 | `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |

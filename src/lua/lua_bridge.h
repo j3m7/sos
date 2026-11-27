@@ -54,7 +54,7 @@ extern lua_job_t lua_job;
 // --- requests: core 1 asks, core 0 answers ----------------------------------------------------
 
 typedef enum {
-    LR_LOG,                         // data: message
+    LR_LOG,                         // data: message, offset: level (SOS_LOG_ERR ... DEBUG)
     LR_TIME,                        // -> result: seconds since 1970 (0 if the clock isn't set)
     LR_READ,                        // path, offset -> data/len (len 0: end of file)
     LR_WRITE,                       // path, data/len, append (offset > 0: append)

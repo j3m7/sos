@@ -119,46 +119,54 @@ bool glitchdet_apply(unsigned setting) {
 void glitchdet_start(unsigned setting) {
     record_readings();                  // before the detector can be armed
     if (caused_reset) {
-        log_msg(SOS_LOG_ERR, "last reset: glitch detector (detectors 0x%x fired, after %lu s up; "
-                             "%lu such reset%s since power-on). The fault record doesn't survive "
-                             "that reset",
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "last reset: glitch detector (detectors 0x%x fired, after %lu s up; "
+                "%lu such reset%s since power-on). The fault record doesn't survive "
+                "that reset",
                 (unsigned)triggers, (unsigned long)last_uptime, (unsigned long)glitchdet_resets(),
                 glitchdet_resets() == 1 ? "" : "s");
         char both[SENSORS_BOTH_MAX];
         sensors_format_both(both, sizeof(both), last_temp, last_vsys);
         if (last_temp != SENSORS_NONE || last_vsys != SENSORS_NONE)
-            log_msg(SOS_LOG_ERR, "last reset: %s before the glitch detector reset (last readings, "
-                                 "taken every %u s)", both, SENSORS_SAMPLE_S);
+            log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                    "last reset: %s before the glitch detector reset (last readings, taken every "
+                    "%u s)", both, SENSORS_SAMPLE_S);
         else
-            log_msg(SOS_LOG_ERR, "last reset: no chip temperature or supply reading was kept from "
-                                 "before the glitch detector reset");
+            log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                    "last reset: no chip temperature or supply reading was kept from before the "
+                    "glitch detector reset");
     }
     if (setting == 0 || setting > 8)
         return;
     if (setting >= 5) {                 // watching resets nothing, so it needs no guard
         if (glitchdet_apply(setting))
-            log_msg(SOS_LOG_NOTICE, "glitch detector: watching at sensitivity %d, not armed (a "
-                                    "trigger is logged, the board isn't reset)", watching);
+            log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                    "glitch detector: watching at sensitivity %d, not armed (a "
+                    "trigger is logged, the board isn't reset)", watching);
         else
-            log_msg(SOS_LOG_ERR, "glitch detector: setting sensitivity %u didn't take",
+            log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                    "glitch detector: setting sensitivity %u didn't take",
                     (setting - 1) & 3u);
         return;
     }
     if (get16(REG_STREAK, MAGIC_STREAK) >= GLITCHDET_GUARD_RESETS) {
         guard_tripped = true;
-        log_msg(SOS_LOG_ERR, "glitch detector: NOT armed at this boot: it reset the board %u "
-                             "times in a row within %u s of starting. The setting is unchanged "
-                             "(`glitch off` turns it off; a reboot tries again)",
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "glitch detector: NOT armed at this boot: it reset the board %u "
+                "times in a row within %u s of starting. The setting is unchanged "
+                "(`glitch off` turns it off; a reboot tries again)",
                 GLITCHDET_GUARD_RESETS, GLITCHDET_STABLE_S);
         REG_STREAK = MAGIC_STREAK;      // so the next boot does try again
         return;
     }
     if (glitchdet_apply(setting))
-        log_msg(SOS_LOG_NOTICE, "glitch detector: armed by software at sensitivity %d (a trial "
-                                "setting, not protection; sensitivity register 0x%08lx)",
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "glitch detector: armed by software at sensitivity %d (a trial "
+                "setting, not protection; sensitivity register 0x%08lx)",
                 armed, (unsigned long)glitch_detector_hw->sensitivity);
     else
-        log_msg(SOS_LOG_ERR, "glitch detector: arming at sensitivity %u didn't take", setting - 1);
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "glitch detector: arming at sensitivity %u didn't take", setting - 1);
 }
 
 void glitchdet_poll(void) {
@@ -189,10 +197,11 @@ void glitchdet_poll(void) {
             sensors_format_both(both, sizeof(both), temp, mv);
             // Two lines, as at boot after a detector reset: one would pass the log's 160
             // characters on a board up for a week.
-            log_msg(SOS_LOG_WARNING, "glitch detector (watching, sensitivity %d): detectors 0x%x "
-                                     "triggered after %lu s up; armed, this would have reset the "
-                                     "board", watching, (unsigned)fresh, (unsigned long)up);
-            log_msg(SOS_LOG_WARNING, "glitch detector: %s at that trigger", both);
+            log_msg(SOS_LOG_KERN | SOS_LOG_WARNING,
+                    "glitch detector (watching, sensitivity %d): detectors 0x%x triggered after "
+                    "%lu s up; armed, this would have reset the board",
+                    watching, (unsigned)fresh, (unsigned long)up);
+            log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "glitch detector: %s at that trigger", both);
             glitch_detector_hw->trig_status = fresh;
         }
     }

@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "core/log.h"
 #include "shell/keys.h"
 
 // Minimal line-oriented shell. Each instance has its own line buffer and talks to one channel
@@ -77,6 +78,7 @@ struct shell {
     int history_pos;            // entry shown, counted back from the newest (0); -1 = none
     char draft[SHELL_LINE_MAX + 1];     // the line being typed before Up, for Down to give back
     size_t draft_len;
+    log_quota_t logger_quota;   // `logger`'s rate limit for this shell
 };
 
 // Bind a shell to a channel and print the greeting and first prompt.

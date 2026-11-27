@@ -129,7 +129,7 @@ static void apply_time(int64_t t_us, time_source_t src) {
     char buf[24], step[40];
     timeconv_format(next / 1000000, buf, sizeof(buf));
     format_step(step, sizeof(step));
-    log_msg(rtc_ok ? SOS_LOG_NOTICE : SOS_LOG_WARNING, "%s: %s UTC, %s, rtc %s",
+    log_msg(SOS_LOG_DAEMON | (rtc_ok ? SOS_LOG_NOTICE : SOS_LOG_WARNING), "%s: %s UTC, %s, rtc %s",
             src == SRC_NTS ? "nts" : "sntp", buf, step, rtc_ok ? "updated" : "not updated");
 }
 
@@ -143,7 +143,8 @@ static bool start_nts(sync_reason_t reason) {
     nts_cancelled = false;
     nts_reason = reason;
     nts_started_us = time_us_64();
-    log_msg(reason == WHY_PERIODIC ? SOS_LOG_INFO : SOS_LOG_NOTICE, "nts: getting the time from %s%s",
+    log_msg(SOS_LOG_DAEMON | (reason == WHY_PERIODIC ? SOS_LOG_INFO : SOS_LOG_NOTICE),
+            "nts: getting the time from %s%s",
             nts_server_used, reason == WHY_PERIODIC ? " (periodic sync)" : "");
     return true;
 }
@@ -166,7 +167,8 @@ static void nts_done(void) {
         } else {
             if (source != SRC_NONE && (offset_us > LARGE_STEP_S * 1000000LL ||
                                        offset_us < -LARGE_STEP_S * 1000000LL))
-                log_msg(SOS_LOG_WARNING, "nts: large correction (%+lld s); the RTC was off",
+                log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                        "nts: large correction (%+lld s); the RTC was off",
                         (long long)(offset_us / 1000000));
             synced_delay_us = delay_us;
             retry_at_us = 0;
@@ -185,10 +187,11 @@ static void nts_done(void) {
         if (retry_delay_ms > RETRY_MAX_MS)
             retry_delay_ms = RETRY_MAX_MS;
         retry_at_us = time_us_64() + (uint64_t)retry_delay_ms * 1000;
-        log_msg(SOS_LOG_WARNING, "nts: sync with %s failed: %s; retrying in %lu s",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "nts: sync with %s failed: %s; retrying in %lu s",
                 nts_server_used, failed_why, (unsigned long)(retry_delay_ms / 1000));
     } else {
-        log_msg(SOS_LOG_WARNING, "nts: sync with %s failed: %s", nts_server_used, failed_why);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "nts: sync with %s failed: %s", nts_server_used, failed_why);
     }
 }
 
@@ -225,7 +228,8 @@ static void sntp_begin(void) {
     sntp_running = true;
     sntp_started_us = time_us_64();
     sntp_reply.ready = false;               // a reply left over from an earlier run doesn't count
-    log_msg(SOS_LOG_NOTICE, "sntp: requesting time from %s (unauthenticated)", sntp_server);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+            "sntp: requesting time from %s (unauthenticated)", sntp_server);
 }
 
 static void sntp_end(void) {
@@ -238,7 +242,7 @@ static void sntp_end(void) {
 static void sntp_done(void) {
     if (time_us_64() - sntp_started_us > (uint64_t)SNTP_TIMEOUT_MS * 1000) {
         sntp_end();
-        log_msg(SOS_LOG_WARNING, "sntp: no reply from %s within %d s", sntp_server,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sntp: no reply from %s within %d s", sntp_server,
                 SNTP_TIMEOUT_MS / 1000);
         return;
     }
@@ -254,7 +258,7 @@ static void sntp_done(void) {
     if (!plausible(t_us / 1000000)) {
         char buf[24];
         timeconv_format(t_us / 1000000, buf, sizeof(buf));
-        log_msg(SOS_LOG_WARNING, "sntp: rejected implausible time %s UTC", buf);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sntp: rejected implausible time %s UTC", buf);
         return;                                 // lwIP asks again after SNTP_UPDATE_DELAY
     }
     sntp_end();
@@ -266,7 +270,7 @@ static void sntp_done(void) {
 void timesync_boot(void) {
     if (!rtc_init()) {
         rtc_boot_status = RTC_ABSENT;
-        log_msg(SOS_LOG_WARNING, rtc_bus_pulled_up()
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, rtc_bus_pulled_up()
                 ? "rtc: no answer on I2C (GP4/GP5, 0x68); the time will come from NTS"
                 : "rtc: not found (no I2C pull-ups on GP4/GP5: Adalogger not attached?); "
                   "the time will come from NTS");
@@ -277,7 +281,7 @@ void timesync_boot(void) {
     if (rtc_boot_status == RTC_OK && !plausible(t))
         rtc_boot_status = RTC_INVALID;
     if (rtc_boot_status != RTC_OK) {
-        log_msg(SOS_LOG_WARNING, "rtc: %s; the time will come from NTS",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: %s; the time will come from NTS",
                 rtc_status_str(rtc_boot_status));
         return;
     }
@@ -285,9 +289,9 @@ void timesync_boot(void) {
     source = SRC_RTC;
     char buf[24];
     timeconv_format(t, buf, sizeof(buf));
-    log_msg(SOS_LOG_NOTICE, "rtc: %s UTC", buf);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: %s UTC", buf);
     if (rtc_battery_low())
-        log_msg(SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
 }
 
 _Static_assert(CONFIG_RTC_OFFSET_MIN == TIMECONV_CAL_STEPS_MIN &&
@@ -313,10 +317,10 @@ bool timesync_apply_cal(void) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     if (!rtc_write_offset(want)) {
-        log_msg(SOS_LOG_WARNING, "rtc: setting the calibration failed");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: setting the calibration failed");
         return false;
     }
-    log_msg(SOS_LOG_NOTICE, "rtc: calibration %s", cal);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: calibration %s", cal);
     return true;
 }
 

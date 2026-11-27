@@ -103,7 +103,8 @@ void sensors_poll(void) {
     sensors_format_mv(v_now, sizeof(v_now), mv);
     sensors_format_mv(v_lo, sizeof(v_lo), vsys_stats.count ? vsys_stats.min : SENSORS_NONE);
     sensors_format_mv(v_hi, sizeof(v_hi), vsys_stats.count ? vsys_stats.max : SENSORS_NONE);
-    log_msg(SOS_LOG_NOTICE, "chip temperature %s, supply %s, %s (since boot: %s to %s, %s to %s)",
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+            "chip temperature %s, supply %s, %s (since boot: %s to %s, %s to %s)",
             t_now, v_now, usb > 0 ? "USB power" : usb == 0 ? "no USB power" : "USB power unknown",
             t_lo, t_hi, v_lo, v_hi);
     sensors_log_mark(&logged, t, mv, usb, up);

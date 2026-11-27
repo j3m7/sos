@@ -62,8 +62,9 @@ unsigned failflash_init(void) {
     usable = (uintptr_t)&__flash_binary_end <= XIP_BASE + FAIL_OFFSET;
     failcount_init(&store);
     if (!usable)
-        log_msg(SOS_LOG_ERR, "console: the firmware image overlaps the wrong-password count's "
-                             "sector; the count is kept only until the next reboot");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "console: the firmware image overlaps the wrong-password count's "
+                "sector; the count is kept only until the next reboot");
     return failcount_get();
 }
 
@@ -76,8 +77,9 @@ static void write_failed(const char *what) {
     if (write_failed_logged || !usable)
         return;
     write_failed_logged = true;
-    log_msg(SOS_LOG_ERR, "console: %s the wrong-password count in flash failed; it is counted in "
-                         "memory until the next reboot", what);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+            "console: %s the wrong-password count in flash failed; it is counted in "
+            "memory until the next reboot", what);
 }
 
 void failflash_attempt(void) {
