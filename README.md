@@ -311,8 +311,9 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   `2026-11-26T14:03:12.345Z notice console: logged in` (UTC; `+12.345`, seconds since boot,
   while the clock isn't set), and each boot starts a file with a `--- boot: SOS <commit>, last
   reset: <why> ---` line. Warnings and errors are written at once, the rest within 5 s. The card
-  is mounted for this at boot; without one, messages wait in the 4 KB history, and any later
-  mount (a file command, `sd`) writes them, with a line saying how many were dropped meanwhile.
+  is mounted for this at boot; without one, messages wait in the 4 KB history, a mount is tried
+  quietly every minute (not after `sd unmount`, until something mounts the card again), and
+  once one is in they're written, with a line saying how many were dropped meanwhile.
   Encrypted or plain, whichever card is in. A failed write stops the files until the card is
   mounted again. `log` shows the state; `log file <level>` sets what's written (default `info`).
   For now the files grow without limit; rotation is next (#104).

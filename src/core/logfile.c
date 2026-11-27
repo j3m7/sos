@@ -29,6 +29,7 @@ static int file_level = SOS_LOG_INFO;
 static uint32_t stopped_generation;
 static const char *error, *error_path;
 static uint32_t bytes, lines, lost;
+static uint64_t last_retry_us;
 
 void logfile_init(const logfile_hooks_t *h) {
     hooks = h;
@@ -36,6 +37,7 @@ void logfile_init(const logfile_hooks_t *h) {
     state = LOGFILE_NO_CARD;
     error = error_path = NULL;
     bytes = lines = lost = 0;
+    last_retry_us = h ? h->now_us() : 0;    // logfile_start() has just tried
 }
 
 static void take(void);
@@ -101,7 +103,7 @@ static void put_line(int f, uint64_t uptime_ms, const char *level, const char *t
     if (!bufs[f].started) {
         char boot[96];
         hooks->boot_text(boot, sizeof(boot));
-        stamp(when, sizeof(when), hooks->now_us() / 1000);
+        stamp(when, sizeof(when), 0);       // the boot's own time
         int n = snprintf(line, sizeof(line), "%s --- boot: %s ---\n", when, boot);
         put(f, line, n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
         bufs[f].started = true;
@@ -166,8 +168,15 @@ void logfile_poll(void) {
         error = error_path = NULL;          // mounted again since: try again
     }
     if (!hooks->card_ready()) {
-        state = LOGFILE_NO_CARD;
-        return;
+        uint64_t now = hooks->now_us();
+        if (hooks->retry_mount && now - last_retry_us >= (uint64_t)LOGFILE_RETRY_MS * 1000) {
+            last_retry_us = now;
+            hooks->retry_mount();
+        }
+        if (!hooks->card_ready()) {
+            state = LOGFILE_NO_CARD;
+            return;
+        }
     }
     state = LOGFILE_WRITING;
     take();

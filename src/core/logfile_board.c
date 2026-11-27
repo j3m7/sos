@@ -80,13 +80,15 @@ static void boot_text(char *buf, size_t len) {
     snprintf(buf, len, "SOS %s, last reset: %s", sos_version, why);
 }
 
+static void retry_mount(void) { sdcard_mount_retry(); }
+
 static const logfile_hooks_t hooks = {
-    now_us, wall_us, sdcard_mounted, sdcard_generation, append, boot_text,
+    now_us, wall_us, sdcard_mounted, sdcard_generation, append, boot_text, retry_mount,
 };
 
 // Start writing, and mount the card for it once now: the configuration is loaded, so an
-// encrypted card opens. Without a card that's one "mount failed" line; it isn't retried, so the
-// log isn't filled with them. Any later mount (a file command, `sd`) starts the files.
+// encrypted card opens. Without a card that's one "mount failed" line; the writer then retries
+// quietly every minute (sdcard_mount_retry), and any other mount starts the files too.
 void logfile_start(void) {
     logfile_init(&hooks);
     sdcard_mount(NULL);

@@ -71,8 +71,18 @@ static bool f_append(const char *path, const char *data, size_t n, const char **
 
 static void f_boot(char *buf, size_t len) { snprintf(buf, len, "SOS test, last reset: power-on"); }
 
+static int retries;
+static bool card_inserted;              // a retry finds a card
+static void f_retry(void) {
+    retries++;
+    if (card_inserted && !card) {
+        card = true;
+        generation++;
+    }
+}
+
 static const logfile_hooks_t file_hooks = {
-    f_now, f_wall, f_ready, f_generation, f_append, f_boot,
+    f_now, f_wall, f_ready, f_generation, f_append, f_boot, f_retry,
 };
 
 static void reset(void) {
@@ -83,6 +93,8 @@ static void reset(void) {
     generation = 1;
     fail_writes = false;
     appends = 0;
+    retries = 0;
+    card_inserted = false;
     memset(files, 0, sizeof(files));
     log_init(&log_hooks);
     log_set_deferred(true);
@@ -297,6 +309,42 @@ TEST(raising_the_file_level_keeps_its_own_record) {
     CHECK(!strstr(a, "after the change"));
 }
 
+// With no card, a mount is tried every LOGFILE_RETRY_MS, not more often; one that finds a card
+// starts the files.
+TEST(no_card_retries_every_minute) {
+    reset();
+    card = false;
+    logfile_init(&file_hooks);          // as logfile_start(): it has just tried
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "waiting for a card");
+    for (int i = 0; i < 100; i++) {
+        now += 500000;                  // 50 s in all
+        logfile_poll();
+    }
+    CHECK_EQ(retries, 0);
+    now += 10000000;
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+    card_inserted = true;
+    now += LOGFILE_RETRY_MS * 1000ull;
+    logfile_poll();
+    CHECK_EQ(retries, 2);
+    CHECK(strstr(file("/var/log/auth.log"), "waiting for a card"));
+    // Mounted: no more tries.
+    now += 10 * LOGFILE_RETRY_MS * 1000ull;
+    logfile_poll();
+    CHECK_EQ(retries, 2);
+}
+
+TEST(boot_marker_has_the_boot_time) {
+    reset();
+    now = 30000000;                     // written 30 s after boot
+    log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "x");
+    logfile_poll();
+    CHECK(strstr(file("/var/log/kern.log"), "2025-11-26T14:03:12.000Z --- boot:"));
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -323,6 +371,8 @@ TEST_MAIN(
     RUN(a_failed_write_stops_until_the_next_mount);
     RUN(file_level_filters);
     RUN(raising_the_file_level_keeps_its_own_record);
+    RUN(no_card_retries_every_minute);
+    RUN(boot_marker_has_the_boot_time);
     RUN(not_started);
     RUN(paths);
 )

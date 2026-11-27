@@ -70,8 +70,11 @@ The log's messages also go to the SD card, one file per facility in `/var/log` (
   every file. A failed write stops the writer (one line in the history, which can't loop since
   it's stopped) until `sdcard_generation()` says the card was mounted again.
 - **Mounting:** `logfile_start()` mounts the card once at boot, after the configuration (so an
-  encrypted card opens). It isn't retried: no card means one "mount failed" line, not one a
-  minute. Any later mount, by a file command, `sd`, SFTP or Lua, starts the files.
+  encrypted card opens). With no card mounted, `logfile_poll()` tries again every minute
+  through `sdcard_mount_retry()`, which logs nothing on failure (the library's messages
+  included), so a card put back is written to without anyone typing a command. It doesn't
+  after `sd unmount` (the card may be on its way out) until something mounts it with
+  `sdcard_mount()`. Any mount, by a file command, `sd`, SFTP or Lua, starts the files.
 - **Level:** `logfile_set_level()` takes what's waiting under the old level first, so the
   record of `log file err` (logged just before) isn't filtered out by the change it records.
 - **Host tested** with the real `log.c` and a fake card (`tests/test_logfile.c`).

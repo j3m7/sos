@@ -19,6 +19,11 @@ void sdcard_command(shell_t *sh, char *args);
 // or in the log when `sh` is NULL.
 bool sdcard_mount(shell_t *sh);
 
+// Mount the card if it isn't, quietly (no log lines if there's none): for retrying every so
+// often (the log files do). Not after `sd unmount`, until something mounts it with
+// sdcard_mount(): the card may be on its way out. True if a card is mounted.
+bool sdcard_mount_retry(void);
+
 // Is a card mounted now? Never mounts one.
 bool sdcard_mounted(void);
 // Changes every time a card is mounted (the same card again too).

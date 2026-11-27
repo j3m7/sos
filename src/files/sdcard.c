@@ -59,9 +59,17 @@ static sd_card_t card = {
 size_t sd_get_num(void) { return 1; }
 sd_card_t *sd_get_by_num(size_t num) { return num == 0 ? &card : NULL; }
 
-// The library's messages (weak hooks, silent by default) go to the system log.
-void put_out_error_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: %s", s); }
-void put_out_info_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s); }
+// The library's messages (weak hooks, silent by default) go to the system log, except during a
+// quiet mount (sdcard_mount_retry()): a missing card would otherwise say so every minute.
+static bool quiet;
+void put_out_error_message(const char *s) {
+    if (!quiet)
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: %s", s);
+}
+void put_out_info_message(const char *s) {
+    if (!quiet)
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s);
+}
 
 // While formatting (one long FatFs call), feed the watchdog from each block write: the main loop
 // doesn't run until it returns, but every completed write is progress.
@@ -347,7 +355,7 @@ static bool mount(shell_t *sh) {
         if (sh)
             shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
                          (unsigned long)ms);
-        else
+        else if (!quiet)
             log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
                     "sd: mount failed: %s (%d)", FRESULT_str(fr), fr);
         return false;
@@ -480,6 +488,18 @@ static bool files_in_use(shell_t *sh) {
     return true;
 }
 
+// Set by `sd unmount` (the card is about to come out), cleared by the next mount asked for.
+static bool unmounted_by_hand;
+
+bool sdcard_mount_retry(void) {
+    if (unmounted_by_hand || card.state.mounted)
+        return card.state.mounted;
+    quiet = true;
+    bool ok = driver_init() && mount(NULL);
+    quiet = false;
+    return ok;
+}
+
 bool sdcard_mounted(void) {
     return card.state.mounted;
 }
@@ -489,6 +509,7 @@ uint32_t sdcard_generation(void) {
 }
 
 bool sdcard_mount(shell_t *sh) {
+    unmounted_by_hand = false;
     if (!driver_init()) {
         if (sh)
             shell_printf(sh, "sd: driver init failed\n");
@@ -778,6 +799,7 @@ void sdcard_command(shell_t *sh, char *args) {
         }
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
+        unmounted_by_hand = true;           // no quiet remount (sdcard_mount_retry) under the hand
         crypt_off();                        // forget the card's key
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
         shell_printf(sh, "unmounted; safe to remove the card\n");
