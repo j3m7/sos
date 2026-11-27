@@ -31,6 +31,8 @@ DESCRIPTION
     a summary, which also goes to the log. It never writes to the card;
     repairing is a later command. Ctrl-C stops it. Afterwards the card is
     left as 'sd unmount' leaves it: the next file command mounts it.
+    The report can't go to a file on the card ('sd check > file' fails, as
+    the card is in use by the check); 'sd check | more' works.
     Only FAT32 is checked so far: on an exFAT card (what 'sd format' makes by
     default) it ends with 'not checked: exFAT is not checked yet'.
 

@@ -52,7 +52,9 @@ there's no card, an `http` request has no TLS roots, the log writer keeps its li
 and the other `sd` commands say `the card is being checked (sd check)`. It prints one line per
 problem and a summary, which also goes to the log (`sd: check: ...`). It reads only; repair is
 a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
-next file command mounts it again, and the log writer's once-a-minute retry doesn't.
+next file command mounts it again, and the log writer's once-a-minute retry doesn't. The report
+can't be written to a file on the card (`sd check > file` fails, since the check holds the
+card); `sd check | more` works, as the pager keeps its lines in memory.
 
 The output looks like this (design: [docs/design/sd-check.md](design/sd-check.md)):
 
