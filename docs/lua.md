@@ -68,6 +68,8 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.cancel(id)` | stop a timer; true if it existed |
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
+| `sos.http.head(url [, opts])` | HTTPS HEAD: the status and headers |
+| `sos.http.download(url, path [, opts])` | HTTPS GET into a file on the card (see [HTTPS](#https)) |
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 | `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
 | `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
@@ -112,6 +114,21 @@ option, a body over `max_body`). Options, all optional except `url` for `request
 | `body`, `content_type` | request body (up to 16 KB) and its type (no `Content-Type` header if not given) |
 | `timeout` | milliseconds until the headers arrive, then between pieces of the body (default 30000) |
 | `max_body` | the most response body to accept, in bytes (default 32 KB; the script's 128 KB covers it) |
+
+`sos.http.download(url, path [, opts])` writes the body to the file at `path` (as `sos.write`
+does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script's memory. Only a
+2xx response is written: the response then has `size` (the bytes written) instead of `body`. Any
+other status leaves the file alone and comes back with its `body` as `get` would (an error page,
+say). With no `max_body`, a download has no size limit (the error page still stops at 32 KB). If
+the transfer fails part way (the connection, the card, a body over `max_body`), the half-written
+file is removed and the call returns `nil` and the message; Ctrl-C leaves what was written.
+
+```lua
+local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")
+if not r then print("failed: " .. err)
+elseif r.status ~= 200 then print(r.status, r.body)
+else print("saved " .. r.size .. " bytes in " .. r.elapsed_ms .. " ms") end
+```
 
 The response's `headers` table has lower-case names; a repeated header's values are joined with
 `, `. The body is the server's bytes as they are: a script that prints it prints whatever the

@@ -487,7 +487,32 @@ static void push_stats(lua_State *L, const lua_http_stats_t *s) {
 }
 
 // The request described by the options table at index t.
-static int http_request(lua_State *L, int t) {
+// sos.http.download's file: one piece of the body, already in lua_req.data (lua_req.len bytes),
+// written to it (the first piece creates or truncates it). False if the write failed.
+static bool file_piece(const char *file, bool first) {
+    memcpy(lua_req.path, file, strlen(file) + 1);
+    lua_req.type = LR_WRITE;
+    lua_req.offset = first ? 0 : 1;
+    request();
+    return lua_req.result >= 0;
+}
+
+// Remove a file that a failed download left half written; return nil and `why`.
+static int drop_file(lua_State *L, const char *file, const char *why) {
+    char err[sizeof(lua_req.error)];
+    snprintf(err, sizeof(err), "%s", why);
+    memcpy(lua_req.path, file, strlen(file) + 1);
+    lua_req.type = LR_REMOVE;
+    request();
+    lua_pushnil(L);
+    lua_pushstring(L, err);
+    return 2;
+}
+
+// The request described by the options table at index t. With `file` (an absolute path), a 2xx
+// response's body goes to that file instead of into the response, which has `size` instead of
+// `body`; another status's body comes back as usual, and the file isn't touched.
+static int http_request(lua_State *L, int t, const char *file) {
     luaL_checkstack(L, 16, NULL);
     const char *url = opt_string(L, t, "url");
     if (!url)
@@ -509,7 +534,8 @@ static int http_request(lua_State *L, int t) {
     if (!content_type)
         content_type = header_ct;
     lua_Integer timeout = opt_integer(L, t, "timeout", 0, 1, 600000);
-    lua_Integer max_body = opt_integer(L, t, "max_body", HTTP_LUA_BODY_MAX, 0, 0x7fffffff);
+    // -1: not given. Then a body in memory stops at HTTP_LUA_BODY_MAX, and a file has no limit.
+    lua_Integer max_body = opt_integer(L, t, "max_body", -1, 0, 0x7fffffff);
 
     http_opts_t o = {
         .method = method,
@@ -532,6 +558,7 @@ static int http_request(lua_State *L, int t) {
     luaL_setmetatable(L, HTTP_CLOSER);
     lua_toclose(L, -1);
 
+    int64_t status = lua_req.result;
     lua_createtable(L, 0, 7);
     lua_pushinteger(L, (lua_Integer)lua_req.result);
     lua_setfield(L, -2, "status");
@@ -540,6 +567,8 @@ static int http_request(lua_State *L, int t) {
     push_headers(L);
     lua_setfield(L, -2, "headers");
 
+    bool to_file = file && status >= 200 && status < 300;
+    lua_Integer limit = max_body >= 0 ? max_body : to_file ? 0x7fffffff : HTTP_LUA_BODY_MAX;
     luaL_Buffer b;
     luaL_buffinit(L, &b);
     size_t total = 0;
@@ -551,31 +580,51 @@ static int http_request(lua_State *L, int t) {
         if (lua_req.result < 0) {               // core 0 has dropped the request
             http_open = false;
             luaL_pushresult(&b);
-            return fail(L);
+            return to_file ? drop_file(L, file, lua_req.error) : fail(L);
         }
         if (lua_req.len == 0) {                 // the end: core 0 has dropped it
             http_open = false;
             memcpy(&stats, lua_req.data, sizeof(stats));
             break;
         }
-        if (total + lua_req.len > (size_t)max_body) {   // the guard closes it
+        if (total + lua_req.len > (size_t)limit) {      // the guard closes it
             luaL_pushresult(&b);
+            const char *why = lua_pushfstring(L, "response body larger than %I bytes (max_body)",
+                                              limit);
+            if (to_file)
+                return drop_file(L, file, why);
             lua_pushnil(L);
-            lua_pushfstring(L, "response body larger than %I bytes (max_body)", max_body);
+            lua_insert(L, -2);
             return 2;
         }
-        luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
+        if (to_file) {
+            if (!file_piece(file, total == 0)) {
+                luaL_pushresult(&b);
+                return drop_file(L, file, lua_req.error);
+            }
+        } else {
+            luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
+        }
         total += lua_req.len;
     }
     luaL_pushresult(&b);
-    lua_setfield(L, -2, "body");
+    if (to_file) {
+        lua_pop(L, 1);
+        lua_req.len = 0;
+        if (total == 0 && !file_piece(file, true))      // an empty body: an empty file
+            return fail(L);
+        lua_pushinteger(L, (lua_Integer)total);
+        lua_setfield(L, -2, "size");
+    } else {
+        lua_setfield(L, -2, "body");
+    }
     push_stats(L, &stats);
     return 1;
 }
 
 static int l_http_request(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    return http_request(L, 1);
+    return http_request(L, 1, NULL);
 }
 
 // A copy of the options table at index opts (or a new one), with method and url set; pushed.
@@ -601,7 +650,7 @@ static int with_options(lua_State *L, int opts, const char *method, int url) {
 }
 
 static int l_http_get(lua_State *L) {
-    return http_request(L, with_options(L, 2, "GET", 1));
+    return http_request(L, with_options(L, 2, "GET", 1), NULL);
 }
 
 static int l_http_post(lua_State *L) {
@@ -609,11 +658,25 @@ static int l_http_post(lua_State *L) {
     int t = with_options(L, 3, "POST", 1);
     lua_pushvalue(L, 2);
     lua_setfield(L, t, "body");
-    return http_request(L, t);
+    return http_request(L, t, NULL);
+}
+
+static int l_http_head(lua_State *L) {
+    return http_request(L, with_options(L, 2, "HEAD", 1), NULL);
+}
+
+// sos.http.download(url, path [, opts]): a GET whose 2xx body goes to the file at path.
+static int l_http_download(lua_State *L) {
+    luaL_checkstring(L, 1);
+    set_path(L, 2);                             // resolved now: the answers reuse lua_req.path
+    char file[LUA_PATH_MAX];
+    memcpy(file, lua_req.path, sizeof(file));
+    return http_request(L, with_options(L, 3, "GET", 1), file);
 }
 
 static const luaL_Reg http_lib[] = {
-    {"request", l_http_request}, {"get", l_http_get}, {"post", l_http_post}, {NULL, NULL},
+    {"request", l_http_request}, {"get", l_http_get},   {"post", l_http_post},
+    {"head", l_http_head},       {"download", l_http_download}, {NULL, NULL},
 };
 
 // --- timers: sos.every, sos.after, sos.cancel ---------------------------------------------------
