@@ -101,3 +101,25 @@ its own working directory (`shell_t.cwd`).
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
+
+## `fsck.c`: checking the card (pure C, host tested)
+
+The checker behind the coming `sd check` ([design](../../docs/design/sd-check.md)). Not in the
+firmware yet: phase 3 adds the command, which runs it only while the card is unmounted.
+
+- **Shape:** it reads sectors through a callback and hands back report lines, so it knows
+  nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
+  5.9 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
+  reads, so a check can run as a shell job a slice at a time.
+- **What it checks (FAT32 for now; exFAT is recognised and refused):** the volume is found and
+  its boot sector judged as FatFs finds and mounts it; then the backup boot sector, FSInfo, the
+  FAT copies, every chain (range, loops, end mark, size against chain), the directory tree
+  (depth, loops, "." and "..", long-name sequences, names FatFs refuses, repeated names), and
+  the clusters: cross-linked, lost, bad. `fsck.h` lists the rules the design note left open.
+- **Windows:** a bit per cluster for a whole card doesn't fit beside everything else, so the
+  clusters are accounted a window at a time, one pass over the tree per window. The report is
+  the same whatever the window size; the tests check that.
+- **Tests:** `tests/test_fsck.c` builds FatFs for the host over a RAM disk and makes its images
+  with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
+  sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
+  checks mutated images twice with different windows and requires the same answer.
