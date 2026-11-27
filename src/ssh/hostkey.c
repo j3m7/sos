@@ -68,15 +68,16 @@ static bool store_sealed(const sealer_t *sealer, uint32_t len) {
 static bool make_new(const sealer_t *sealer, uint32_t *len) {
     int n = wolfSSH_MakeEd25519Key(key_der, sizeof(key_der), WOLFSSH_ED25519KEY);
     if (n <= 0 || n > HOSTREC_MAX_KEY) {
-        log_msg(SOS_LOG_ERR, "hostkey: key generation failed (%d)", n);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "hostkey: key generation failed (%d)", n);
         return false;
     }
     if (!store_sealed(sealer, (uint32_t)n)) {
-        log_msg(SOS_LOG_ERR, "hostkey: failed to store host key in flash");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "hostkey: failed to store host key in flash");
         return false;
     }
     *len = (uint32_t)n;
-    log_msg(SOS_LOG_NOTICE, "hostkey: stored new host key (%lu bytes, sealed for this owner)",
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+            "hostkey: stored new host key (%lu bytes, sealed for this owner)",
             (unsigned long)*len);
     return true;
 }
@@ -97,7 +98,8 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     if (action == HOSTKEY_NONE_NO_OWNER) {
         // Not an error and not final: the board hasn't been set up. Asked again later.
         if (!said_no_owner)
-            log_msg(SOS_LOG_NOTICE, "hostkey: no host key yet: this board isn't set up, and its "
+            log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                    "hostkey: no host key yet: this board isn't set up, and its "
                                     "host key belongs to its owner (it is made at setup)");
         said_no_owner = true;
         return false;
@@ -120,7 +122,8 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     case HOSTKEY_OPEN:
         ok = owner_seal.have_key && hostrec_open(stored, &sealer, true, key_der, &n);
         if (!ok && owner_seal.have_key) {
-            log_msg(SOS_LOG_NOTICE, "hostkey: the stored host key doesn't open (it belongs to an "
+            log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                    "hostkey: the stored host key doesn't open (it belongs to an "
                                     "earlier owner or root secret, or is damaged); making a NEW "
                                     "host key: SSH clients will see a changed fingerprint");
             ok = make_new(&sealer, &n);
@@ -132,13 +135,16 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
             // fingerprint) and store it the new way.
             ok = true;
             if (store_sealed(&sealer, n))
-                log_msg(SOS_LOG_NOTICE, "hostkey: the stored host key is now sealed for this "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                        "hostkey: the stored host key is now sealed for this "
                                         "owner (same key, same fingerprint)");
             else
-                log_msg(SOS_LOG_ERR, "hostkey: sealing the stored host key for this owner "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                        "hostkey: sealing the stored host key for this owner "
                                      "failed; it stays as it was");
         } else if (owner_seal.have_key) {
-            log_msg(SOS_LOG_NOTICE, "hostkey: the stored host key doesn't open (sealed under "
+            log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                    "hostkey: the stored host key doesn't open (sealed under "
                                     "another root secret, or damaged); making a NEW host key: "
                                     "SSH clients will see a changed fingerprint");
             ok = make_new(&sealer, &n);
@@ -148,16 +154,18 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         if (owner_seal.have_key && hostrec_open(stored, NULL, false, key_der, &n)) {
             ok = true;
             if (store_sealed(&sealer, n))
-                log_msg(SOS_LOG_NOTICE, "hostkey: sealed the stored host key (same key, same "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                        "hostkey: sealed the stored host key (same key, same "
                                         "fingerprint)");
             else
-                log_msg(SOS_LOG_ERR, "hostkey: sealing the stored host key failed; it stays "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                        "hostkey: sealing the stored host key failed; it stays "
                                      "unsealed");
         }
         break;
     case HOSTKEY_MAKE_NEW:
         if (owner_seal.have_key) {
-            log_msg(SOS_LOG_NOTICE, kind == HOSTREC_SEALED_OLD
+            log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, kind == HOSTREC_SEALED_OLD
                         ? "hostkey: the stored host key isn't tied to an owner, and a "
                           "console-only board doesn't carry it over; making a new host key"
                         : kind == HOSTREC_PLAIN
@@ -169,13 +177,15 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         break;
     case HOSTKEY_USE_PLAIN_UNSEALED:
         ok = hostrec_open(stored, NULL, false, key_der, &n);
-        log_msg(SOS_LOG_ERR, "hostkey: the host key is stored unsealed and there's no key to "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "hostkey: the host key is stored unsealed and there's no key to "
                              "seal it with (see `rootsecret`); using it as it is");
         break;
     case HOSTKEY_NONE_NO_KEYS:
         // Without the root secret a sealed key can't be opened and a new one couldn't be
         // sealed. No host key, so no SSH, until that's put right.
-        log_msg(SOS_LOG_ERR, "hostkey: no host key: there's no key to %s (see `rootsecret`)",
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "hostkey: no host key: there's no key to %s (see `rootsecret`)",
                 kind == HOSTREC_SEALED || kind == HOSTREC_SEALED_OLD ? "open the stored one with"
                                                                       : "seal a new one with");
         break;
@@ -183,7 +193,8 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         break;                          // handled above
     }
     if (have_base && have_owner && !owner_seal.have_key)
-        log_msg(SOS_LOG_ERR, "hostkey: making the key that seals the host key failed");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "hostkey: making the key that seals the host key failed");
 
     seal_wipe(&owner_seal);
     seal_wipe(&old_seal);

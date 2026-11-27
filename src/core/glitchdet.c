@@ -100,7 +100,8 @@ bool glitchdet_apply(unsigned setting) {
 
 void glitchdet_start(unsigned setting) {
     if (caused_reset)
-        log_msg(SOS_LOG_ERR, "last reset: glitch detector (detectors 0x%x fired, after %lu s up; "
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "last reset: glitch detector (detectors 0x%x fired, after %lu s up; "
                              "%lu such reset%s since power-on). The fault record doesn't survive "
                              "that reset",
                 (unsigned)triggers, (unsigned long)last_uptime, (unsigned long)glitchdet_resets(),
@@ -109,16 +110,19 @@ void glitchdet_start(unsigned setting) {
         return;
     if (setting >= 5) {                 // watching resets nothing, so it needs no guard
         if (glitchdet_apply(setting))
-            log_msg(SOS_LOG_NOTICE, "glitch detector: watching at sensitivity %d, not armed (a "
+            log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                    "glitch detector: watching at sensitivity %d, not armed (a "
                                     "trigger is logged, the board isn't reset)", watching);
         else
-            log_msg(SOS_LOG_ERR, "glitch detector: setting sensitivity %u didn't take",
+            log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                    "glitch detector: setting sensitivity %u didn't take",
                     (setting - 1) & 3u);
         return;
     }
     if (get16(REG_STREAK, MAGIC_STREAK) >= GLITCHDET_GUARD_RESETS) {
         guard_tripped = true;
-        log_msg(SOS_LOG_ERR, "glitch detector: NOT armed at this boot: it reset the board %u "
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "glitch detector: NOT armed at this boot: it reset the board %u "
                              "times in a row within %u s of starting. The setting is unchanged "
                              "(`glitch off` turns it off; a reboot tries again)",
                 GLITCHDET_GUARD_RESETS, GLITCHDET_STABLE_S);
@@ -126,11 +130,13 @@ void glitchdet_start(unsigned setting) {
         return;
     }
     if (glitchdet_apply(setting))
-        log_msg(SOS_LOG_NOTICE, "glitch detector: armed by software at sensitivity %d (a trial "
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "glitch detector: armed by software at sensitivity %d (a trial "
                                 "setting, not protection; sensitivity register 0x%08lx)",
                 armed, (unsigned long)glitch_detector_hw->sensitivity);
     else
-        log_msg(SOS_LOG_ERR, "glitch detector: arming at sensitivity %u didn't take", setting - 1);
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "glitch detector: arming at sensitivity %u didn't take", setting - 1);
 }
 
 void glitchdet_poll(void) {
@@ -152,7 +158,8 @@ void glitchdet_poll(void) {
             if (!watch_seen)
                 watch_first_s = up;
             watch_seen |= fresh;
-            log_msg(SOS_LOG_WARNING, "glitch detector (watching, sensitivity %d): detectors 0x%x "
+            log_msg(SOS_LOG_KERN | SOS_LOG_WARNING,
+                    "glitch detector (watching, sensitivity %d): detectors 0x%x "
                                      "triggered after %lu s up; armed, this would have reset the "
                                      "board", watching, (unsigned)fresh, (unsigned long)up);
             glitch_detector_hw->trig_status = fresh;

@@ -147,22 +147,22 @@ int main(void) {
     for (int i = 0; i < 20 && !stdio_usb_connected(); i++)
         sleep_ms(100);
     log_init(&log_hooks);
-    log_msg(SOS_LOG_NOTICE, "SOS booting");
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "SOS booting");
 
     // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
     fault_boot();
     wdog_start();
     if (fault_last())
-        log_msg(SOS_LOG_ERR, "last reset: %s", fault_last());
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "last reset: %s", fault_last());
     else if (wdog_caused_reset())
-        log_msg(SOS_LOG_WARNING, "last reset: watchdog timeout");
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "last reset: watchdog timeout");
 
     // System clock from the RTC, before anything that might want the time.
     timesync_boot();
 
     tls_init();                         // wolfSSL heap accounting, before any allocation
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
-        log_msg(SOS_LOG_ERR, "crypto init failed");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "crypto init failed");
         return 1;
     }
 
@@ -181,7 +181,7 @@ int main(void) {
     cardkey_init();                     // the base of the key for encrypted SD cards
 
     if (cyw43_arch_init_with_country(wifi_country_code())) {
-        log_msg(SOS_LOG_ERR, "cyw43 init failed");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "cyw43 init failed");
         return 1;
     }
     wifi_start();                       // connects in the background; the console works meanwhile

@@ -25,7 +25,7 @@ void consoleonly_init(void) {
     if (SOS_FORCE_CONSOLE_ONLY && state == CONSOLEONLY_NO) {
         forced = true;
         state = CONSOLEONLY_YES;
-        log_msg(SOS_LOG_WARNING, "console-only setup: FORCED BY THIS BUILD "
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "console-only setup: FORCED BY THIS BUILD "
                                  "(SOS_FORCE_CONSOLE_ONLY) for testing; the board's OTP "
                                  "marker is blank. Unsealed "
                                  "configuration and host key records are refused");
@@ -35,15 +35,17 @@ void consoleonly_init(void) {
     case CONSOLEONLY_NO:
         break;                          // an open board: nothing to say at every boot
     case CONSOLEONLY_YES:
-        log_msg(SOS_LOG_NOTICE, "console-only board: unsealed configuration and host key records "
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "console-only board: unsealed configuration and host key records "
                                 "are refused; set up on the console only");
         break;
     case CONSOLEONLY_YES_UNREADABLE:
-        log_msg(SOS_LOG_ERR, "console-only setup: the marker's OTP rows can't be read; "
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "console-only setup: the marker's OTP rows can't be read; "
                              "treated as set, so unsealed records are refused");
         break;
     case CONSOLEONLY_YES_DAMAGED:
-        log_msg(SOS_LOG_ERR, "console-only setup: the marker's OTP rows hold "
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "console-only setup: the marker's OTP rows hold "
                              "0x%06lx 0x%06lx 0x%06lx, neither blank nor the marker; "
                              "treated as set, so unsealed records are refused",
                 (unsigned long)rows[0], (unsigned long)rows[1], (unsigned long)rows[2]);

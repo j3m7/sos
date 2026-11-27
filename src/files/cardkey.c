@@ -21,7 +21,8 @@ static bool have_base;
 void cardkey_init(void) {
     have_base = keyprov_derive(KEYPROV_SD_WRAP_BASE, base);
     if (!have_base)
-        log_msg(SOS_LOG_ERR, "sd: no key for encrypted cards (see `rootsecret`): they can't be "
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
+                "sd: no key for encrypted cards (see `rootsecret`): they can't be "
                              "opened or made");
 }
 

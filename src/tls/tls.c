@@ -136,7 +136,8 @@ static void wolf_error(tls_conn_t *c, const char *what, int err) {
     bool reset = c->tcp_failed;
     cyw43_arch_lwip_end();
     if (closed && connected)
-        log_msg(SOS_LOG_WARNING, "tls: %s %s the connection %lu ms after accepting it", c->host,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "tls: %s %s the connection %lu ms after accepting it", c->host,
                 reset ? "reset" : "closed", (unsigned long)((closed - connected) / 1000));
 }
 
@@ -174,7 +175,8 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
     (void)pcb;
     tls_conn_t *c = arg;
     if (!p || err != ERR_OK) {
-        log_msg(SOS_LOG_DEBUG, "tls: tcp recv %s, err %d", p ? "data" : "FIN", (int)err);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
+                "tls: tcp recv %s, err %d", p ? "data" : "FIN", (int)err);
         if (p)
             pbuf_free(p);
         if (!c->tcp_closed_us)
@@ -194,7 +196,7 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
 
 static void tcp_err_cb(void *arg, err_t err) {
     tls_conn_t *c = arg;
-    log_msg(SOS_LOG_DEBUG, "tls: tcp error %d", (int)err);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG, "tls: tcp error %d", (int)err);
     c->pcb = NULL;                              // lwIP has freed it
     c->tcp_err = err;
     if (!c->tcp_closed_us)
@@ -213,7 +215,8 @@ static int io_recv(WOLFSSL *ssl, char *buf, int sz, void *ctx) {
         bool closed = c->peer_closed || c->tcp_failed;
         cyw43_arch_lwip_end();
         if (closed)
-            log_msg(SOS_LOG_DEBUG, "tls: recv: closed (peer_closed %d, tcp_failed %d)",
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
+                    "tls: recv: closed (peer_closed %d, tcp_failed %d)",
                     c->peer_closed, c->tcp_failed);
         return closed ? WOLFSSL_CBIO_ERR_CONN_CLOSE : WOLFSSL_CBIO_ERR_WANT_READ;
     }
@@ -278,7 +281,8 @@ static void start_connect(tls_conn_t *c) {
     uint64_t t0 = time_us_64();
     if (!setup_session(c))
         return;
-    log_msg(SOS_LOG_DEBUG, "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
+            "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
     if (ssh_ringbuffer_init(&c->rx, NULL, TCP_WND) != 0) {
         fail(c, "out of memory");
         return;
@@ -382,7 +386,7 @@ static void handshake_step(tls_conn_t *c) {
         }
         c->stats.handshake_us = time_us_64() - c->connected_us;
         const char *group = wolfSSL_get_curve_name(c->ssl);
-        log_msg(SOS_LOG_DEBUG, "tls: handshake done, key exchange group %s",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG, "tls: handshake done, key exchange group %s",
                 group ? group : "?");
         c->state = TLS_READY;
         return;

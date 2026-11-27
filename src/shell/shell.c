@@ -235,7 +235,8 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
     shell_printf(sh, "wall <message>    send a message to every other shell\n");
     shell_printf(sh, "chat              talk with the others in the chat room (Ctrl-D leaves)\n");
-    shell_printf(sh, "dmesg             system log\n");
+    shell_printf(sh, "dmesg [-f <fac>]  system log [one facility: kern auth daemon user none]\n");
+    shell_printf(sh, "logger [-p <level>] <message>  add a line to the log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "glitch            glitch detector setting, state and resets\n");
@@ -351,11 +352,67 @@ static void cmd_net(shell_t *sh) {
 
 // --- log -----------------------------------------------------------------------------------------
 
-static void cmd_dmesg(shell_t *sh) {
+// `dmesg [-f <facility>]`: the RAM history, all of it or one facility's messages.
+static void cmd_dmesg(shell_t *sh, char *args) {
+    int only = -1;
+    if (args) {
+        char *opt = strtok(args, " ");
+        char *name = strtok(NULL, " ");
+        if (opt && name && !strcmp(opt, "-f") && !strtok(NULL, " "))
+            only = log_facility_parse(name);
+        if (only < 0) {
+            shell_printf(sh, "usage: dmesg [-f none|kern|auth|daemon|user]\n");
+            return;
+        }
+    }
     char line[LOG_LINE_MAX + 1];
     uint32_t cursor = 0;
-    while (log_history_next(&cursor, line, sizeof(line)))
-        shell_printf(sh, "%s\n", line);
+    int priority;
+    while (log_history_next(&cursor, line, sizeof(line), &priority))
+        if (only < 0 || (priority & SOS_LOG_FACILITY_MASK) == only)
+            shell_printf(sh, "%s\n", line);
+}
+
+// `logger [-p <level>] <message>`: a line in the log from any shell, like Unix logger. Always the
+// user facility, tagged with the shell it came from, so a line can't pass for a system message or
+// land in the auth log. Rate limited like scripts' output, for a loop piped into a session.
+#define LOGGER_PER_SEC 10
+static log_quota_t logger_quota;
+
+static void cmd_logger(shell_t *sh, char *args) {
+    int level = SOS_LOG_NOTICE;
+    char *msg = args;
+    if (msg && !strncmp(msg, "-p", 2) && (msg[2] == ' ' || !msg[2])) {
+        char *name = msg + 2;
+        while (*name == ' ')
+            name++;
+        char *after = strchr(name, ' ');
+        if (after)
+            *after++ = '\0';
+        level = log_level_parse(name);
+        msg = after;
+        while (msg && *msg == ' ')
+            msg++;
+    }
+    if (level < 0 || !msg || !*msg) {
+        shell_printf(sh, "usage: logger [-p err|warning|notice|info|debug] <message>\n");
+        return;
+    }
+    if (!log_quota_take(&logger_quota, LOGGER_PER_SEC)) {
+        shell_printf(sh, "logger: more than %d messages a second; not logged\n", LOGGER_PER_SEC);
+        return;
+    }
+    unsigned refused = log_quota_dropped(&logger_quota);
+    if (refused)
+        log_msg(SOS_LOG_USER | SOS_LOG_NOTICE,
+                "logger: %u message%s refused (more than %d a second)", refused,
+                refused == 1 ? "" : "s", LOGGER_PER_SEC);
+    // "console", or "ssh <name>" (the session's key comment, as `who` shows it).
+    const char *name = chat_name(sh);
+    if (name && strcmp(name, sh->io->name))
+        log_msg(SOS_LOG_USER | level, "logger (%s %s): %s", sh->io->name, name, msg);
+    else
+        log_msg(SOS_LOG_USER | level, "logger (%s): %s", sh->io->name, msg);
 }
 
 static void cmd_log(shell_t *sh, char *args) {
@@ -381,6 +438,7 @@ static void cmd_log(shell_t *sh, char *args) {
         log_set_console_level(l);
     else
         log_set_history_level(l);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     shell_printf(sh, "%s level: %s (until reboot)\n", what, level);
 }
 
@@ -417,7 +475,8 @@ static bool key_add_line(shell_t *sh, const char *line) {
     save(sh);
     shell_printf(sh, "trusted:\n");
     print_key(sh, settings()->key_count - 1, &key);
-    log_msg(SOS_LOG_NOTICE, "config: trusted key added (%s)", key.comment[0] ? key.comment : "no comment");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+            "config: trusted key added (%s)", key.comment[0] ? key.comment : "no comment");
     return true;
 }
 
@@ -451,7 +510,7 @@ static void cmd_key(shell_t *sh, char *args) {
             return;
         }
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: trusted key %ld removed", n);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: trusted key %ld removed", n);
         shell_printf(sh, "removed key %ld\n", n);
         if (!settings()->key_count)
             shell_printf(sh, "warning: no trusted keys left; SSH logins are no longer possible\n");
@@ -566,11 +625,11 @@ static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
     }
     save(sh);
     if (add) {
-        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' added", pending_ssid);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: Wi-Fi network '%s' added", pending_ssid);
         if (!wifi_up())
             wifi_reconnect();       // it may be the one in reach
     } else {
-        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", pending_ssid);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: Wi-Fi network set to '%s'", pending_ssid);
         wifi_reconnect();
     }
 }
@@ -622,7 +681,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         bool was_connected = now && !strcmp(now, net.ssid);
         config_wifi_remove(settings(), (unsigned)i);
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' removed", net.ssid);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: Wi-Fi network '%s' removed", net.ssid);
         memset(&net, 0, sizeof(net));
         if (!config_wifi_count(settings()))
             shell_printf(sh, "warning: no Wi-Fi network left\n");
@@ -634,7 +693,8 @@ static void cmd_wifi(shell_t *sh, char *args) {
             return;
         config_wifi_prefer(settings(), (unsigned)i);
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: Wi-Fi network '%s' preferred", settings()->wifi_ssid);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: Wi-Fi network '%s' preferred", settings()->wifi_ssid);
         if (wifi_up() && strcmp(wifi_ssid(), settings()->wifi_ssid))
             shell_printf(sh, "takes effect on the next Wi-Fi connect ('wifi connect')\n");
     } else if (!strcmp(args, "connect")) {
@@ -645,7 +705,8 @@ static void cmd_wifi(shell_t *sh, char *args) {
         if (!require_admin(sh))
             return;
         wifi_set_keepalive(!strcmp(args, "keepalive on"));
-        log_msg(SOS_LOG_NOTICE, "wifi: keepalive %s (until reboot)", wifi_keepalive() ? "on" : "off");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "wifi: keepalive %s (until reboot)", wifi_keepalive() ? "on" : "off");
     } else if (!strcmp(args, "stats") || !strcmp(args, "stats chip")) {
         wifi_stats(sh, args[5] != 0);
     } else if (!strncmp(args, "iovar ", 6)) {
@@ -670,7 +731,7 @@ static void cmd_wifi(shell_t *sh, char *args) {
         }
         snprintf(settings()->wifi_country, sizeof(settings()->wifi_country), "%s", v);
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: wifi country %s", v[0] ? v : "worldwide");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: wifi country %s", v[0] ? v : "worldwide");
         shell_printf(sh, "takes effect at the next boot ('reboot')\n");
     } else if (!strcmp(args, "power")) {
         shell_printf(sh, "power saving: %s\n", settings()->wifi_powersave ? "on" : "off");
@@ -680,7 +741,8 @@ static void cmd_wifi(shell_t *sh, char *args) {
         settings()->wifi_powersave = !strcmp(args, "power on");
         save(sh);
         wifi_apply_power();
-        log_msg(SOS_LOG_NOTICE, "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: wifi power saving %s", settings()->wifi_powersave ? "on" : "off");
     } else {
         shell_printf(sh, "usage: wifi [set|add|remove <n>|prefer <n>|connect|stats [chip]|power [on|off]|\n            country <XX>|worldwide|keepalive on|off|iovar <name> [<value>]]\n");
     }
@@ -703,7 +765,7 @@ static void set_field(shell_t *sh, const char *what, char *value, char *field, s
     }
     snprintf(field, size, "%s", value);
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: %s set to '%s'", what, field);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: %s set to '%s'", what, field);
     if (field == settings()->hostname)
         shell_printf(sh, "takes effect on the next Wi-Fi connect ('wifi connect')\n");
 }
@@ -784,12 +846,12 @@ static void cmd_glitch(shell_t *sh, char *args) {
         settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_OFF;
         glitchdet_apply(0);
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: glitch detector off");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: glitch detector off");
         shell_printf(sh, "glitch detector off, now and at boot\n");
     } else if (!strcmp(sub, "default") && !arg) {
         settings()->glitch_detector = CONFIG_GLITCH_DETECTOR_DEFAULT;
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: glitch detector back to the default");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: glitch detector back to the default");
         if (glitchdet_apply(CONFIG_GLITCH_DEFAULT_MODE))
             shell_printf(sh, "glitch detector back to the default: armed at sensitivity %u, now "
                              "and at boot\n", (unsigned)CONFIG_GLITCH_DEFAULT_MODE - 1);
@@ -800,7 +862,8 @@ static void cmd_glitch(shell_t *sh, char *args) {
         // Saved first: if arming resets the board at once, the guard at boot deals with it.
         settings()->glitch_detector = (uint8_t)setting;
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: glitch detector on, sensitivity %c", arg[0]);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: glitch detector on, sensitivity %c", arg[0]);
         if (glitchdet_apply(setting))
             shell_printf(sh, "glitch detector armed at sensitivity %c, now and at boot.\n"
                              "If it resets the board, `glitch off` turns it off; after %u resets "
@@ -812,7 +875,8 @@ static void cmd_glitch(shell_t *sh, char *args) {
         unsigned setting = (unsigned)(arg[0] - '0') + 5;
         settings()->glitch_detector = (uint8_t)setting;
         save(sh);
-        log_msg(SOS_LOG_NOTICE, "config: glitch detector watching, sensitivity %c", arg[0]);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: glitch detector watching, sensitivity %c", arg[0]);
         if (glitchdet_apply(setting))
             shell_printf(sh, "watching at sensitivity %c, now and at boot: a trigger is logged "
                              "and shown by `glitch`; the board isn't reset\n", arg[0]);
@@ -874,7 +938,7 @@ static void burn_report(shell_t *sh, const rootburn_report_t *rep) {
                      rep->page_locked ? "locked against the bootloader" : "NOT LOCKED");
     if (rep->result == ROOTBURN_WRITE && rep->row)
         shell_printf(sh, "It stopped at row 0x%03x.\n", rep->row);
-    log_msg(rootburn_must_stop(rep->result) ? SOS_LOG_ERR : SOS_LOG_NOTICE,
+    log_msg(SOS_LOG_KERN | (rootburn_must_stop(rep->result) ? SOS_LOG_ERR : SOS_LOG_NOTICE),
             "rootsecret burn: %s (OTP page %u, row 0x%03x, wrote %s, page %s%s)",
             rootburn_result_text(rep->result), rep->page, rep->row, rep->wrote ? "yes" : "no",
             rep->page_locked ? "locked" : "not locked",
@@ -930,7 +994,7 @@ static bool burn_job(shell_t *sh, void *arg, bool cancel) {
     // How long OTP programming takes on this chip isn't known until it has been done once:
     // worth writing down (docs/securing-a-board.md).
     shell_printf(sh, "It took %lu ms.\n", (unsigned long)took_ms);
-    log_msg(SOS_LOG_NOTICE, "rootsecret burn: took %lu ms", (unsigned long)took_ms);
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "rootsecret burn: took %lu ms", (unsigned long)took_ms);
     shell_printf(sh, "You can let go of the button.\n");
     return false;
 }
@@ -1155,7 +1219,7 @@ static bool console_rescue_allowed(const char *cmd) {
 }
 
 static void console_opened(shell_t *sh) {
-    log_msg(SOS_LOG_NOTICE, "console: logged in");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "console: logged in");
     shell_greet(sh);
 }
 
@@ -1175,11 +1239,12 @@ static void console_first_use(shell_t *sh) {
 // Not printed on the console while it's locked (the log is held); `dmesg` in an SSH session and
 // the console after the next login show it.
 static void console_failed(unsigned failures) {
-    log_msg(SOS_LOG_WARNING, "console: wrong password (%u since the last right one)", failures);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
+            "console: wrong password (%u since the last right one)", failures);
 }
 
 static void console_auto_locked(const char *why) {
-    log_msg(SOS_LOG_NOTICE, "console: locked (%s)", why);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "console: locked (%s)", why);
 }
 
 static const login_hooks_t console_login = {
@@ -1191,12 +1256,14 @@ static const login_hooks_t console_login = {
 
 void shell_console_start(shell_t *console) {
     if (!console_no_keys() && !settings_console_has_password())
-        log_msg(SOS_LOG_WARNING, "console: no console password is set: the console is open to "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
+                "console: no console password is set: the console is open to "
                                  "anyone at the port (`passwd` sets one)");
     // Wrong answers from before this boot still count: say so, since the first check will wait.
     unsigned kept = failflash_count();
     if (kept && settings_console_has_password())
-        log_msg(SOS_LOG_WARNING, "console: %u wrong password%s since the last right one, "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
+                "console: %u wrong password%s since the last right one, "
                                  "counted across reboots; the next check waits for it",
                 kept, kept == 1 ? "" : "s");
     login_start(console, &console_login);
@@ -1217,7 +1284,7 @@ static void setup_finish(shell_t *sh) {
         config_wifi_set_first(c, setup_state.ssid, setup_state.password);
     memset(&setup_state, 0, sizeof(setup_state));
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: setup completed");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: setup completed");
     shell_printf(sh, "\nsaved:\n");
     cmd_config(sh, NULL);
     if (!c->key_count)
@@ -1326,7 +1393,7 @@ static void on_new_password_again(shell_t *sh, char *answer, void *arg) {
         return;
     }
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: console password set");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: console password set");
     // Whoever set it had the console open. Wrong answers counted against an earlier password
     // (or with none set) must not delay the first login with this one: the count kept in flash
     // and the one login.c took from it at boot both start again.
@@ -1367,7 +1434,8 @@ static void on_current_password(shell_t *sh, char *answer, void *arg) {
         r = settings_console_check_step();
     if (r != 1) {
         shell_printf(sh, "wrong password\n");
-        log_msg(SOS_LOG_WARNING, "console: wrong current password given to `passwd`");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
+                "console: wrong current password given to `passwd`");
         return;
     }
     ask_new_password(sh, NULL);
@@ -1442,9 +1510,9 @@ static void cmd_time_auto(shell_t *sh, const char *value) {
     settings()->ntp_sync_hours = (uint16_t)hours;
     save(sh);
     if (hours)
-        log_msg(SOS_LOG_NOTICE, "config: ntp sync every %lu h", hours);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: ntp sync every %lu h", hours);
     else
-        log_msg(SOS_LOG_NOTICE, "config: ntp sync off");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: ntp sync off");
     show_ntp_sync_hours(sh);
 }
 
@@ -1476,7 +1544,7 @@ static void cmd_time_cal(shell_t *sh, const char *value) {
     save(sh);
     bool applied = timesync_apply_cal();
     timesync_cal_str(cal, sizeof(cal));
-    log_msg(SOS_LOG_NOTICE, "config: rtc calibration %s", cal);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: rtc calibration %s", cal);
     shell_printf(sh, "rtc calibration: %s%s\n", cal,
                  applied ? "" : " (saved, but the RTC didn't take it)");
 }
@@ -1512,7 +1580,7 @@ static void cmd_time_server(shell_t *sh, const char *value) {
         snprintf(c->ntp_server, sizeof(c->ntp_server), "%s", value);
     }
     save(sh);
-    log_msg(SOS_LOG_NOTICE, "config: nts server set to '%s'",
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: nts server set to '%s'",
             c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER);
     show_ntp_server(sh);
     shell_printf(sh, "used from the next sync ('time sync' to sync now)\n");
@@ -1634,7 +1702,9 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "chat"))
         chat_cmd_chat(sh, args);
     else if (!strcmp(cmd, "dmesg"))
-        cmd_dmesg(sh);
+        cmd_dmesg(sh, args);
+    else if (!strcmp(cmd, "logger"))
+        cmd_logger(sh, args);
     else if (!strcmp(cmd, "log"))
         cmd_log(sh, args);
     else if (!strcmp(cmd, "config"))

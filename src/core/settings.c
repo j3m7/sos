@@ -108,7 +108,7 @@ const char *settings_console_set_password(const char *password) {
         !pwv_compute(password, strlen(password), salt, SOS_CONSOLE_PW_ITERATIONS, pw_key, verifier))
         return "making the password's verifier failed";
     // How long one check of this password costs (the same derivation), for tuning the count.
-    log_msg(SOS_LOG_INFO, "config: password verifier made in %lu ms (%u iterations)",
+    log_msg(SOS_LOG_AUTH | SOS_LOG_INFO, "config: password verifier made in %lu ms (%u iterations)",
             (unsigned long)((time_us_64() - t0) / 1000), (unsigned)SOS_CONSOLE_PW_ITERATIONS);
     live.console_iterations = SOS_CONSOLE_PW_ITERATIONS;
     memcpy(live.console_salt, salt, sizeof(salt));
@@ -152,9 +152,10 @@ static void take_provisioned_password(void) {
     const char *err = settings_console_set_password(live.console_password);
     memset(live.console_password, 0, sizeof(live.console_password));
     if (err)
-        log_msg(SOS_LOG_ERR, "config: the provisioned console password wasn't set: %s", err);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "config: the provisioned console password wasn't set: %s", err);
     else
-        log_msg(SOS_LOG_NOTICE, "config: console password set from the provisioned "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: console password set from the provisioned "
                                 "configuration");
 }
 
@@ -173,10 +174,12 @@ static void ensure_owner_secret(void) {
     if (settings_has_owner_secret() || !seal.have_key)
         return;
     if (random_bytes(NULL, live.owner_secret, sizeof(live.owner_secret)))
-        log_msg(SOS_LOG_NOTICE, "config: this configuration is a new owner for encrypted SD "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: this configuration is a new owner for encrypted SD "
                                 "cards (cards encrypted under an earlier one stay locked)");
     else
-        log_msg(SOS_LOG_ERR, "config: making the owner secret failed (no random numbers)");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "config: making the owner secret failed (no random numbers)");
 }
 
 // --- public API ----------------------------------------------------------------------------------
@@ -186,7 +189,8 @@ void settings_init(void) {
     store.refuse_plain = consoleonly();
     persistent = (uintptr_t)&__flash_binary_end <= XIP_BASE + SLOT_OFFSET(0);
     if (!persistent) {
-        log_msg(SOS_LOG_ERR, "config: firmware overlaps the config area; settings won't be saved");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "config: firmware overlaps the config area; settings won't be saved");
         config_defaults(&live);
         return;
     }
@@ -194,12 +198,13 @@ void settings_init(void) {
     seal.have_key = keyprov_derive(KEYPROV_CONFIG_SEAL, seal.key);
     have_pw_key = keyprov_derive(KEYPROV_CONSOLE_PASSWORD, pw_key);
     if (!seal.have_key)
-        log_msg(SOS_LOG_ERR, "config: no key to seal the configuration with (see `rootsecret`): "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "config: no key to seal the configuration with (see `rootsecret`): "
                              "a sealed configuration can't be read, and nothing can be saved");
 
     uint32_t seq;
     if (config_load(&store, &live, &seq)) {
-        log_msg(SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_INFO, "config: loaded (revision %lu)", (unsigned long)seq);
         if (config_stored(&store) == CONFIG_STORED_PLAIN) {
             // From older firmware or a provisioning image: store it sealed, and erase the
             // plain copy (config_save does both). A plain record has no owner secret, so this
@@ -207,14 +212,17 @@ void settings_init(void) {
             ensure_owner_secret();
             take_provisioned_password();
             if (config_save(&store, &live))
-                log_msg(SOS_LOG_NOTICE, "config: the saved configuration was unsealed (older "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                        "config: the saved configuration was unsealed (older "
                                         "firmware, or provisioning); it's now stored sealed");
             else
-                log_msg(SOS_LOG_ERR, "config: sealing the saved configuration failed; it stays "
+                log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                        "config: sealing the saved configuration failed; it stays "
                                      "unsealed in flash");
         }
         if (!config_scrub_plain(&store))
-            log_msg(SOS_LOG_ERR, "config: an unsealed configuration record is still in flash "
+            log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                    "config: an unsealed configuration record is still in flash "
                                  "(erasing it failed)");
         // A sealed configuration from before the owner secret: give it one now, so "no owner
         // secret" only ever means that nothing is saved.
@@ -224,7 +232,8 @@ void settings_init(void) {
         return;
     }
     if (config_sealed_unopened(&store))
-        log_msg(SOS_LOG_ERR, "config: a sealed configuration is present and doesn't open "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
+                "config: a sealed configuration is present and doesn't open "
                              "(sealed under another root secret, or changed); it's left as it "
                              "is and the board starts unconfigured");
     // Nothing saved (a new board, after `config reset`, or records this firmware can't read):
@@ -237,13 +246,16 @@ void settings_init(void) {
         config_store_t open_board = store;
         open_board.refuse_plain = false;
         if (config_stored(&open_board) == CONFIG_STORED_PLAIN)
-            log_msg(SOS_LOG_WARNING, "config: an unsealed configuration record is in flash and "
+            log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
+                    "config: an unsealed configuration record is in flash and "
                                      "was REFUSED: this is a console-only board");
-        log_msg(SOS_LOG_NOTICE, "config: none saved; run 'setup' on the console (a console-only "
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+                "config: none saved; run 'setup' on the console (a console-only "
                                 "board can't be provisioned from a file)");
         return;
     }
-    log_msg(SOS_LOG_NOTICE, "config: none saved; run 'setup' on the console (or provision the board)");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+            "config: none saved; run 'setup' on the console (or provision the board)");
 }
 
 sos_config_t *settings(void) {
@@ -253,17 +265,18 @@ sos_config_t *settings(void) {
 bool settings_save(void) {
     ensure_owner_secret();
     if (!config_save(&store, &live)) {
-        log_msg(SOS_LOG_ERR, "config: saving to flash failed");
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: saving to flash failed");
         return false;
     }
-    log_msg(SOS_LOG_INFO, "config: saved");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_INFO, "config: saved");
     return true;
 }
 
 bool settings_reset(void) {
     bool ok = persistent && config_erase(&store);
     config_defaults(&live);
-    log_msg(SOS_LOG_NOTICE, "config: reset%s", ok ? "" : " (erasing the saved one failed)");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
+            "config: reset%s", ok ? "" : " (erasing the saved one failed)");
     return ok;
 }
 

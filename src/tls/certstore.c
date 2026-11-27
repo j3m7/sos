@@ -116,9 +116,11 @@ static void note(certs_state_t st, const char *why, unsigned loaded) {
         return;
     last = (int)st;
     if (st == ST_OK)
-        log_msg(SOS_LOG_NOTICE, "tls: using %u root certificate(s) from %s", loaded, CERTSTORE_FILE);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+                "tls: using %u root certificate(s) from %s", loaded, CERTSTORE_FILE);
     else if (st != ST_NOT_APPROVED)
-        log_msg(SOS_LOG_WARNING, "tls: %s %s (%s); built-in roots only", CERTSTORE_FILE,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "tls: %s %s (%s); built-in roots only", CERTSTORE_FILE,
                 state_text[st], why ? why : "");
 }
 
@@ -259,7 +261,7 @@ static void on_approve(shell_t *sh, char *answer, void *arg) {
     memcpy(settings()->certs_hash, pending_hash, sizeof(pending_hash));
     if (!settings_save())
         shell_printf(sh, "error: saving to flash failed; the approval will be lost at reboot\n");
-    log_msg(SOS_LOG_NOTICE, "config: %s approved for TLS", CERTSTORE_FILE);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "config: %s approved for TLS", CERTSTORE_FILE);
     shell_printf(sh, "approved: TLS uses these roots from the next connection\n");
 }
 
@@ -361,6 +363,6 @@ void certstore_command(shell_t *sh, char *args) {
     memset(settings()->certs_hash, 0, CONFIG_CERTS_HASH_LEN);
     if (!settings_save())
         shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
-    log_msg(SOS_LOG_NOTICE, "config: %s no longer trusted", CERTSTORE_FILE);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "config: %s no longer trusted", CERTSTORE_FILE);
     shell_printf(sh, "forgotten: TLS uses the built-in roots only\n");
 }

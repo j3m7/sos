@@ -7,6 +7,12 @@
 //
 // Messages logged in interrupt context are only stored; log_flush(), called from the main loop,
 // prints them. Platform access goes through log_hooks_t, so the module runs in host unit tests.
+//
+// Each message has a facility, OR-ed into the priority as in syslog:
+// log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "console: logged in"). The facility says which log a
+// message belongs to (#104): kern, auth (logins and every configuration change), daemon (network
+// and background services) or user (scripts and `logger`). A message without one (facility 0) is
+// a caller still to be tagged; it ends up in the last-resort log, never in several.
 
 #ifndef SOS_LOG_H
 #define SOS_LOG_H
@@ -22,6 +28,17 @@
 #define SOS_LOG_NOTICE  5
 #define SOS_LOG_INFO    6
 #define SOS_LOG_DEBUG   7
+#define SOS_LOG_LEVEL_MASK 0x07
+
+// Facilities (bits 3-6 of the priority). Not syslog's numbers: 0 is "none", so an untagged
+// message is told apart from a kern one.
+#define SOS_LOG_NONE    (0 << 3)
+#define SOS_LOG_KERN    (1 << 3)    // boot, resets, faults, glitch detector, root secret, memory
+#define SOS_LOG_AUTH    (2 << 3)    // logins (console and SSH), passwords, configuration changes
+#define SOS_LOG_DAEMON  (3 << 3)    // Wi-Fi, SSH server, time, HTTP/TLS, SD card, chat
+#define SOS_LOG_USER    (4 << 3)    // Lua scripts, `logger`
+#define SOS_LOG_FACILITY_MASK 0x78
+#define SOS_LOG_FACILITIES 5        // facility numbers 0 .. SOS_LOG_FACILITIES - 1
 
 #define LOG_HISTORY_SIZE 4096   // bytes of RAM history (oldest messages are dropped first)
 #define LOG_LINE_MAX     160    // longer messages are truncated
@@ -41,8 +58,10 @@ typedef struct {
 
 void log_init(const log_hooks_t *hooks);
 
-void log_msg(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void log_vmsg(int level, const char *fmt, va_list ap);
+// `priority`: a facility OR-ed with a level. Levels below SOS_LOG_ERR (syslog's emerg, alert,
+// crit) count as errors.
+void log_msg(int priority, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void log_vmsg(int priority, const char *fmt, va_list ap);
 
 // Print stored messages the console hasn't shown yet. Thread context; call from the main loop.
 // Does nothing while hooks->hold() is true.
@@ -67,9 +86,29 @@ int log_history_level(void);
 const char *log_level_name(int level);
 int log_level_parse(const char *name);          // -1 if unknown
 
+// "none", "kern", "auth", "daemon", "user" for a facility (SOS_LOG_AUTH etc., level bits ignored);
+// or NULL. Parsing gives the facility value, or -1 if unknown.
+const char *log_facility_name(int facility);
+int log_facility_parse(const char *name);
+
 // Iterate over the history, oldest first. Start with *cursor = 0; each call copies the next
-// message (with timestamp, without the trailing newline) and returns true, or returns false when
-// there are no more. Messages overwritten since the previous call are skipped.
-bool log_history_next(uint32_t *cursor, char *buf, size_t buflen);
+// message (with timestamp, without the trailing newline), sets *priority (facility | level) if
+// it isn't NULL, and returns true, or returns false when there are no more. Messages overwritten
+// since the previous call are skipped.
+bool log_history_next(uint32_t *cursor, char *buf, size_t buflen, int *priority);
+
+// A rate limit for messages from outside the firmware (scripts, `logger`), so a loop can't push
+// everything else (failed logins, warnings) out of the history: at most `per_sec` messages in
+// each second. Zero-initialize; one per source.
+typedef struct {
+    uint64_t window_us;         // start of the current second
+    unsigned count;             // messages let through in it
+    unsigned dropped;           // refused since log_quota_dropped() last took the count
+} log_quota_t;
+
+// True if one more message may go in now; false (and counted as dropped) if not.
+bool log_quota_take(log_quota_t *q, unsigned per_sec);
+// The number dropped since the last call, and resets it: report it once a message goes through.
+unsigned log_quota_dropped(log_quota_t *q);
 
 #endif

@@ -5,6 +5,7 @@
 // from interrupt context, and the RAM history.
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "core/log.h"
 #include "test.h"
@@ -60,7 +61,7 @@ static int history_count(void) {
     char buf[LOG_LINE_MAX + 1];
     uint32_t cur = 0;
     int n = 0;
-    while (log_history_next(&cur, buf, sizeof(buf)))
+    while (log_history_next(&cur, buf, sizeof(buf), NULL))
         n++;
     return n;
 }
@@ -98,7 +99,7 @@ TEST(levels_and_tags) {
     CHECK_EQ(history_count(), 3);
     char buf[LOG_LINE_MAX + 1];
     uint32_t cur = 0;
-    CHECK(log_history_next(&cur, buf, sizeof(buf)));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL));
     CHECK(!strcmp(buf, "[    1.234] error: bad"));
 }
 
@@ -170,7 +171,7 @@ TEST(long_message_truncated) {
     log_msg(SOS_LOG_NOTICE, "%s", big);
     char buf[LOG_LINE_MAX + 8];
     uint32_t cur = 0;
-    CHECK(log_history_next(&cur, buf, sizeof(buf)));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL));
     CHECK_EQ(strlen(buf), LOG_LINE_MAX);
 }
 
@@ -180,11 +181,11 @@ TEST(history_cursor_continues) {
     reset();
     log_msg(SOS_LOG_INFO, "one");
     log_msg(SOS_LOG_INFO, "two");
-    CHECK(log_history_next(&cur, buf, sizeof(buf)) && strstr(buf, "one"));
-    CHECK(log_history_next(&cur, buf, sizeof(buf)) && strstr(buf, "two"));
-    CHECK(!log_history_next(&cur, buf, sizeof(buf)));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL) && strstr(buf, "one"));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL) && strstr(buf, "two"));
+    CHECK(!log_history_next(&cur, buf, sizeof(buf), NULL));
     log_msg(SOS_LOG_INFO, "three");
-    CHECK(log_history_next(&cur, buf, sizeof(buf)) && strstr(buf, "three"));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL) && strstr(buf, "three"));
 }
 
 TEST(history_drops_oldest_when_full) {
@@ -192,20 +193,20 @@ TEST(history_drops_oldest_when_full) {
     uint32_t cur = 0, stale;
     reset();
     log_msg(SOS_LOG_INFO, "first");
-    CHECK(log_history_next(&cur, buf, sizeof(buf)));
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL));
     stale = 0;                                  // a reader that never started
     for (int i = 0; i < 400; i++)               // ~20 bytes each: far more than the history
         log_msg(SOS_LOG_INFO, "msg %03d", i);
     int n = history_count();
     CHECK(n > 100 && n < 400);
-    CHECK(log_history_next(&stale, buf, sizeof(buf)));
+    CHECK(log_history_next(&stale, buf, sizeof(buf), NULL));
     CHECK(strstr(buf, "msg ") && !strstr(buf, "first"));   // oldest kept is a later one
-    CHECK(log_history_next(&cur, buf, sizeof(buf)));       // a stale cursor jumps forward
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL));       // a stale cursor jumps forward
     CHECK(strstr(buf, "msg "));
     // The newest message is intact.
     const char *last = NULL;
     cur = 0;
-    while (log_history_next(&cur, buf, sizeof(buf)))
+    while (log_history_next(&cur, buf, sizeof(buf), NULL))
         last = buf;
     CHECK(last && strstr(buf, "msg 399"));
 }
@@ -276,13 +277,84 @@ TEST(level_names) {
     CHECK_EQ(log_level_parse("loud"), -1);
 }
 
+TEST(facility_kept_with_each_message) {
+    reset();
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "console: logged in");
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: link lost");
+    log_msg(SOS_LOG_USER | SOS_LOG_DEBUG, "too low for the history");
+    log_msg(SOS_LOG_INFO, "untagged");
+    log_msg(SOS_LOG_KERN | 2, "crit counts as err");
+    uint32_t cur = 0;
+    char buf[LOG_LINE_MAX + 1];
+    int p = -1;
+    CHECK(log_history_next(&cur, buf, sizeof(buf), &p));
+    CHECK_EQ(p, SOS_LOG_AUTH | SOS_LOG_NOTICE);
+    CHECK(strstr(buf, "] console: logged in") != NULL);
+    CHECK(log_history_next(&cur, buf, sizeof(buf), &p));
+    CHECK_EQ(p, SOS_LOG_DAEMON | SOS_LOG_WARNING);
+    CHECK(strstr(buf, "] warning: wifi: link lost") != NULL);
+    CHECK(log_history_next(&cur, buf, sizeof(buf), &p));
+    CHECK_EQ(p, SOS_LOG_NONE | SOS_LOG_INFO);
+    CHECK(log_history_next(&cur, buf, sizeof(buf), &p));
+    CHECK_EQ(p, SOS_LOG_KERN | SOS_LOG_ERR);
+    CHECK(strstr(buf, "] error: crit counts as err") != NULL);
+    CHECK(!log_history_next(&cur, buf, sizeof(buf), &p));
+    // The facility doesn't change what the console prints, or which levels it prints.
+    CHECK(strstr(out, "console: logged in") && strstr(out, "warning: wifi: link lost"));
+    CHECK(!strstr(out, "untagged"));
+}
+
+TEST(facility_survives_wrap_around) {
+    reset();
+    for (int i = 0; i < 400; i++)
+        log_msg((i % 2 ? SOS_LOG_USER : SOS_LOG_AUTH) | SOS_LOG_INFO, "message %d", i);
+    uint32_t cur = 0;
+    char buf[LOG_LINE_MAX + 1];
+    int p, n = 0;
+    while (log_history_next(&cur, buf, sizeof(buf), &p)) {
+        int i = atoi(strstr(buf, "message ") + 8);
+        CHECK_EQ(p, (i % 2 ? SOS_LOG_USER : SOS_LOG_AUTH) | SOS_LOG_INFO);
+        n++;
+    }
+    CHECK(n > 50 && n < 400);
+}
+
+TEST(facility_names) {
+    CHECK(!strcmp(log_facility_name(SOS_LOG_NONE), "none"));
+    CHECK(!strcmp(log_facility_name(SOS_LOG_KERN), "kern"));
+    CHECK(!strcmp(log_facility_name(SOS_LOG_AUTH | SOS_LOG_ERR), "auth"));
+    CHECK(!strcmp(log_facility_name(SOS_LOG_DAEMON), "daemon"));
+    CHECK(!strcmp(log_facility_name(SOS_LOG_USER), "user"));
+    CHECK(log_facility_name(5 << 3) == NULL);
+    CHECK_EQ(log_facility_parse("auth"), SOS_LOG_AUTH);
+    CHECK_EQ(log_facility_parse("none"), SOS_LOG_NONE);
+    CHECK_EQ(log_facility_parse("user"), SOS_LOG_USER);
+    CHECK_EQ(log_facility_parse("local0"), -1);
+}
+
+TEST(quota_limits_each_second) {
+    reset();
+    log_quota_t q = {0};
+    for (int i = 0; i < 3; i++)
+        CHECK(log_quota_take(&q, 3));
+    CHECK(!log_quota_take(&q, 3));
+    CHECK(!log_quota_take(&q, 3));
+    CHECK_EQ(log_quota_dropped(&q), 2);
+    CHECK_EQ(log_quota_dropped(&q), 0);        // taken once
+    now += 999999;
+    CHECK(!log_quota_take(&q, 3));              // still the same second
+    now += 1;
+    CHECK(log_quota_take(&q, 3));               // a new one
+    CHECK_EQ(log_quota_dropped(&q), 1);
+}
+
 TEST(nothing_before_init) {
     log_init(NULL);
     log_msg(SOS_LOG_ERR, "ignored");            // must not crash
     log_flush();
     uint32_t cur = 0;
     char buf[8];
-    CHECK(!log_history_next(&cur, buf, sizeof(buf)));
+    CHECK(!log_history_next(&cur, buf, sizeof(buf), NULL));
 }
 
 TEST_MAIN(
@@ -302,5 +374,9 @@ TEST_MAIN(
     RUN(held_console_overflow_is_reported);
     RUN(logging_while_printing_does_not_recurse);
     RUN(level_names);
+    RUN(facility_kept_with_each_message);
+    RUN(facility_survives_wrap_around);
+    RUN(facility_names);
+    RUN(quota_limits_each_second);
     RUN(nothing_before_init);
 )
