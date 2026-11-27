@@ -431,24 +431,30 @@ static void line_backspace(shell_t *sh) {
 
 #define TAB_LIST_COLUMNS 80     // the terminal's width isn't known: list for the narrowest
 
-// Columns `text` takes on the terminal (it's valid UTF-8: complete.h).
-static size_t text_columns(const char *text) {
+// Columns the `len` bytes at `text` take on the terminal (valid UTF-8: complete.h).
+static size_t text_columns(const char *text, size_t len) {
     size_t cols = 0;
-    const unsigned char *p = (const unsigned char *)text;
-    while (*p) {
+    const unsigned char *p = (const unsigned char *)text, *end = p + len;
+    while (p < end) {
         unsigned n = utf8_len(*p);
         if (n <= 1) {
             cols++;
             p++;
             continue;
         }
+        if (p + n > end)                // cut short: the terminal shows nothing of it yet
+            break;
         uint32_t cp = p[0] & (0x7f >> n);
-        for (unsigned i = 1; i < n && p[i]; i++)
+        for (unsigned i = 1; i < n; i++)
             cp = cp << 6 | (p[i] & 0x3f);
         cols += (size_t)charwidth(cp);
         p += n;
     }
     return cols;
+}
+
+static char ascii_lower(char c) {
+    return c >= 'A' && c <= 'Z' ? (char)(c + 'a' - 'A') : c;
 }
 
 typedef struct {
@@ -468,12 +474,12 @@ static void tab_collect(const char *word, char end, void *arg) {
         m->first_end = end;
         m->common = n;
     } else {
-        size_t i = 0;
-        while (i < m->common && word[i] == m->first[i])
+        size_t i = 0;               // file names match in any ASCII case (complete.h)
+        while (i < m->common && ascii_lower(word[i]) == ascii_lower(m->first[i]))
             i++;
         m->common = i;
     }
-    size_t cols = text_columns(word) + (end == '/');
+    size_t cols = text_columns(word, n) + (end == '/');
     if (cols > m->widest)
         m->widest = cols;
 }
@@ -496,7 +502,7 @@ static void tab_print(const char *word, char end, void *arg) {
     write_out(l->sh, word, strlen(word));
     if (end == '/')
         write_out(l->sh, "/", 1);
-    l->last = text_columns(word) + (end == '/');
+    l->last = text_columns(word, strlen(word)) + (end == '/');
 }
 
 static void line_tab(shell_t *sh, bool again) {
@@ -527,6 +533,15 @@ static void line_tab(shell_t *sh, bool again) {
             return;
         }
         history_edited(sh);
+        // A file name typed in another case: write it again in the name's own. The bytes and
+        // the columns are the same (only ASCII letters differ), so it covers what was there.
+        if (memcmp(sh->line + start, m.first, typed)) {
+            size_t cols = text_columns(sh->line + start, typed);
+            for (size_t i = 0; i < cols; i++)
+                write_out(sh, "\b", 1);
+            memcpy(sh->line + start, m.first, typed);
+            write_out(sh, sh->line + start, typed);
+        }
         memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
         if (whole)
             sh->line[sh->line_len + add - 1] = m.first_end;

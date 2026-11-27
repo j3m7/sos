@@ -29,10 +29,13 @@ translation (`crlf`), and `admin` (true for the console only).
   are offered only on an admin channel, `SHELL_HIDDEN` ones never. Nothing at a question.
   After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
   `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
-  main loop waits) for the directory named up to the last `/`, and offers its entries that
-  start with the rest; a directory ends with `/` instead of a space, and `SHELL_DIR` keeps to
-  directories. Names that aren't valid UTF-8 from U+0021 up (spaces, controls, C1 controls)
-  are never offered, so a file name can't send the terminal an escape sequence.
+  main loop waits) for the directory named up to the last `/`, and offers its entries that start
+  with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
+  name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
+  `SHELL_DIR` keeps to directories. Names that aren't valid UTF-8 from U+0021 up (spaces of
+  any kind, controls, C1 controls) or hold what `termtext_hidden()` names (bidi controls,
+  invisible characters) are never offered: a file name can't send the terminal an escape
+  sequence, nor look like another.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop

@@ -66,6 +66,21 @@ static bool name_ok(const char *name) {
     return true;
 }
 
+// Does `name` start with prefix[0..n), ignoring the case of ASCII letters? FAT matches names
+// that way too (README.TXT is readme.txt); other letters must be the same.
+static bool starts_with_any_case(const char *name, const char *prefix, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char a = (unsigned char)name[i], b = (unsigned char)prefix[i];
+        if (a >= 'A' && a <= 'Z')
+            a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z')
+            b += 'a' - 'A';
+        if (a != b || !a)
+            return false;
+    }
+    return true;
+}
+
 typedef struct {
     const char *prefix;
     size_t plen;
@@ -77,8 +92,8 @@ typedef struct {
 
 static void take_entry(const char *name, bool is_dir, void *arg) {
     entries_t *e = arg;
-    if ((e->dirs_only && !is_dir) || strncmp(name, e->prefix, e->plen) || !name_ok(name) ||
-        strlen(name) > SHELL_LINE_MAX)  // couldn't go on the line anyway
+    if ((e->dirs_only && !is_dir) || !starts_with_any_case(name, e->prefix, e->plen) ||
+        !name_ok(name) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
         return;
     e->fn(name, is_dir ? '/' : ' ', e->arg);
     e->count++;

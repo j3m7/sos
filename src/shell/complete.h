@@ -48,7 +48,8 @@ typedef struct {
 // (only directories with SHELL_DIR), and *start is just after that '/'; otherwise *start is
 // where the last word begins.
 //
-// Calls `fn` with each match that starts with the text from *start, and returns how many.
+// Calls `fn` with each match that starts with the text from *start (file names ignoring the
+// case of ASCII letters, as FAT does; words exactly), and returns how many.
 // Words: not SHELL_HIDDEN ones, nor SHELL_ADMIN ones unless `admin`. File names: only those
 // that can be typed as one word and shown as they are (valid UTF-8; no spaces of any kind,
 // control characters, C1 controls, nor what termtext_hidden() names) and fit on a line
