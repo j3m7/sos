@@ -559,7 +559,8 @@ runs, 384 bytes of stack for `trng`.
 
 ### 9.3 Phase 3 design: checks of stored state
 
-Status: design, for review before the code (#233). Phase 3 adds six background checks that read
+Status: design approved by Reviewer (#254), with the `config` cases of a plain record split as
+below. Phase 3 adds six background checks that read
 what the board keeps in flash, in OTP and on the card, and compare it with what the running
 board uses. §9.4 will record what the build settles.
 
@@ -618,10 +619,11 @@ record, CRC right, on a store that refuses plain), `unopened` (sealed, CRC right
 | Status | When | Text (dev-1 or example) |
 |---|---|---|
 | PASS | in use: sealed; other slot empty or an older sealed record | `rev 28 sealed, in use (slot B); slot A rev 27 sealed` |
-| WARN | in use: plain (an open board; `settings_init()` seals it at boot, so one still plain means sealing failed) | `rev 3 plain, in use (slot A): not sealed yet (see dmesg)` |
+| WARN | in use: plain, the other slot not sealed (an open board; `settings_init()` seals a plain record at boot, so one still plain means that sealing failed: its fix is the sealing at the next boot, see dmesg) | `rev 3 plain, in use (slot A): not sealed yet (see dmesg)` |
+| WARN | in use: plain, with a sealed record in the other slot. `scan()` takes a plain record before a sealed one whatever the sequence numbers, so this is a plain record written after the sealing: older firmware after a downgrade, provisioning, or a seal interrupted before the plain copy was erased | `rev 3 plain, in use (slot A): written after sealing (downgrade, provisioning or an interrupted seal)` |
 | WARN | in use: sealed; other slot `junk`, `bad-header`, `bad-crc` or `invalid` | `rev 28 sealed, in use (slot B); slot A damaged (bad CRC): no fallback` |
 | WARN | in use: sealed; other slot `unopened` | `...; slot A sealed under another key (old root secret?)` |
-| WARN | other slot `refused` or plain beside a sealed record (the scrub didn't erase it) | `...; slot A: plain record left beside the sealed one` |
+| WARN | in use: sealed; other slot `refused`. Only on a store that refuses plain records (a console-only board): on one that accepts them, the plain record would be the one in use (above). `config_scrub_plain()` erases it at boot, so one still there means that erase failed | `...; slot A: refused plain record left (console-only)` |
 | WARN | nothing in use, a `refused` record (console-only board) | `plain record refused (console-only board); running unconfigured` |
 | FAIL | nothing in use, a slot `unopened` | `sealed record doesn't open (another root secret?); running unconfigured` |
 | FAIL | nothing in use, a slot damaged (any damaged kind) | `slot A damaged (bad CRC), no usable record; running on defaults` |
@@ -679,7 +681,9 @@ read again: `rootsecret` uses its boot-time result.
 the board, so it isn't used. For each boot key row the check takes the raw 24 bits, undoes the
 bit-repair flip (both BRBP bits set: invert all 24), recomputes the 6 parity bits of the 16 data
 bits (the OTP macro's Hamming code, as picotool's `otp_calculate_ecc()` computes it), and
-compares. A blank row (all zero) is consistent. Pure and host tested (`statecheck.c`), with known
+compares. It also compares the 16 data bits with what the unguarded corrected alias
+(`otpread_ecc()`, which doesn't fault) returns for the same row: on a clean row they agree, and
+a row the hardware corrected shows as a difference. A blank row (all zero) is consistent. Pure and host tested (`statecheck.c`), with known
 rows from picotool's code. A row that reads as all ones (no permission) is reported, never
 judged.
 
@@ -717,7 +721,7 @@ count; stray cleared bits after a track's count; cleared beyond attempts. And `f
 | Status | When | Text |
 |---|---|---|
 | PASS | erased (never counted: no password check has started since it was made) | `no wrong passwords recorded` |
-| PASS | marker, count 0 | `0 wrong passwords; 37 of 14336 checks used` (dev-1: some small number) |
+| PASS | marker, count 0 | `0 wrong passwords; 37 of 14336 checks used` (dev-1: some small number; 14336 is `FAILCOUNT_CAPACITY`, 7 pages of 256 bytes of bits, from `failcount.h`, and the code prints that constant) |
 | WARN | count above 0: someone typed wrong passwords since the last right one (a check in progress counts too) | `3 wrong passwords since the last right one` |
 | WARN | the RAM count is higher than flash's (flash writes didn't take) | `2 counted in RAM only: flash writes failed` |
 | WARN | neither marker nor erased: reads as 0, and the next check writes a fresh sector | `no marker: counts as 0 until the next password check` |
@@ -742,6 +746,11 @@ check hashes the page again and compares. It never opens the record.
 | FAIL | the page changed since the key was loaded (nothing but `hostkey.c` writes it) | `stored record changed since boot; sshd serves the key in RAM` |
 | FAIL | no key, and `hostkey.c` gave up (no root secret, or the store failed) | `no host key (see dmesg); sshd isn't running` |
 | SKIP | the board isn't set up (no owner secret), or no key asked for yet | `board not set up: no host key yet` |
+
+Every path that rewrites the page goes through `hostkey.c`, which updates or clears the digest:
+a key made or taken over in `hostkey_get()` (setup, or the first SSH start after it) records the
+page after it is stored; `hostkey_owner_gone()` (`config reset`, which does not reboot) and
+`hostkey_erase()` clear it, and the check is then SKIP until a new key is in use.
 
 The comparison #233 asked for ("the record opens and its public key matches") would mean opening
 the record into a second buffer; the digest of the page as loaded answers the same question (is
@@ -778,7 +787,7 @@ compare against.
 | PASS | roots approved and the file matches | `...; /certs/roots.pem matches its approval` |
 | WARN | approved, and the file differs, is missing or is over 64 KB | `roots.pem changed since approval: built-in roots only` |
 | WARN | `/var/log` missing or not a directory | `/var/log missing: log files aren't written` |
-| WARN | `/certs` exists but isn't a directory | `/certs is not a directory` |
+| WARN | `/certs` exists but isn't a directory | `/certs is a file: remove it with rm on the console` (`/certs` is protected, so only the console's `rm` can) |
 | WARN | an encrypted card is in and doesn't open with this board's key | `encrypted card doesn't open with this board's key; not mounted` |
 | SKIP | the yielding cases above | `card unmounted by hand`, `sd check running`, `files open; next run` |
 
