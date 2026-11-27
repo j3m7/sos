@@ -19,4 +19,9 @@ void wdog_feed(void);
 // True if the last reset was a watchdog timeout (not a `reboot` command or power-on).
 bool wdog_caused_reset(void);
 
+// Restart now, as `reboot` and Lua's sos.reboot() do: what the log files haven't written yet goes
+// to the card first. Doesn't return. The caller logs why. The next boot doesn't count it as a
+// watchdog timeout (wdog_caused_reset()), so /autorun.lua runs after it.
+void wdog_reboot(void) __attribute__((noreturn));
+
 #endif

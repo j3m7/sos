@@ -24,6 +24,8 @@
 #define LUA_REQ_DATA   4096         // payload per request (file data, directory entries)
 #define LUA_OUT_SIZE   2048         // output ring buffer
 #define LUA_LINE_MAX   256          // one line at the interactive prompt (SHELL_LINE_MAX)
+#define LUA_REBOOT_MIN_S 600        // sos.reboot() is refused before the board has been up this long
+#define LUA_REBOOT_WHY_MAX 100      // the most of sos.reboot()'s reason that's logged
 
 // --- one script at a time -------------------------------------------------------------------
 
@@ -73,6 +75,8 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
+                                    // error (up for less than LUA_REBOOT_MIN_S)
     LR_INFO,                        // offset: a lua_health_table_t, arg: its argument (sos.dmesg's
                                     // cursor) -> data/len: lua_info.h records
     // HTTPS (net/http.h), one request at a time, answered from the main loop once there's

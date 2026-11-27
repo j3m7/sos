@@ -76,6 +76,11 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   `/autorun.lua` if the card has one, unless the last reset was a fault (`fault_last()`) or the
   watchdog (`wdog_caused_reset()`): a script that brings the device down then doesn't run again
   at every boot.
+- **`sos.reboot`** (`LR_REBOOT`): `serve_reboot()` logs the script's tag and reason (kern, so
+  it's in the same log as `reboot`) and restarts with `wdog_reboot()`, which `reboot` uses too.
+  It refuses in the first `LUA_REBOOT_MIN_S` (10 minutes) after boot, logging the refusal: a
+  normal restart doesn't count as a crash, so `/autorun.lua` runs again, and without the wait a
+  script that reboots at once would loop.
 - **The prompt** (`lua` alone) is a question (`shell_ask_eof`) whose answers are lines of Lua.
   Each line runs as a short shell job (`repl_step`): it hands the line to core 1
   (`lua_job.repl_line`, then `repl_cmd`), shows the output, and asks again (`>` or `>>`).
