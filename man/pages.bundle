@@ -290,6 +290,64 @@ DESCRIPTION
 
 SEE ALSO
     uptime, temp, power, version
+@@ grep
+NAME
+    grep - only the lines of a command's output that hold a text
+
+SYNOPSIS
+    <command> | grep [-v] [-i] [-n] <text>
+
+DESCRIPTION
+    Passes on the lines of the command's output that hold the text, and drops
+    the others ('dmesg | grep wifi', 'cat /log/sos.log | grep error | more').
+    The text is a fixed string, not a pattern: no regular expressions and no
+    wildcards. It is everything after the options, spaces inside it kept
+    ('grep no route' looks for "no route"), at most 64 bytes.
+
+    -v    the lines without the text instead
+    -i    upper and lower case alike (ASCII letters only)
+    -n    each line starts with its number in the output and a ':'
+
+    Options can be joined ('-vn'). A word starting with '-' that isn't made of
+    these letters begins the text ('grep -x' looks for "-x").
+
+    Lines are passed on whole, as soon as each one ends; a last line without
+    a newline gets one. A line longer than 512 bytes is matched in pieces of
+    512 bytes, each one on its own (and shown as a line of its own); with -n
+    the pieces share the line's number.
+
+NOTES
+    grep works only after a '|': typed on its own it says so. A '|' starts a
+    stage only when a stage name follows it (grep, head, tail, wc, more), so
+    the text may hold a '|' that doesn't ('grep a|b'). Error messages of the
+    command go through grep like its other output. More about pipes in
+    'man more'.
+
+SEE ALSO
+    head, tail, wc, more
+@@ head
+NAME
+    head - the first lines of a command's output, then stop it
+
+SYNOPSIS
+    <command> | head [<n>]
+
+DESCRIPTION
+    Passes on the first n lines of the command's output (10 without a
+    number; 1 to 999999) and drops the rest. Once it has them the command is
+    stopped at once, as Ctrl-C would stop it but without '^C': 'cat big.log |
+    head 3' doesn't read the rest of the file. A command that isn't a job
+    (dmesg, help) runs to its end, its further output dropped.
+
+    Stages after it still get their turn: 'dmesg | head 5 | wc' counts the
+    five lines.
+
+NOTES
+    head works only after a '|': typed on its own it says so. More about
+    pipes in 'man more'.
+
+SEE ALSO
+    tail, grep, wc, more
 @@ help
 NAME
     help - list the commands this channel may use
@@ -411,8 +469,12 @@ DESCRIPTION
     Any command's output can be read that way too: end the line with '| more'
     ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
+    Pipes: a command's output can go through grep, head, tail and wc on its
+    way, each after a '|' ('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep
+    error | more'). They work only after a '|'; 'man more' says how.
+
 SEE ALSO
-    help, man, logout, passwd, setup, edit, more
+    help, man, logout, passwd, setup, edit, more, grep
 @@ key
 NAME
     key - the SSH public keys the board trusts
@@ -701,11 +763,36 @@ NOTES
     the pager). A command with no output says so instead of opening the pager.
     Messages from other shells wait until the pager is left.
 
+PIPES
+    A command's output can go through filters on its way to the screen or to
+    the pager, one after another, each after a '|':
+
+        dmesg | grep wifi
+        cat /log/sos.log | grep -i error | tail 20 | more
+        help | wc
+
+    The filters are grep (lines with a text), head (the first lines; it
+    stops the command once it has them), tail (the last lines) and wc
+    (counts); see their pages. 'more' can only come last, and at most four
+    filters fit in a line. The output streams through: grep shows lines as
+    the command prints them, and with '| more' only what the filters let
+    through is kept, so 'cat big.log | grep error | more' isn't cut at 32 KB
+    unless the matches are. When the 32 KB are full the command is stopped,
+    as head stops it.
+
+    A '|' starts a stage only when a stage name follows it (grep, head,
+    tail, wc, more); any other '|' is part of the command's text ('ls |
+    morex' runs ls with those words). A stage that doesn't parse ('x | grep',
+    'x | head y') prints its usage and the command doesn't run. Ctrl-C drops
+    what the filters hold (tail's lines, wc's count); a command that asks a
+    question or draws its own screen runs as if there were no pipe. Tab
+    completes the stage names after '| ', and grep's options.
+
     'man <topic>' shows a manual page in this viewer. Log messages are held on
     the console while it runs there, as for the editor.
 
 SEE ALSO
-    edit, cat, man
+    edit, cat, man, grep, head, tail, wc
 @@ mv
 NAME
     mv - move or rename a file or directory
@@ -1014,6 +1101,29 @@ DESCRIPTION
 
 SEE ALSO
     key, who, config, net
+@@ tail
+NAME
+    tail - the last lines of a command's output
+
+SYNOPSIS
+    <command> | tail [<n>]
+
+DESCRIPTION
+    Shows the last n lines of the command's output (10 without a number; 1 to
+    999999) once the command has finished ('ls | tail 3', 'dmesg | tail').
+    It keeps at most 4 KB: when the lines asked for are longer than that, it
+    shows the last whole lines that fit, and says nothing about it. A single
+    line longer than 4 KB shows its end. A last line without a newline is
+    counted as a line, as it came.
+
+    Ctrl-C while the command runs drops what tail holds: nothing is shown.
+
+NOTES
+    tail works only after a '|': typed on its own it says so. More about
+    pipes in 'man more'.
+
+SEE ALSO
+    head, grep, wc, more
 @@ temp
 NAME
     temp - the chip's temperature, and the lowest and highest since boot
@@ -1224,6 +1334,26 @@ DESCRIPTION
 
 SEE ALSO
     chat, who
+@@ wc
+NAME
+    wc - count the lines, words and bytes of a command's output
+
+SYNOPSIS
+    <command> | wc
+
+DESCRIPTION
+    Prints, once the command has finished, three numbers: the newlines, the
+    words and the bytes of its output ('help | wc', 'ls | wc'), counted as
+    Unix wc counts them: a word is a run of anything but spaces, tabs and
+    line breaks, and bytes are bytes, not characters. Ctrl-C while the command
+    runs drops the count.
+
+NOTES
+    wc works only after a '|': typed on its own it says so. More about pipes
+    in 'man more'.
+
+SEE ALSO
+    grep, head, tail, more
 @@ who
 NAME
     who - who is logged in, and who is in the chat

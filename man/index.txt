@@ -9,6 +9,6 @@ Time and TLS: time nts tls
 HTTPS: http
 Files and SD card: ls cd pwd cat cp mv rm mkdir echo sd
 Editor: edit
-Pager: more
+Pager and pipes: more grep head tail wc
 Manual pages: man
 Lua: lua

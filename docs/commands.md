@@ -55,6 +55,10 @@ Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a scre
 'man <topic>' shows a page in the same viewer. Any command's output can be read that way too: end
 the line with '| more' ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
+Pipes: a command's output can go through grep, head, tail and wc on its way, each after a '|'
+('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep error | more'). They work only after a '|'; 'man
+more' says how.
+
 ## System
 
 | Command | Where | What it does |
@@ -137,11 +141,15 @@ the line with '| more' ('dmesg | more', 'wifi stats | more'); the pager takes up
 |---|---|---|
 | `edit <file>` | any | full-screen text editor ([page](../man/edit.txt)) |
 
-## Pager
+## Pager and pipes
 
 | Command | Where | What it does |
 |---|---|---|
 | `more <file>`<br>`<command> \| more` | any | read a file a screen at a time, whatever its size ([page](../man/more.txt)) |
+| `<command> \| grep [-v] [-i] [-n] <text>` | any | only the lines of a command's output that hold a text ([page](../man/grep.txt)) |
+| `<command> \| head [<n>]` | any | the first lines of a command's output, then stop it ([page](../man/head.txt)) |
+| `<command> \| tail [<n>]` | any | the last lines of a command's output ([page](../man/tail.txt)) |
+| `<command> \| wc` | any | count the lines, words and bytes of a command's output ([page](../man/wc.txt)) |
 
 ## Manual pages
 

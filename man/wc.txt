@@ -1,0 +1,19 @@
+NAME
+    wc - count the lines, words and bytes of a command's output
+
+SYNOPSIS
+    <command> | wc
+
+DESCRIPTION
+    Prints, once the command has finished, three numbers: the newlines, the
+    words and the bytes of its output ('help | wc', 'ls | wc'), counted as
+    Unix wc counts them: a word is a run of anything but spaces, tabs and
+    line breaks, and bytes are bytes, not characters. Ctrl-C while the command
+    runs drops the count.
+
+NOTES
+    wc works only after a '|': typed on its own it says so. More about pipes
+    in 'man more'.
+
+SEE ALSO
+    grep, head, tail, more
