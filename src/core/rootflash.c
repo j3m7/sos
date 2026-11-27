@@ -12,6 +12,7 @@
 #include <wolfssl/wolfcrypt/random.h>
 
 #include "core/flashop.h"
+#include "core/health.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootsecret.h"
@@ -59,8 +60,17 @@ static bool store_erase(void *ctx) {
     return usable && flashop_run(do_flash, &job);
 }
 
+// Asked only when the secret is made (rootsecret_ensure() on a fresh board): refused while a
+// health check holding HEALTH_GATE_KEYS fails. The board then has no root secret, and the
+// console's rescue state names the check (health_refusal(), shell.c). Reading an existing
+// secret is never gated.
 static bool store_random(void *ctx, uint8_t *out, size_t len) {
     (void)ctx;
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    if (held) {
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "rootsecret: not made: health check %s failed", held);
+        return false;
+    }
     WC_RNG rng;
     if (wc_InitRng(&rng) != 0)
         return false;
