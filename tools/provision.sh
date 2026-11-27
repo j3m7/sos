@@ -22,8 +22,9 @@
 #
 #   -n  build the image and say where it would go, but don't write it
 #   -s  the board's serial (16 hex digits, as `version` and `picotool info` show it); default
-#       $SOS_FLASH_SERIAL, the variable `ninja flash` uses. Without one, picotool takes the
-#       board that is attached, so have only that one plugged in
+#       $SOS_FLASH_SERIAL, the variable `ninja flash` uses. Required when this machine has a
+#       flash key list (see tools/flash.sh), which means it works with more than one board.
+#       Without one, picotool takes the board that is attached
 #   -f  flash size in bytes (default 4194304, the Pico 2 W)
 #   -w  where to put the tool and the image (default: a temporary directory)
 #   provision.conf  default: $SOS_PROVISION_FILE, or provision.conf in the source tree
@@ -51,6 +52,15 @@ ser=() board="the board on USB"
 if [[ -n $serial ]]; then
     [[ $serial =~ ^[0-9A-F]{16}$ ]] || { echo "not a board serial (16 hex digits): $serial" >&2; exit 2; }
     ser=(--ser "$serial") board="board $serial"
+else
+    keys=${SOS_FLASH_KEYS:-${XDG_CONFIG_HOME:-$HOME/.config}/sos/flash-keys}
+    if [[ -e $keys ]]; then
+        echo "REFUSED: name the board: -s <serial> or SOS_FLASH_SERIAL=<serial>." >&2
+        echo "  This machine has a flash key list ($keys)," >&2
+        echo "  so it works with more than one board. \`version\` on the board's console and" >&2
+        echo "  \`picotool info\` show the serial." >&2
+        exit 3
+    fi
 fi
 
 if [[ -z $work ]]; then

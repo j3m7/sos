@@ -106,7 +106,8 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
 `ninja flash` (`cmake --build --preset debug --target flash`) loads `build/sos.bin` over USB
 with `tools/flash.sh`. Set `SOS_FLASH_SERIAL` to a board's serial number (`version` on its
 console, or `picotool info`) to say which board; with a key list (below) it is required.
-`tools/provision.sh` (`ninja provision`) writes to the same board when it is set.
+`tools/provision.sh` (`ninja provision`) writes to the same board when it is set, and with a
+key list it refuses to run without it.
 
 A board with secure boot starts only firmware signed with a key whose hash is in its
 one-time-programmable memory. Flash it anything else and it doesn't start: it waits in the USB

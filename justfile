@@ -9,7 +9,6 @@
 # Writing OTP memory is deliberately not a recipe: it is a hand-run procedure (docs/otp/).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set positional-arguments := false
 
 # List the recipes
 default:
@@ -58,22 +57,22 @@ flash serial="" dir="build":
     [[ -z {{ quote(serial) }} ]] || export SOS_FLASH_SERIAL={{ quote(serial) }}
     tools/flash.sh -n {{ quote(dir / "sos.bin") }}
     read -rp "Flash {{ dir }}/sos.bin to board ${SOS_FLASH_SERIAL:-(whichever is on USB)}? [y/N] " answer
-    [[ $answer == [yY]* ]] || { echo "not flashed"; exit 1; }
+    [[ $answer =~ ^([yY]|[yY][eE][sS])$ ]] || { echo "not flashed"; exit 1; }
     tools/flash.sh {{ quote(dir / "sos.bin") }}
 
 # Build the configuration record and say where it would go; writes nothing
 provision-check serial="" file="":
     tools/provision.sh -n {{ if serial != "" { "-s " + quote(serial) } else { "" } }} {{ quote(file) }}
 
-# Ask, then replace a board's configuration (serial: default $SOS_FLASH_SERIAL; file: provision.conf)
+# Show where it goes, ask, then replace a board's configuration (serial: default $SOS_FLASH_SERIAL; file: provision.conf)
 provision serial="" file="":
     #!/usr/bin/env bash
     set -euo pipefail
     [[ -z {{ quote(serial) }} ]] || export SOS_FLASH_SERIAL={{ quote(serial) }}
     [[ -z {{ quote(file) }} ]] || export SOS_PROVISION_FILE={{ quote(file) }}
-    board=${SOS_FLASH_SERIAL:+board ${SOS_FLASH_SERIAL^^}}
-    read -rp "Replace the saved configuration of ${board:-the only board on USB} from ${SOS_PROVISION_FILE:-provision.conf}? [y/N] " answer
-    [[ $answer == [yY]* ]] || { echo "not provisioned"; exit 1; }
+    tools/provision.sh -n
+    read -rp "Replace that board's saved configuration? [y/N] " answer
+    [[ $answer =~ ^([yY]|[yY][eE][sS])$ ]] || { echo "not provisioned"; exit 1; }
     cmake --build build --target provision
 
 # SSH hardware test, e.g. `just hw-ssh 192.168.1.20 -u me -q`
