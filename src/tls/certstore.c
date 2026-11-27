@@ -259,8 +259,14 @@ static void on_approve(shell_t *sh, char *answer, void *arg) {
         return;
     }
     memcpy(settings()->certs_hash, pending_hash, sizeof(pending_hash));
-    if (!settings_save())
-        shell_printf(sh, "error: saving to flash failed; the approval will be lost at reboot\n");
+    if (!settings_save()) {
+        if (settings_save_refused())
+            shell_printf(sh, SETTINGS_REFUSED_FMT "the approval holds only until a reboot\n",
+                         settings_save_refused());
+        else
+            shell_printf(sh, "error: saving to flash failed; the approval will be lost at "
+                             "reboot\n");
+    }
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: %s approved for TLS", CERTSTORE_FILE);
     shell_printf(sh, "approved: TLS uses these roots from the next connection\n");
 }
@@ -361,8 +367,13 @@ void certstore_command(shell_t *sh, char *args) {
         return;
     }
     memset(settings()->certs_hash, 0, CONFIG_CERTS_HASH_LEN);
-    if (!settings_save())
-        shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
+    if (!settings_save()) {
+        if (settings_save_refused())
+            shell_printf(sh, SETTINGS_REFUSED_FMT "the change holds only until a reboot\n",
+                         settings_save_refused());
+        else
+            shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
+    }
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: %s no longer trusted", CERTSTORE_FILE);
     shell_printf(sh, "forgotten: TLS uses the built-in roots only\n");
 }

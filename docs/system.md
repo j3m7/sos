@@ -63,6 +63,17 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
   RP2350 maximum is 16777 ms and `0` disables the watchdog. It pauses while a debugger halts
   the core.
 
+## Health checks
+
+SOS checks itself at boot and every minute while it runs: the last reset, the glitch detector's
+guard, both cores' stacks, free heap, the chip's temperature and the supply. `health` shows the
+latest result of each (PASS, WARN, FAIL or SKIP, with the reason), in any shell; `health run`
+and `health full` run them now, on the console only. A change of status is logged (`kern`): a
+healthy board logs only `health: boot checks ... in N ms`. A failed check refuses what depends
+on it (making keys, encrypting new data), never what only reads what is stored. Lua scripts read
+the results with `sos.health()`. See `man health` and the design,
+[`docs/design/health.md`](design/health.md).
+
 ## Chip temperature calibration
 
 `temp` reads the RP2350's own temperature sensor. Uncalibrated it is a few degrees off: the

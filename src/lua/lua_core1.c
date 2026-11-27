@@ -26,8 +26,11 @@
 #include "core/log.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
+#include "lua/lua_codec.h"
 #include "lua/lua_core1.h"
 #include "lua/lua_date.h"
+#include "lua/lua_hash.h"
+#include "lua/lua_json.h"
 #include "lua/lua_health.h"
 #include "lua/lua_info.h"
 #include "net/http.h"
@@ -487,7 +490,35 @@ static void push_stats(lua_State *L, const lua_http_stats_t *s) {
 }
 
 // The request described by the options table at index t.
-static int http_request(lua_State *L, int t) {
+// sos.http.download's file: one piece of the body, already in lua_req.data (lua_req.len bytes),
+// written to it (the first piece creates or truncates it). False if the write failed.
+static bool file_piece(const char *file, bool first) {
+    memcpy(lua_req.path, file, strlen(file) + 1);
+    lua_req.type = LR_WRITE;
+    lua_req.offset = first ? 0 : 1;
+    request();
+    return lua_req.result >= 0;
+}
+
+// A download failed: remove the file if this download wrote to it (`wrote`; a file that was there
+// before and never touched stays as it was), and return nil and `why`.
+static int drop_file(lua_State *L, const char *file, bool wrote, const char *why) {
+    char err[sizeof(lua_req.error)];
+    snprintf(err, sizeof(err), "%s", why);
+    if (wrote) {
+        memcpy(lua_req.path, file, strlen(file) + 1);
+        lua_req.type = LR_REMOVE;
+        request();
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, err);
+    return 2;
+}
+
+// The request described by the options table at index t. With `file` (an absolute path), a 2xx
+// response's body goes to that file instead of into the response, which has `size` instead of
+// `body`; another status's body comes back as usual, and the file isn't touched.
+static int http_request(lua_State *L, int t, const char *file) {
     luaL_checkstack(L, 16, NULL);
     const char *url = opt_string(L, t, "url");
     if (!url)
@@ -509,7 +540,8 @@ static int http_request(lua_State *L, int t) {
     if (!content_type)
         content_type = header_ct;
     lua_Integer timeout = opt_integer(L, t, "timeout", 0, 1, 600000);
-    lua_Integer max_body = opt_integer(L, t, "max_body", HTTP_LUA_BODY_MAX, 0, 0x7fffffff);
+    // -1: not given. Then a body in memory stops at HTTP_LUA_BODY_MAX, and a file has no limit.
+    lua_Integer max_body = opt_integer(L, t, "max_body", -1, 0, 0x7fffffff);
 
     http_opts_t o = {
         .method = method,
@@ -532,6 +564,7 @@ static int http_request(lua_State *L, int t) {
     luaL_setmetatable(L, HTTP_CLOSER);
     lua_toclose(L, -1);
 
+    int64_t status = lua_req.result;
     lua_createtable(L, 0, 7);
     lua_pushinteger(L, (lua_Integer)lua_req.result);
     lua_setfield(L, -2, "status");
@@ -540,6 +573,8 @@ static int http_request(lua_State *L, int t) {
     push_headers(L);
     lua_setfield(L, -2, "headers");
 
+    bool to_file = file && status >= 200 && status < 300;
+    lua_Integer limit = max_body >= 0 ? max_body : to_file ? 0x7fffffff : HTTP_LUA_BODY_MAX;
     luaL_Buffer b;
     luaL_buffinit(L, &b);
     size_t total = 0;
@@ -551,31 +586,51 @@ static int http_request(lua_State *L, int t) {
         if (lua_req.result < 0) {               // core 0 has dropped the request
             http_open = false;
             luaL_pushresult(&b);
-            return fail(L);
+            return to_file ? drop_file(L, file, total > 0, lua_req.error) : fail(L);
         }
         if (lua_req.len == 0) {                 // the end: core 0 has dropped it
             http_open = false;
             memcpy(&stats, lua_req.data, sizeof(stats));
             break;
         }
-        if (total + lua_req.len > (size_t)max_body) {   // the guard closes it
+        if (total + lua_req.len > (size_t)limit) {      // the guard closes it
             luaL_pushresult(&b);
+            const char *why = lua_pushfstring(L, "response body larger than %I bytes (max_body)",
+                                              limit);
+            if (to_file)
+                return drop_file(L, file, total > 0, why);
             lua_pushnil(L);
-            lua_pushfstring(L, "response body larger than %I bytes (max_body)", max_body);
+            lua_insert(L, -2);
             return 2;
         }
-        luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
+        if (to_file) {
+            if (!file_piece(file, total == 0)) {
+                luaL_pushresult(&b);
+                return drop_file(L, file, total > 0, lua_req.error);
+            }
+        } else {
+            luaL_addlstring(&b, (const char *)lua_req.data, lua_req.len);
+        }
         total += lua_req.len;
     }
     luaL_pushresult(&b);
-    lua_setfield(L, -2, "body");
+    if (to_file) {
+        lua_pop(L, 1);
+        lua_req.len = 0;
+        if (total == 0 && !file_piece(file, true))      // an empty body: an empty file
+            return fail(L);
+        lua_pushinteger(L, (lua_Integer)total);
+        lua_setfield(L, -2, "size");
+    } else {
+        lua_setfield(L, -2, "body");
+    }
     push_stats(L, &stats);
     return 1;
 }
 
 static int l_http_request(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    return http_request(L, 1);
+    return http_request(L, 1, NULL);
 }
 
 // A copy of the options table at index opts (or a new one), with method and url set; pushed.
@@ -601,7 +656,7 @@ static int with_options(lua_State *L, int opts, const char *method, int url) {
 }
 
 static int l_http_get(lua_State *L) {
-    return http_request(L, with_options(L, 2, "GET", 1));
+    return http_request(L, with_options(L, 2, "GET", 1), NULL);
 }
 
 static int l_http_post(lua_State *L) {
@@ -609,11 +664,25 @@ static int l_http_post(lua_State *L) {
     int t = with_options(L, 3, "POST", 1);
     lua_pushvalue(L, 2);
     lua_setfield(L, t, "body");
-    return http_request(L, t);
+    return http_request(L, t, NULL);
+}
+
+static int l_http_head(lua_State *L) {
+    return http_request(L, with_options(L, 2, "HEAD", 1), NULL);
+}
+
+// sos.http.download(url, path [, opts]): a GET whose 2xx body goes to the file at path.
+static int l_http_download(lua_State *L) {
+    luaL_checkstring(L, 1);
+    set_path(L, 2);                             // resolved now: the answers reuse lua_req.path
+    char file[LUA_PATH_MAX];
+    memcpy(file, lua_req.path, sizeof(file));
+    return http_request(L, with_options(L, 3, "GET", 1), file);
 }
 
 static const luaL_Reg http_lib[] = {
-    {"request", l_http_request}, {"get", l_http_get}, {"post", l_http_post}, {NULL, NULL},
+    {"request", l_http_request}, {"get", l_http_get},   {"post", l_http_post},
+    {"head", l_http_head},       {"download", l_http_download}, {NULL, NULL},
 };
 
 // --- timers: sos.every, sos.after, sos.cancel ---------------------------------------------------
@@ -719,6 +788,119 @@ static int run_timers(lua_State *L) {
     }
 }
 
+// --- sos.hash, sos.hmac (on core 0: lua_hash.c), sos.base64 (lua_codec.c) ---------------------
+
+static const char *const hash_names[] = {"sha1", "sha256", "sha384", "sha512", NULL};
+
+static bool hash_step(unsigned step, unsigned arg, const char *data, size_t len) {
+    lua_req.type = LR_HASH;
+    lua_req.offset = step;
+    lua_req.arg = arg;
+    memcpy(lua_req.data, data, len);
+    lua_req.len = (uint32_t)len;
+    request();
+    return lua_req.result >= 0;
+}
+
+// Hash msg (with key, for an HMAC) on core 0, 4 KB per request; push the digest, raw or in hex.
+static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len, const char *msg,
+                    size_t msg_len, bool raw) {
+    if (key_len > LUA_REQ_DATA)
+        return luaL_error(L, "key longer than %d bytes", LUA_REQ_DATA);
+    bool ok = hash_step(LUA_HASH_BEGIN, arg, key, key_len);
+    for (size_t at = 0; ok && at < msg_len; at += LUA_REQ_DATA) {
+        check_cancel(L);
+        size_t n = msg_len - at < LUA_REQ_DATA ? msg_len - at : LUA_REQ_DATA;
+        ok = hash_step(LUA_HASH_UPDATE, arg, msg + at, n);
+    }
+    check_cancel(L);
+    if (!ok || !hash_step(LUA_HASH_FINAL, arg, "", 0))
+        return fail(L);
+    size_t n = lua_req.len;
+    if (raw) {
+        lua_pushlstring(L, (const char *)lua_req.data, n);
+    } else {
+        char hex[2 * LUA_HASH_MAX];
+        lua_hex(lua_req.data, n, hex);
+        lua_pushlstring(L, hex, 2 * n);
+    }
+    return 1;
+}
+
+// sos.hash(alg, data [, raw]): the digest of data in hex (raw bytes if raw is true).
+static int l_hash(lua_State *L) {
+    unsigned alg = (unsigned)luaL_checkoption(L, 1, NULL, hash_names);
+    size_t len;
+    const char *msg = luaL_checklstring(L, 2, &len);
+    return run_hash(L, alg, "", 0, msg, len, lua_toboolean(L, 3));
+}
+
+// sos.hmac(alg, key, data [, raw]): the HMAC of data with key, in hex (raw bytes if raw).
+static int l_hmac(lua_State *L) {
+    unsigned alg = (unsigned)luaL_checkoption(L, 1, NULL, hash_names);
+    size_t key_len, len;
+    const char *key = luaL_checklstring(L, 2, &key_len);
+    const char *msg = luaL_checklstring(L, 3, &len);
+    return run_hash(L, alg | LUA_HASH_HMAC, key, key_len, msg, len, lua_toboolean(L, 4));
+}
+
+static bool url_variant(lua_State *L, int idx) {
+    static const char *const variants[] = {"std", "url", NULL};
+    return luaL_checkoption(L, idx, "std", variants) == 1;
+}
+
+// sos.base64.encode(s [, "url"])
+static int l_b64_encode(lua_State *L) {
+    size_t n;
+    const uint8_t *s = (const uint8_t *)luaL_checklstring(L, 1, &n);
+    bool url = url_variant(L, 2);
+    luaL_Buffer b;
+    char *out = luaL_buffinitsize(L, &b, lua_b64_encoded_len(n, url));
+    lua_b64_encode(s, n, out, url);
+    luaL_pushresultsize(&b, lua_b64_encoded_len(n, url));
+    return 1;
+}
+
+// sos.base64.decode(s [, "url"]): the bytes, or nil and a message if s isn't base64.
+static int l_b64_decode(lua_State *L) {
+    size_t n, len;
+    const char *s = luaL_checklstring(L, 1, &n);
+    bool url = url_variant(L, 2);
+    luaL_Buffer b;
+    uint8_t *out = (uint8_t *)luaL_buffinitsize(L, &b, n / 4 * 3 + 3);
+    if (!lua_b64_decode(s, n, out, &len, url)) {
+        lua_pushnil(L);
+        lua_pushstring(L, url ? "not URL-safe base64" : "not base64");
+        return 2;
+    }
+    luaL_pushresultsize(&b, len);
+    return 1;
+}
+
+static const luaL_Reg base64_lib[] = {
+    {"encode", l_b64_encode}, {"decode", l_b64_decode}, {NULL, NULL},
+};
+
+// --- sos.json (lua_json.c) ------------------------------------------------------------------------
+
+// sos.json.decode(s): the value, or nil and where the text stops being JSON.
+static int l_json_decode(lua_State *L) {
+    size_t n;
+    const char *s = luaL_checklstring(L, 1, &n);
+    return lua_json_decode(L, s, n);
+}
+
+// sos.json.encode(v): the text.
+static int l_json_encode(lua_State *L) {
+    luaL_checkany(L, 1);
+    lua_json_encode(L, 1);
+    return 1;
+}
+
+static const luaL_Reg json_lib[] = {
+    {"decode", l_json_decode}, {"encode", l_json_encode}, {NULL, NULL},
+};
+
 // --- read-only tables: sos.sensors, sos.mem, ... (lua_health.c on core 0) ---------------------
 
 // Ask core 0 for table `which` (with argument `arg`) and push it, or push nil and the error.
@@ -745,6 +927,7 @@ static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
 static int l_clock(lua_State *L) { return info(L, LH_CLOCK); }
+static int l_health(lua_State *L) { return info(L, LH_HEALTH); }
 
 // Core 0's figures, and the script's own allocation, which core 1 keeps.
 static int l_mem(lua_State *L) {
@@ -812,7 +995,8 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
-    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {NULL, NULL},
+    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
+    {"hmac", l_hmac},     {"health", l_health}, {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -967,6 +1151,12 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "http");
     luaL_newlib(L, wifi_lib);
     lua_setfield(L, -2, "wifi");
+    luaL_newlib(L, base64_lib);
+    lua_setfield(L, -2, "base64");
+    luaL_newlib(L, json_lib);
+    lua_json_push_null(L);
+    lua_setfield(L, -2, "null");
+    lua_setfield(L, -2, "json");
     luaL_newmetatable(L, HTTP_CLOSER);
     lua_pushcfunction(L, http_closer);
     lua_setfield(L, -2, "__close");

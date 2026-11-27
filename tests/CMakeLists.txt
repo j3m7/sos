@@ -131,6 +131,12 @@ add_executable(test_sensors test_sensors.c ${SOS_ROOT}/src/core/sensors.c)
 target_include_directories(test_sensors PRIVATE ${SOS_ROOT}/src)
 add_test(NAME sensors COMMAND test_sensors)
 
+# src/core/health.c: the health check framework (registry, results, scheduling, gates, text, the
+# Lua record) and the seed checks' judging, with the log, the clock and the Lua writer stood in for.
+add_executable(test_health test_health.c ${SOS_ROOT}/src/core/health.c)
+target_include_directories(test_health PRIVATE ${SOS_ROOT}/src)
+add_test(NAME health COMMAND test_health)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
@@ -230,7 +236,8 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
         ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${WOLFSSL_ROOT}/wolfcrypt/src/memory.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/wc_port.c ${WOLFSSL_ROOT}/wolfcrypt/src/error.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c ${WOLFSSL_ROOT}/wolfcrypt/src/hmac.c
-        ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c)
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha512.c)
     target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
     target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
         ${WOLFSSL_ROOT})
@@ -263,6 +270,13 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_pwverify PRIVATE wolfcrypt_host)
     add_test(NAME pwverify COMMAND test_pwverify)
+
+    # src/lua/lua_hash.c: sos.hash and sos.hmac's core 0 side, against published test vectors.
+    add_executable(test_lua_hash test_lua_hash.c ${SOS_ROOT}/src/lua/lua_hash.c
+        ${SOS_ROOT}/src/core/heaptag.c)
+    target_include_directories(test_lua_hash PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_hash PRIVATE wolfcrypt_host)
+    add_test(NAME lua_hash COMMAND test_lua_hash)
 else()
     message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
 endif()
@@ -331,6 +345,13 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_date PRIVATE lua_host)
     add_test(NAME lua_date COMMAND test_lua_date)
+    add_executable(test_lua_codec test_lua_codec.c ${SOS_ROOT}/src/lua/lua_codec.c)
+    target_include_directories(test_lua_codec PRIVATE ${SOS_ROOT}/src)
+    add_test(NAME lua_codec COMMAND test_lua_codec)
+    add_executable(test_lua_json test_lua_json.c ${SOS_ROOT}/src/lua/lua_json.c)
+    target_include_directories(test_lua_json PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_json PRIVATE lua_host)
+    add_test(NAME lua_json COMMAND test_lua_json)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()
@@ -341,6 +362,14 @@ add_executable(test_sdfault test_sdfault.c ${SOS_ROOT}/src/files/sdfault.c)
 target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
 add_test(NAME sdfault COMMAND test_sdfault)
+
+# src/files/fsck_plan.c: what `sd check fix` says about its plan and its repair. fsck_repair.c
+# (with the checker it needs) for fsck_plan_writes().
+add_executable(test_fsck_plan test_fsck_plan.c ${SOS_ROOT}/src/files/fsck_plan.c
+    ${SOS_ROOT}/src/files/fsck_repair.c ${SOS_ROOT}/src/files/fsck.c
+    ${SOS_ROOT}/src/files/fsck_exfat.c)
+target_include_directories(test_fsck_plan PRIVATE ${SOS_ROOT}/src)
+add_test(NAME fsck_plan COMMAND test_fsck_plan)
 
 # src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
 # ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
@@ -428,6 +457,13 @@ sos_fuzz(certbundle ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/heapta
 sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
+if (TARGET lua_host)                                # sos.json.decode: what HTTPS servers send
+    sos_fuzz(json ${SOS_ROOT}/src/lua/lua_json.c)
+    target_link_libraries(replay_json PRIVATE lua_host)
+    if (SOS_FUZZ)
+        target_link_libraries(fuzz_json PRIVATE lua_host)
+    endif()
+endif()
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
 sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
     ${SOS_ROOT}/src/files/fsck_repair.c)

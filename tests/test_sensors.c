@@ -275,6 +275,21 @@ TEST(scratch_register_form) {
     CHECK_EQ(sensors_unpack(0xffffffff, t), SENSORS_NONE);
 }
 
+// The `supply` health check's window: the lowest since its reader last restarted it.
+TEST(window_min) {
+    int min = SENSORS_NONE;
+    sensors_window_add(&min, SENSORS_NONE);        // no reading: still empty
+    CHECK_EQ(min, SENSORS_NONE);
+    sensors_window_add(&min, 4650);
+    CHECK_EQ(min, 4650);
+    sensors_window_add(&min, 4520);                // a dip is kept...
+    sensors_window_add(&min, 4660);                // ...past later, higher readings
+    sensors_window_add(&min, SENSORS_NONE);
+    CHECK_EQ(min, 4520);
+    sensors_window_add(&min, -3);                  // any int, below zero too
+    CHECK_EQ(min, -3);
+}
+
 TEST_MAIN(
     RUN(temp_datasheet_example);
     RUN(temp_conversion);
@@ -286,6 +301,7 @@ TEST_MAIN(
     RUN(format_age);
     RUN(lowest_and_highest);
     RUN(stats_shift);
+    RUN(window_min);
     RUN(parse_temp);
     RUN(log_policy_temperature);
     RUN(log_policy_supply);

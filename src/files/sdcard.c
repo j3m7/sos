@@ -26,12 +26,16 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/health.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/settings.h"
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/cardkey.h"
 #include "files/fsck.h"
+#include "files/fsck_plan.h"
+#include "files/fsck_repair.h"
 #include "files/sdcrypt.h"
 #ifdef SOS_TEST_COMMANDS
 #include "core/fault.h"
@@ -401,6 +405,9 @@ static bool checking;
 // The configuration was erased during the check (sdcard_owner_gone()): the layer is off, so the
 // check would read ciphertext. Tested before every step.
 static bool check_stop;
+// The check is `sd check fix`'s (design §10.3): it may write, and it logs as "sd: check fix:".
+static bool check_fix;
+static void check_orphaned(void);
 
 typedef enum {
     CARD_READY,         // initialized; the layer matches the card (plain, or encrypted and open)
@@ -601,6 +608,7 @@ static bool files_in_use(shell_t *sh) {
 static bool unmounted_by_hand;
 
 bool sdcard_mount_retry(void) {
+    check_orphaned();
     if (checking)
         return false;
     if (unmounted_by_hand || card.state.mounted)
@@ -620,6 +628,7 @@ uint32_t sdcard_generation(void) {
 }
 
 bool sdcard_mount(shell_t *sh) {
+    check_orphaned();
     if (checking) {
         if (sh)
             shell_printf(sh, CHECKING_MSG "\n");
@@ -685,10 +694,23 @@ static uint8_t new_key[SDCRYPT_KEY_LEN];
 static bool start_encrypted(shell_t *sh) {
     uint8_t id[SDCRYPT_ID_LEN], nonce[SDCRYPT_NONCE_LEN], key[SDCRYPT_KEY_LEN];
     uint8_t wrap[CARDKEY_LEN];
+    // A new card id and data key are random numbers, and the card is encrypted under them:
+    // refused, before anything is written, while a check holding either gate fails.
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+    if (held) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
+                "failed", held);
+        shell_printf(sh, "format refused: health check %s failed (see `health`); nothing was "
+                         "written\n", held);
+        return false;
+    }
     // The first encrypted card on a board that was never set up makes the owner secret (and
     // saves the configuration to hold it).
     if (!cardkey_ensure() || !cardkey_get(wrap)) {
-        shell_printf(sh, "format failed: no key to encrypt the card with (see dmesg)\n");
+        if (settings_save_refused())
+            shell_printf(sh, "format failed: " SETTINGS_REFUSED_FMT, settings_save_refused());
+        else
+            shell_printf(sh, "format failed: no key to encrypt the card with (see dmesg)\n");
         return false;
     }
     WC_RNG rng;
@@ -856,6 +878,17 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
                          "can't be encrypted: use `sd format plain`\n");
         return;
     }
+    // Asked again in start_encrypted(), which is where it counts; here so a refusal comes
+    // before the card is looked at and the question asked.
+    const char *held = format_plain ? NULL
+                                    : health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+    if (held) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
+                "failed", held);
+        shell_printf(sh, "the card can't be encrypted now: health check %s failed (see `health`; "
+                         "`sd format plain` isn't refused)\n", held);
+        return;
+    }
 
     // Make sure there's a card, and show what's on it now.
     if (card.state.mounted || mount(sh))
@@ -887,34 +920,68 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
 }
 
-// --- check (sd check) ----------------------------------------------------------------------------
+// --- check (sd check, sd check fix) ------------------------------------------------------------
 //
 // docs/design/sd-check.md has the design. The check runs only on an unmounted card, as a shell
 // job, with the `checking` flag set throughout: nothing mounts the card meanwhile (sdcard_mount(),
 // sdcard_mount_retry(), mount()) and the other `sd` commands refuse. The checker (files/fsck.c)
 // reads the volume through the layer (disk_read(0), decrypted on an encrypted card) and never
 // writes. Every way it ends goes through check_end(), which leaves the card as `sd unmount` does.
+//
+// `sd check fix` (design §10.3) is the same job around files/fsck_repair.h: the check, then the
+// plan and the question, then on `yes` the job again, for the repair and the final check. While
+// the question waits the job has ended but its memory is kept (fix_asking) and `checking` stays
+// set: the answer (on_fix_confirm()) goes on or ends through check_end(), and a question the
+// console drops unanswered (it locked itself) is ended by check_orphaned(). Repair writes one
+// sector at a time through the layer (disk_write(0): encrypted on an encrypted card, and through
+// `sd fault`'s hook in test builds), and stops at the first that fails.
 
 #define CHECK_STEP_US     20000             // work per job step, as files.c's STEP_US
 #define CHECK_WINDOW_MAX  (16 * 1024)       // cluster window (design §6.2), halved down to MIN
 #define CHECK_WINDOW_MIN  (4 * 1024)
-#define CHECK_BUDGET_MAX  1024              // sector reads per step at most
+#define CHECK_BUDGET_MAX  1024              // sector reads (and writes) per step at most
 #define CHECK_ROOM        1024              // output room wanted before a step (report lines)
+#define CHECK_LOCKED      "the configuration was erased (the card is locked now)"
+#define CHECK_NO_WORSE    "the card is no worse than before (sd check shows what is left)"
 
 typedef struct {
     shell_t *sh;                // for the report lines
-    fsck_t *f;                  // in `mem`
-    uint32_t budget;            // sector reads per step, adjusted toward CHECK_STEP_US
+    fsck_t *f;                  // sd check: in `mem`
+    fsck_repair_t *r;           // sd check fix: in `mem` (and `f` is NULL)
+    uint32_t budget;            // sectors per step, adjusted toward CHECK_STEP_US
     uint32_t pass_shown;        // last pass told to the shell
+    fsck_phase_t phase_shown;   // sd check fix: the run whose passes are shown
+    fsck_phase_t ran;           // sd check fix: the phase the last step ran in
+    uint32_t written;           // sd check fix: sectors written (a failed write isn't)
     size_t mem_len;             // bytes in `mem`: the checker's state and the cluster window
     uint8_t mem[];
 } check_job_t;
+
+// `sd check fix` waiting for its `yes`: the job, kept for the answer.
+static check_job_t *fix_asking;
+
+static const char *check_tag(void) {
+    return check_fix ? "check fix" : "check";
+}
+
+static const fsck_result_t *check_result(const check_job_t *j) {
+    return j->r ? fsck_repair_result(j->r) : fsck_result(j->f);
+}
 
 static bool check_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
     (void)ctx;
     if (count == 0 || lba > UINT32_MAX - count)     // the driver takes 32-bit sector numbers
         return false;
     return disk_read(0, buf, (LBA_t)lba, (UINT)count) == RES_OK;
+}
+
+// Repair's writes, one sector each (fsck_repair.h). Anything but RES_OK stops the repair.
+static bool check_write(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf) {
+    check_job_t *j = ctx;
+    if (count != 1 || lba > UINT32_MAX - count || disk_write(0, buf, (LBA_t)lba, 1) != RES_OK)
+        return false;
+    j->written++;
+    return true;
 }
 
 // One problem or note. Names come from the card: control characters (escape sequences) don't
@@ -930,27 +997,44 @@ static void check_report(void *ctx, const char *line) {
 }
 
 // The header line (design §7) once the volume is known, then a line per pass when there are
-// several.
+// several. For sd check fix, a header for the repair and the final check too (a second, one-pass
+// repair run shows nothing).
 static void check_progress(check_job_t *j) {
-    const fsck_result_t *res = fsck_result(j->f);
-    if (!res->passes || res->pass <= j->pass_shown)
+    const fsck_result_t *res = check_result(j);
+    fsck_phase_t phase = j->r ? fsck_repair_phase(j->r) : FSCK_PHASE_CHECK;
+    if (phase != FSCK_PHASE_CHECK && phase != FSCK_PHASE_REPAIR && phase != FSCK_PHASE_FINAL)
+        return;
+    if (!res->passes)
+        return;
+    if (phase != j->phase_shown) {
+        j->phase_shown = phase;
+        j->pass_shown = 0;
+    }
+    if (res->pass <= j->pass_shown)
         return;
     if (!j->pass_shown) {
         uint64_t tenths = res->volume_sectors * 10 / (2 * 1024 * 1024);     // GB, one decimal
         uint32_t ckb = res->cluster_bytes / 1024;
+        const char *es = res->passes == 1 ? "" : "es";
         char head[128];
-        snprintf(head, sizeof(head),
-                 "checking %s, %llu.%llu GB, %lu clusters of %lu %s, %s (%lu pass%s)",
-                 res->kind == FSCK_KIND_EXFAT ? "exFAT" : "FAT32",
-                 (unsigned long long)(tenths / 10), (unsigned long long)(tenths % 10),
-                 (unsigned long)res->clusters,
-                 (unsigned long)(ckb ? ckb : res->cluster_bytes), ckb ? "KB" : "bytes",
-                 card_kind == KIND_ENCRYPTED ? "encrypted" : "not encrypted",
-                 (unsigned long)res->passes, res->passes == 1 ? "" : "es");
+        if (phase == FSCK_PHASE_REPAIR)
+            snprintf(head, sizeof(head), "repairing (%lu pass%s)", (unsigned long)res->passes, es);
+        else if (phase == FSCK_PHASE_FINAL)
+            snprintf(head, sizeof(head), "checking again (%lu pass%s)",
+                     (unsigned long)res->passes, es);
+        else
+            snprintf(head, sizeof(head),
+                     "checking %s, %llu.%llu GB, %lu clusters of %lu %s, %s (%lu pass%s)",
+                     res->kind == FSCK_KIND_EXFAT ? "exFAT" : "FAT32",
+                     (unsigned long long)(tenths / 10), (unsigned long long)(tenths % 10),
+                     (unsigned long)res->clusters,
+                     (unsigned long)(ckb ? ckb : res->cluster_bytes), ckb ? "KB" : "bytes",
+                     card_kind == KIND_ENCRYPTED ? "encrypted" : "not encrypted",
+                     (unsigned long)res->passes, es);
         shell_printf(j->sh, "%s\n", head);
         // Logged too: with the last line's entry it times the check (dmesg), and it reaches the
         // log files once the card is mounted again.
-        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: check: %s", head);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s: %s", check_tag(), head);
     }
     if (res->passes > 1)
         shell_printf(j->sh, "pass %lu/%lu\n", (unsigned long)res->pass,
@@ -959,19 +1043,25 @@ static void check_progress(check_job_t *j) {
 }
 
 // Every end of a check, before or during the job: finished, Ctrl-C (or the session ended),
-// stopped by config reset, or refused after `checking` was set. Frees the job, then leaves the
-// card as `sd unmount` does (design §2.5): the key forgotten, reinitialized at the next mount,
-// and no quiet remount by the log writer (whoever checked the card may be about to take it
-// out). Prints and logs the last line. Returns false, for the job's step to return.
+// stopped by config reset, refused after `checking` was set, or (sd check fix) not confirmed.
+// Frees the job, then leaves the card as `sd unmount` does (design §2.5): the key forgotten,
+// reinitialized at the next mount, and no quiet remount by the log writer (whoever checked the
+// card may be about to take it out). Prints (to `sh` if there is one) and logs the last line.
+// Returns false, for the job's step to return.
 static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
 static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     if (j) {
+        // The driver can leave a multi-block write open between calls: finish it before the
+        // card may be taken out.
+        if (j->written && !(card.state.m_Status & STA_NOINIT))
+            card.sync(&card);
         size_t len = sizeof(*j) + j->mem_len;
         sdcrypt_wipe(j, len);               // sectors of the decrypted volume
         heap_release(HEAP_FILES, j);
     }
+    fix_asking = NULL;
     crypt_off();
     card.state.m_Status |= STA_NOINIT;
     checking = false;
@@ -982,21 +1072,109 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    shell_printf(sh, "%s\n", line);
-    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check: %s", line);
+    if (sh)
+        shell_printf(sh, "%s\n", line);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: %s: %s", check_tag(), line);
+    check_fix = false;
     return false;
+}
+
+// sd check fix stopped between steps (Ctrl-C, the session ended, config reset): what it had
+// written decides what is said.
+static bool fix_stop(shell_t *sh, check_job_t *j, const char *why) {
+    fsck_phase_t phase = fsck_repair_phase(j->r);
+    unsigned long w = j->written;
+    if (phase == FSCK_PHASE_CHECK || phase == FSCK_PHASE_PLAN)
+        return check_end(sh, j, "%s; nothing written", why);
+    if (phase == FSCK_PHASE_FINAL)
+        return check_end(sh, j, "%s in the final check; the repair is done (%lu sector%s "
+                         "written), sd check checks again", why, w, w == 1 ? "" : "s");
+    return check_end(sh, j, "%s after %lu sector%s written; " CHECK_NO_WORSE, why, w,
+                     w == 1 ? "" : "s");
+}
+
+static void on_fix_confirm(shell_t *sh, char *answer, void *arg);
+
+static void plan_line(void *ctx, const char *s) {
+    shell_printf(ctx, "%s\n", s);
+}
+
+// The check is done (FSCK_PLAN): its summary, the plan, and the question, which ends the job
+// with `checking` still set.
+static bool fix_plan(shell_t *sh, check_job_t *j) {
+    if (shell_write_space(sh) < CHECK_ROOM)
+        return true;                        // the plan waits for room (the next step is free)
+    const fsck_result_t *chk = fsck_repair_check(j->r);
+    const fsck_plan_t *p = fsck_repair_plan(j->r);
+    shell_printf(sh, "%s\n", chk->summary);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: %s", chk->summary);
+    fsck_plan_show(p, chk->cluster_bytes, chk->problems > 0, plan_line, sh);
+    char brief[2 * FSCK_PLAN_LINE_MAX];
+    fsck_plan_brief(p, brief, sizeof(brief));
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: plan: %s", brief);
+    if (!fsck_plan_writes(p))
+        return check_end(sh, j, "nothing to repair");
+    shell_printf(sh, "Ctrl-C stops the repair: wherever it stops, the card is no worse than "
+                     "before.\n");
+    // Input typed during the check would answer the question before the plan was read: drop it,
+    // as the pager drops what was typed before it.
+    sdcrypt_wipe(sh->ahead, sh->ahead_len);
+    sh->ahead_len = 0;
+    fix_asking = j;
+    shell_ask(sh, "Repair the card? Type 'yes': ", false, on_fix_confirm, j);
+    return false;
+}
+
+// sd check fix's job finished a step with something other than FSCK_MORE.
+static bool fix_next(shell_t *sh, check_job_t *j, int r) {
+    if (r == FSCK_PLAN)
+        return fix_plan(sh, j);
+    unsigned long w = j->written;
+    if (r == FSCK_FAILED) {
+        const char *why = fsck_repair_why(j->r) ? fsck_repair_why(j->r) : "?";
+        if (j->ran == FSCK_PHASE_CHECK)     // as sd check's
+            return check_end(sh, j, "%s: %s",
+                             fsck_repair_result(j->r)->passes ? "failed" : "not checked", why);
+        if (j->ran == FSCK_PHASE_FINAL)
+            return check_end(sh, j, "the repair is done (%lu sector%s written), but the final "
+                             "check failed: %s", w, w == 1 ? "" : "s", why);
+        shell_printf(sh, "%lu sector%s written before it stopped\n", w, w == 1 ? "" : "s");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: %lu sector%s written before it "
+                "stopped", w, w == 1 ? "" : "s");
+        return check_end(sh, j, "stopped: %s; " CHECK_NO_WORSE, why);
+    }
+    // FSCK_DONE: what was written, anything left to repair (there shouldn't be), the final check.
+    char line[2 * FSCK_PLAN_LINE_MAX];
+    fsck_done_line(fsck_repair_done(j->r), fsck_repair_check(j->r)->cluster_bytes, (uint32_t)w,
+                   line, sizeof(line));
+    shell_printf(sh, "repaired: %s\n", line);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: repaired: %s", line);
+    const fsck_plan_t *left = fsck_repair_left(j->r);
+    if (fsck_plan_writes(left)) {
+        fsck_plan_brief(left, line, sizeof(line));
+        shell_printf(sh, "still to repair: %s (run sd check fix again)\n", line);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: check fix: still to repair: %s", line);
+    }
+    return check_end(sh, j, "after repair: %s", fsck_repair_result(j->r)->summary);
 }
 
 static bool check_step(shell_t *sh, void *arg, bool cancel) {
     check_job_t *j = arg;
     if (cancel)
-        return check_end(sh, j, "stopped");
-    if (check_stop)
-        return check_end(sh, j, "stopped: the configuration was erased (the card is locked now)");
+        return j->r ? fix_stop(sh, j, "stopped") : check_end(sh, j, "stopped");
+    if (check_stop)     // before any read or write: the layer is off (sdcard_owner_gone())
+        return j->r ? fix_stop(sh, j, "stopped: " CHECK_LOCKED)
+                    : check_end(sh, j, "stopped: " CHECK_LOCKED);
     if (shell_write_space(sh) < CHECK_ROOM)
         return true;                        // wait for the terminal to take the report lines
     uint64_t t0 = time_us_64();
-    int r = fsck_step(j->f, j->budget);
+    int r;
+    if (j->r) {
+        j->ran = fsck_repair_phase(j->r);
+        r = fsck_repair_step(j->r, j->budget);
+    } else {
+        r = fsck_step(j->f, j->budget);
+    }
     uint64_t us = time_us_64() - t0;
     if (us < CHECK_STEP_US / 2 && j->budget < CHECK_BUDGET_MAX)
         j->budget *= 2;
@@ -1005,6 +1183,8 @@ static bool check_step(shell_t *sh, void *arg, bool cancel) {
     check_progress(j);
     if (r == FSCK_MORE)
         return true;
+    if (j->r)
+        return fix_next(sh, j, r);
     const fsck_result_t *res = fsck_result(j->f);
     char line[FSCK_SUMMARY_MAX + 64];
     if (r == FSCK_DONE)
@@ -1015,14 +1195,42 @@ static bool check_step(shell_t *sh, void *arg, bool cancel) {
     return check_end(sh, j, "%s", line);
 }
 
-static void cmd_check(shell_t *sh, const char *arg) {
-    if (arg) {
-        shell_printf(sh, "usage: sd check\n");
+// The answer to sd check fix's question. Anything but `yes` (Ctrl-C too) ends it unrepaired.
+static void on_fix_confirm(shell_t *sh, char *answer, void *arg) {
+    check_job_t *j = arg;
+    fix_asking = NULL;
+    if (check_stop) {                       // config reset while it waited: the layer is off
+        check_end(sh, j, "not repaired: " CHECK_LOCKED);
+        return;
+    }
+    if (!answer || strcmp(answer, "yes")) {
+        check_end(sh, j, "not repaired");
+        return;
+    }
+    fsck_repair_confirm(j->r);
+    j->budget = 8;                          // writes are slower than reads: adapt again
+    shell_run_job(sh, check_step, j);
+}
+
+// The console dropped sd check fix's question without answering it (it locked itself, which
+// ends what runs on it), so on_fix_confirm() won't run: end the check here, or `checking` would
+// stay set. Called wherever the card is wanted next: the sd commands, mounts, the log writer's
+// retry.
+static void check_orphaned(void) {
+    if (fix_asking && fix_asking->sh->answer != on_fix_confirm)
+        check_end(NULL, fix_asking, "not repaired: the question went unanswered");
+}
+
+static void cmd_check(shell_t *sh, const char *arg, const char *arg2) {
+    bool fix = arg && !strcmp(arg, "fix");
+    if ((arg && !fix) || arg2) {
+        shell_printf(sh, "usage: sd check [fix]\n");
         return;
     }
     // It shuts every other user out of the card until it ends.
     if (!sh->io->admin) {
-        shell_printf(sh, "the card can only be checked on the serial console\n");
+        shell_printf(sh, "the card can only be %s on the serial console\n",
+                     fix ? "repaired" : "checked");
         return;
     }
     if (card.state.mounted) {
@@ -1033,6 +1241,7 @@ static void cmd_check(shell_t *sh, const char *arg) {
         return;
     checking = true;
     check_stop = false;
+    check_fix = fix;
     // A mount that failed leaves its volume registered with FatFs, and any f_* call would then
     // try that mount again, reaching the card: unregister it (no card access).
     f_unmount(sd_get_drive_prefix(&card));
@@ -1050,7 +1259,8 @@ static void cmd_check(shell_t *sh, const char *arg) {
         check_end(sh, NULL, "not checked: the card's size can't be read");
         return;
     }
-    size_t state = fsck_state_size() + 8;   // fsck_new() aligns `mem` to 8 bytes
+    // fsck_new() and fsck_repair_new() align `mem` to 8 bytes.
+    size_t state = (fix ? fsck_repair_state_size() : fsck_state_size()) + 8;
     check_job_t *j = NULL;
     size_t window = CHECK_WINDOW_MAX;
     for (;;) {
@@ -1061,19 +1271,23 @@ static void cmd_check(shell_t *sh, const char *arg) {
     }
     if (!j) {
         size_t need = sizeof(*j) + state + CHECK_WINDOW_MIN;
-        check_end(sh, NULL, "not enough memory to check the card (needs %u KB)",
-                  (unsigned)((need + 1023) / 1024));
+        check_end(sh, NULL, "not enough memory to %s the card (needs %u KB)",
+                  fix ? "repair" : "check", (unsigned)((need + 1023) / 1024));
         return;
     }
     j->sh = sh;
     j->budget = 8;
     j->mem_len = state + window;
     fsck_io_t io = {
-        .read = check_read, .report = check_report, .write = NULL, .ctx = j, .sectors = sectors,
+        .read = check_read, .report = check_report, .write = fix ? check_write : NULL, .ctx = j,
+        .sectors = sectors,
         .upcase = ff_wtoupper,          // FatFs's own case folding, for exFAT's name hashes
     };
-    j->f = fsck_new(&io, j->mem, j->mem_len);
-    if (!j->f) {
+    if (fix)
+        j->r = fsck_repair_new(&io, j->mem, j->mem_len);
+    else
+        j->f = fsck_new(&io, j->mem, j->mem_len);
+    if (!j->f && !j->r) {
         check_end(sh, j, "not checked: the checker couldn't start");
         return;
     }
@@ -1192,6 +1406,7 @@ void sdcard_command(shell_t *sh, char *args) {
     char *sub = args ? strtok(args, " ") : NULL;
     char *arg = sub ? strtok(NULL, " ") : NULL;
     char *arg2 = arg ? strtok(NULL, " ") : NULL;
+    check_orphaned();
     if (checking) {
         shell_printf(sh, CHECKING_MSG "\n");
         return;
@@ -1209,7 +1424,7 @@ void sdcard_command(shell_t *sh, char *args) {
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg, arg2);
     else if (!strcmp(sub, "check"))
-        cmd_check(sh, arg);
+        cmd_check(sh, arg, arg2);
 #ifdef SOS_TEST_COMMANDS
     else if (!strcmp(sub, "fault"))
         cmd_fault(sh, arg, arg2);
@@ -1231,5 +1446,5 @@ void sdcard_command(shell_t *sh, char *args) {
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
-                         "unmount|check" SD_USAGE_FAULT "]\n");
+                         "unmount|check [fix]" SD_USAGE_FAULT "]\n");
 }

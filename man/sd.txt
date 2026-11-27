@@ -7,6 +7,7 @@ SYNOPSIS
     sd speed [<MHz>]                      (change: console only)
     sd unmount                            (console only)
     sd check                              (console only)
+    sd check fix                          (console only)
     sd test [<KB> [keep]]                 (console only)
     sd format [exfat | fat32] [plain]     (console only)
 
@@ -30,7 +31,7 @@ DESCRIPTION
     read (roots already in memory still work), the log files wait, and the
     other 'sd' commands refuse. It prints one line per problem, then
     a summary, which also goes to the log. It never writes to the card;
-    repairing is a later command. Ctrl-C stops it. Afterwards the card is
+    'sd check fix' repairs. Ctrl-C stops it. Afterwards the card is
     left as 'sd unmount' leaves it: the next file command mounts it.
     The report can't go to a file on the card: 'sd check > file' opens the
     file first, which mounts the card, so the check refuses ('the card is
@@ -53,6 +54,43 @@ DESCRIPTION
     summary), FAT entry 0 not matching the media byte, an up-case table
     unlike FatFs's. A card that can't be checked at all ends with 'not
     checked: <why>' (no card, no volume, a boot sector FatFs would refuse).
+
+    'sd check fix' checks the same way, then repairs what can be repaired
+    without losing data a file still reaches: lost clusters are freed,
+    chains longer than their file are cut to the file's size (the rest
+    freed), a second FAT that differs from the first gets the first's
+    sectors, and FSInfo's free count is set to unknown so that the next
+    mount counts it again. On exFAT the allocation bitmap is what's
+    repaired: bits of lost clusters are cleared, and clusters a file uses
+    but the bitmap calls free are marked in use. It never touches cross-linked
+    files, broken or short chains, damaged directory entries or names, the
+    boot sector or the partition table: each of those means choosing whose
+    data wins, which is for a PC and a backup. With cross-links on the card
+    it doesn't cut chains either ('trims skipped: cross-linked files, fix
+    those on a PC first'), and when part of the directory tree couldn't be
+    read it frees and cuts nothing, since what that part holds would look
+    lost. An empty file that still has clusters is left as it is.
+
+    After the check it shows the plan: 'to repair:' with a line per kind
+    and its count, 'left alone:' with what it skips and why, and asks for
+    'yes', as 'sd format' does. Anything else ends it with 'not repaired',
+    and nothing has been written. A plan with nothing to write
+    ends with 'nothing to repair' instead. On 'yes' it repairs, one sector
+    at a time, then checks the card again: 'repaired: <what>; <n> sectors
+    written', then 'after repair: <summary>'. The plan, what was written
+    and the summary go to the log ('sd: check fix: ...').
+
+    It can stop at any sector, by Ctrl-C, a write error or a power cut,
+    and the card is no worse than before: files read the same bytes, and a
+    check finds the problems it found before or fewer, plus at most a note
+    that the two FATs differ and lost clusters at the end of a chain being
+    cut (space, not data: 'sd check fix' again frees them). A write error
+    ends it with 'stopped: write error at sector <n>; the card is no worse
+    than before (sd check shows what is left)'. A card that lost power
+    during a write can still hold a half-written sector, which no order of
+    writes prevents: check it again before use. Like 'sd check', it is
+    console only, runs only on an unmounted card, and nothing else uses the
+    card until it ends, the question included.
 
     'sd test [<KB> [keep]]' is a write and read benchmark: 4 to 65536 KB,
     default 256; everything else waits until it finishes. 'keep' leaves
