@@ -974,6 +974,17 @@ run:
     return false;
 }
 
+// Tab at the prompt, under lua_pcall (run_repl): the names that could finish repl_line.
+static int l_repl_complete(lua_State *L) {
+    size_t used;
+    bool more;
+    unsigned n = lua_complete(L, lua_job.repl_line, (char *)lua_req.data, LUA_REQ_DATA, &used,
+                              &more);
+    lua_job.repl_names_len = (uint32_t)used;
+    lua_job.repl_names = n;
+    return 0;
+}
+
 static void run_repl(lua_State *L) {
     lua_pushliteral(L, "");                         // 2: unfinished statement
     for (;;) {
@@ -983,11 +994,13 @@ static void run_repl(lua_State *L) {
         if (lua_job.repl_quit)
             break;
         if (lua_job.repl_complete) {                // Tab: names, not a line (no code runs)
-            size_t used;
-            bool more;
-            lua_job.repl_names = lua_complete(L, lua_job.repl_line, (char *)lua_req.data,
-                                              LUA_REQ_DATA, &used, &more);
-            lua_job.repl_names_len = (uint32_t)used;
+            // Protected: the walk allocates (the path's strings), and a failed allocation
+            // raises an error, which mustn't end the session.
+            lua_job.repl_names = 0;
+            lua_job.repl_names_len = 0;
+            lua_pushcfunction(L, l_repl_complete);
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK)
+                lua_job.repl_names = lua_job.repl_names_len = 0;
             lua_settop(L, 2);
             __dmb();
             lua_job.repl_cmd = false;
