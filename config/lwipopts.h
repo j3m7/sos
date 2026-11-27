@@ -104,4 +104,7 @@ void sos_sntp_get_time(unsigned int *sec, unsigned int *us);
 #define LINK_STATS                  0
 #define MIB2_STATS                  1
 
+// Raw PCBs: one per ping run (src/net/ping.c: a shell each and a Lua script).
+#define MEMP_NUM_RAW_PCB            5
+
 #endif /* SOS_LWIPOPTS_H */

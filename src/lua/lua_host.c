@@ -20,6 +20,8 @@
 #include "ff.h"
 #include "lua.h"
 
+#include "chat/chat.h"
+#include "core/random.h"
 #include "core/fault.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -32,8 +34,11 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_hash.h"
 #include "lua/lua_health.h"
+#include "lua/lua_net.h"
 #include "net/http.h"
 #include "shell/words.h"
+#include "time/timeconv.h"
+#include "time/timesync.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
 
@@ -197,6 +202,69 @@ static void serve_change(FRESULT (*op)(const TCHAR *)) {
 }
 
 static FRESULT do_mkdir(const TCHAR *p) { return f_mkdir(p); }
+
+// sos.rename: both paths must be ones a script may change. With offset 1, a file at `to` is
+// removed first (not a directory), so the rename replaces it; there's a moment with only `from`.
+static void serve_rename(void) {
+    char from[LUA_PATH_MAX], to[LUA_PATH_MAX];
+    lua_req.data[LUA_REQ_DATA - 1] = 0;
+    if (!req_path(from) || !req_may_write(from))
+        return;
+    if (!path_resolve("/", (const char *)lua_req.data, to, sizeof(to))) {
+        req_error("path too long");
+        return;
+    }
+    if (!req_may_write(to))
+        return;
+    // One file under two spellings (another case): with replace, the unlink would delete it.
+    if (!strcasecmp(from, to)) {
+        req_error("source and destination are the same");
+        return;
+    }
+    FILINFO fi;
+    if (lua_req.offset && f_stat(to, &fi) == FR_OK) {
+        if (fi.fattrib & AM_DIR) {
+            req_error("a directory is in the way");
+            return;
+        }
+        FRESULT fr = f_unlink(to);
+        if (fr != FR_OK) {
+            req_error(files_error(fr));
+            return;
+        }
+    }
+    FRESULT fr = f_rename(from, to);
+    if (fr != FR_OK)
+        req_error(files_error(fr));
+}
+
+// sos.stat: size, kind and time; LUA_REQ_NOT_FOUND if there's nothing at the path.
+static void serve_stat(void) {
+    char path[LUA_PATH_MAX];
+    if (!req_path(path))
+        return;
+    lua_stat_t st = {0};
+    if (!strcmp(path, "/")) {                   // f_stat can't stat the root
+        st.dir = true;
+    } else {
+        FILINFO fi;
+        FRESULT fr = f_stat(path, &fi);
+        if (fr != FR_OK) {
+            req_error(files_error(fr));
+            if (fr == FR_NO_FILE || fr == FR_NO_PATH || fr == FR_INVALID_NAME)
+                lua_req.result = LUA_REQ_NOT_FOUND;
+            return;
+        }
+        st.size = fi.fsize;
+        st.dir = (fi.fattrib & AM_DIR) != 0;
+        if (fi.fdate)
+            st.time = timeconv_from_tm(80 + (fi.fdate >> 9), ((fi.fdate >> 5) & 15) - 1,
+                                       fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63,
+                                       (fi.ftime & 31) * 2);
+    }
+    memcpy(lua_req.data, &st, sizeof(st));
+    lua_req.len = sizeof(st);
+}
 static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 
 // sos.reboot([why]). Refused in the first LUA_REBOOT_MIN_S after boot: a normal restart runs
@@ -239,6 +307,57 @@ static void serve_hash(void) {
     }
     memcpy(lua_req.data, digest, n);
     lua_req.len = (uint32_t)n;
+}
+
+// sos.wall(msg): to every shell, from the script (its tag as the sender). It shares the log's
+// limit of SCRIPT_LOG_PER_SEC, and never waits: a full ring of unread messages is an error.
+static void serve_wall(void) {
+    lua_req.data[LUA_REQ_DATA - 1] = 0;
+    if (!script_alive()) {
+        req_error("the script's session has ended");
+        return;
+    }
+    if (!log_quota_take(&script_quota, SCRIPT_LOG_PER_SEC)) {
+        req_error("more than 10 messages a second");
+        return;
+    }
+    int n = chat_wall_from(job_tag, (const char *)lua_req.data);
+    if (n < 0)
+        req_error("other shells haven't read the last messages yet: try again shortly");
+    else
+        lua_req.result = n;
+}
+
+// sos.time.sync(): as `time sync` (which any shell may run), but at most one started by scripts
+// every LUA_TIMESYNC_MIN_S, so a script in a loop can't hammer the NTS server.
+static void serve_timesync(void) {
+    static uint64_t last_us;
+    static bool started;
+    uint64_t now = time_us_64();
+    if (started && now - last_us < (uint64_t)LUA_TIMESYNC_MIN_S * 1000000) {
+        char msg[sizeof(lua_req.error)];
+        snprintf(msg, sizeof(msg), "a script started one %u s ago (at most one per %u s)",
+                 (unsigned)((now - last_us) / 1000000), (unsigned)LUA_TIMESYNC_MIN_S);
+        req_error(msg);
+        return;
+    }
+    if (!timesync_request_nts()) {
+        req_error("a sync is already running");
+        return;
+    }
+    started = true;
+    last_us = now;
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "%s started a time sync", job_tag);
+}
+
+// sos.random(n): bytes from wolfCrypt's DRBG, seeded by the chip's TRNG (core/random.h).
+static void serve_random(void) {
+    uint32_t n = lua_req.offset;
+    if (n > LUA_REQ_DATA || !random_bytes(NULL, lua_req.data, n)) {
+        req_error("no random bytes");
+        return;
+    }
+    lua_req.len = n;
 }
 
 // sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
@@ -315,6 +434,11 @@ static void http_stats(void) {
         s.handshake_us = clamp_u32(ts->handshake_us);
         s.longest_step_us = ts->longest_step_us;
         s.heap_peak = clamp_u32(ts->heap_peak);
+        s.cert = ts->cert_known;
+        s.cert_not_before = ts->cert_not_before;
+        s.cert_not_after = ts->cert_not_after;
+        memcpy(s.cert_subject, ts->cert_subject, sizeof(s.cert_subject));
+        memcpy(s.cert_issuer, ts->cert_issuer, sizeof(s.cert_issuer));
     }
     memcpy(lua_req.data, &s, sizeof(s));
 }
@@ -364,6 +488,29 @@ static bool is_http(lua_req_type_t t) {
     return t == LR_HTTP_REQUEST || t == LR_HTTP_READ || t == LR_HTTP_CLOSE;
 }
 
+static bool is_net(lua_req_type_t t) {
+    return t == LR_SCAN || t == LR_RESOLVE || t == LR_PING;
+}
+
+// sos.wifi.scan, sos.net.resolve, sos.ping (lua_net.c): true once answered.
+static bool serve_net(void) {
+    if (lua_job.cancel || !script_alive()) {
+        lua_net_drop();
+        return !req_error("interrupted");
+    }
+    lua_req.path[LUA_PATH_MAX - 1] = '\0';
+    size_t len;
+    const char *err;
+    if (!lua_net_serve(lua_req.type, lua_req.path, lua_req.offset, lua_req.data, LUA_REQ_DATA,
+                       &len, &err))
+        return false;
+    if (err)
+        req_error(err);
+    else
+        lua_req.len = (uint32_t)len;
+    return true;
+}
+
 // Answer the pending request, if it can be answered here and now.
 static void serve(bool main_loop) {
     if (is_http(lua_req.type)) {
@@ -374,6 +521,13 @@ static void serve(bool main_loop) {
         if (!serve_http())
             return;                             // not yet: again next pass
         http_started = false;
+    } else if (is_net(lua_req.type)) {
+        if (!main_loop)
+            return;
+        lua_req.result = 0;
+        lua_req.error[0] = '\0';
+        if (!serve_net())
+            return;
     } else {
         lua_req.result = 0;
         lua_req.error[0] = '\0';
@@ -399,7 +553,12 @@ static void serve(bool main_loop) {
         case LR_LIST:   serve_list(); break;
         case LR_REMOVE: serve_change(do_unlink); break;
         case LR_MKDIR:  serve_change(do_mkdir); break;
+        case LR_RENAME: serve_rename(); break;
+        case LR_STAT:   serve_stat(); break;
         case LR_INFO:   serve_info(); break;
+        case LR_WALL:   serve_wall(); break;
+        case LR_TIMESYNC: serve_timesync(); break;
+        case LR_RANDOM: serve_random(); break;
         case LR_REBOOT: serve_reboot(); break;
         case LR_HASH:   serve_hash(); break;
         default:        req_error("unknown request"); break;
@@ -437,6 +596,7 @@ static void finish(void) {
     script_log_dropped();
     http_drop();
     http_started = false;
+    lua_net_drop();                     // a scan, lookup or ping the script didn't wait out
     lua_hash_drop();                    // one the script didn't finish
     heap_release(HEAP_LUA, owner_code);
     owner_code = NULL;

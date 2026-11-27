@@ -24,4 +24,15 @@ unsigned certstore_load(struct WOLFSSL_CTX *ctx);
 // `tls roots [approve | forget]`. Approving and forgetting need the console.
 void certstore_command(shell_t *sh, char *args);
 
+// What `tls roots` shows, as values (for Lua's sos.tls.roots()): the built-in roots are
+// tls_roots[] (tls/tls_roots.h); this reads and checks the card's file as `tls roots` does.
+typedef struct {
+    const char *state;          // "approved", "none approved", "missing: not used", ...
+    bool used;                  // the file's certificates are trusted
+    unsigned count;             // how many it holds (when used)
+    const char *why;            // what's wrong with it, when it can't be used (may be NULL)
+    bool not_approved;          // no file has been approved (`tls roots approve`)
+} certstore_info_t;
+void certstore_info(certstore_info_t *info);
+
 #endif

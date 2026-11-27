@@ -13,9 +13,11 @@ This note sets the rules so that the phases (§9) can be built without deciding 
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): phases 1 (the FAT32 checker, #223), 2 (exFAT) and 3 (`sd check` on the
-device, #226) are built; the timing in §6.2 is still to be measured on dev-1, and phases 4 and
-5 are to come. Tracking issue: #213.
+Status (2026-11-27): all phases are built and merged: 1 (the FAT32 checker, #223), 2 (exFAT,
+#232), 3 (`sd check` on the device, #226), 4 (the fault harness and FAT32 repair, #238; exFAT
+repair, #249) and 5 (the test-build fault commands, #231; `sd check fix`, #239). The phase 5
+board run was done on dev-1 on 2026-11-27 with an exFAT card. Still owed: the same run on a
+FAT32 card, blocked because `sd format fat32` fails on dev-1's card (#247). Tracking issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
@@ -291,9 +293,11 @@ are covered in `ceil(count / 8W)` passes:
   `detect()` as for any mount.
 - **Time:** each pass reads every directory and every FAT sector that a chain passes through,
   plus its window's share of the FAT or bitmap. A NoFatChain exFAT file costs no FAT reads, and
-  FatFs writes exFAT files contiguously when it can. Estimate for a full 32 GB card at about
-  1 MB/s encrypted: tens of seconds with a 16 KB window, a few minutes with 4 KB. This is
-  **unmeasured**: phase 3 measures it on dev-1 and writes the result here. The check shows
+  FatFs writes exFAT files contiguously when it can. **Measured on dev-1** (2026-11-27): exFAT,
+  7.5 GB, 246 528 clusters of 32 KB, encrypted, a nearly empty card (`/var` and `/man`, about
+  60 files): 2 passes in 0.45 s with the 16 KB window, 8 passes in 0.67 s with 4 KB. Pass 1 is
+  the slowest: it also reads the names and the up-case table. A full card will be slower,
+  chiefly by its directory and FAT reads, and how much is **unmeasured**. The check shows
   progress (`pass 3/8`) on the console.
 
 ## 7. Output
@@ -367,12 +371,23 @@ pass 8/8
 
 4. **Repair on the host:** the fault-injection harness of §10.4 (write counting, cut and failure
    after N writes, the random damage generator) comes first, in the same PR or one before it.
-   Then the repairs of §10.1 with the write order of §10.2. Host only.
+   Then the repairs of §10.1 with the write order of §10.2. Host only. *Built*, FAT32 first
+   (#238) and exFAT on top (`src/files/fsck_repair.c`, `tests/test_fsck_repair.c`; the rules it
+   settles are in `fsck_repair.h` and §10.1, §10.2). exFAT reuses FAT32's trim hooks; its other
+   hooks in `fsck.c` are the bitmap comparison (one write per bitmap sector and pass), the
+   volume, and two more places where the walk can't see all that FatFs reads (a directory too
+   deep, a chain breaking on a free or bad entry).
 5. **`sd check fix` on the device:** §10.3's command, the test-build-only fault commands of
-   §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults.
+   §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults. *5a, the fault
+   commands (`sd fault`, test builds only), is merged (#231)*. *5b, the command itself, is
+   built* (`cmd_check()` in `sdcard.c`, its words in `src/files/fsck_plan.c`): FAT32 only, with
+   exFAT ending `not repaired: exFAT repair isn't built yet` until exFAT repair drops the plan's
+   refusal. The question ends the job but keeps its memory and the `checking` flag; a question
+   the console drops unanswered (it locked itself) is ended the next time the card is wanted.
+   Board test with `sd fault` to come.
 
 Each phase is a PR that leaves main working. Phases 1, 2 and 4 are host code only. `fsck.c`
-enters the firmware image in phase 3, and repair's code reaches the board in phase 5.
+enters the firmware image in phase 3, and repair's code reaches the board in phase 5b.
 
 ## 10. Repair
 
@@ -392,10 +407,36 @@ Only fixes that can't lose data that is still reachable:
   else uses it (§10.2). For exFAT this covers files with a FAT chain and, for NoFatChain files,
   bitmap bits past the run. FAT32 directories (size 0, §5) are never trimmed.
 - **exFAT clusters reached but clear in the bitmap** get their bitmap bit set, so FatFs won't
-  hand that cluster to another file later.
+  hand that cluster to another file later. This is done even when frees are skipped (below):
+  it only marks used a cluster something reaches.
+- **On exFAT** the end mark of a trim is `0xFFFFFFFF` (all 32 bits), written to the one FAT;
+  the tail's bits are then cleared as lost clusters, and its FAT entries are left (FatFs doesn't
+  read the entries of free clusters). A NoFatChain file has no chain to end: its clusters past
+  the run are lost clusters already, and only their bits are cleared. Directories, the bitmap
+  and the up-case table aren't trimmed. There is no FSInfo and no second FAT.
 - **FAT32's FSInfo free count** is set to `0xFFFFFFFF` (unknown) before any other write, so
   FatFs recounts on its next mount.
-- **A second FAT copy** (FAT32 with two FATs) gets every change written to the first copy.
+- **A second FAT copy** (FAT32 with two FATs) gets every change written to the first copy:
+  the first copy's whole sector, as FatFs's `sync_window()` writes it. A sector where the second
+  copy differs from the first is repaired from the first, since FatFs reads only the first copy
+  and would overwrite the second at its next write there.
+
+Left alone, though §10.1 would otherwise repair them:
+
+- **When part of the tree wasn't walked**, nothing is freed or trimmed: a directory whose chain
+  loops or breaks (FatFs still reads its entries up to the break, and those of the cluster it
+  breaks on), a directory nested deeper than the checker reads, or a walk stopped because
+  chains overlap too much. What such a directory holds would look lost. FSInfo and the second
+  FAT are still repaired, and exFAT bits are still set.
+- **On exFAT, when any chain breaks on a free or bad FAT entry**, nothing is freed or trimmed
+  either. FatFs reads the cluster the chain breaks on, but the checker doesn't count it (§5),
+  so it looks lost; on FAT32 that cluster is already free or marked bad, but on exFAT its bit
+  is what keeps FatFs from handing it to another file.
+- **An empty file with a chain** (size 0, a start cluster) isn't trimmed: trimming it to no
+  clusters would mean writing its directory entry. It stays a note.
+- **FSInfo** is written only when it is valid, lies inside the reserved area (else it is a FAT
+  sector too), isn't already `0xFFFFFFFF`, and is either stale or the repair writes anything
+  else.
 
 Only reported, never changed: cross-links, chains shorter than their file or broken, damaged
 entry sets or names, a damaged boot region, GPT or MBR. Each of those needs a choice about whose
@@ -405,15 +446,28 @@ data wins, and that is for a person with a PC and a backup.
 
 Every repair is a sequence of single-sector writes, ordered so that **stopping after any
 prefix of the sequence leaves the volume no worse than before**: a check then reports a subset
-of the original problems, plus at most a "FAT copies differ" note, and every file reads the same
-bytes as before the repair.
+of the original problems, plus at most:
+
+- (a) a "FAT copies differ" note;
+- (b) lost clusters that are the tail of a chain being trimmed: its end mark was written and
+  the tail not yet freed. That costs space, not data, and running repair again frees it.
+
+Every file still reads the same bytes as before the repair. (b) can't be avoided: no order of
+single-sector writes ends a chain early and frees a tail that runs past the end mark's FAT
+sector without a lost or a broken chain in between, and a broken chain would be worse.
 
 - FSInfo is invalidated first.
 - A trim writes the new end-of-chain mark before freeing anything. Until the tail is freed,
   it is a run of lost clusters, which the checker already handles.
 - On FAT32, the first FAT copy is written before the second.
 - On exFAT a bit is set before any bit is cleared in the same sector, and a sector's new
-  bitmap state is written in a single write.
+  bitmap state is written in a single write: sets and clears land together. Each bit changed
+  takes one cluster from a problem to none (a set only for a cluster something reaches, a clear
+  only for one nothing reaches), whatever the other bits, so any prefix of the writes leaves a
+  subset of the problems, counted cluster by cluster: a run of lost or reached-but-free
+  clusters that crosses a sector or a window may be left in part, and is then reported shorter.
+  The order of sectors doesn't matter. A sector that two windows share is written in each of
+  the two passes, the part of it in that pass's window.
 
 Repair runs inside the passes of §6.2.
 
@@ -432,7 +486,12 @@ Repair runs inside the passes of §6.2.
   turns out longer than its file, the end-of-chain mark at L is written at once. That is safe:
   the tail becomes a lost run, which is a state the checker already handles. The tail isn't
   marked, so it is freed as lost clusters in the passes whose windows hold it.
-- **Lost clusters** are freed at the end of the pass whose window holds them.
+- **A second repair run:** pass 1 marks a chain's clusters in window 1 before the walk knows
+  the chain is too long, so the first repair run doesn't free the part of a trimmed tail that
+  lies in window 1. When it trimmed anything, a second repair run of pass 1 alone frees it (it
+  only frees: nothing else is left to do). Without trims there is one repair run.
+- **Lost clusters** are freed at the end of the pass whose window holds them, a FAT sector at a
+  time, before the checker's FAT cache moves to the next sector.
 
 When the last pass ends, a full check runs again by itself, and its summary is what
 `sd check fix` reports. It must show no problem of a kind §10.1 repairs.
