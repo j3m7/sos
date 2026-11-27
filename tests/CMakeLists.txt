@@ -230,7 +230,8 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
         ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c ${WOLFSSL_ROOT}/wolfcrypt/src/memory.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/wc_port.c ${WOLFSSL_ROOT}/wolfcrypt/src/error.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c ${WOLFSSL_ROOT}/wolfcrypt/src/hmac.c
-        ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c)
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha512.c)
     target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
     target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
         ${WOLFSSL_ROOT})
@@ -263,6 +264,13 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_include_directories(test_pwverify PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_pwverify PRIVATE wolfcrypt_host)
     add_test(NAME pwverify COMMAND test_pwverify)
+
+    # src/lua/lua_hash.c: sos.hash and sos.hmac's core 0 side, against published test vectors.
+    add_executable(test_lua_hash test_lua_hash.c ${SOS_ROOT}/src/lua/lua_hash.c
+        ${SOS_ROOT}/src/core/heaptag.c)
+    target_include_directories(test_lua_hash PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_hash PRIVATE wolfcrypt_host)
+    add_test(NAME lua_hash COMMAND test_lua_hash)
 else()
     message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
 endif()
@@ -331,6 +339,9 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_date PRIVATE lua_host)
     add_test(NAME lua_date COMMAND test_lua_date)
+    add_executable(test_lua_codec test_lua_codec.c ${SOS_ROOT}/src/lua/lua_codec.c)
+    target_include_directories(test_lua_codec PRIVATE ${SOS_ROOT}/src)
+    add_test(NAME lua_codec COMMAND test_lua_codec)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()

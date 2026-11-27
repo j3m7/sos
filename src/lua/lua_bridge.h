@@ -75,6 +75,8 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_HASH,                        // offset: step, arg: algorithm (lua_hash.h), data/len: key or
+                                    // message -> after the last step, data/len: the digest
     LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
                                     // error (up for less than LUA_REBOOT_MIN_S)
     LR_INFO,                        // offset: a lua_health_table_t, arg: its argument (sos.dmesg's

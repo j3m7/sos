@@ -148,6 +148,17 @@ conversions, so core 1 needs neither newlib's `strftime` nor its time zone code.
 against the host's `strftime()` over years 1 to 9999 (`tests/test_lua_date.c`). `sos.clock` is a
 health table (`LH_CLOCK`) from `timesync_info()`.
 
+## Hashes: `lua_hash.c`, `lua_codec.c`
+
+`sos.hash` and `sos.hmac` run on core 0 (`LR_HASH`), not core 1: wolfCrypt is built with
+`WOLFSSL_SMALL_STACK`, so SHA's transform takes its buffer from `XMALLOC`, which goes to the TLS
+module's accounting hooks (`src/tls/tls.c`): plain counters, and a walk over core 0's open
+connections. Core 1 streams the key and message in 4 KB requests (begin, update..., final);
+core 0 keeps one context (from the heap, `lua` in `mem`), freed after the final step, by the next
+begin, or when the script ends. Hex and base64 (`lua_codec.c`) are pure C on core 1. Tested on the
+host: `tests/test_lua_hash.c` (FIPS 180, RFC 2202 and RFC 4231 vectors, with the host wolfCrypt)
+and `tests/test_lua_codec.c`.
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).
