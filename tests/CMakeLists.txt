@@ -328,6 +328,29 @@ add_test(NAME man_topic COMMAND test_man_topic)
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)
 
+# tests/fsck_disk.c, fsck_faults.c, fsck_damage.c: the fault-injection harness for the card
+# checker's repair (docs/design/sd-check.md §10.4): RAM disk images made by FatFs itself (ff.c and
+# ffunicode.c built for the host), a fault layer that cuts or fails writes and reads, a runner,
+# file fingerprints and a seeded damage generator. SDCARD_ROOT: the SD card library, as for the
+# firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
+if (NOT DEFINED SDCARD_ROOT)
+    set(SDCARD_ROOT "${SOS_ROOT}/lib/sdcard" CACHE PATH "SD card library source")
+endif()
+if (EXISTS ${SDCARD_ROOT}/src/ff15/source/ff.c)
+    if (NOT TARGET fatfs_host)
+        add_library(fatfs_host STATIC ${SDCARD_ROOT}/src/ff15/source/ff.c
+            ${SDCARD_ROOT}/src/ff15/source/ffunicode.c)
+        target_include_directories(fatfs_host PUBLIC ${SDCARD_ROOT}/src/ff15/source
+            ${SDCARD_ROOT}/src/include)
+        target_compile_options(fatfs_host PRIVATE -w)     # the library's code, not ours to warn about
+    endif()
+    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
+    add_test(NAME fsck_faults COMMAND test_fsck_faults)
+else()
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck_faults is skipped")
+endif()
+
 # Fuzz targets (tests/fuzz/): parsers of what the network, the card, the flash and terminals
 # send. Each runs here over its corpus (tests/fuzz/corpus/<name>/: seeds, and any input that
 # once crashed it) with the sanitizers of this build. With clang and -DSOS_FUZZ=ON each is
