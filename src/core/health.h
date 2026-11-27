@@ -72,17 +72,8 @@ typedef struct health_check {
 
 // NULL if the gate (one or more HEALTH_GATE_* bits) is open, else the name of the first
 // FAILed check that holds it. Every gate is open until a check that holds it has failed: NONE,
-// SKIP, PASS and WARN don't close it.
+// SKIP, PASS and WARN don't close it. A caller that refuses logs the refusal, naming the check.
 const char *health_gate(uint32_t gate);
-
-// The same, for a caller that is about to refuse: also remembers the check's name for
-// health_refusal(). The caller logs the refusal, naming the check.
-const char *health_gate_refuse(uint32_t gate);
-
-// The check named by the last refusal (health_gate_refuse), or NULL if nothing was refused
-// since boot. For the console's rescue state: a fresh board whose root secret wasn't made says
-// why (shell.c, console_no_keys).
-const char *health_refusal(void);
 
 // --- the framework -------------------------------------------------------------------------------
 

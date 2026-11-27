@@ -70,7 +70,7 @@ static bool store_sealed(const sealer_t *sealer, uint32_t len) {
 static bool make_new(const sealer_t *sealer, uint32_t *len) {
     // A new key is random numbers: refused while a check holding HEALTH_GATE_KEYS fails. No host
     // key means no sshd; the console still works.
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    const char *held = health_gate(HEALTH_GATE_KEYS);
     if (held) {
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "hostkey: no new host key made: health check %s failed",
                 held);

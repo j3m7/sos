@@ -86,7 +86,7 @@ static const char *save_refused;
 // (core/health.h). Opening a sealed record is not gated: the board can still read what it has.
 static bool gated_seal(void *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *plain,
                        size_t len, uint8_t *out) {
-    const char *held = health_gate_refuse(HEALTH_GATE_CRYPTO);
+    const char *held = health_gate(HEALTH_GATE_CRYPTO);
     if (!held)
         return seal_seal(ctx, aad, aad_len, plain, len, out);
     save_refused = held;
@@ -137,7 +137,7 @@ const char *settings_console_set_password(const char *password) {
     if (!have_pw_key)
         return "this board has no key to protect a password with (see `rootsecret`)";
     // A new salt is a random number: refused while a check holding HEALTH_GATE_KEYS fails.
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    const char *held = health_gate(HEALTH_GATE_KEYS);
     if (held) {
         static char why[48 + HEALTH_NAME_MAX];
         snprintf(why, sizeof(why), "refused: health check %s failed (see `health`)", held);
@@ -222,7 +222,7 @@ bool settings_has_owner_secret(void) {
 static bool ensure_owner_secret(void) {
     if (settings_has_owner_secret() || !seal.have_key)
         return true;
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    const char *held = health_gate(HEALTH_GATE_KEYS);
     if (held) {
         save_refused = held;
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: owner secret not made: health check %s failed",

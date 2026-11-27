@@ -72,7 +72,7 @@ const char *rootflash_refused_by(void) {
 
 static bool store_random(void *ctx, uint8_t *out, size_t len) {
     (void)ctx;
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    const char *held = health_gate(HEALTH_GATE_KEYS);
     if (held) {
         refused_by = held;
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "rootsecret: not made: health check %s failed", held);

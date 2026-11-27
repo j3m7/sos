@@ -211,7 +211,6 @@ TEST(boot_time_is_measured) {
 TEST(gates) {
     setup();
     CHECK(health_gate(HEALTH_GATE_KEYS) == NULL);       // nothing has run: open
-    CHECK(health_refusal() == NULL);
     health_status_t open[] = {HEALTH_SKIP, HEALTH_PASS, HEALTH_WARN};
     for (unsigned i = 0; i < 3; i++) {
         health_inject("kat", open[i], "x");
@@ -223,15 +222,10 @@ TEST(gates) {
     health_inject("trng", HEALTH_FAIL, "x");
     CHECK(!strcmp(health_gate(HEALTH_GATE_KEYS), "trng"));     // the first in table order
     CHECK(!strcmp(health_gate(HEALTH_GATE_CRYPTO), "kat"));    // trng doesn't hold CRYPTO
-    CHECK(health_refusal() == NULL);                // asking isn't refusing
-    CHECK(!strcmp(health_gate_refuse(HEALTH_GATE_KEYS), "trng"));
-    CHECK(!strcmp(health_refusal(), "trng"));
     // A later PASS opens it again (the latest result counts).
     health_inject("trng", HEALTH_PASS, "x");
     health_inject("kat", HEALTH_PASS, "x");
     CHECK(health_gate(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO) == NULL);
-    CHECK(health_gate_refuse(HEALTH_GATE_KEYS) == NULL);
-    CHECK(!strcmp(health_refusal(), "trng"));       // the last refusal is remembered
     // A check added later holds its gate the same way.
     static const health_check_t extra = {"inj-keys", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS,
                                          step5};

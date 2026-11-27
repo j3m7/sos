@@ -25,7 +25,6 @@ static unsigned count;
 static health_clock_fn clock_us;
 static uint32_t boot_ms;
 static int busy = -1;                   // the background check part-way through, or -1
-static const char *refused_by;          // health_refusal()
 
 static struct {
     bool active;
@@ -152,7 +151,6 @@ void health_init(const health_check_t *checks, unsigned n, health_clock_fn now) 
     clock_us = now;
     boot_ms = 0;
     busy = -1;
-    refused_by = NULL;
     count = n < HEALTH_MAX ? n : HEALTH_MAX;
     for (unsigned i = 0; i < count; i++) {
         entries[i].check = &checks[i];
@@ -209,17 +207,6 @@ const char *health_gate(uint32_t gate) {
         if ((entries[i].check->gates & gate) && entries[i].result.status == HEALTH_FAIL)
             return entries[i].check->name;
     return NULL;
-}
-
-const char *health_gate_refuse(uint32_t gate) {
-    const char *name = health_gate(gate);
-    if (name)
-        refused_by = name;
-    return name;
-}
-
-const char *health_refusal(void) {
-    return refused_by;
 }
 
 // --- boot tier -------------------------------------------------------------------------------
