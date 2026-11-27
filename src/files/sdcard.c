@@ -351,9 +351,10 @@ static DSTATUS init_layer(sd_card_t *c) {
     // logged once per insertion rather than at every try.
     bool was_up = !(c->state.m_Status & STA_NOINIT);
     DSTATUS st = lib_init(c);
-    if (st & STA_NOINIT)
+    if (st & STA_NOINIT) {
         crypt_off();
-    else if (!was_up || card_kind == KIND_UNKNOWN)
+        c->state.sectors = 0;               // no card: its size isn't known (sd format's test)
+    } else if (!was_up || card_kind == KIND_UNKNOWN)
         detect();
     return st;
 }
@@ -670,6 +671,7 @@ static void cmd_speed(shell_t *sh, const char *mhz) {
     card.state.mounted = false;
     crypt_off();
     card.state.m_Status |= STA_NOINIT;      // next mount initializes the card at the new rate
+    card.state.sectors = 0;                 // and stores its size again
     spi.baud_rate = (uint)(f * 1000000);
     if (mount(sh))
         shell_printf(sh, "SPI clock: %lu kHz (asked for %lu)\n",
@@ -1071,6 +1073,7 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     fix_asking = NULL;
     crypt_off();
     card.state.m_Status |= STA_NOINIT;
+    card.state.sectors = 0;                 // the card may be taken out now
     checking = false;
     check_stop = false;
     unmounted_by_hand = true;
@@ -1445,6 +1448,7 @@ void sdcard_command(shell_t *sh, char *args) {
         unmounted_by_hand = true;           // no quiet remount (sdcard_mount_retry) under the hand
         crypt_off();                        // forget the card's key
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
+        card.state.sectors = 0;             // and its size isn't the old card's
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
