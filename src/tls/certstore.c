@@ -359,7 +359,6 @@ static void cmd_status(shell_t *sh) {
     }
 }
 
-
 void certstore_command(shell_t *sh, char *args) {
     if (!args || !*args) {
         cmd_status(sh);

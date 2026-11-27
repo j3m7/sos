@@ -960,7 +960,7 @@ static int l_clock_sync(lua_State *L) {
 // sos.random(n): n random bytes (from core 0's DRBG, 4 KB per request).
 static int l_random(lua_State *L) {
     lua_Integer n = luaL_checkinteger(L, 1);
-    luaL_argcheck(L, n >= 0 && n <= 1024 * 1024, 1, "from 0 to 1048576 bytes");
+    luaL_argcheck(L, n >= 0 && n <= 128 * 1024, 1, "from 0 to 131072 bytes (a script's memory)");
     luaL_Buffer b;
     char *out = luaL_buffinitsize(L, &b, (size_t)n);
     for (lua_Integer at = 0; at < n; at += LUA_REQ_DATA) {

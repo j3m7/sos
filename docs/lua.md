@@ -68,7 +68,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.ssh.status()` | what `ssh` shows: `{running=, key_type=, fingerprint=, max_sessions=, logins=, refused_busy=, refused_penalty=, dropped_stale=, sessions = { {slot=, login=, address=, state=, sftp=, seconds=}, ... }}` |
 | `sos.tls.roots()` | the roots TLS trusts, as `tls roots` shows them: `{builtin = {names...}, file = {path=, state=, used=, count=, why=}}` |
 | `sos.wall(msg)` | send `msg` to every shell, with the script's path as the sender; returns how many (0 if nobody is logged in), or `nil` and why: other shells haven't read the last 16 messages yet (try again shortly), or more than 10 a second (the limit `sos.log` shares) |
-| `sos.random(n)` | `n` random bytes (up to 1 MB) from the chip's random number generator, through wolfCrypt's DRBG on core 0 |
+| `sos.random(n)` | `n` random bytes (up to 128 KB, a script's memory) from the chip's random number generator, through wolfCrypt's DRBG on core 0 |
 | `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
