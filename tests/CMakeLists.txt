@@ -310,3 +310,32 @@ add_test(NAME man_topic COMMAND test_man_topic)
 
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)
+
+# Fuzz targets (tests/fuzz/): parsers of what the network, the card, the flash and terminals
+# send. Each runs here over its corpus (tests/fuzz/corpus/<name>/: seeds, and any input that
+# once crashed it) with the sanitizers of this build. With clang and -DSOS_FUZZ=ON each is
+# also built as a libFuzzer program, fuzz_<name> (`just fuzz <name>`).
+option(SOS_FUZZ "Build the libFuzzer targets (needs clang)" OFF)
+if (SOS_FUZZ AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SOS_FUZZ needs clang: CC=clang cmake -S tests -B build-fuzz -DSOS_FUZZ=ON")
+endif()
+function(sos_fuzz name)
+    set(srcs ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/fuzz_${name}.c ${ARGN})
+    add_executable(replay_${name} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/replay.c ${srcs})
+    target_include_directories(replay_${name} PRIVATE ${SOS_ROOT}/src)
+    add_test(NAME fuzz_${name} COMMAND replay_${name} ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${name})
+    if (SOS_FUZZ)
+        add_executable(fuzz_${name} ${srcs})
+        target_include_directories(fuzz_${name} PRIVATE ${SOS_ROOT}/src)
+        target_compile_options(fuzz_${name} PRIVATE -fsanitize=fuzzer)
+        target_link_options(fuzz_${name} PRIVATE -fsanitize=fuzzer)
+    endif()
+endfunction()
+sos_fuzz(http ${SOS_ROOT}/src/net/http_msg.c)
+sos_fuzz(nts_ke ${SOS_ROOT}/src/time/nts_ke.c)
+sos_fuzz(nts_ntp ${SOS_ROOT}/src/time/nts_ntp.c)
+sos_fuzz(certbundle ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/heaptag.c
+    ${SOS_ROOT}/src/core/config.c)
+sos_fuzz(config)                                    # includes config.c itself
+sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
+sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)

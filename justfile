@@ -41,6 +41,15 @@ lint:
 tidy *files:
     tools/tidy.sh {{ files }}
 
+# libFuzzer on a parser (clang): http nts_ke nts_ntp certbundle config ping terminal (docs/development.md)
+fuzz target seconds="60":
+    [[ -f build-fuzz/build.ninja ]] || CC=clang cmake -S tests -B build-fuzz -G Ninja -DSOS_FUZZ=ON
+    cmake --build build-fuzz --target {{ quote("fuzz_" + target) }}
+    mkdir -p {{ quote("build-fuzz/corpus/" + target) }} {{ quote("build-fuzz/crashes/" + target) }}
+    {{ quote("build-fuzz/fuzz_" + target) }} -max_total_time={{ quote(seconds) }} -max_len=8400 \
+        {{ quote("-artifact_prefix=build-fuzz/crashes/" + target + "/") }} \
+        {{ quote("build-fuzz/corpus/" + target) }} {{ quote("tests/fuzz/corpus/" + target) }}
+
 # Which key an image is signed with, and the flash guard's verdict; flashes nothing
 flash-check dir="build":
     tools/flash.sh -n {{ quote(dir / "sos.bin") }}
