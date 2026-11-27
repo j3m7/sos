@@ -340,12 +340,12 @@ bool log_history_entry(uint32_t *cursor, log_entry_t *e, bool *lost) {
     if (!hooks)
         return false;
     uint32_t saved = hooks->lock();
-    if (*cursor == 0 || before(*cursor, start)) {
+    // Before the oldest: the entries after it were overwritten. Past the newest: not a cursor
+    // this boot gave (one kept from before a reboot, say), so whatever it pointed at is gone too.
+    if (*cursor == 0 || before(*cursor, start) || before(end, *cursor)) {
         if (*cursor != 0 && lost)
-            *lost = true;                       // the entries after it were overwritten
+            *lost = true;
         *cursor = start;
-    } else if (before(end, *cursor)) {
-        *cursor = end;                          // past the newest: not a cursor this log gave
     }
     bool ok = before(*cursor, end);
     if (ok)

@@ -748,8 +748,7 @@ static int l_dmesg(lua_State *L) {
         lua_getfield(L, t, "cursor");
         cursor = (uint32_t)lua_tointeger(L, -1);
         lua_getfield(L, t, "lost");
-        if (page == 0)
-            lost = lua_toboolean(L, -1);
+        lost = lost || lua_toboolean(L, -1);    // a later page too, if the log overtook it
         lua_getfield(L, t, "more");
         bool more = lua_toboolean(L, -1);
         lua_settop(L, list);

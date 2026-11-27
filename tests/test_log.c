@@ -250,11 +250,10 @@ TEST(history_entries_report_lost_and_bad_cursors) {
     CHECK(log_history_entry(&cur, &e, &lost) && !lost);     // only the call that jumped says so
     uint32_t zero = 0;
     CHECK(log_history_entry(&zero, &e, &lost) && !lost);    // 0 is "from the oldest", not lost
-    uint32_t ahead = cur + 100000;              // a cursor this log never gave
-    CHECK(!log_history_entry(&ahead, &e, &lost) && !lost);
-    log_msg(SOS_LOG_INFO, "after");
-    CHECK(log_history_entry(&ahead, &e, &lost) && !lost);   // it was moved to the end
-    CHECK(!strcmp(e.text, "after"));
+    uint32_t ahead = cur + 100000;              // a cursor this boot never gave (an old boot's)
+    CHECK(log_history_entry(&ahead, &e, &lost) && lost);    // lost: from the oldest kept
+    CHECK(strstr(e.text, "msg ") != NULL);
+    CHECK(log_history_entry(&ahead, &e, &lost) && !lost);
 }
 
 TEST(overflow_before_printing_is_reported) {

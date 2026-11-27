@@ -230,7 +230,8 @@ three values:
   `"kern"`, `"auth"`, `"daemon"`, `"user"` or `"none"`, and the message without the time and the
   level's tag;
 - a cursor: pass it to the next call to get only the entries logged since;
-- `lost`: `true` if entries after the cursor you passed were dropped before this call.
+- `lost`: `true` if entries after the cursor you passed are gone: dropped before this call, or
+  the cursor is from before a reboot. Then the list starts at the oldest entry kept.
 
 The log keeps only the last 4 KB of messages (about 50 lines), so a script that watches it should
 read it often enough; `lost` says when it didn't. Without a cursor (or with 0) it returns all that

@@ -214,7 +214,8 @@ static void dmesg_table(lua_info_t *w, uint32_t cursor) {
         lua_info_open(w, "");
         lua_info_num(w, "time", (double)e.uptime_ms / 1000.0);
         lua_info_str(w, "level", log_level_name(level < SOS_LOG_ERR ? SOS_LOG_ERR : level));
-        lua_info_str(w, "facility", log_facility_name(e.priority & SOS_LOG_FACILITY_MASK));
+        const char *facility = log_facility_name(e.priority & SOS_LOG_FACILITY_MASK);
+        lua_info_str(w, "facility", facility ? facility : "none");
         lua_info_str(w, "text", e.text);
         lua_info_close(w);
         if (w->failed || w->cap - w->len < DMESG_TAIL) {
