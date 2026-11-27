@@ -104,7 +104,9 @@ local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
   GitHub (not from the firmware's commit, so a board gets a tzdata update without a reflash). It
   writes `/tz/zones.~new`, checks that every line is a zone with a rule the board can use, then
   renames it into place, so a failed download leaves the old bundle. It then says whether the
-  saved zone's rule changed. It isn't available while `sd check` has the card.
+  saved zone's rule changed. It works from any shell, SSH included, because the card can be
+  written over SFTP anyway and only `time zone <name>` on the console changes the setting. It
+  isn't available while `sd check` has the card.
 - **`tools/tz-install.sh [user@]<host>`** copies the same file over SFTP.
 
 The bundle holds each zone's current rule, not its history: local time is right from the

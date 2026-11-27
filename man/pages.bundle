@@ -1555,8 +1555,10 @@ TIME ZONES
     'time zone install' downloads tz/zones.bundle from the main branch of
     the SOS repository on GitHub into /tz (the board needs the network),
     checks every line of it, and says whether the saved zone's rule changed.
-    From a computer, tools/tz-install.sh <host> copies it over SFTP. The
-    bundle is built from IANA's signed tzdata releases.
+    It works from any shell, SSH included, on purpose: the card can be
+    written over SFTP anyway, and only 'time zone <name>' on the console
+    changes the setting. From a computer, tools/tz-install.sh <host> copies
+    it over SFTP. The bundle is built from IANA's signed tzdata releases.
 
     Only what is shown changes. Log files, file times (ls, SFTP), chat and
     wall stamps and log rotation stay UTC and say so.

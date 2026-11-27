@@ -24,6 +24,7 @@
 #include "time/tzrule.h"
 
 #define TZZONE_NEW      TZZONE_DIR "/zones.~new"    // a bundle being downloaded
+#define TZZONE_OLD      TZZONE_DIR "/zones.~old"    // the one it replaces, until it has
 // Always main's: a tzdata update doesn't depend on the firmware, so a board takes it without
 // being reflashed.
 #define TZZONE_URL      "https://raw.githubusercontent.com/j3m7/sos/main/tz/zones.bundle"
@@ -283,14 +284,22 @@ static bool install_done(shell_t *sh, install_job_t *j) {
         f_unlink(TZZONE_NEW);
         return install_end(j);
     }
-    fr = f_unlink(TZZONE_BUNDLE);
+    // The old bundle is moved aside, not removed, until the new one is in its place: a failure
+    // in between puts it back, so the card always has one.
+    f_unlink(TZZONE_OLD);                           // left by an install cut short
+    fr = f_rename(TZZONE_BUNDLE, TZZONE_OLD);
+    bool had_old = fr == FR_OK;
     if (fr == FR_OK || fr == FR_NO_FILE)
         fr = f_rename(TZZONE_NEW, TZZONE_BUNDLE);
     if (fr != FR_OK) {
         shell_printf(sh, "time zone install: " TZZONE_BUNDLE ": %s\n", files_error(fr));
         f_unlink(TZZONE_NEW);
+        if (had_old && f_rename(TZZONE_OLD, TZZONE_BUNDLE) != FR_OK)
+            shell_printf(sh, "the old bundle is in " TZZONE_OLD "; run install again\n");
         return install_end(j);
     }
+    if (had_old)
+        f_unlink(TZZONE_OLD);
     shell_printf(sh, "time zone install: tzdata %s, %u zones, in " TZZONE_BUNDLE "\n", f.version,
                  f.zones);
     const sos_config_t *c = settings();
