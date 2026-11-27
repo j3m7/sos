@@ -295,13 +295,12 @@ TEST(tee_write_error_says_so_once_and_shuts) {
     CHECK(!p.done && card_len == 4);
     pipe_write(&p, "defg\n", 5);                   // would pass 6: refused
     CHECK(p.done && !card_open);
-    CHECK_STR(said, "tee: /f: card full\n");
-    CHECK_STR(out, "abc\ndefg\n");                  // the terminal still got this write
+    CHECK_STR(said, "");                            // the message goes down the line, not aside
+    CHECK_STR(out, "abc\ndefg\ntee: /f: card full\n");    // after what this write owed
     pipe_write(&p, "more\n", 5);                   // dropped: the line is shut
     pipe_end(&p);
-    CHECK_STR(said, "tee: /f: card full\n");        // not said again
     CHECK(card_len == 4 && card_closes == 1);
-    CHECK_STR(out, "abc\ndefg\n");
+    CHECK_STR(out, "abc\ndefg\ntee: /f: card full\n");    // not said again
     CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 

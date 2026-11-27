@@ -387,14 +387,14 @@ typedef struct {
 
 static const pipe_filter_t tee_filter;
 
-// Say why on the terminal: not through the line, which would write the message into the file
-// and pass it on.
+// Say why, down the line like any output of the command's (there is no stderr; under `| more`
+// it lands in the pager's text, not on top of its frame). Only once the file is closed, so the
+// message isn't written into it.
 static void tee_say(tee_t *t, const char *what) {
-    pipeline_t *p = t->st.pipe;
-    bool aside = p->aside;
-    p->aside = true;
-    shell_printf(p->sh, "tee: %s: %s\n", t->path, what);
-    p->aside = aside;
+    char msg[SHELL_PATH_MAX + 80];
+    int n = snprintf(msg, sizeof(msg), "tee: %s: %s\n", t->path, what);
+    if (n > 0)
+        pipe_emit(&t->st, msg, (size_t)n < sizeof(msg) ? (size_t)n : sizeof(msg) - 1);
 }
 
 // Close the file (once); a failure to write it out is reported unless one was already.
@@ -413,8 +413,8 @@ static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
         const char *err = pipe_file_write(t->file, buf, len);
         if (err) {                          // once: the file is closed, the line ends
             tee_finish(t, false);
-            tee_say(t, err);
             pipe_emit(st, buf, len);        // what the terminal was owed from this write
+            tee_say(t, err);
             pipe_shut(st);
             return;
         }
