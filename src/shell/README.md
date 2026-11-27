@@ -28,8 +28,10 @@ translation (`crlf`), and `admin` (true for the console only).
   a row lists them in columns and redraws the line. `SHELL_ADMIN` words are offered only on an
   admin channel, `SHELL_HIDDEN` ones never. At a question, only if it has a completer
   (`shell_ask_complete()`, refused for a secret one): the whole answer, spaces included, from
-  that function (`complete_answer()`); the SSID questions use the names a scan hears. Nothing at
-  a password.
+  that function (`complete_answer()`); the SSID questions use the names a scan hears.
+  `shell_ask_complete_words()` completes only the last word instead (single-word values, a space
+  after one): the chat prompt, with `/who`, `/quit` and the names in the room. Nothing at a
+  password.
   After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
   `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
   main loop waits) for the directory named up to the last `/`, and offers its entries that start

@@ -73,8 +73,17 @@ void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn
 }
 
 void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete) {
-    if (sh->answer && !sh->secret)
+    if (sh->answer && !sh->secret) {
         sh->ask_complete = complete;
+        sh->ask_words = false;
+    }
+}
+
+void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete) {
+    if (sh->answer && !sh->secret) {
+        sh->ask_complete = complete;
+        sh->ask_words = true;
+    }
 }
 
 char shell_eof[] = "";
@@ -549,8 +558,8 @@ static bool tab_source(shell_t *sh, size_t *start, size_t *n, complete_fn fn, vo
     if (sh->answer) {
         if (!sh->ask_complete || sh->secret)
             return false;
-        *start = 0;
-        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, fn, arg, partial);
+        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, sh->ask_words, start,
+                             fn, arg, partial);
         return true;
     }
     const shell_cmd_t *const *tables = shell_command_tables(sh);

@@ -39,7 +39,8 @@ At the question for a Wi-Fi network's name ('wifi set', 'wifi add', setup), Tab 
 of the networks around, strongest first, and a second Tab lists them with their signal. They come
 from a scan that starts when the question is asked and takes about half a second; until it ends Tab
 only lists what it has heard so far. Names with characters that can't be shown as they are aren't
-offered. Tab does nothing at a password or any other question.
+offered. At the chat prompt it completes /who, /quit and the names in the room. Tab does nothing at
+a password or any other question.
 
 The console asks for its password before taking any command, once one is set, and locks itself
 again on logout, when the USB terminal disconnects and after 10 minutes with nothing typed;
