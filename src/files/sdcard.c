@@ -93,18 +93,18 @@ static block_dev_err_t (*lib_write_blocks)(sd_card_t *, const uint8_t *, uint32_
 static block_dev_err_t (*lib_read_blocks)(sd_card_t *, uint8_t *, uint32_t, uint32_t);
 static uint32_t (*lib_get_num_sectors)(sd_card_t *);
 
-// FatFs asks for the card size again at the end of a format, right after a long write, when the
-// card can still be busy: the driver's CMD9 (read CSD) then fails and it reports 0 sectors, which
-// fails the format. The size can't change while the card stays initialized (init stores it), so
-// fall back to that.
+// The card's size, from what init stored: it can't change while the card stays initialized, and
+// asking the card again isn't safe. The driver leaves a multi-block write (CMD25) open between
+// calls so that contiguous writes can go on; its size query (CMD9) doesn't close it first, so a
+// query right after a long write (f_mkfs asks again at the end of a format, after writing the
+// FATs) lands inside the open write, and the card rejects the next write with nonsense status
+// bits (issue #247: FAT32 formats failed with 1572). Only without a stored size is the card asked,
+// after closing any open write.
 static uint32_t get_num_sectors_cached(sd_card_t *c) {
-    uint32_t n = lib_get_num_sectors(c);
-    if (!n && c->state.sectors) {
-        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: size query failed, using %lu sectors from init",
-                (unsigned long)c->state.sectors);
-        n = c->state.sectors;
-    }
-    return n;
+    if (c->state.sectors)
+        return c->state.sectors;
+    c->sync(c);
+    return lib_get_num_sectors(c);
 }
 
 static struct { uint32_t writes, reads, sectors, last_sector, last_count; } io_stats;
@@ -351,9 +351,10 @@ static DSTATUS init_layer(sd_card_t *c) {
     // logged once per insertion rather than at every try.
     bool was_up = !(c->state.m_Status & STA_NOINIT);
     DSTATUS st = lib_init(c);
-    if (st & STA_NOINIT)
+    if (st & STA_NOINIT) {
         crypt_off();
-    else if (!was_up || card_kind == KIND_UNKNOWN)
+        c->state.sectors = 0;               // no card: its size isn't known (sd format's test)
+    } else if (!was_up || card_kind == KIND_UNKNOWN)
         detect();
     return st;
 }
@@ -691,6 +692,7 @@ static void cmd_speed(shell_t *sh, const char *mhz) {
     card.state.mounted = false;
     crypt_off();
     card.state.m_Status |= STA_NOINIT;      // next mount initializes the card at the new rate
+    card.state.sectors = 0;                 // and stores its size again
     spi.baud_rate = (uint)(f * 1000000);
     if (mount(sh))
         shell_printf(sh, "SPI clock: %lu kHz (asked for %lu)\n",
@@ -1092,6 +1094,7 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     fix_asking = NULL;
     crypt_off();
     card.state.m_Status |= STA_NOINIT;
+    card.state.sectors = 0;                 // the card may be taken out now
     checking = false;
     check_stop = false;
     unmounted_by_hand = true;
@@ -1466,6 +1469,7 @@ void sdcard_command(shell_t *sh, char *args) {
         unmounted_by_hand = true;           // no quiet remount (sdcard_mount_retry) under the hand
         crypt_off();                        // forget the card's key
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
+        card.state.sectors = 0;             // and its size isn't the old card's
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
