@@ -37,6 +37,10 @@ test *ctest_args:
 lint:
     tools/lint-shell.sh
 
+# clang-tidy on SOS's C sources (checks in .clang-tidy); extra arguments: only those files
+tidy *files:
+    tools/tidy.sh {{ files }}
+
 # Which key an image is signed with, and the flash guard's verdict; flashes nothing
 flash-check dir="build":
     tools/flash.sh -n {{ quote(dir / "sos.bin") }}

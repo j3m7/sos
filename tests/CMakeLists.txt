@@ -8,6 +8,7 @@ project(sos_host_tests C)
 enable_testing()
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)      # for tools/tidy.sh
 set(SOS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 option(SOS_TEST_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" ON)
