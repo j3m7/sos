@@ -289,7 +289,7 @@ end)
 ## Hashes and base64
 
 `sos.hash(alg, data [, raw])` returns the digest of the string `data`, and `sos.hmac(alg, key,
-data [, raw])` its HMAC with `key` (up to 4 KB), as lower-case hex, or as raw bytes when `raw` is
+data [, raw])` its HMAC with `key` (up to 4 KB; an empty key is allowed, as HMAC defines it), as lower-case hex, or as raw bytes when `raw` is
 true. `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. They run in wolfCrypt on core 0, the
 code TLS uses: about 5 ms for each 4 KB of data, which a long hash spends without stopping
 anything else. Failures (not enough memory) return `nil` and a message.

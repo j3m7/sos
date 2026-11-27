@@ -78,6 +78,11 @@ static void hmacs(void) {
     CHECK_HEX(hmac(LUA_HASH_SHA512, "Jefe", "what do ya want for nothing?"),
               "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
               "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737");
+    // An empty key is defined (it's padded with zeros like any short one): the RFC 2104 value,
+    // not an error.
+    CHECK_HEX(hmac(LUA_HASH_SHA256, "", "x"),
+              "4cbc96099a6467ce002461f10549b4898265ebe6188b45efacc44293516e62c4");
+    CHECK_HEX(hmac(LUA_HASH_SHA1, "", ""), "fbdb1d1b18aa6c08324b7d64b71fb76370690e1d");
     // RFC 4231 test case 6: a key longer than the block (131 bytes of 0xaa), hashed first.
     char key[132];
     memset(key, 0xaa, 131);
