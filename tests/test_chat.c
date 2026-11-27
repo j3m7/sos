@@ -10,6 +10,7 @@
 #include "chat/chat.h"
 #include "shell/complete.h"
 #include "shell/shell.h"
+#include "core/heaptag.h"
 #include "test.h"
 
 // --- fake channels ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn,
 
 void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     (void)sh; (void)name; (void)len;
-    free(text);                             // not under test here
+    heap_release(HEAP_EDIT, text);          // not under test here
 }
 
 void shell_execute(shell_t *sh, char *cmd) {

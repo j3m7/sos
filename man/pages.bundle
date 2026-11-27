@@ -677,7 +677,9 @@ NOTES
     rest is dropped and the text ends with a note saying so. A command that
     asks a question runs as if there were no '| more', and a full-screen
     program (edit, more, man) ignores it. Ctrl-C while the command runs drops
-    the output. A command with no output says so instead of opening the pager.
+    the output, and so is anything typed while it runs (it would be keys for
+    the pager). A command with no output says so instead of opening the pager.
+    Messages from other shells wait until the pager is left.
 
     'man <topic>' shows a manual page in this viewer. Log messages are held on
     the console while it runs there, as for the editor.

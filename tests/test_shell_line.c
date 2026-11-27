@@ -66,6 +66,8 @@ static int n_executed;
 static int job_steps, job_calls, job_cancels;
 static bool job_partial;
 static int job_arg_token;
+static int job_ask_step;                    // the step that asks a question (0: none)
+static void fake_answer(shell_t *sh, char *answer, void *arg);
 
 static bool fake_job(shell_t *sh, void *arg, bool cancel) {
     CHECK(arg == &job_arg_token);
@@ -75,6 +77,8 @@ static bool fake_job(shell_t *sh, void *arg, bool cancel) {
         return false;
     }
     shell_printf(sh, job_partial ? "step %d" : "step %d\n", job_calls);
+    if (job_calls == job_ask_step)
+        shell_ask(sh, "Really? ", false, fake_answer, NULL);
     return job_calls < job_steps;
 }
 
@@ -137,6 +141,13 @@ void shell_execute(shell_t *sh, char *cmd) {
     if (!strcmp(cmd, "ask")) {
         shell_printf(sh, "before the question\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
+        return;
+    }
+    if (!strcmp(cmd, "askjob")) {           // a job with a question pending (as chat's can be)
+        shell_printf(sh, "hold on\n");
+        shell_ask(sh, "Really? ", false, fake_answer, NULL);
+        job_calls = job_cancels = 0;
+        shell_run_job(sh, fake_job, &job_arg_token);
         return;
     }
     if (!strcmp(cmd, "job")) {
@@ -791,6 +802,73 @@ TEST(pipe_to_more_leaves_a_full_screen_program_alone) {
     CHECK(!shell_job_running(&sh));
     CHECK_EQ(paged_calls, 0);
     CHECK_EQ(raw_keys_got[0], 'x');
+}
+
+TEST(pipe_to_more_drops_input_typed_during_the_job) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 2;
+    job_partial = false;
+    type("job | more\r");
+    type("q\r");                                // would quit the pager, or run as a command
+    CHECK(sh.ahead_len > 0);
+    type("");
+    CHECK_EQ(paged_calls, 1);
+    CHECK_EQ(sh.ahead_len, 0);                  // neither: dropped
+    CHECK_EQ(n_executed, 1);
+}
+
+TEST(pipe_to_more_lets_a_jobs_question_through) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 1;
+    job_partial = false;
+    type("askjob | more\r");                    // a job that asked at once: released now
+    CHECK(!sh.pipe_pending && sh.pipe_buf == NULL);
+    CHECK_OUT("askjob | more\nhold on\n");
+    clear_out();
+    type("");
+    CHECK_EQ(paged_calls, 0);
+    CHECK_OUT("step 1\nReally? ");               // runs unpiped, then the question's prompt
+    type("y\r");
+
+    start(&io_plain);                           // a job that asks on its way: released then
+    paged_calls = 0;
+    job_steps = 2;
+    job_ask_step = 2;
+    type("job | more\r");
+    CHECK(sh.pipe_pending);
+    clear_out();
+    type("");
+    CHECK_OUT("");                              // step 1, captured
+    type("");                                   // step 2 asks and ends the job
+    CHECK_EQ(paged_calls, 0);
+    CHECK(sh.pipe_buf == NULL);
+    CHECK_OUT("step 1\nstep 2\nReally? ");
+    job_ask_step = 0;
+}
+
+TEST(pipe_to_more_on_a_locked_console_runs_plain) {
+    start(&io_console);
+    no_tables = true;                           // as shell.c's tables are while locked
+    paged_calls = 0;
+    type("help | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK(strstr(fake.out, "<help>") != NULL);  // the refusal (here: the fake's output) shows
+    no_tables = false;
+}
+
+TEST(pipe_to_more_holds_the_screen_for_messages) {
+    start(&io_plain);
+    job_steps = 2;
+    type("job | more\r");
+    CHECK(shell_screen_held(&sh));
+    clear_out();
+    shell_hide_input(&sh);                      // a message wanting the line: nothing to hide
+    CHECK_OUT("");
+    type("");
+    type("");
+    CHECK(!shell_screen_held(&sh));
 }
 
 TEST(pipe_to_more_ends_with_the_session) {
@@ -1812,6 +1890,10 @@ TEST_MAIN(
     RUN(pipe_to_more_with_nothing_says_so);
     RUN(pipe_to_more_lets_a_question_through);
     RUN(pipe_to_more_leaves_a_full_screen_program_alone);
+    RUN(pipe_to_more_drops_input_typed_during_the_job);
+    RUN(pipe_to_more_lets_a_jobs_question_through);
+    RUN(pipe_to_more_on_a_locked_console_runs_plain);
+    RUN(pipe_to_more_holds_the_screen_for_messages);
     RUN(pipe_to_more_ends_with_the_session);
     RUN(job_runs_in_steps_then_prompts);
     RUN(job_ends_output_with_newline_before_prompt);

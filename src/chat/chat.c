@@ -166,8 +166,8 @@ void chat_deliver(shell_t *sh) {
     peer_t *p = find(sh);
     if (!p || (!p->missed && p->next == head))
         return;
-    if (shell_raw_mode(sh))     // a full-screen program owns the screen: messages wait
-        return;
+    if (shell_screen_held(sh))  // a full-screen program owns the screen, or `| more` is
+        return;                 // capturing a command's output: messages wait
     char buf[CHAT_STAMP_MAX + CHAT_NAME_MAX + SHELL_LINE_MAX + 32];
     int space = shell_write_space(sh) - redraw_cost(sh);
     bool hidden = false;

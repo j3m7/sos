@@ -133,6 +133,7 @@ struct shell {
     char *pipe_buf;             // NULL when not capturing
     size_t pipe_len, pipe_cap;
     bool pipe_cut;              // output past SHELL_PIPE_MAX was dropped
+    bool pipe_oom;              // ... or because memory ran out
     bool pipe_pending;          // the command started a job: page when it ends
     char pipe_name[64];         // the command line, for the pager's status row
 };
@@ -216,6 +217,9 @@ void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
 // A raw-mode job (shell_run_raw) owns the screen: nothing else should write to this shell.
 bool shell_raw_mode(const shell_t *sh);
+// The screen isn't for messages now: a full-screen program owns it (raw mode), or a command's
+// output is being captured for the pager (`| more`). Messages from other shells wait.
+bool shell_screen_held(const shell_t *sh);
 
 // Like shell_run_job, in raw input mode, for full-screen programs: every key typed goes to `key`
 // as it arrives, decoded (keys.h), instead of being kept for afterwards. Ctrl-C is a key like
