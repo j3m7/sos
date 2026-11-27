@@ -323,6 +323,9 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   when (saved in the configuration; console only). The time of the last rotation is kept on
   the card (`/var/log/.rotated`), so a reboot keeps the count and a rotation missed while the
   board was off happens at the first chance; without the clock set nothing rotates.
+- **Protected:** like `/certs`, `/var/log` can be read from anywhere (SSH, SFTP, Lua) but
+  changed only on the console, so a session that gets in can't erase its traces. `/var`
+  itself is protected too (renaming it would move `/var/log`); the rest of `/var` isn't.
 - `logger [-p <level>] <message>` adds a line to the log from any shell (facility `user`, at
   `notice` unless `-p` says otherwise), tagged with the shell it came from. At most 10 a second.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`
