@@ -1,0 +1,24 @@
+NAME
+    setup - guided configuration of a new board
+
+SYNOPSIS
+    setup        (console only)
+
+DESCRIPTION
+    Asks, in order: a new console password if none is set (8 to 64 characters,
+    not echoed, twice), the Wi-Fi network (SSID) and its password (not echoed;
+    empty for an open network), and a public key to trust (paste one
+    authorized_keys line, e.g. ~/.ssh/id_ed25519.pub). Enter keeps the value
+    shown in brackets; Ctrl-C cancels without changing anything.
+
+    Each answer is saved in flash at once. Wi-Fi connects in the background,
+    and once the board has a network and a trusted key the SSH server starts;
+    the log shows the address and the host key fingerprint to check against
+    what your client prints.
+
+    The same settings can be written from the development machine over USB
+    (ninja provision), which replaces everything saved and makes the board a
+    new owner.
+
+SEE ALSO
+    passwd, wifi, key, config, ssh

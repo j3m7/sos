@@ -43,6 +43,7 @@
 #include "core/version.h"
 #include "core/wdog.h"
 #include "edit/edit.h"
+#include "man/man.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "lua/lua_core1.h"
@@ -228,6 +229,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
+    shell_printf(sh, "temp cal          chip temperature calibration\n");
     shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
@@ -257,6 +259,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
@@ -327,15 +330,86 @@ static void print_since_boot(shell_t *sh, const sensors_stats_t *st,
                  lo, lo_age, hi, hi_age, SENSORS_SAMPLE_S);
 }
 
-// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
-static void cmd_temp(shell_t *sh) {
+// A temperature difference with its sign: "+1.8 C", "-0.4 C", "0.0 C".
+static void format_temp_delta(char *out, size_t size, int tenths) {
     char t[SENSORS_TEXT_MAX];
+    sensors_format_temp(t, sizeof(t), tenths);
+    snprintf(out, size, "%s%s", tenths > 0 ? "+" : "", t);
+}
+
+// `temp cal [off | <degrees>]`: the chip temperature's calibration (a setting, so console only
+// to change). <degrees> is what a reference thermometer beside the board reads now; the
+// difference from the sensor's own reading is stored and added to every reading after.
+static void cmd_temp_cal(shell_t *sh, const char *value) {
+    char d[SENSORS_TEXT_MAX + 1], r[SENSORS_TEXT_MAX], ref_t[SENSORS_TEXT_MAX];
+    int old = settings()->temp_offset;
+    while (*value == ' ')
+        value++;
+    if (!*value) {
+        format_temp_delta(d, sizeof(d), old);
+        if (old)
+            shell_printf(sh, "chip temperature calibration: %s added to the sensor's reading\n", d);
+        else
+            shell_printf(sh, "chip temperature calibration: none (uncalibrated)\n");
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    int ref = 0, raw = 0, offset = 0;
+    if (strcmp(value, "off")) {
+        if (!sensors_parse_temp(value, &ref)) {
+            shell_printf(sh, "not changed: give 'off', or what a thermometer beside the board "
+                             "reads now, in degrees C\n(e.g. 23.5)\n");
+            return;
+        }
+        raw = sensors_read_temp_uncalibrated();
+        offset = ref - raw;
+        sensors_format_temp(r, sizeof(r), raw);
+        sensors_format_temp(ref_t, sizeof(ref_t), ref);
+        if (offset < -CONFIG_TEMP_OFFSET_MAX || offset > CONFIG_TEMP_OFFSET_MAX) {
+            shell_printf(sh, "not changed: the sensor reads %s, and %s is more than %d degrees "
+                             "from it.\nCheck the reference, and that the board has cooled to "
+                             "room temperature.\n", r, ref_t, CONFIG_TEMP_OFFSET_MAX / 10);
+            return;
+        }
+    }
+    settings()->temp_offset = (int16_t)offset;
+    save(sh);
+    sensors_temp_offset_changed(old);
+    format_temp_delta(d, sizeof(d), offset);
+    if (!offset && !strcmp(value, "off")) {
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: chip temperature calibration off");
+        shell_printf(sh, "chip temperature calibration: none (uncalibrated)\n");
+        return;
+    }
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: chip temperature calibration %s (sensor %s, "
+                                           "reference %s)", d, r, ref_t);
+    shell_printf(sh, "the sensor reads %s and the reference %s: %s is now added to every "
+                     "reading\n", r, ref_t, d);
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
+static void cmd_temp(shell_t *sh, char *args) {
+    if (args) {
+        if (!strncmp(args, "cal", 3) && (args[3] == ' ' || !args[3]))
+            cmd_temp_cal(sh, args + 3);
+        else
+            shell_printf(sh, "usage: temp [cal [off | <degrees>]]\n");
+        return;
+    }
+    char t[SENSORS_TEXT_MAX], d[SENSORS_TEXT_MAX + 1];
     sensors_format_temp(t, sizeof(t), sensors_read_temp());
     shell_printf(sh, "chip temperature: %s\n", t);
     print_since_boot(sh, sensors_temp_stats(), sensors_format_temp);
     shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
-                     "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
-                     "time on this board.\n");
+                     "under Wi-Fi load).\n");
+    int offset = settings()->temp_offset;
+    format_temp_delta(d, sizeof(d), offset);
+    if (offset)
+        shell_printf(sh, "Calibrated (`temp cal`): %s added to the sensor's reading.\n", d);
+    else
+        shell_printf(sh, "Uncalibrated: a few degrees off, good for change over time on this "
+                         "board (`temp cal`).\n");
 }
 
 // `power`: the supply voltage (VSYS) now, the lowest and highest since boot, and USB power.
@@ -945,6 +1019,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "not reset\n");
         return;
     }
+    int old_temp_offset = settings()->temp_offset;
     bool erased = settings_reset();
     // The live configuration is gone either way, the owner secret with it: an encrypted card
     // doesn't stay open under it, and the SSH host key was that owner's. SSH stops now (it
@@ -962,6 +1037,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
                          "back at the next boot.\n");
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
+    sensors_temp_offset_changed(old_temp_offset);   // and the chip temperature
     wifi_reconnect();
 }
 
@@ -1365,6 +1441,9 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    char tcal[SENSORS_TEXT_MAX + 1];
+    format_temp_delta(tcal, sizeof(tcal), c->temp_offset);
+    shell_printf(sh, "temp cal:      %s\n", c->temp_offset ? tcal : "off");
     unsigned days = c->log_rotate_days ? c->log_rotate_days : CONFIG_LOG_ROTATE_DAYS_DEFAULT;
     shell_printf(sh, "log rotation:  every %u day%s at %02u:%02u UTC%s\n", days,
                  days == 1 ? "" : "s", c->log_rotate_minute / 60u, c->log_rotate_minute % 60u,
@@ -1851,7 +1930,6 @@ static void cmd_nts(shell_t *sh, char *args) {
 // Commands that take no arguments, and others whose handler has another signature.
 static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
 static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
-static void run_temp(shell_t *sh, char *args) { (void)args; cmd_temp(sh); }
 static void run_power(shell_t *sh, char *args) { (void)args; cmd_power(sh); }
 static void run_version(shell_t *sh, char *args) { (void)args; cmd_version(sh); }
 static void run_mem(shell_t *sh, char *args) { (void)args; cmd_mem(sh); }
@@ -1889,6 +1967,72 @@ static void run_reboot(shell_t *sh, char *args) {
     watchdog_reboot(0, 0, 0);
 }
 
+// --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
+
+// `key del <n>`: the trusted keys' numbers, as `key list` shows them, with their comments.
+static void tab_key_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    const sos_config_t *c = settings();
+    char n[4];
+    for (unsigned i = 0; i < c->key_count; i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, c->keys[i].comment, arg);
+    }
+}
+
+// `wifi remove|prefer <n>`: the saved networks' numbers, as `wifi` shows them, with their SSIDs.
+static void tab_wifi_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    char n[4];
+    config_wifi_net_t net;
+    for (unsigned i = 0; config_wifi_get(settings(), i, &net); i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, net.ssid, arg);
+    }
+}
+
+// NTS servers the board knows: the build's default and the one set with `time server`.
+static void nts_servers(shell_value_fn fn, void *arg) {
+    const char *set = settings()->ntp_server;
+    fn(NTS_DEFAULT_SERVER, "default", arg);
+    if (set[0] && strcmp(set, NTS_DEFAULT_SERVER))
+        fn(set, "set with 'time server'", arg);
+}
+
+// `nts ke <host>` and `time server <name>`: those servers; console only, as another host is.
+static void tab_nts_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (sh->io->admin)
+        nts_servers(fn, arg);
+}
+
+static void tab_time_server(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (!sh->io->admin)
+        return;
+    fn("default", NULL, arg);
+    nts_servers(fn, arg);
+}
+
+// `ping <host>`: the NTS servers and the gateway, while Wi-Fi is up.
+static void tab_ping_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    nts_servers(fn, arg);
+    if (!wifi_up())
+        return;
+    char gw[IP4ADDR_STRLEN_MAX] = "";
+    cyw43_arch_lwip_begin();
+    if (netif_default && !ip4_addr_isany_val(*netif_ip4_gw(netif_default)))
+        ip4addr_ntoa_r(netif_ip4_gw(netif_default), gw, sizeof(gw));
+    cyw43_arch_lwip_end();
+    if (gw[0])
+        fn(gw, "gateway", arg);
+}
+
+static const shell_values_t key_numbers = SHELL_VALUES_INIT(tab_key_numbers);
+static const shell_values_t wifi_numbers = SHELL_VALUES_INIT(tab_wifi_numbers);
+static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
+static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
+static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
+
 // The words Tab offers after each command (shell.h): the subcommands its parser takes.
 #define END {0}
 #define W(name) {name, NULL, 0}
@@ -1900,17 +2044,20 @@ static const shell_word_t levels[] = {
 static const shell_word_t facilities[] = {
     W("none"), W("kern"), W("auth"), W("daemon"), W("user"), END};
 
+static const shell_word_t temp_words[] = {
+    {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    END};
 static const shell_word_t time_words[] = {
     {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, END}, 0},
     {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
-    {"server", (const shell_word_t[]){{"default", NULL, SHELL_ADMIN}, END}, 0},
+    {"server", SHELL_VALUES_OF(time_servers), 0},
     {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
     END};
 static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},
                                      END}, 0},
     END};
-static const shell_word_t nts_words[] = {W("ke"), W("query"), END};
+static const shell_word_t nts_words[] = {{"ke", SHELL_VALUES_OF(nts_hosts), 0}, W("query"), END};
 static const shell_word_t dmesg_words[] = {{"-f", facilities, 0}, END};
 static const shell_word_t logger_words[] = {{"-p", levels, 0}, END};
 static const shell_word_t rotate_words[] = {W("every"), W("at"), END};
@@ -1918,21 +2065,24 @@ static const shell_word_t log_words[] = {
     {"console", levels, SHELL_ADMIN}, {"history", levels, SHELL_ADMIN},
     {"file", levels, SHELL_ADMIN}, {"rotate", rotate_words, SHELL_ADMIN}, END};
 static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
+static const shell_word_t sensitivities[] = {W("0"), W("1"), W("2"), W("3"), END};
 static const shell_word_t glitch_words[] = {
-    {"watch", NULL, SHELL_ADMIN}, {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN},
+    {"watch", sensitivities, SHELL_ADMIN}, {"on", sensitivities, SHELL_ADMIN},
+    {"off", NULL, SHELL_ADMIN},
     {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
 static const shell_word_t rootsecret_words[] = {
     {"forget", NULL, SHELL_ADMIN},
     {"burn", (const shell_word_t[]){W("plan"), W("rehearse"), END}, SHELL_ADMIN},
     END};
 static const shell_word_t key_words[] = {
-    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", NULL, SHELL_ADMIN}, END};
+    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", SHELL_VALUES_OF(key_numbers), SHELL_ADMIN},
+    END};
 static const shell_word_t wifi_words[] = {
     {"stats", (const shell_word_t[]){W("chip"), END}, 0},
     {"set", NULL, SHELL_ADMIN},
     {"add", NULL, SHELL_ADMIN},
-    {"remove", NULL, SHELL_ADMIN},
-    {"prefer", NULL, SHELL_ADMIN},
+    {"remove", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
+    {"prefer", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
     {"connect", NULL, SHELL_ADMIN},
     {"power", on_off_admin, 0},             // shows the setting anywhere; on|off: console
     {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
@@ -1948,14 +2098,17 @@ static const shell_word_t sd_words[] = {
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
-static const shell_word_t http_words[] = {W("get"), W("head"), W("post"), END};
+static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
+static const shell_word_t http_words[] = {
+    {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+static const shell_word_t man_words[] = {W("install"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
     {"help", run_help, NULL, 0},
     {"?", run_help, NULL, SHELL_HIDDEN},
     {"uptime", run_uptime, NULL, 0},
-    {"temp", run_temp, NULL, 0},
+    {"temp", cmd_temp, temp_words, 0},
     {"power", run_power, NULL, 0},
     {"version", run_version, NULL, 0},
     {"time", cmd_time, time_words, 0},
@@ -1963,7 +2116,7 @@ static const shell_cmd_t commands[] = {
     {"nts", cmd_nts, nts_words, 0},
     {"mem", run_mem, NULL, 0},
     {"net", run_net, NULL, 0},
-    {"ping", ping_command, NULL, 0},
+    {"ping", ping_command, SHELL_VALUES_OF(ping_hosts), 0},
     {"ssh", run_ssh, NULL, 0},
     {"who", chat_cmd_who, NULL, 0},
     {"wall", chat_cmd_wall, NULL, 0},
@@ -1982,6 +2135,7 @@ static const shell_cmd_t commands[] = {
     {"lua", lua_command, lua_words, SHELL_PATH},
     {"edit", edit_command, NULL, SHELL_PATH},
     {"more", view_command, NULL, SHELL_PATH},
+    {"man", man_command, man_words, 0},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, SHELL_ADMIN},

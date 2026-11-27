@@ -1,0 +1,22 @@
+NAME
+    key - the SSH public keys the board trusts
+
+SYNOPSIS
+    key
+    key list
+    key add [<line>]      (console only)
+    key del <n>           (console only)
+
+DESCRIPTION
+    'key list' numbers the trusted keys and shows their fingerprints. They are
+    what decides who may log in over SSH (and SFTP): any user name logs in
+    with a trusted key, and the name is only shown. The key's comment names
+    the person in 'who', 'wall' and the chat.
+
+    'key add' trusts one authorized_keys line (ssh-ed25519 or
+    ecdsa-sha2-nistp256; up to 8 keys); without a line it asks for one, to
+    paste. 'key del <n>' stops trusting key n. Changes apply at once: a new
+    key works for the next login.
+
+SEE ALSO
+    ssh, setup, who, config

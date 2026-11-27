@@ -1,0 +1,15 @@
+NAME
+    cat - print a file
+
+SYNOPSIS
+    cat <file>
+
+DESCRIPTION
+    Prints the file to the terminal as it is. A job: Ctrl-C stops it, and a
+    slow SSH client slows it down instead of losing output (about 130 KB/s
+    over SSH). For reading a long file a screen at a time, with search, use
+    'more'; it also keeps a file from sending the terminal a sequence, which
+    'cat' doesn't.
+
+SEE ALSO
+    more, ls, echo

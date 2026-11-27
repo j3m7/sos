@@ -1,0 +1,27 @@
+NAME
+    passwd - set or change the console password
+
+SYNOPSIS
+    passwd        (console only)
+
+DESCRIPTION
+    Sets the console password, or changes it after asking for the current one:
+    8 to 64 printable ASCII characters, asked twice, not echoed. A board with
+    no console password opens straight into setting one (a new board: the
+    whole of 'setup', which starts with it). SSH sessions aren't affected;
+    they log in with their keys.
+
+    The console asks for the password before taking any command, and until it
+    is typed shows nothing: no greeting, no log lines, no messages. Each check
+    takes about 0.3 s by design, and after a wrong answer the next one waits
+    1 s, 2 s, 4 s ... up to 30 s; the count is kept in flash, so unplugging the
+    board between guesses skips no wait. An answer interrupted with Ctrl-C
+    counts as wrong. Wrong attempts are logged.
+
+    What is stored is not the password but a verifier in the sealed
+    configuration (PBKDF2, keyed under the root secret). If the password is
+    forgotten there is no way round it: erase the configuration over USB (or
+    provision the board again), which locks the board's encrypted SD cards.
+
+SEE ALSO
+    logout, setup, config

@@ -97,20 +97,11 @@ static void run(shell_t *sh, view_t *v, const char *name, pager_source_t src) {
     shell_run_raw(sh, view_step, view_key, v);
 }
 
-void view_command(shell_t *sh, char *args) {
-    if (!args || !*args || strchr(args, ' ')) {
-        shell_printf(sh, "usage: more <file>\n");
-        return;
-    }
+void edit_view_file(shell_t *sh, const char *path, const char *name) {
+    // `name` heads the error messages and the status row (the path itself for `more`).
     view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
     if (!v) {
-        shell_printf(sh, "more: out of memory\n");
-        return;
-    }
-    char path[PATH_LEN];
-    if (!path_resolve(sh->cwd, args, path, sizeof(path))) {
-        shell_printf(sh, "path too long\n");
-        heap_release(HEAP_EDIT, v);
+        shell_printf(sh, "%s: out of memory\n", name);
         return;
     }
     if (!sdcard_mount(sh)) {
@@ -120,21 +111,34 @@ void view_command(shell_t *sh, char *args) {
     FILINFO fi;
     FRESULT fr = f_stat(path, &fi);
     if (fr == FR_OK && (fi.fattrib & AM_DIR)) {
-        shell_printf(sh, "more: %s: is a directory\n", path);
+        shell_printf(sh, "%s: %s: is a directory\n", name, path);
         heap_release(HEAP_EDIT, v);
         return;
     }
     if (fr == FR_OK)
         fr = f_open(&v->file, path, FA_READ);
     if (fr != FR_OK) {
-        shell_printf(sh, "more: %s: %s\n", path, files_error(fr));
+        shell_printf(sh, "%s: %s: %s\n", name, path, files_error(fr));
         heap_release(HEAP_EDIT, v);
         return;
     }
     v->file_open = true;
     files_hold();
     pager_source_t src = { .read = read_file, .ctx = v, .size = (size_t)f_size(&v->file) };
-    run(sh, v, path, src);
+    run(sh, v, !strcmp(name, "more") ? path : name, src);
+}
+
+void view_command(shell_t *sh, char *args) {
+    if (!args || !*args || strchr(args, ' ')) {
+        shell_printf(sh, "usage: more <file>\n");
+        return;
+    }
+    char path[PATH_LEN];
+    if (!path_resolve(sh->cwd, args, path, sizeof(path))) {
+        shell_printf(sh, "path too long\n");
+        return;
+    }
+    edit_view_file(sh, path, "more");
 }
 
 void edit_view(shell_t *sh, const char *name, const char *text, size_t len) {

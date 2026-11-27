@@ -131,14 +131,32 @@ static const shell_word_t t_time[] = {
     W("stats"),
     W("status"),
     {0}};
+static const shell_word_t t_url[] = {{"https://", NULL, SHELL_NOSPACE}, {0}};
+static const shell_word_t t_http[] = {{"get", t_url, 0}, {0}};
+// Values from a function, as shell.c's key numbers: notes from outside, one with an escape
+// sequence and a line break; a value with a space, which can't be offered.
+static void t_key_numbers(shell_t *s, shell_value_fn fn, void *arg) {
+    (void)s;
+    char buf[8];
+    static const char *const notes[] = {"laptop", "evil\x1b[2J\nx", NULL};
+    for (int i = 0; i < 3; i++) {
+        snprintf(buf, sizeof(buf), "%d", i == 2 ? 12 : i + 1);
+        fn(buf, notes[i], arg);         // the buffer is reused: Tab must copy
+    }
+    fn("a b", NULL, arg);
+}
+static const shell_values_t t_keys = SHELL_VALUES_INIT(t_key_numbers);
+static const shell_word_t t_key[] = {{"del", SHELL_VALUES_OF(t_keys), 0}, {0}};
 static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
 static const shell_cmd_t t_commands[] = {
     C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
-    {"?", NULL, NULL, SHELL_HIDDEN}, {0}};
+    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0},
+    {"key", NULL, t_key, 0}, {0}};
 static const shell_word_t t_lua[] = {{"-b", NULL, SHELL_PATH}, W("ps"), {0}};
 static const shell_cmd_t t_files[] = {
     C("ls"), {"lua", NULL, t_lua, SHELL_PATH}, {"log", NULL, t_log, 0},
-    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR}, {0}};
+    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", NULL, NULL, SHELL_REDIRECT}, {0}};
 static const shell_cmd_t *const t_tables[] = {t_commands, t_files, NULL};
 static bool no_tables;          // as on a locked console
 
@@ -158,6 +176,7 @@ static const struct {
     {"/data", {"x.csv"}},
     {"/u", {"\xc3\xa9" "1", "\xc3\xa8" "2", "Mj\xc3\xb6lnir.txt", "bad\xc2\x9b" "c", "\xff"}},
     {"/big", {"zz", "aa"}},     // listed as cut short
+    {"/case", {"README.TXT", "ReadMe.md", "x.Bin", "\xc3\x96l.txt", "Docs/"}},
     // Look like something they aren't: U+202E (right-to-left override), U+200B (zero-width
     // space), U+00A0 and U+3000 (spaces that don't separate words), U+FEFF; then a plain one.
     {"/look", {"safe\xe2\x80\xaetxt.exe", "a\xe2\x80\x8b" "b", "a\xc2\xa0" "b",
@@ -1235,10 +1254,12 @@ TEST(tab_on_an_empty_line_lists_the_commands) {
     start(&io_plain);
     type("\t\t");
     // Not setup (admin only), not ? (hidden).
-    CHECK_OUT("\a\nhelp      hostname  time      ls        lua       log       cat       cd\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      web       key       ls        lua       log\n"
+              "cat       cd        echo\nsos> ");
     start(&io_admin);
     type("\t\t");
-    CHECK_OUT("\a\nhelp      hostname  time      setup     ls        lua       log       cat\ncd\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      setup     web       key       ls        lua\n"
+              "log       cat       cd        echo\nsos> ");
 }
 
 TEST(tab_list_wraps_rows_on_a_crlf_channel) {
@@ -1432,6 +1453,114 @@ TEST(tab_skips_names_that_look_like_something_else) {
     CHECK(line_is("cat look/ab "));                  // not U+FEFF c
 }
 
+TEST(tab_file_names_match_in_any_ascii_case) {
+    start(&io_plain);
+    type("cat case/x.b\t");
+    CHECK(line_is("cat case/x.Bin "));
+    CHECK_OUT("cat case/x.b\b\b\bx.Bin ");          // retyped in the name's case
+    start(&io_plain);
+    type("cat case/read\t");                         // README.TXT, ReadMe.md
+    CHECK(line_is("cat case/README."));              // the first one's case
+    type("M\t");
+    CHECK(line_is("cat case/ReadMe.md "));
+    start(&io_plain);
+    type("cat case/readme.txt\t");                   // whole, but in another case
+    CHECK(line_is("cat case/README.TXT "));
+    start(&io_plain);
+    type("cd case/d\t");
+    CHECK(line_is("cd case/Docs/"));
+}
+
+TEST(tab_case_folds_ascii_only) {
+    start(&io_plain);
+    type("cat case/\xc3\xb6\t");                     // ö doesn't match Ö
+    CHECK_OUT("cat case/\xc3\xb6\a");
+    start(&io_plain);
+    type("cat case/\xc3\x96\t");
+    CHECK(line_is("cat case/\xc3\x96l.txt "));
+}
+
+TEST(tab_commands_stay_case_sensitive) {
+    start(&io_plain);
+    type("TI\t");
+    CHECK_OUT("TI\a");
+    start(&io_plain);
+    type("time SY\t");
+    CHECK_OUT("time SY\a");
+}
+
+TEST(tab_completes_the_file_after_echo_redirect) {
+    start(&io_plain);
+    type("echo hi > r\t");
+    CHECK(line_is("echo hi > readme.txt "));
+    start(&io_plain);
+    type("echo hi >> do\t");
+    CHECK(line_is("echo hi >> docs/"));
+    start(&io_plain);
+    type("echo hi>r\t");                             // no spaces: echo still writes to it
+    CHECK(line_is("echo hi>readme.txt "));
+    start(&io_plain);
+    type("echo a > b >r\t");                         // the last '>' is the one echo uses
+    CHECK(line_is("echo a > b >readme.txt "));
+    start(&io_plain);
+    type("echo hi > case/read\t");                   // any case, as for other paths
+    CHECK(line_is("echo hi > case/README."));
+    start(&io_plain);
+    type("echo a>b\t");                              // a '>' inside the text, no spaces at all
+    CHECK(line_is("echo a>big/"));
+    start(&io_plain);
+    type("echo a >> r\t");                           // append: the name after the last '>'
+    CHECK(line_is("echo a >> readme.txt "));
+    start(&io_plain);
+    type("echo > \t\t");                             // nothing typed yet: the working directory
+    CHECK(strstr(fake.out, "readme.txt") != NULL);
+}
+
+TEST(tab_echo_text_is_free) {
+    start(&io_plain);
+    type("echo r\t");                                // no '>': text, not a path
+    CHECK_OUT("echo r\a");
+    start(&io_plain);
+    type("echo hi > my f\t");                        // a name with a space: never offered
+    CHECK_OUT("echo hi > my f\a");
+    start(&io_plain);
+    type("echo hi > readme.txt and\t");
+    CHECK_OUT("echo hi > readme.txt and\a");
+}
+
+TEST(tab_a_word_that_ends_with_nothing) {
+    start(&io_plain);
+    type("web g\t");
+    CHECK(line_is("web get "));
+    type("h\t");
+    CHECK_OUT("web get https://");                   // no space: the URL goes on
+    CHECK(line_is("web get https://"));
+    clear_out();
+    type("\t");                                      // complete already: nothing to add
+    CHECK_OUT("");
+}
+
+TEST(tab_values_from_a_function) {
+    start(&io_plain);
+    type("key del 2\t");
+    CHECK(line_is("key del 2 "));
+    start(&io_plain);
+    type("key del 1\t");                             // 1 and 12
+    CHECK_OUT("key del 1\a");
+    start(&io_plain);
+    type("key del \t");
+    clear_out();
+    type("\t");
+    // One a line with notes; the note's escape and line break can't reach the terminal.
+    CHECK_OUT("\n1   laptop\n2   evil.[2J x\n12\nsos> key del ");
+    start(&io_plain);
+    type("key del a\t");                             // "a b": not one word
+    CHECK_OUT("key del a\a");
+    start(&io_plain);
+    type("key del 2 \t");                            // nothing after a value
+    CHECK_OUT("key del 2 \a");
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1581,6 +1710,13 @@ TEST_MAIN(
     RUN(tab_paths_relative_to_the_working_directory_and_absolute);
     RUN(tab_skips_names_it_cannot_type_or_show);
     RUN(tab_skips_names_that_look_like_something_else);
+    RUN(tab_file_names_match_in_any_ascii_case);
+    RUN(tab_case_folds_ascii_only);
+    RUN(tab_commands_stay_case_sensitive);
+    RUN(tab_completes_the_file_after_echo_redirect);
+    RUN(tab_echo_text_is_free);
+    RUN(tab_a_word_that_ends_with_nothing);
+    RUN(tab_values_from_a_function);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);

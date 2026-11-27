@@ -1,0 +1,18 @@
+NAME
+    ls - list a directory on the SD card
+
+SYNOPSIS
+    ls [<path>]
+
+DESCRIPTION
+    Lists the directory (the working directory without a path): each entry
+    with its size and date. A job: it does a little work per pass of the main
+    loop, so the console, SSH and the watchdog keep going, and Ctrl-C stops it.
+    Files are dated with the system clock (UTC).
+
+    Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
+    used. Paths are relative to the shell's working directory unless they
+    start with '/'. File names with spaces aren't supported yet.
+
+SEE ALSO
+    cd, cat, sd, intro

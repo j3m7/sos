@@ -66,6 +66,21 @@ static bool name_ok(const char *name) {
     return true;
 }
 
+// Does `name` start with prefix[0..n), ignoring the case of ASCII letters? FAT matches names
+// that way too (README.TXT is readme.txt); other letters must be the same.
+static bool starts_with_any_case(const char *name, const char *prefix, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char a = (unsigned char)name[i], b = (unsigned char)prefix[i];
+        if (a >= 'A' && a <= 'Z')
+            a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z')
+            b += 'a' - 'A';
+        if (a != b || !a)
+            return false;
+    }
+    return true;
+}
+
 typedef struct {
     const char *prefix;
     size_t plen;
@@ -77,11 +92,78 @@ typedef struct {
 
 static void take_entry(const char *name, bool is_dir, void *arg) {
     entries_t *e = arg;
-    if ((e->dirs_only && !is_dir) || strncmp(name, e->prefix, e->plen) || !name_ok(name) ||
-        strlen(name) > SHELL_LINE_MAX)  // couldn't go on the line anyway
+    if ((e->dirs_only && !is_dir) || !starts_with_any_case(name, e->prefix, e->plen) ||
+        !name_ok(name) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
         return;
-    e->fn(name, is_dir ? '/' : ' ', e->arg);
+    e->fn(name, is_dir ? '/' : ' ', NULL, e->arg);
     e->count++;
+}
+
+// Complete the path line[p..len): the entries of the directory it names up to its last '/' that
+// start with what follows. *start goes just after that '/'.
+static size_t complete_path(const complete_src_t *src, const char *line, size_t p, size_t len,
+                            bool dirs_only, size_t *start, complete_fn fn, void *arg,
+                            bool *partial) {
+    if (!src->list_dir)
+        return 0;
+    const char *prefix = line + p;
+    size_t plen = len - p;
+    size_t slash = plen;
+    while (slash > 0 && prefix[slash - 1] != '/')
+        slash--;
+    char dir[SHELL_LINE_MAX + 1];
+    memcpy(dir, prefix, slash);
+    dir[slash] = '\0';
+    entries_t e = {prefix + slash, plen - slash, dirs_only, fn, arg, 0};
+    complete_dir_t r = src->list_dir(src->sh, dir, take_entry, &e);
+    *start = p + slash;
+    *partial = r == COMPLETE_DIR_PART;
+    return e.count;
+}
+
+// A command marked SHELL_REDIRECT (echo) writes to the text after the line's last '>' (or ">>"),
+// spaces before it skipped: that's a path when the cursor is in it. Complete it then; nothing
+// otherwise (the words before are free text).
+static size_t complete_redirect(const complete_src_t *src, const char *line, size_t from,
+                                size_t len, size_t *start, complete_fn fn, void *arg,
+                                bool *partial) {
+    size_t gt = len;
+    while (gt > from && line[gt - 1] != '>')
+        gt--;
+    if (gt == from)
+        return 0;
+    size_t p = gt;
+    while (p < len && line[p] == ' ')
+        p++;
+    if (memchr(line + p, ' ', len - p))  // a name with a space: never offered (complete.h)
+        return 0;
+    return complete_path(src, line, p, len, false, start, fn, arg, partial);
+}
+
+typedef struct {
+    const char *prefix;
+    size_t plen;
+    complete_fn fn;
+    void *arg;
+    size_t count;
+} values_t;
+
+// A word from a values function: offered like a file name, only if it can go on the line as
+// one word and be shown as it is.
+static void take_value(const char *value, const char *note, void *arg) {
+    values_t *v = arg;
+    if (strncmp(value, v->prefix, v->plen) || !name_ok(value) || strlen(value) > SHELL_LINE_MAX)
+        return;
+    v->fn(value, ' ', note, v->arg);
+    v->count++;
+}
+
+static bool is_values(const shell_word_t *words) {
+    return words && !words->name && (words->flags & SHELL_VALUES);
+}
+
+static char word_end(unsigned flags) {
+    return flags & SHELL_NOSPACE ? '\0' : ' ';
 }
 
 size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
@@ -116,8 +198,10 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
                         found = c;
                         break;
                     }
-            if (!found)
+            if (!found || (!src->admin && (found->flags & SHELL_ADMIN)))
                 return 0;
+            if (found->flags & SHELL_REDIRECT)
+                return complete_redirect(src, line, i, len, start, fn, arg, partial);
             words = found->words;
             flags = found->flags;
             at_command = false;
@@ -152,29 +236,23 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
         for (const shell_cmd_t *const *t = src->tables; *t; t++)
             for (const shell_cmd_t *c = *t; c->name; c++)
                 if (offered(c->flags, src->admin) && !strncmp(c->name, prefix, plen)) {
-                    fn(c->name, ' ', arg);
+                    fn(c->name, word_end(c->flags), NULL, arg);
                     count++;
                 }
         return count;
     }
+    if (is_values(words)) {
+        values_t v = {prefix, plen, fn, arg, 0};
+        ((const shell_values_t *)words)->list(src->sh, take_value, &v);
+        count = v.count;
+    }
     for (const shell_word_t *x = words; x && x->name; x++)
         if (offered(x->flags, src->admin) && !strncmp(x->name, prefix, plen)) {
-            fn(x->name, ' ', arg);
+            fn(x->name, word_end(x->flags), NULL, arg);
             count++;
         }
-    if (!paths || !src->list_dir)
+    if (!paths)
         return count;
-
-    // A path: the directory part, up to its last '/', and the start of a name in it.
-    size_t slash = plen;
-    while (slash > 0 && prefix[slash - 1] != '/')
-        slash--;
-    char dir[SHELL_LINE_MAX + 1];
-    memcpy(dir, prefix, slash);
-    dir[slash] = '\0';
-    entries_t e = {prefix + slash, plen - slash, dirs_only, fn, arg, 0};
-    complete_dir_t r = src->list_dir(src->sh, dir, take_entry, &e);
-    *start = s + slash;                 // with a '/', no word matched (words have none)
-    *partial = r == COMPLETE_DIR_PART;
-    return count + e.count;
+    // With a '/' in the path, *start moves past it, but then no word matched (words have none).
+    return count + complete_path(src, line, s, len, dirs_only, start, fn, arg, partial);
 }

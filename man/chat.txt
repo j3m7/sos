@@ -1,0 +1,24 @@
+NAME
+    chat - talk with the others in the chat room
+
+SYNOPSIS
+    chat
+
+DESCRIPTION
+    Joins the chat room: shows the last few lines and who is there, then each
+    line typed at the 'chat> ' prompt goes to everyone else in the room, as
+
+        [14:03] alice@laptop: hi
+
+    Joining and leaving are announced. In the room:
+
+        /who          who is in the room
+        /quit         leave (so do Ctrl-C, and Ctrl-D on an empty line)
+        //text        send a line that begins with '/'
+
+    Messages are kept only in memory (the last 16), never in the log or on the
+    card. See 'wall' for how messages arrive and what happens to a reader who
+    falls behind.
+
+SEE ALSO
+    wall, who
