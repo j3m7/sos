@@ -40,8 +40,9 @@ translation (`crlf`), and `admin` (true for the console only).
   with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
   name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
   `SHELL_DIR` keeps to directories. After a `>` or `>>` (the shell's redirect, any command) only
-  the text after the line's last `>` is a path, a `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and
-  a word list that is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers,
+  the text after the line's last `>` is a path, a `SHELL_NOSPACE` word (`https://`) ends with
+  nothing instead of a space, and a word list that is a `shell_values_t` (`SHELL_VALUES_OF`)
+  comes from a function: key numbers,
   saved networks, hosts. Those values pass the file-name check; their notes (a key's comment, an
   SSID) show only in the list, one match a line, through `termtext`. Names that aren't valid
   UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or hold what
@@ -111,7 +112,8 @@ The console asks for the console password before it takes any command (issue #64
   a stdio driver that is never registered (`stdio_filter_driver()`), so nothing is sent or
   read; the shell's own reads and writes open that gate for as long as they take.
 - **The gate:** `run_line()` calls `login_gate()` for every console command line, on the line as
-  typed and before it is split into words, and it refuses while locked. So the lock doesn't depend on the question staying pending.
+  typed and before it is split into words, and it refuses while locked. So the lock doesn't
+  depend on the question staying pending.
 - **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
   root-derived key). It runs as a shell job, a slice per main-loop pass, through
   `login_hooks_t`; `core/settings.c` holds the verifier and the key.
