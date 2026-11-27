@@ -26,8 +26,8 @@ them instead of replacing them:
   `sensors_usb_power()`. Read every 10 s by `sensors_poll()`.
 - **Memory:** `stackmon_peak()` for core 0 (painted at boot), `lua_core1_stack_peak()` for the
   32 KB Lua stack on core 1 (painted when a script starts). Core 0's stack is also guarded:
-  `PICO_USE_STACK_GUARDS` (MSPLIM), and `fault.c` reports a stack overflow. `heap_info()`, `heap_free()`, and
-  use by feature from `heaptag.h`.
+  `PICO_USE_STACK_GUARDS` (MSPLIM), and `fault.c` reports a stack overflow. Heap:
+  `heap_info()`, `heap_free()`, and use by feature from `heaptag.h`.
 - **Stored state:** the config records carry a CRC and are sealed (AES-GCM). `config.c` picks
   the newest valid record of the two but doesn't say whether the other one was valid.
   `rootsource()`, `rootflash_degraded()`, `otpread_status()`, `otpread_bootkeys()`,
