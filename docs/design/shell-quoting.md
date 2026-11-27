@@ -66,7 +66,8 @@ Rules, a subset of POSIX sh word splitting with nothing that SOS has no use for:
 - `\x` outside quotes: `x` is literal, whatever it is (space, quote, `|`, `>`, `\`).
 - `|`, `>` and `>>` outside quotes are operators. They end the word before them and need no
   spaces: `a|b` is the three words `a`, `|`, `b`. `>>` is one operator; `>>>` is `>>` then `>`.
-  An operator's `v[i]` is NULL and its `kind` says which it is.
+  An operator's `v[i]` is NULL and its `kind` says which it is, so that every command and
+  stage segment is a NULL-terminated slice of `v` that can be passed as `argv` without copying.
 - Quotes may open and close inside a word: `a"b c"d` is the one word `ab cd`. `""` and `''` are
   a word that is the empty string.
 - No variables, globbing, tilde, `#` comments, `;`, `&`, `<`, `2>`, backquotes or `$(...)`.
@@ -75,10 +76,12 @@ Rules, a subset of POSIX sh word splitting with nothing that SOS has no use for:
   (there is no multi-line input to continue into). The 33rd word is an error.
 
 Visible costs, accepted: quotes disappear from free text (`echo "a"` prints `a`; `lua -e
-print("hi")` must be typed `lua -e 'print("hi")'`), an apostrophe in a `wall`, `chat` or
-`logger` message must be escaped or the text quoted (`wall "don't"`), and `|` is always a pipe,
-so Lua code with `|` is quoted too. The user has said compatibility is not a constraint while
-one board runs SOS.
+print("hi")` must be typed `lua -e 'print("hi")'`); an apostrophe in a `wall`, `chat` or
+`logger` message must be escaped or the text quoted (`wall don't` is "unmatched quote", `wall
+"don't"` works), and this is the case people will hit most; `|` is always a pipe and `>` always
+a redirect, so Lua code with `|`, `>` or `>=`, an `->` in a message, or a JSON body for `http
+post` are quoted too (`http post <url> '{"a":1}'`). The user has said compatibility is not a
+constraint while one board runs SOS.
 
 ## 3. The line
 
@@ -101,8 +104,15 @@ redirect := ( '>' | '>>' ) word        (exactly one word, and the end of the lin
   command (`> f`) is an error and nothing runs. The tee rules hold: the path is checked when the
   line is parsed, the file is opened on the first byte of output or at the end for an empty one,
   and an error from the file ends the pipeline once, said on the terminal.
-- A command that asks a question or enters raw mode while piped is released, as today. A
-  locked console gets its refusal, not a pipeline.
+- Errors that run nothing, each with its own short message: a line that starts with an
+  operator (`| grep x`, `> f`), a trailing `|` (`a |`), a redirect without a path (`a >`), a
+  redirect not at the end (`a > f | grep x`), a second redirect (`a > f > g`), `| more` with a
+  redirect, a word after `|` that is not a stage name, and the tokenizer's three errors.
+- Order with the console lock: the lock is checked first, on the raw line, as `run_line()` does
+  today through `shell_command_tables()` before it splits anything; a locked console gets its
+  refusal (or the rescue command, which `rescue_allowed()` recognises by the first word) and
+  never the tokenizer's messages. Then the line is tokenized.
+- A command that asks a question or enters raw mode while piped is released, as today.
 - `echo` is an ordinary command: `echo <text>` prints it, and `echo <text> > file` is the shell's
   redirect. `SHELL_REDIRECT` is retired; Tab completes a path after an unquoted `>` or `>>` on
   any line (phase 3).
@@ -131,22 +141,32 @@ void shell_execute(shell_t *sh, int argc, char **argv);
 ```
 
 For a `run` handler it joins `argv[1..]` with single spaces, in place (the words lie in the
-line buffer in order, so the join only moves bytes left), and passes the result, or NULL when
-there are no words or the joined text is empty. Quoted spaces survive the join because they are
-inside a word: `echo "a   b"` prints `a   b`, `echo a   b` prints `a b`, as in sh. That is the
-join rule for the free-text commands (`echo`, `logger`, `lua -e`, `wall`, `chat`, `http post`),
-which stay on `run` and need no change. `key add <line>` stays on `run` too; its man page notes
-that a quote or backslash in the key's comment must be escaped (the base64 body has neither).
+line buffer in order, so the join only moves bytes left), through one helper (`words_join()`,
+in words.c) that migrated handlers with free text after their options use too. The handler gets
+NULL when `argc == 1` or when the joined text is empty (`echo ""`), otherwise the text as it is,
+spaces included: `echo "" ""` gets one space. Handlers that test only `!args` behave as today
+for every line that was valid before. Quoted spaces survive the join because they are inside a
+word: `echo "a   b"` prints `a   b`, `echo a   b` prints `a b`, as in sh. That is the join rule
+for the free-text commands (`echo`, `logger`, `wall`, `chat`, `http post`), which stay on `run`
+and need no change. `key add <line>` stays on `run` too; its man page notes that a quote or
+backslash in the key's comment must be escaped (the base64 body has neither).
 
 Which commands migrate to `runv` in phase 2: **every entry flagged `SHELL_PATH`** (so that
 `cat 'my file'` works and Tab's new quoting of inserted names, phase 3, lands on a command that
-can read it) **and the pipe filters** (`grep 'a b'`, `tee 'my file'`). A host test checks the
-first. Everything else migrates when it is next touched: its flat string is correct for the
-unquoted words those commands take.
+can read it) **and the pipe filters** (`grep 'a b'`, `tee 'my file'`). On main at e7174c4 the
+`SHELL_PATH` entries are `ls`, `cd`, `cat`, `cp`, `mv`, `rm`, `mkdir` (files.c) and `lua`,
+`edit`, `more` (shell.c): ten, and a host test checks that each of them has `runv`. `lua` is
+both a path command (`lua <file>`, `lua -b <file>`) and a free-text one (`lua -e <code>`): it
+moves to `runv`, and for `-e` its handler joins `argv[2..]` with `words_join()`, so `lua -e
+print(1 +  1)` still works and `lua -e 'print("hi")'` is one word. Everything else migrates when
+it is next touched: its flat string is correct for the unquoted words those commands take.
 
 Filters: `pipe_filter_t.open` takes `(shell_t *sh, int argc, char **argv)` with `argv[0]` the
 stage name, from phase 1, because `pipe_open()` already has the words then and there is no
-reason to join and re-split them.
+reason to join and re-split them. `grep` takes **one** pattern word after its options, as in
+sh: `grep 'no route'`, and `grep no route` is a usage error (today the text runs to the end of
+the stage, spaces kept; man/grep.txt changes in phase 1). `tee` takes one path word, which may
+now contain spaces.
 
 ## 5. Tab
 
@@ -172,12 +192,17 @@ depend on phase 1 and not on each other.
    go; filters open from words; `tee` gets `quiet` and the shell appends it for `>`/`>>`;
    `shell_execute()` takes words and joins for `run`; `cmd_echo` loses its redirect and
    `SHELL_REDIRECT` goes (complete.c's `complete_redirect()` is left for phase 3 but no longer
-   finds the flag: make it apply to every command, as the simplest step). Docs: man/intro.txt
-   gets a QUOTING paragraph; echo.txt, more.txt, tee.txt, lua.txt, key.txt and docs/lua.md
-   follow; shell-pipes.md's status line records that §2's rule is retired here.
-2. **Argument vectors** (#206): `runv` in `shell_cmd_t`, the table test, migration of every
-   `SHELL_PATH` command (files.c, `edit`, `more <file>`, `lua <file>`, `man install`, and the
-   rest the test lists) and of `two_args()`/`resolve()`; the files.c comment about spaces goes.
+   finds the flag: make it apply to every command, as the simplest step; it keeps scanning for
+   the line's last `>`, so until phase 3 a `>` inside quotes misleads Tab, accepted). Docs:
+   man/intro.txt gets a QUOTING paragraph; echo.txt (the redirect is the shell's; the file is
+   still written when the text is empty, because a quiet tee opens at the end for empty output),
+   grep.txt (one pattern word; its NOTES paragraph about `grep a|b` goes), more.txt, tee.txt,
+   lua.txt, key.txt, and one sentence each in wall.txt, logger.txt, chat.txt and http.txt
+   pointing at intro's QUOTING; docs/lua.md's examples; shell-pipes.md's status line records that
+   §2's rule is retired here.
+2. **Argument vectors** (#206): `runv` in `shell_cmd_t`, the table test, migration of the ten
+   `SHELL_PATH` commands listed in §4 (`lua -e` joining with `words_join()`) and of
+   `two_args()`/`resolve()`; the files.c comment about spaces goes.
 3. **Tab with quotes** (#207): §5.
 
 Not in scope: `<`, `2>`, `;`, variables, globbing. A `>` sugar for `tee` was the reason this
