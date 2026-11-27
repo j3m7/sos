@@ -15,9 +15,11 @@ DESCRIPTION
     (a relative path starts at the working directory); 'lua -e <code>' runs
     the code given; 'lua' opens a prompt where each line runs as entered, in
     one state for the session (an expression's value is printed; Ctrl-C
-    interrupts a line; Ctrl-D on an empty line or 'exit' leaves). The output
-    goes to the shell that started the script, and Ctrl-C stops it, as does
-    ending the session. One script runs at a time.
+    interrupts a line; Ctrl-D on an empty line or 'exit' leaves; Tab completes
+    the name being typed, 'string.fo' to 'string.format', looking into tables
+    without running any of the script's code). The output goes to the shell
+    that started the script, and Ctrl-C stops it, as does ending the session.
+    One script runs at a time.
 
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the

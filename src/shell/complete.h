@@ -70,9 +70,11 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
 // from `list` that starts with it exactly and passes the file-name check with U+0020 allowed
 // (one at a time, not at either end), ending in nothing ('\0'), and returns how many. With
 // `words` (shell_ask_complete_words), only the last word is: the values must be single words,
-// and end in ' '. *start is where the text Tab completes begins. *partial: the list may still
-// grow.
+// and end in ' '; with `chars` too (shell_ask_complete_chars), the word is the run of those
+// characters before the cursor, and the values end in nothing. *start is where the text Tab
+// completes begins. *partial: the list may still grow.
 size_t complete_answer(shell_t *sh, shell_ask_complete_fn list, const char *line, size_t len,
-                       bool words, size_t *start, complete_fn fn, void *arg, bool *partial);
+                       bool words, const char *chars, size_t *start, complete_fn fn, void *arg,
+                       bool *partial);
 
 #endif

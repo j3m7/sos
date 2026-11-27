@@ -41,8 +41,9 @@ DESCRIPTION
     starts when the question is asked and takes about half a second; until it
     ends Tab only lists what it has heard so far. Names with characters that
     can't be shown as they are aren't offered. At the chat prompt it completes
-    /who, /quit and the names in the room. Tab does nothing at a password or
-    any other question.
+    /who, /quit and the names in the room. At the Lua prompt it completes
+    names of globals and table fields ('string.fo'). Tab does nothing at a
+    password or any other question.
 
     The console asks for its password before taking any command, once one is
     set, and locks itself again on logout, when the USB terminal disconnects

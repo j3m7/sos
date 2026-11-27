@@ -22,6 +22,7 @@
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "lua/lua_bridge.h"
+#include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
 #include "net/http.h"
 
@@ -981,6 +982,18 @@ static void run_repl(lua_State *L) {
         __dmb();
         if (lua_job.repl_quit)
             break;
+        if (lua_job.repl_complete) {                // Tab: names, not a line (no code runs)
+            size_t used;
+            bool more;
+            lua_job.repl_names = lua_complete(L, lua_job.repl_line, (char *)lua_req.data,
+                                              LUA_REQ_DATA, &used, &more);
+            lua_job.repl_names_len = (uint32_t)used;
+            lua_settop(L, 2);
+            __dmb();
+            lua_job.repl_cmd = false;
+            __sev();
+            continue;
+        }
         // A Ctrl-C during the last line left the hook running every instruction (interrupt()).
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         if (lua_job.repl_reset) {

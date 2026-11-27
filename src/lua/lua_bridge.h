@@ -46,6 +46,14 @@ typedef struct {
     bool repl_reset;                // drop the unfinished statement before this line (Ctrl-C)
     bool repl_incomplete;           // the statement continues on the next line
     char repl_line[LUA_LINE_MAX + 1];
+    // Tab at the prompt (lua/lua_complete.h): with repl_complete set, repl_line is a name being
+    // typed, not a line to run. Core 1 writes the names that could finish it into lua_req.data
+    // (each ending in NUL: repl_names of them, repl_names_len bytes), leaves the statement and
+    // everything else alone, and clears repl_cmd as for a line. Core 0 clears repl_complete
+    // before it sends a line.
+    bool repl_complete;
+    uint32_t repl_names;
+    uint32_t repl_names_len;
     // Set by core 1 before DONE:
     bool ok;
     char error[256];

@@ -1657,6 +1657,32 @@ TEST(tab_question_completes_the_last_word_when_asked_to) {
     CHECK_EQ(ssids_calls, 0);
 }
 
+// Like the Lua prompt's completer: dotted names.
+static bool t_lua_names(shell_t *s, shell_value_fn fn, void *arg) {
+    (void)s;
+    fn("string.format", NULL, arg);
+    fn("string.find", NULL, arg);
+    fn("print", NULL, arg);
+    return false;
+}
+
+TEST(tab_question_word_of_given_characters) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "> ", false, on_answer, NULL);
+    shell_ask_complete_chars(&sh, t_lua_names, "abcdefghijklmnopqrstuvwxyz.:");
+    type("x = (pr\t");                               // the word starts after "("
+    CHECK(line_is("x = (print"));                    // nothing added: '(' or '.' is up to you
+    type(" .. string.fo\t");
+    CHECK(line_is("x = (print .. string.format"));
+    start_ask(&io_plain);
+    shell_ask(&sh, "> ", false, on_answer, NULL);
+    shell_ask_complete_chars(&sh, t_lua_names, "abcdefghijklmnopqrstuvwxyz.:");
+    type("string.f\t");
+    CHECK(line_is("string.f"));                      // format, find
+    type("\t");
+    CHECK_OUT("string.f\a\nstring.format  string.find\n> string.f");
+}
+
 TEST(tab_question_completer_ends_with_the_question) {
     start_ask(&io_plain);
     shell_ask(&sh, "SSID: ", false, on_answer, NULL);
@@ -1840,6 +1866,7 @@ TEST_MAIN(
     RUN(tab_question_list_still_growing);
     RUN(tab_never_completes_a_secret_question);
     RUN(tab_question_completes_the_last_word_when_asked_to);
+    RUN(tab_question_word_of_given_characters);
     RUN(tab_question_completer_ends_with_the_question);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);

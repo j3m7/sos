@@ -28,6 +28,7 @@
 #include "files/path.h"
 #include "files/sdcard.h"
 #include "lua/lua_bridge.h"
+#include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
 #include "net/http.h"
 
@@ -530,8 +531,44 @@ static bool repl_sent;                          // ...handed over to core 1
 static bool repl_reset_next;                    // drop the unfinished statement with the next line
 static bool repl_more;                          // the statement continues: ">> "
 
+// Tab at the prompt: core 1, waiting for the next line, lists the names that could finish the
+// one being typed (lua/lua_complete.h: raw table access only, so none of the script's code
+// runs). It takes microseconds; if core 1 hasn't answered within REPL_TAB_WAIT_US (or is still
+// busy with an earlier Tab, or stopping a line), nothing is offered this time, and the next
+// line waits for it as it waits for a line interrupted with Ctrl-C (repl_step).
+#define REPL_TAB_WAIT_US 20000
+
+static bool repl_tab(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (owner != sh || !repl || lua_job.state != LJ_RUNNING || lua_job.repl_cmd || !lua_req.data)
+        return false;
+    size_t s = sh->line_len;
+    while (s > 0 && strchr(LUA_COMPLETE_CHARS, sh->line[s - 1]))
+        s--;
+    size_t n = sh->line_len - s;            // <= SHELL_LINE_MAX <= LUA_LINE_MAX
+    memcpy(lua_job.repl_line, sh->line + s, n);
+    lua_job.repl_line[n] = '\0';
+    lua_job.repl_complete = true;
+    __dmb();
+    lua_job.repl_cmd = true;
+    __sev();
+    uint64_t until = time_us_64() + REPL_TAB_WAIT_US;
+    while (lua_job.repl_cmd && time_us_64() < until)
+        tight_loop_contents();
+    if (lua_job.repl_cmd)
+        return false;
+    __dmb();
+    lua_job.repl_complete = false;
+    const char *p = (const char *)lua_req.data, *end = p + lua_job.repl_names_len;
+    for (uint32_t i = 0; i < lua_job.repl_names && p < end; i++) {
+        fn(p, NULL, arg);
+        p += strlen(p) + 1;
+    }
+    return false;
+}
+
 static void repl_ask(shell_t *sh) {
     shell_ask_eof(sh, repl_more ? ">> " : "> ", repl_answer, NULL);
+    shell_ask_complete_chars(sh, repl_tab, LUA_COMPLETE_CHARS);
 }
 
 // Core 1 has ended the session (it couldn't start, or after exit): report and finish.
@@ -565,6 +602,7 @@ static bool repl_step(shell_t *sh, void *arg, bool cancel) {
         lua_out.tail = lua_out.head;            // what that line printed after Ctrl-C
         lua_job.cancel = false;
         memcpy(lua_job.repl_line, repl_pending, sizeof(lua_job.repl_line));
+        lua_job.repl_complete = false;          // a line, even after a Tab that timed out
         lua_job.repl_reset = repl_reset_next;
         repl_reset_next = false;
         __dmb();

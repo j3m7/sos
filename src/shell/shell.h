@@ -114,6 +114,7 @@ struct shell {
     bool ask_eof;               // Ctrl-D on an empty line answers SHELL_EOF (see shell_ask_eof)
     shell_ask_complete_fn ask_complete;     // Tab's answers to it (shell_ask_complete); NULL: none
     bool ask_words;             // ...for its last word only (shell_ask_complete_words)
+    const char *ask_chars;      // ...a word of these characters (shell_ask_complete_chars)
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
@@ -187,6 +188,10 @@ void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete);
 // from `complete`'s values, which must be single words, and adds a space after one, as on the
 // command line.
 void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete);
+
+// The same where a word isn't between spaces (a line of code): the word Tab completes is the
+// run of `chars` (kept, not copied) just before the cursor, and nothing is added after one.
+void shell_ask_complete_chars(shell_t *sh, shell_ask_complete_fn complete, const char *chars);
 
 // Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
 // prompt: Ctrl-D on an empty line answers SHELL_EOF ("end of input") instead of logging out.

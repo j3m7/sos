@@ -269,6 +269,7 @@ typedef struct {
     const char *typed;
     size_t len;
     bool words;
+    char end;
     complete_fn fn;
     void *arg;
     size_t count;
@@ -279,20 +280,26 @@ static void take_answer(const char *value, const char *note, void *arg) {
     if (strncmp(value, a->typed, a->len) || !text_ok(value, !a->words) ||
         strlen(value) > SHELL_LINE_MAX)
         return;
-    // A whole answer is done once completed (Enter sends it); a word gets a space, as on the
-    // command line.
-    a->fn(value, a->words ? ' ' : '\0', note, a->arg);
+    a->fn(value, a->end, note, a->arg);
     a->count++;
 }
 
 size_t complete_answer(shell_t *sh, shell_ask_complete_fn list, const char *line, size_t len,
-                       bool words, size_t *start, complete_fn fn, void *arg, bool *partial) {
+                       bool words, const char *chars, size_t *start, complete_fn fn, void *arg,
+                       bool *partial) {
     size_t s = 0;
-    if (words)
+    if (words && chars)
+        for (s = len; s > 0 && strchr(chars, line[s - 1]); s--)
+            ;
+    else if (words)
         for (s = len; s > 0 && line[s - 1] != ' '; s--)
             ;
     *start = s;
-    answers_t a = {line + s, len - s, words, fn, arg, 0};
+    // A whole answer is done once completed (Enter sends it); a word between spaces gets a
+    // space, as on the command line; a word of `chars` (a Lua name) gets nothing: what follows
+    // it is up to the person ('.', '(', ...).
+    answers_t a = {line + s, len - s, words, (char)(!words ? '\0' : chars ? '\0' : ' '), fn, arg,
+                   0};
     *partial = list(sh, take_answer, &a);
     return a.count;
 }
