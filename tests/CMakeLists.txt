@@ -320,6 +320,29 @@ else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()
 
+# src/files/fsck_exfat.c: the checker's exFAT parts, on images made by FatFs itself (ff.c and
+# ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library,
+# as for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
+if (NOT DEFINED SDCARD_ROOT)
+    set(SDCARD_ROOT "${SOS_ROOT}/lib/sdcard" CACHE PATH "SD card library source")
+endif()
+if (EXISTS ${SDCARD_ROOT}/src/ff15/source/ff.c)
+    if (NOT TARGET fatfs_host)
+        set(FATFS_DIR ${SDCARD_ROOT}/src/ff15/source)
+        add_library(fatfs_host STATIC ${FATFS_DIR}/ff.c ${FATFS_DIR}/ffunicode.c)
+        target_include_directories(fatfs_host PUBLIC ${FATFS_DIR} ${SDCARD_ROOT}/src/include)
+        target_compile_options(fatfs_host PRIVATE -w)     # the library's code, not ours to warn about
+    endif()
+    add_executable(test_fsck_exfat test_fsck_exfat.c ${SOS_ROOT}/src/files/fsck_exfat.c)
+    target_include_directories(test_fsck_exfat PRIVATE ${SOS_ROOT}/src ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(test_fsck_exfat PRIVATE
+        FSCK_EXFAT_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck_exfat")
+    target_link_libraries(test_fsck_exfat PRIVATE fatfs_host)
+    add_test(NAME fsck_exfat COMMAND test_fsck_exfat)
+else()
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck_exfat is skipped")
+endif()
+
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
 add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
 target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
