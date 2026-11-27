@@ -38,6 +38,7 @@
 #include "core/stackmon.h"
 #include "core/version.h"
 #include "core/wdog.h"
+#include "files/sdcard.h"
 #include "lua/lua_core1.h"
 #include "net/wifi.h"
 #include "time/rtc.h"
@@ -245,6 +246,24 @@ static void clock_table(lua_info_t *w) {
     lua_info_close(w);
 }
 
+// What `sd info` shows. Counting free space can take a moment on a FAT32 card (exFAT keeps a
+// bitmap); `sd info` does the same from any shell.
+static void sd_table(lua_info_t *w) {
+    sdcard_info_t i;
+    lua_info_bool(w, "mounted", sdcard_info(&i));
+    if (!i.card)
+        return;
+    lua_info_str(w, "card", i.card);
+    lua_info_int(w, "card_bytes", (int64_t)i.card_bytes);
+    lua_info_bool(w, "encrypted", i.encrypted);
+    lua_info_str(w, "fs", i.fs);
+    if (i.free_ok) {
+        lua_info_int(w, "total", (int64_t)i.total);
+        lua_info_int(w, "free", (int64_t)i.free);
+        lua_info_int(w, "cluster", i.cluster);
+    }
+}
+
 // Room kept after the entries for the list's end and the three fields after it.
 #define DMESG_TAIL 64
 
@@ -297,6 +316,7 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_GLITCH:  glitch_table(&w); break;
     case LH_WIFI:    wifi_table(&w); break;
     case LH_CLOCK:   clock_table(&w); break;
+    case LH_SD:      sd_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
     case LH_HEALTH:  health_lua_table(&w); break;     // results only: no check is run
     default:         return 0;
