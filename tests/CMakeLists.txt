@@ -348,8 +348,17 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     target_include_directories(test_fsck_faults PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
     add_test(NAME fsck_faults COMMAND test_fsck_faults)
+
+    # src/files/fsck_repair.c: sd check fix's repairs, through the harness above.
+    add_executable(test_fsck_repair test_fsck_repair.c fsck_disk.c fsck_faults.c fsck_damage.c
+        ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_repair.c)
+    target_include_directories(test_fsck_repair PRIVATE ${SOS_ROOT}/src)
+    # Thousands of full checks of a 130000-cluster image: optimized, the sanitizers still on.
+    target_compile_options(test_fsck_repair PRIVATE -O2)
+    target_link_libraries(test_fsck_repair PRIVATE fatfs_host)
+    add_test(NAME fsck_repair COMMAND test_fsck_repair)
 else()
-    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck and test_fsck_faults are skipped")
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck, test_fsck_faults and test_fsck_repair are skipped")
 endif()
 
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
