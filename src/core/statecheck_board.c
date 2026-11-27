@@ -199,6 +199,7 @@ static void hostkey_gather(statecheck_hostkey_t *h) {
     h->gave_up = k.gave_up;
     h->unsealed = k.unsealed;
     h->page_matches = k.page_matches;
+    h->erased = k.erased;
     const char *fp = sshd_host_fingerprint();
     h->fingerprint = fp && fp[0] ? fp : NULL;
 }

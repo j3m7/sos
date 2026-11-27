@@ -246,6 +246,18 @@ void statecheck_judge_otp(const statecheck_otp_t *o, health_result_t *out) {
         return;
     }
 
+    // The one FAIL comes before every WARN: a damaged row or split copies beside a revoked image
+    // key must not hide that the board won't start after a reset. The comparison uses the
+    // corrected hashes (key_ecc), so a damaged raw row doesn't invalidate it.
+    int image_slot = -1;
+    if (o->image_signed && bootkey_compare(&keys, o->image_hash, &image_slot) != BOOTKEY_MATCH)
+        image_slot = -1;
+    if (secure_boot && image_slot < 0) {
+        result(out, HEALTH_FAIL, "image key in no valid slot: no boot after a reset; "
+               "running on");
+        return;
+    }
+
     for (unsigned i = 0; i < STATECHECK_BOOTKEY_ROWS; i++) {
         statecheck_row_t r = statecheck_otp_row(o->key_raw[i], o->key_ecc[i]);
         if (r == STATECHECK_ROW_ECC_MISMATCH) {
@@ -282,14 +294,6 @@ void statecheck_judge_otp(const statecheck_otp_t *o, health_result_t *out) {
         return;
     }
 
-    int image_slot = -1;
-    if (o->image_signed && bootkey_compare(&keys, o->image_hash, &image_slot) != BOOTKEY_MATCH)
-        image_slot = -1;
-    if (secure_boot && image_slot < 0) {
-        result(out, HEALTH_FAIL, "image key in no valid slot: no boot after a reset; "
-               "running on");
-        return;
-    }
 
     // "valid 0=dev1 1=dev2 2=key"
     char slots[48] = "";
@@ -362,7 +366,11 @@ void statecheck_judge_hostkey(const statecheck_hostkey_t *h, health_result_t *ou
         return;
     }
     const char *fp = h->fingerprint ? h->fingerprint : "sshd not started";
-    if (!h->page_matches)
+    // An erase the user asked for is a WARN; the FAIL is kept for a page that changed without
+    // hostkey.c writing it, the finding it is for.
+    if (h->erased)
+        result(out, HEALTH_WARN, "erased: new key at next boot; sshd serves the old one");
+    else if (!h->page_matches)
         result(out, HEALTH_FAIL, "stored record changed since loaded; sshd serves the key in RAM");
     else if (h->unsealed)
         result(out, HEALTH_WARN, "stored unsealed (no root secret); %s", fp);

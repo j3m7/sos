@@ -132,6 +132,7 @@ typedef struct {
     bool unsealed;                      // in use as a plain record (no root secret, open board)
     bool page_matches;                  // the stored page's digest is the one taken when loaded
     const char *fingerprint;            // sshd's, "SHA256:..." (NULL: sshd not started)
+    bool erased;                        // hostkey_erase() since: gone on purpose, not changed
 } statecheck_hostkey_t;
 
 void statecheck_judge_hostkey(const statecheck_hostkey_t *h, health_result_t *out);

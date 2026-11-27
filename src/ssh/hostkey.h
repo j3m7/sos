@@ -38,6 +38,7 @@ typedef struct {
     bool gave_up;               // none, for a reason that lasts until a reboot (or a refusal)
     bool unsealed;              // the key in use is a plain record, used as it is
     bool page_matches;          // have_key, and the stored page is the one loaded
+    bool erased;                // hostkey_erase() since then: the page is gone on purpose
 } hostkey_health_t;
 void hostkey_health(hostkey_health_t *out);
 

@@ -53,6 +53,7 @@ static bool said_no_owner;
 // path here that rewrites the page records it again or clears it.
 static uint8_t page_digest[32];
 static bool have_digest;
+static bool erased;                         // hostkey_erase() since the key in use was loaded
 static bool in_use_unsealed;                // the key in use is a plain record, used as it is
 static uint8_t page[HOSTREC_PAGE];          // a record being built
 
@@ -228,6 +229,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         // The page as it is now, after any store above.
         have_digest = wc_Sha256Hash(keysector_page(KEYSECTOR_HOSTKEY), HOSTREC_PAGE,
                                     page_digest) == 0;
+        erased = false;
         in_use_unsealed = action == HOSTKEY_USE_PLAIN_UNSEALED;
     } else {
         wipe(key_der, sizeof(key_der));
@@ -245,11 +247,13 @@ void hostkey_owner_gone(void) {
     refused = false;
     said_no_owner = false;
     have_digest = false;
+    erased = false;
     in_use_unsealed = false;
 }
 
 bool hostkey_erase(void) {
     have_digest = false;                // whatever the page holds now isn't what was loaded
+    erased = true;                      // on purpose: the health check says so, not "changed"
     return keysector_write(KEYSECTOR_HOSTKEY, NULL);      // keeps the device key
 }
 
@@ -257,6 +261,7 @@ void hostkey_health(hostkey_health_t *out) {
     out->have_key = have_key;
     out->gave_up = gave_up;
     out->unsealed = in_use_unsealed;
+    out->erased = erased;
     out->page_matches = false;
     uint8_t now[sizeof(page_digest)];
     if (have_key && have_digest &&

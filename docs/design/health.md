@@ -684,8 +684,11 @@ the board, so it isn't used. For each boot key row the check takes the raw 24 bi
 bit-repair flip (both BRBP bits set: invert all 24), recomputes the 6 parity bits of the 16 data
 bits (the OTP macro's Hamming code, as picotool's `otp_calculate_ecc()` computes it), and
 compares. It also compares the 16 data bits with what the unguarded corrected alias
-(`otpread_ecc()`, which doesn't fault) returns for the same row: on a clean row they agree, and
-a row the hardware corrected shows as a difference. A blank row (all zero) is consistent. Pure
+(`otpread_ecc()`, which doesn't fault) returns for the same row: on a clean row they agree.
+A 1-bit error in the raw row shows as `ECC mismatch` (its parity no longer fits);
+`corrected` is reported only when the raw row is self-consistent but the alias returns other
+data. The check can't tell a correctable error from an uncorrectable one, and doesn't try.
+A blank row (all zero) is consistent. Pure
 and host tested (`statecheck.c`), with known rows from picotool's code. A row that reads as all
 ones (no permission) is reported, never judged.
 
@@ -865,12 +868,17 @@ build, where a dev key in a valid slot is named in the PASS.
   between them gives one stale result, put right at the next run.
 - `config`'s FAIL for "nothing usable" takes `unopened` before a damaged slot (it says more),
   and a damaged slot before a `refused` one.
+- `hostkey` after `hostkey_erase()`: WARN `erased: new key at next boot; sshd serves the old
+  one`. The FAIL `stored record changed since loaded` is kept for a page that changed without
+  hostkey.c writing it.
 - `failcount` judges, in order: the firmware overlapping the sector (FAIL), counts in RAM that
   flash didn't take, no marker, inconsistent tracks, a count above 0 (WARN), then PASS. The
   capacity in its text is `FAILCOUNT_CAPACITY` (7 pages of 256 bytes, one bit each: 14336).
-- `otp` judges unreadable rows first, then the SKIP of an open board, then each boot key row
-  (`ECC mismatch` before `corrected`), then CRIT1 against the latched register, CRIT1's copies,
-  BOOT_FLAGS1's copies, the image's key, and dev keys. Copies are compared only on the bits SOS
+- `otp` judges unreadable rows first, then the SKIP of an open board, then the image's key
+  (the one FAIL, before every WARN, so a damaged row or split copies can't hide that the board
+  won't start after a reset; it uses the corrected hashes), then each boot key row
+  (`ECC mismatch` before `corrected`), CRIT1 against the latched register, CRIT1's copies,
+  BOOT_FLAGS1's copies, and dev keys. Copies are compared only on the bits SOS
   relies on (CRIT1 0x7f, BOOT_FLAGS1's KEY_VALID and KEY_INVALID). The dev key hashes are
   constants checked by the host test with `openssl` (it says so and skips the comparison when
   `openssl` is missing). `_Static_assert`s pin the row numbers and bits to the SDK's names, and

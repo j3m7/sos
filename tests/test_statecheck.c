@@ -396,6 +396,19 @@ TEST(otp_fail_image_key_not_valid) {
     CHECK(says("image key in none"));
 }
 
+// The FAIL isn't hidden by a WARN: a damaged key row and split CRIT1 copies beside a revoked
+// image key still give the FAIL (Reviewer on #254).
+TEST(otp_fail_before_warns) {
+    statecheck_otp_t o = dev1();
+    for (unsigned i = 0; i < STATECHECK_FLAGS1_COPIES; i++)
+        o.flags1[i] = 0x3 | 0x100;          // slot 0, the image's key, marked invalid
+    o.key_raw[17] ^= 1u << 18;              // and slot 1's second row damaged
+    o.crit1[2] |= STATECHECK_DEBUG_DISABLE; // and one CRIT1 copy split
+    statecheck_judge_otp(&o, &r);
+    CHECK_EQ(r.status, HEALTH_FAIL);
+    CHECK(says("image key in no valid slot"));
+}
+
 TEST(otp_skip_open_board) {
     statecheck_otp_t o;
     memset(&o, 0, sizeof(o));
@@ -514,6 +527,10 @@ TEST(hostkey_paths) {
     statecheck_judge_hostkey(&h, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
     CHECK(says("sshd serves the key in RAM"));
+    h.erased = true;                        // `hostkey_erase()`: on purpose, so not the FAIL
+    statecheck_judge_hostkey(&h, &r);
+    CHECK_EQ(r.status, HEALTH_WARN);
+    CHECK(!strcmp(r.text, "erased: new key at next boot; sshd serves the old one"));
     statecheck_hostkey_t none = {true, false, true, false, false, NULL};
     statecheck_judge_hostkey(&none, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
@@ -645,6 +662,7 @@ TEST_MAIN(
     RUN(otp_warn_crit1);
     RUN(otp_warn_flags1_disagree);
     RUN(otp_fail_image_key_not_valid);
+    RUN(otp_fail_before_warns);
     RUN(otp_skip_open_board);
     RUN(dev_key_hashes_match_the_pem_files);
     RUN(failcount_pass);
