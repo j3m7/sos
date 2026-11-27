@@ -1491,6 +1491,12 @@ TEST(tab_completes_the_file_after_echo_redirect) {
     type("echo hi > case/read\t");                   // any case, as for other paths
     CHECK(line_is("echo hi > case/README."));
     start(&io_plain);
+    type("echo a>b\t");                              // a '>' inside the text, no spaces at all
+    CHECK(line_is("echo a>big/"));
+    start(&io_plain);
+    type("echo a >> r\t");                           // append: the name after the last '>'
+    CHECK(line_is("echo a >> readme.txt "));
+    start(&io_plain);
     type("echo > \t\t");                             // nothing typed yet: the working directory
     CHECK(strstr(fake.out, "readme.txt") != NULL);
 }
