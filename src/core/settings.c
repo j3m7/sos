@@ -3,12 +3,14 @@
 
 #include "core/settings.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "hardware/flash.h"
 #include "pico/stdlib.h"
 
 #include "core/flashop.h"
+#include "core/health.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/pwverify.h"
@@ -76,7 +78,24 @@ static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t 
 // settings_init(), before the key provider locks. It stays here, in RAM, for as long as the
 // board runs: every save needs it. Nothing copies it elsewhere.
 static seal_ctx_t seal = { .random = random_bytes };
-static const sealer_t sealer = { seal_seal, seal_open, &seal };
+
+// The health check that stopped the last save (settings_save_refused), or NULL.
+static const char *save_refused;
+
+// Sealing is new encrypted data: refused while a check holding HEALTH_GATE_CRYPTO fails
+// (core/health.h). Opening a sealed record is not gated: the board can still read what it has.
+static bool gated_seal(void *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *plain,
+                       size_t len, uint8_t *out) {
+    const char *held = health_gate_refuse(HEALTH_GATE_CRYPTO);
+    if (!held)
+        return seal_seal(ctx, aad, aad_len, plain, len, out);
+    save_refused = held;
+    memset(out, 0, len + SEALER_OVERHEAD);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: not sealed: health check %s failed", held);
+    return false;
+}
+
+static const sealer_t sealer = { gated_seal, seal_open, &seal };
 
 // An open board: plain records (from older firmware, or a provisioning image) are loaded, and
 // sealed at once. A console-only board refuses them (core/consoleonly.h): refuse_plain is set in
@@ -117,6 +136,15 @@ const char *settings_console_set_password(const char *password) {
         return err;
     if (!have_pw_key)
         return "this board has no key to protect a password with (see `rootsecret`)";
+    // A new salt is a random number: refused while a check holding HEALTH_GATE_KEYS fails.
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    if (held) {
+        static char why[48 + HEALTH_NAME_MAX];
+        snprintf(why, sizeof(why), "refused: health check %s failed (see `health`)", held);
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: console password not set: health check %s "
+                "failed", held);
+        return why;
+    }
     uint8_t salt[PWV_SALT_LEN], verifier[PWV_LEN];
     uint64_t t0 = time_us_64();
     // The derivation uses pw_job, the one job there is. A check still running in it is given
@@ -189,10 +217,18 @@ bool settings_has_owner_secret(void) {
 }
 
 // Before a save: a configuration without an owner secret gets a new one. Only when it can be
-// stored sealed; never logged.
-static void ensure_owner_secret(void) {
+// stored sealed; never logged. False if a health check refused making it (HEALTH_GATE_KEYS):
+// then nothing is saved, and save_refused names the check.
+static bool ensure_owner_secret(void) {
     if (settings_has_owner_secret() || !seal.have_key)
-        return;
+        return true;
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    if (held) {
+        save_refused = held;
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: owner secret not made: health check %s failed",
+                held);
+        return false;
+    }
     if (random_bytes(NULL, live.owner_secret, sizeof(live.owner_secret)))
         log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                 "config: this configuration is a new owner for encrypted SD "
@@ -200,6 +236,7 @@ static void ensure_owner_secret(void) {
     else
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "config: making the owner secret failed (no random numbers)");
+    return true;
 }
 
 // --- public API ----------------------------------------------------------------------------------
@@ -229,16 +266,18 @@ void settings_init(void) {
             // From older firmware or a provisioning image: store it sealed, and erase the
             // plain copy (config_save does both). A plain record has no owner secret, so this
             // configuration gets a new one.
-            ensure_owner_secret();
+            save_refused = NULL;
+            bool owner = ensure_owner_secret();
             take_provisioned_password();
-            if (config_save(&store, &live))
+            if (owner && config_save(&store, &live))
                 log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                         "config: the saved configuration was unsealed (older "
                         "firmware, or provisioning); it's now stored sealed");
             else
                 log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
-                        "config: sealing the saved configuration failed; it stays "
-                        "unsealed in flash");
+                        "config: sealing the saved configuration failed%s%s%s; it stays "
+                        "unsealed in flash", save_refused ? " (health check " : "",
+                        save_refused ? save_refused : "", save_refused ? " failed)" : "");
         }
         if (!config_scrub_plain(&store))
             log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
@@ -283,13 +322,21 @@ sos_config_t *settings(void) {
 }
 
 bool settings_save(void) {
-    ensure_owner_secret();
-    if (!config_save(&store, &live)) {
-        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: saving to flash failed");
+    save_refused = NULL;
+    if (!ensure_owner_secret() || !config_save(&store, &live)) {
+        if (save_refused)
+            log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: not saved: health check %s failed",
+                    save_refused);
+        else
+            log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "config: saving to flash failed");
         return false;
     }
     log_msg(SOS_LOG_AUTH | SOS_LOG_INFO, "config: saved");
     return true;
+}
+
+const char *settings_save_refused(void) {
+    return save_refused;
 }
 
 bool settings_reset(void) {

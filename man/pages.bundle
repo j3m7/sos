@@ -358,6 +358,61 @@ NOTES
 
 SEE ALSO
     tail, grep, wc, more
+@@ health
+NAME
+    health - self-checks of the board: the latest result of each
+
+SYNOPSIS
+    health
+    health run [<name>]                 (console only)
+    health full                         (console only)
+
+DESCRIPTION
+    SOS checks itself: at boot, then in the background while it runs. Each
+    check reports PASS, WARN or FAIL with a short reason, or SKIP where it
+    doesn't apply. 'health' shows the latest result of each check, in any
+    shell: its name, status, when it was taken ('boot', '12 s ago', or 'never'
+    for one that hasn't run) and the reason, then how long the boot checks
+    took.
+
+    The checks so far read what SOS already keeps:
+        resets      boot: WARN if the last reset was a fault, the watchdog or
+                    the glitch detector (the text says which; see 'uptime')
+        glitch      every minute: WARN if the glitch detector's loop guard
+                    left it off at this boot (see 'glitch')
+        stack       every minute: WARN when core 0's stack peak is over 75 %
+                    of its size, or core 1's (Lua) of its 32 KB; FAIL over 90 %
+        heap        every minute: WARN under 64 KB free (back to PASS only
+                    above 96 KB); FAIL under 16 KB (see 'mem')
+        chip-temp   every minute: WARN over 70 C, FAIL over 85 C (the die's
+                    temperature, see 'temp')
+        supply      every minute: the lowest VSYS since the last run; on USB
+                    power WARN under 4.3 V, and FAIL under 3.0 V (see 'power')
+
+    A change of status is logged (facility kern): a FAIL at err, a WARN at
+    warning, the way back to PASS at notice. A board that stays healthy logs
+    one line per boot: the summary of the boot checks. A FAIL also refuses
+    what depends on the check: making keys (the root secret, the owner secret,
+    the SSH host key, an encrypted card, a console password's salt) or
+    encrypting new data (saving the configuration). The refusal names the
+    check, and the latest result counts: a check that passes again lifts it.
+    Reading what is already stored is never refused. None of the checks above
+    refuses anything yet.
+
+    A fresh board whose root secret was refused this way keeps its console
+    locked, saying which check failed; 'health' and 'reboot' work there.
+
+    Lua scripts read the same results with sos.health() (see 'lua').
+
+CONSOLE ONLY
+    'health run' runs the boot and background checks now, one after the
+    other, and prints each result as it comes; 'health run <name>' runs one
+    check. 'health full' runs every check, including slow ones that run only
+    on request (none yet). Ctrl-C stops: the check being run keeps its earlier
+    result, those already done keep their new ones.
+
+SEE ALSO
+    uptime, glitch, mem, temp, power, dmesg, lua
 @@ help
 NAME
     help - list the commands this channel may use
@@ -713,18 +768,20 @@ DESCRIPTION
     and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
     sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
     sos.sleep, sos.log; timers sos.every/after/cancel (a background script
-    keeps going while timers are left);
-    sos.http.get/post/request for HTTPS (the response includes how long the
-    request took); tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;
+    keeps going while timers are left); sos.http.get/post/head/request and
+    sos.http.download (into a file) for HTTPS (the response includes how
+    long the request took); tables about the board: sos.sensors, sos.mem,
+    sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
+    sos.health (the self-checks' latest results);
     sos.dmesg for the system log (with a cursor, for only the newer lines);
-    and sos.reboot([why]), refused until the board has been up 10 minutes.
+    sos.hash, sos.hmac (SHA-1, SHA-2), sos.base64 and sos.json; and
+    sos.reboot([why]), refused until the board has been up 10 minutes.
     There is no io, os or debug. Failures return nil and a message. Each
     script may allocate up to 128 KB. Full details: docs/lua.md in the
     repository.
 
 SEE ALSO
-    dmesg, logger, http, mem
+    dmesg, logger, http, mem, health
 @@ man
 NAME
     man - the manual: list the pages, read one, or install them

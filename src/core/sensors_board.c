@@ -27,6 +27,7 @@
 static sensors_stats_t temp_stats, vsys_stats;
 static sensors_logged_t logged;
 static int boot_temp = SENSORS_NONE;    // sensors_init's, before Wi-Fi starts
+static int vsys_window = SENSORS_NONE;  // sensors_vsys_min_take()
 static int usb = -1;
 static uint64_t next_sample_us;
 
@@ -85,6 +86,7 @@ int sensors_read_vsys(void) {
     cyw43_thread_exit();
     int mv = sensors_vsys_mv(sum, SENSORS_SAMPLES, SENSORS_VREF_UV, SENSORS_VSYS_DIVIDER);
     sensors_stats_add(&vsys_stats, mv, uptime_s());
+    sensors_window_add(&vsys_window, mv);
     return mv;
 #else
     return SENSORS_NONE;
@@ -138,6 +140,12 @@ int sensors_last_vsys(void) {
 
 int sensors_usb_power(void) {
     return usb;
+}
+
+int sensors_vsys_min_take(void) {
+    int min = vsys_window;
+    vsys_window = SENSORS_NONE;
+    return min;
 }
 
 const sensors_stats_t *sensors_temp_stats(void) {

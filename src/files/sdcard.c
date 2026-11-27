@@ -26,8 +26,10 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/health.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/settings.h"
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/cardkey.h"
@@ -692,10 +694,23 @@ static uint8_t new_key[SDCRYPT_KEY_LEN];
 static bool start_encrypted(shell_t *sh) {
     uint8_t id[SDCRYPT_ID_LEN], nonce[SDCRYPT_NONCE_LEN], key[SDCRYPT_KEY_LEN];
     uint8_t wrap[CARDKEY_LEN];
+    // A new card id and data key are random numbers, and the card is encrypted under them:
+    // refused, before anything is written, while a check holding either gate fails.
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+    if (held) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
+                "failed", held);
+        shell_printf(sh, "format refused: health check %s failed (see `health`); nothing was "
+                         "written\n", held);
+        return false;
+    }
     // The first encrypted card on a board that was never set up makes the owner secret (and
     // saves the configuration to hold it).
     if (!cardkey_ensure() || !cardkey_get(wrap)) {
-        shell_printf(sh, "format failed: no key to encrypt the card with (see dmesg)\n");
+        if (settings_save_refused())
+            shell_printf(sh, "format failed: " SETTINGS_REFUSED_FMT, settings_save_refused());
+        else
+            shell_printf(sh, "format failed: no key to encrypt the card with (see dmesg)\n");
         return false;
     }
     WC_RNG rng;
@@ -861,6 +876,17 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     if (!format_plain && !cardkey_possible()) {
         shell_printf(sh, "this board's root secret can't be used (see `rootsecret`), so the card "
                          "can't be encrypted: use `sd format plain`\n");
+        return;
+    }
+    // Asked again in start_encrypted(), which is where it counts; here so a refusal comes
+    // before the card is looked at and the question asked.
+    const char *held = format_plain ? NULL
+                                    : health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+    if (held) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
+                "failed", held);
+        shell_printf(sh, "the card can't be encrypted now: health check %s failed (see `health`; "
+                         "`sd format plain` isn't refused)\n", held);
         return;
     }
 

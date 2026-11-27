@@ -187,6 +187,8 @@ set(SOS_SOURCES
     src/core/chipinfo.c
     src/core/sensors.c
     src/core/sensors_board.c
+    src/core/health.c
+    src/core/health_board.c
     src/core/logfile.c
     src/core/logfile_board.c
     src/core/bootkey.c
@@ -247,10 +249,13 @@ set(SOS_SOURCES
     src/tls/certbundle.c
     src/lua/lua_host.c
     src/lua/lua_core1.c
+    src/lua/lua_codec.c
     src/lua/lua_complete.c
     src/lua/lua_date.c
+    src/lua/lua_hash.c
     src/lua/lua_health.c
     src/lua/lua_info.c
+    src/lua/lua_json.c
 )
 # The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
 # Regenerated at every build rather than at configure time, so it follows checkouts and commits.
