@@ -70,7 +70,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 | `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
-| `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
+| `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()`, `sos.health()` | the same |
 | `sos.reboot([why])` | restart the board, logging `why` and the script's name. Refused (`nil` and a message) until the board has been up 10 minutes: a normal restart runs `/autorun.lua` again, so a script that reboots at once would loop |
 | `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
 
@@ -191,8 +191,8 @@ print(next3 - now)
 
 ## Board health
 
-Six functions return a table about the board: what `temp`, `power`, `mem`, `version`, `uptime`,
-`glitch` and `net` show, read as values. Nothing waits for new measurements: the
+Seven functions return a table about the board: what `temp`, `power`, `mem`, `version`, `uptime`,
+`glitch`, `net` and `health` show, read as values. Nothing waits for new measurements: the
 temperature and supply are the latest readings, which the main loop takes every 10 seconds. A
 field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
 
@@ -257,6 +257,26 @@ field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
 | `channel`, `rate_mbps`, `txpower_dbm` | the channel, the current transmit rate and the power limit |
 | `ip`, `gateway` | the addresses (when connected) |
 | `arp_received`, `arp_sent` | ARP counters, as `net` shows them |
+
+**`sos.health()`**: the self-checks' latest results (`health`). A script reads them and can't
+run a check: running them is the console's (`health run`).
+
+| Field | |
+|---|---|
+| `worst` | the worst status of any check: `"pass"`, `"warn"` or `"fail"` (a check not run yet, or skipped, counts as a pass) |
+| `boot_ms` | how long the boot checks took, in milliseconds |
+| `checks` | a list in `health`'s order: `{name=, status=, tier=, text=, ago_s=, runs=, fails=}` |
+
+In each check, `status` is `"none"` (not run yet), `"skip"`, `"pass"`, `"warn"` or `"fail"`;
+`tier` is `"boot"`, `"background"` or `"full"`; `text` is the reason `health` shows and `ago_s`
+how many seconds ago the result was taken, both `nil` for a check that hasn't run; `runs` and
+`fails` count its runs since boot and those that failed.
+
+```lua
+for _, c in ipairs(sos.health().checks) do
+  if c.status == "warn" or c.status == "fail" then print(c.name, c.status, c.text) end
+end
+```
 
 ```lua
 -- /autorun.lua: log a warning when the chip is hot or the supply sags

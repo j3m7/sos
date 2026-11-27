@@ -95,6 +95,7 @@ typedef struct health_check {
     const char *name;               // [a-z0-9-]{1,12}: "clocks", "trng", "stack"
     health_tier_t tier;
     uint32_t period_s;              // HEALTH_BACKGROUND only
+    uint32_t first_s;               // HEALTH_BACKGROUND: first run after boot; 0 = period_s
     uint32_t gates;                 // HEALTH_GATE_* bits refused while this check FAILs
     // One step of the check. *state is NULL on the first call and is the check's to use; a
     // check that needs more than one step returns HEALTH_MORE and is called again on a later
@@ -106,8 +107,9 @@ typedef struct health_check {
 
 `HEALTH_TEXT_MAX` is 64. The registry is a `const health_check_t[]` given to `health_init()`.
 Results are kept in a static array beside it: per check, the latest result, the uptime in
-seconds when it was taken, a run count and a fail count. With 20 checks that's about 1.8 KB of
-RAM.
+seconds when it was taken, a run count and a fail count. As built, the registry has room for
+`HEALTH_MAX` (24) checks, the test-only ones included, and takes about 2.8 KB of RAM with the
+scheduling state (§9.1).
 
 ## 4. Tiers and scheduling
 
@@ -170,13 +172,13 @@ refusal. These are the call sites:
 
 | Operation | Where | Gate |
 |---|---|---|
-| root secret created (open board) | `rootsecret_ensure()` via `rootflash_init()` | KEYS |
-| root secret burned to OTP (burn image) | `rootburn_run()` | KEYS |
+| root secret created (open board) | `rootsecret_ensure()` via `rootflash_init()`: the store's random source, `store_random()` (`rootflash.c`) | KEYS |
+| root secret burned to OTP (burn image) | `rootburn_run()`: its random source, `get_random()` (`rootburn_board.c`) | KEYS |
 | owner secret created | `ensure_owner_secret()` (`settings.c`) | KEYS |
 | SSH host key made | `make_new()` (`hostkey.c`) | KEYS |
-| encrypted card format (card id, data key) | `start_encrypted()` (`sdcard.c`) | KEYS, CRYPTO |
+| encrypted card format (card id, data key) | `start_encrypted()` (`sdcard.c`), and before the question in `cmd_format()` | KEYS, CRYPTO |
 | console password salt | `settings_console_set_password()` | KEYS |
-| config record sealed | `seal_seal()` caller in `settings_save()` | CRYPTO |
+| config record sealed | the sealer `settings.c` gives `config_save()` (`gated_seal()`): every save, and the sealing of a plain record at boot | CRYPTO |
 
 What a refusal means at each site, and why it is safe:
 
@@ -300,9 +302,49 @@ test-only check holding that gate at FAIL. That way the board test can see each 
 - the boot line in `dmesg`
 - `crash fault` then reboot: `resets` WARN
 - `health inject` for each gate, then each refused operation where it can be tried without
-  touching the stored configuration (host key and owner secret refusals are tested on the host)
+  touching the stored configuration (the host key refusal is tested on the host; `settings.c`
+  has no host test, so the owner secret and sealing refusals are left to the board, on a
+  configuration that is backed up first)
 - `sos.health()` from Lua
 - `mem` before and after, and `ssh` "longest" unchanged
+
+### 9.1 As built (phase 1)
+
+Where the build settled details this note left open, or differs from it:
+
+- **Gates in pure modules** go through the module's existing ops: `rootsecret.c` and
+  `rootburn.c` are untouched, and their board backends' random sources refuse. The burn image
+  then reports `ROOTBURN_RANDOM`, and the log line before it names the check.
+- **`health_gate_refuse()` and `health_refusal()`:** a caller about to refuse asks
+  `health_gate_refuse()`, which also remembers the check; `console_no_keys()` shows
+  `key making refused: health check <name> failed` when there is no usable root secret and a
+  refusal was recorded.
+- **`settings_save_refused()`** names the check that stopped the last save. What the four
+  callers did before: `shell.c`'s `save()` and `tls/certstore.c` (`tls roots approve` and
+  `forget`) checked the result but always said `saving to flash failed`; `files/cardkey.c`
+  passed the failure on, and `sd format` said `no key to encrypt the card with (see dmesg)`;
+  `settings_init()` ignored the result of its save (the owner secret for an older record),
+  which only `settings_save()`'s own log line reported. Now the first three print
+  `the configuration wasn't saved: health check <name> failed`, and the log line of the
+  fourth names the check.
+- **Host key:** a refused key isn't final until reboot, as other failures are: `hostkey_get()`
+  asks again once the gate is open, so `sshd` starts after a `health run` that passes.
+- **Boot checks** that return HEALTH_MORE are cancelled and recorded as FAIL (a bug in the
+  check), so the gates they hold close.
+- **No reading:** `chip-temp` and `supply` are SKIP without one. `supply` takes the lowest VSYS
+  since its last run (`sensors_vsys_min_take()`); run again before a new reading (`health run`
+  right after the background run), it takes the latest reading.
+- **`health inject <name> clear`** records PASS ("cleared by hand"), so the change is logged
+  like any other. The gate checks are full-tier checks named `inject-keys` and
+  `inject-crypto`; `health full` runs them and they pass, which opens the gate again.
+- **Full tier:** phase 1 has none (`sd check` is phase 5). `health full` is `health run` plus
+  any test-only checks.
+- **SSH refusal:** `health run` and `health full` check `io->admin` themselves, to print this
+  note's message (`require_admin()` speaks of the configuration).
+- **Temperature figures:** 70 C and 85 C are as above. The RP2350 datasheet wasn't at hand
+  when they were set; 85 C is taken as the top of the chip's rated ambient range, and the die
+  runs above ambient. Check them against the datasheet before relying on a FAIL.
+- **Cost** (debug build, `arm-none-eabi-size`): text +7.5 KB, bss +2.8 KB.
 
 ## 10. Phases
 
