@@ -84,12 +84,12 @@ bool pwv_equal(const uint8_t a[PWV_LEN], const uint8_t b[PWV_LEN]) {
     return diff == 0;
 }
 
-bool pwv_compute(const char *password, size_t len, const uint8_t salt[PWV_SALT_LEN],
-                 uint32_t iterations, const uint8_t key[PWV_LEN], uint8_t out[PWV_LEN]) {
-    static pwv_job_t job;       // an Hmac is large for the stack; single-threaded
+bool pwv_compute(pwv_job_t *job, const char *password, size_t len,
+                 const uint8_t salt[PWV_SALT_LEN], uint32_t iterations,
+                 const uint8_t key[PWV_LEN], uint8_t out[PWV_LEN]) {
     memset(out, 0, PWV_LEN);
-    if (!pwv_start(&job, password, len, salt, iterations))
+    if (!pwv_start(job, password, len, salt, iterations))
         return false;
-    pwv_step(&job, iterations);
-    return pwv_finish(&job, key, out);
+    pwv_step(job, iterations);
+    return pwv_finish(job, key, out);
 }

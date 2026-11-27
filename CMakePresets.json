@@ -18,10 +18,20 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "minsize",
+      "displayName": "Pico 2 W (smallest image)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-minsize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" }
+    { "name": "release", "configurePreset": "release" },
+    { "name": "minsize", "configurePreset": "minsize" }
   ]
 }
