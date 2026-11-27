@@ -357,3 +357,4 @@ sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
+sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)

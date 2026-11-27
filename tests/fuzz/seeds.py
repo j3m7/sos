@@ -164,5 +164,84 @@ def words():
     write("words", "errors", b"wall don't \\")
 
 
-for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words):
+# --- fsck_exfat: [part] then the part's input (see fuzz_fsck_exfat.c) ---------------------------
+
+def rotr_add(width, s, b):
+    top = 1 << (width - 1)
+    return ((top if s & 1 else 0) + (s >> 1) + b) & ((1 << width) - 1)
+
+
+def ascii_upper(c):
+    return c - 32 if ord("a") <= c <= ord("z") else c
+
+
+def exfat_boot(clusters=1000, shift=3):
+    """Sectors 0-11 of an exFAT boot region as f_mkfs writes them."""
+    s0 = bytearray(512)
+    s0[0:11] = b"\xEB\x76\x90EXFAT   "
+    fat_len = ((clusters + 2) * 4 + 511) // 512
+    heap = 2048
+    struct.pack_into("<QQIIIIIIHHBBBB", s0, 64, 0, heap + clusters * (1 << shift), 32, fat_len,
+                     heap, clusters, 4, 0x12345678, 0x100, 0, 9, shift, 1, 0x80)
+    s0[120:122] = b"\xEB\xFE"
+    s0[510:512] = b"\x55\xAA"
+    ext = bytearray(512)
+    ext[510:512] = b"\x55\xAA"
+    region = [bytes(s0)] + [bytes(ext)] * 8 + [bytes(512)] * 2
+    s = 0
+    for k, sec in enumerate(region):
+        for i, b in enumerate(sec):
+            if k or i not in (106, 107, 112):
+                s = rotr_add(32, s, b)
+    return b"".join(region) + struct.pack("<I", s) * 128
+
+
+def exfat_set(name, first, length, attr=0x20, contiguous=True):
+    units = [ord(c) for c in name]
+    names = max(1, (len(units) + 14) // 15)
+    h = 0
+    for u in units:
+        u = ascii_upper(u)
+        h = rotr_add(16, h, u & 0xFF)
+        h = rotr_add(16, h, u >> 8)
+    es = [bytearray(32) for _ in range(2 + names)]
+    es[0][0], es[0][1] = 0x85, 1 + names
+    struct.pack_into("<H", es[0], 4, attr)
+    es[1][0], es[1][1], es[1][3] = 0xC0, 3 if contiguous else 1, len(units)
+    struct.pack_into("<HxxQxxxxIQ", es[1], 4, h, length, first, length)
+    for k in range(names):
+        es[2 + k][0] = 0xC1
+        for i, u in enumerate(units[15 * k:15 * k + 15]):
+            struct.pack_into("<H", es[2 + k], 2 + 2 * i, u)
+    s = 0
+    for k, e in enumerate(es):
+        for i, b in enumerate(e):
+            if k or i not in (2, 3):
+                s = rotr_add(16, s, b)
+    struct.pack_into("<H", es[0], 2, s)
+    return b"".join(es)
+
+
+def fsck_exfat():
+    write("fsck_exfat", "boot", b"\0\0" + struct.pack("<I", 1 << 20) + exfat_boot())
+    label = bytes([0x83, 0]) + bytes(30)
+    bitmap = bytes([0x81]) + bytes(19) + struct.pack("<IQ", 2, 125)
+    upcase_table = struct.pack("<97H", *range(97)) + struct.pack("<26H", *range(65, 91))
+    upcase_table += struct.pack("<HH", 0xFFFF, 0x10000 - 123)
+    s = 0
+    for b in upcase_table:
+        s = rotr_add(32, s, b)
+    upcase = bytes([0x82, 0, 0, 0]) + struct.pack("<I", s) + bytes(12) + struct.pack(
+        "<IQ", 3, len(upcase_table))
+    root = (label + bitmap + upcase + exfat_set("README.txt", 5, 100)
+            + exfat_set("A long name with more than thirty characters", 6, 70000, contiguous=False)
+            + exfat_set("dir", 30, 4096, attr=0x10) + exfat_set("empty", 0, 0)
+            + bytes([0xA0, 0]) + bytes(30) + bytes(32))
+    write("fsck_exfat", "root", b"\x01\x01" + struct.pack("<IB", 1000, 3) + root)
+    write("fsck_exfat", "upcase", b"\x02" + struct.pack("<IB", len(upcase_table), 63) + upcase_table)
+    write("fsck_exfat", "window", b"\x03" + struct.pack("<IH", 2, 256) +
+          bytes([0xFF, 0x0F, 0, 0xF0] * 4) + bytes([0xFF, 0xFF, 0, 0x30] * 4))
+
+
+for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck_exfat):
     f()
