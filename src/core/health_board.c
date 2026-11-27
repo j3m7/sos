@@ -154,31 +154,47 @@ static health_step_t check_flash(void **state, bool cancel, health_result_t *out
 
 // trng: SP 800-90B's startup tests over raw samples of the TRNG's ring oscillator (hwtest.h).
 // wolfCrypt is seeded from pico_rand, which mixes the TRNG with other sources: testing its
-// output would test the mixing, not the noise source. So this reads the TRNG block itself:
-//   - one sample every TRNG_SAMPLE_CLOCKS clk_sys cycles (the datasheet's minimum with the von
-//     Neumann corrector bypassed is 17; larger is better), the shortest inverter chain;
-//   - the corrector bypassed, so the bits are the oscillator's own; the TRNG's own CRNGT and
-//     autocorrelation tests left on, and their errors counted (hwtest_judge_trng);
-//   - 16 blocks of 192 bits: about 1.3 ms at 150 MHz; interrupts are off for at most
-//     TRNG_TIMEOUT_US (10 ms), the bound if the TRNG stalls.
+// output would test the mixing, not the noise source. So this reads the TRNG block itself, as
+// docs/design/health.md §9.2 explains:
+//   - one sample every 256 clk_sys cycles (the datasheet: larger periods give better bits, and
+//     17 is the least with the von Neumann corrector bypassed), the shortest inverter chain;
+//   - the corrector bypassed, so the bits are the oscillator's own, and the block's own
+//     autocorrelation test bypassed too: on raw bits it stopped the TRNG on dev-1 at 64 cycles
+//     (#242), so SP 800-90B's tests over the raw bits are the check, with the block's CRNGT;
+//   - 16 blocks of 192 bits: about 5.3 ms at 150 MHz; interrupts are off for at most
+//     TRNG_TIMEOUT_US, the bound if the TRNG stalls.
 // pico_rand reads the same block (on either core, under PICO_SPINLOCK_ID_RAND, with all checks
 // bypassed and one sample per cycle): this takes the same lock, which also keeps interrupts off,
 // resets the block before and after, and so leaves it as pico_rand finds it after a reset. Its
 // next refill sets every register it relies on.
-#define TRNG_SAMPLE_CLOCKS 64
-#define TRNG_TIMEOUT_US    10000        // 16 blocks take about 1.3 ms
+typedef struct {
+    uint32_t sample;                    // clk_sys cycles between samples (SAMPLE_CNT1)
+    bool autocorr;                      // the block's autocorrelation test on
+    bool vn;                            // the von Neumann corrector on
+} trng_cfg_t;
 
-static void trng_collect(hwtest_trng_t *t, uint32_t *words) {
+static const trng_cfg_t trng_check_cfg = {256, false, false};
+#define TRNG_TIMEOUT_US 20000           // 16 blocks take about 5.3 ms
+
+// Collect up to HWTEST_TRNG_BLOCKS blocks into words, stopping at the timeout, an
+// autocorrelation error, or more than err_max CRNGT and von Neumann errors together.
+static void trng_collect(const trng_cfg_t *cfg, uint32_t timeout_us, unsigned err_max,
+                         hwtest_trng_t *t, uint32_t *words) {
     spin_lock_t *lock = spin_lock_instance(PICO_SPINLOCK_ID_RAND);
     uint32_t save = spin_lock_blocking(lock);
     reset_unreset_block_num_wait_blocking(RESET_TRNG);
     trng_hw->trng_config = 0;
-    trng_hw->sample_cnt1 = TRNG_SAMPLE_CLOCKS;
-    trng_hw->trng_debug_control = TRNG_TRNG_DEBUG_CONTROL_VNC_BYPASS_BITS;
+    trng_hw->sample_cnt1 = cfg->sample;
+    uint32_t bypass = 0;
+    if (!cfg->vn)
+        bypass |= TRNG_TRNG_DEBUG_CONTROL_VNC_BYPASS_BITS;
+    if (!cfg->autocorr)
+        bypass |= TRNG_TRNG_DEBUG_CONTROL_AUTO_CORRELATE_BYPASS_BITS;
+    trng_hw->trng_debug_control = bypass;
     trng_hw->rng_icr = TRNG_RNG_ICR_BITS;
     trng_hw->rnd_source_enable = TRNG_RND_SOURCE_ENABLE_RND_SRC_EN_BITS;
     uint64_t t0 = time_us_64();
-    while (t->blocks < HWTEST_TRNG_BLOCKS && time_us_64() - t0 < TRNG_TIMEOUT_US) {
+    while (t->blocks < HWTEST_TRNG_BLOCKS && time_us_64() - t0 < timeout_us) {
         uint32_t isr = trng_hw->rng_isr;
         if (isr & TRNG_RNG_ISR_AUTOCORR_ERR_BITS) {
             t->autocorr_error = true;   // stopped until a reset
@@ -186,7 +202,11 @@ static void trng_collect(hwtest_trng_t *t, uint32_t *words) {
         }
         if (isr & (TRNG_RNG_ISR_CRNGT_ERR_BITS | TRNG_RNG_ISR_VN_ERR_BITS)) {
             // The block is thrown away: start the next one.
-            if (++t->crngt_errors > HWTEST_TRNG_CRNGT_MAX)
+            if (isr & TRNG_RNG_ISR_CRNGT_ERR_BITS)
+                t->crngt_errors++;
+            if (isr & TRNG_RNG_ISR_VN_ERR_BITS)
+                t->vn_errors++;
+            if (t->crngt_errors + t->vn_errors > err_max)
                 break;
             trng_hw->rng_icr = TRNG_RNG_ICR_CRNGT_ERR_BITS | TRNG_RNG_ICR_VN_ERR_BITS;
             trng_hw->rnd_source_enable = 0;
@@ -208,15 +228,20 @@ static void trng_collect(hwtest_trng_t *t, uint32_t *words) {
     spin_unlock(lock, save);
 }
 
+static void trng_run(const trng_cfg_t *cfg, uint32_t timeout_us, unsigned err_max,
+                     hwtest_trng_t *t) {
+    uint32_t words[HWTEST_TRNG_WORDS];
+    memset(t, 0, sizeof(*t));
+    trng_collect(cfg, timeout_us, err_max, t, words);
+    hwtest_trng_stats(words, t->blocks * HWTEST_TRNG_BLOCK_WORDS, &t->stats);
+}
+
 static health_step_t check_trng(void **state, bool cancel, health_result_t *out) {
     (void)state;
     if (cancel)
         return HEALTH_DONE;
-    uint32_t words[HWTEST_TRNG_WORDS];
     hwtest_trng_t t;
-    memset(&t, 0, sizeof(t));
-    trng_collect(&t, words);
-    hwtest_trng_stats(words, t.blocks * HWTEST_TRNG_BLOCK_WORDS, &t.stats);
+    trng_run(&trng_check_cfg, TRNG_TIMEOUT_US, HWTEST_TRNG_CRNGT_MAX, &t);
     hwtest_judge_trng(&t, out);
     return HEALTH_DONE;
 }
@@ -388,6 +413,37 @@ void health_board_crypto_times(health_print_fn print, void *arg) {
     selftest_close(st);
     snprintf(line, sizeof(line), "boot subset (crypto) %u us, the rest (crypto-ssh) %u us",
              (unsigned)boot_us, (unsigned)rest_us);
+    print(arg, line);
+}
+
+// `health trng-diag`: the TRNG under each of a few setups, for the board run to compare with
+// the check's own (trng_check_cfg). Each setup collects 16 blocks or stops after 50 ms or 64
+// thrown-away blocks.
+void health_board_trng_diag(health_print_fn print, void *arg) {
+    static const uint32_t samples[] = {17, 64, 256};
+    char line[112];
+    print(arg, "sample autocorr vn   blocks crngt vn-err autocorr-err run prop     us");
+    for (unsigned s = 0; s < sizeof(samples) / sizeof(samples[0]); s++) {
+        for (unsigned ac = 0; ac < 2; ac++) {
+            for (unsigned vn = 0; vn < 2; vn++) {
+                trng_cfg_t cfg = {samples[s], ac != 0, vn != 0};
+                hwtest_trng_t t;
+                trng_run(&cfg, 50000, 64, &t);
+                bool chosen = cfg.sample == trng_check_cfg.sample &&
+                              cfg.autocorr == trng_check_cfg.autocorr &&
+                              cfg.vn == trng_check_cfg.vn;
+                snprintf(line, sizeof(line), "%6u %-8s %-4s %6u %5u %6u %-12s %3u %4u %6u%s",
+                         (unsigned)cfg.sample, cfg.autocorr ? "on" : "off", cfg.vn ? "on" : "off",
+                         t.blocks, t.crngt_errors, t.vn_errors, t.autocorr_error ? "yes" : "no",
+                         (unsigned)t.stats.max_run, (unsigned)t.stats.max_count, (unsigned)t.us,
+                         chosen ? "  <- the check's" : "");
+                print(arg, line);
+            }
+        }
+    }
+    snprintf(line, sizeof(line), "fails at: run %u, prop %u of %u; blocks under %u; crngt over %u",
+             HWTEST_TRNG_RCT_CUTOFF, HWTEST_TRNG_APT_CUTOFF, HWTEST_TRNG_APT_WINDOW,
+             HWTEST_TRNG_BLOCKS, HWTEST_TRNG_CRNGT_MAX);
     print(arg, line);
 }
 #endif

@@ -54,11 +54,13 @@ void hwtest_trng_stats(const uint32_t *words, size_t n, hwtest_trng_stats_t *out
 
 void hwtest_judge_trng(const hwtest_trng_t *t, health_result_t *out) {
     const hwtest_trng_stats_t *s = &t->stats;
+    unsigned thrown = t->crngt_errors + t->vn_errors;
     if (t->autocorr_error) {
-        result(out, HEALTH_FAIL, "the TRNG's own autocorrelation test failed");
-    } else if (t->crngt_errors > HWTEST_TRNG_CRNGT_MAX) {
-        result(out, HEALTH_FAIL, "the TRNG's own repetition test failed %u times",
-               t->crngt_errors);
+        result(out, HEALTH_FAIL, "TRNG autocorrelation error after %u of %u blocks", t->blocks,
+               HWTEST_TRNG_BLOCKS);
+    } else if (thrown > HWTEST_TRNG_CRNGT_MAX) {
+        result(out, HEALTH_FAIL, "TRNG threw away %u blocks (crngt %u, vn %u), %u of %u kept",
+               thrown, t->crngt_errors, t->vn_errors, t->blocks, HWTEST_TRNG_BLOCKS);
     } else if (t->blocks < HWTEST_TRNG_BLOCKS) {
         result(out, HEALTH_FAIL, "the TRNG gave %u of %u blocks in %u ms", t->blocks,
                HWTEST_TRNG_BLOCKS, (unsigned)(t->us / 1000u));

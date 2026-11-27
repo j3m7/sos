@@ -17,9 +17,9 @@
 
 // --- trng: SP 800-90B §4.4 health tests as a startup test --------------------------------------
 //
-// Over raw bits from the TRNG's ring oscillator (one bit per sample, its checks and the von
-// Neumann corrector bypassed), assuming a min-entropy of H = 0.5 bit per sample and a false
-// positive rate of alpha = 2^-30 per test:
+// Over raw bits from the TRNG's ring oscillator (one bit per sample, the von Neumann corrector
+// and the block's autocorrelation test bypassed, its CRNGT on), assuming a min-entropy of
+// H = 0.5 bit per sample and a false positive rate of alpha = 2^-30 per test:
 // - Repetition Count Test (§4.4.1): C = 1 + ceil(-log2(alpha) / H) = 1 + ceil(30 / 0.5) = 61.
 //   A run of 61 identical samples fails.
 // - Adaptive Proportion Test (§4.4.2), binary samples, window W = 1024:
@@ -50,12 +50,14 @@ typedef struct {
     hwtest_trng_stats_t stats;          // over the blocks collected
     unsigned blocks;                    // blocks collected (HWTEST_TRNG_BLOCKS when complete)
     unsigned crngt_errors;              // blocks the TRNG's own repetition test threw away
+    unsigned vn_errors;                 // blocks its von Neumann corrector threw away (when on)
     bool autocorr_error;                // the TRNG's own autocorrelation test stopped it
     uint32_t us;                        // how long it took
 } hwtest_trng_t;
 
-// FAIL on the TRNG's own autocorrelation error, more than HWTEST_TRNG_CRNGT_MAX of its CRNGT
-// errors, fewer blocks than asked for (it stopped producing), or either startup test.
+// FAIL on the TRNG's own autocorrelation error, more than HWTEST_TRNG_CRNGT_MAX of its CRNGT and
+// von Neumann errors together, fewer blocks than asked for (it stopped producing), or either
+// startup test. The text says which, and after how many blocks.
 void hwtest_judge_trng(const hwtest_trng_t *t, health_result_t *out);
 
 // --- clocks ----------------------------------------------------------------------------------

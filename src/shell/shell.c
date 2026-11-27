@@ -2208,11 +2208,12 @@ static void cmd_health(shell_t *sh, char *args) {
 #ifdef SOS_TEST_COMMANDS
     bool inject = w1 && !strcmp(w1, "inject") && !w4;
     bool times = w1 && !strcmp(w1, "crypto-times") && !w2;
+    bool diag = w1 && !strcmp(w1, "trng-diag") && !w2;
 #else
-    bool inject = false, times = false;
+    bool inject = false, times = false, diag = false;
     (void)w4;
 #endif
-    if (!run && !full && !inject && !times) {
+    if (!run && !full && !inject && !times && !diag) {
         shell_printf(sh, "usage: health [run [<name>] | full]\n");
         return;
     }
@@ -2226,13 +2227,16 @@ static void cmd_health(shell_t *sh, char *args) {
         health_inject_cmd(sh, w2, w3);
         return;
     }
-    // A measurement for a board run (docs/design/health.md §9.2): it holds the loop a moment.
-    if (times) {
+    // Measurements for a board run (docs/design/health.md §9.2): they hold the loop a moment.
+    if (times || diag) {
         if (health_job_running()) {
             shell_printf(sh, "checks are already running\n");
             return;
         }
-        health_board_crypto_times(health_print_line, sh);
+        if (times)
+            health_board_crypto_times(health_print_line, sh);
+        else
+            health_board_trng_diag(health_print_line, sh);
         return;
     }
 #endif

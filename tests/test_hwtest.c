@@ -192,7 +192,7 @@ TEST(repeating_pattern_is_left_to_the_hardware) {
     t.us = 400;
     hwtest_judge_trng(&t, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
-    CHECK(!strcmp(r.text, "the TRNG's own repetition test failed 9 times"));
+    CHECK(!strcmp(r.text, "TRNG threw away 9 blocks (crngt 9, vn 0), 0 of 16 kept"));
 }
 
 TEST(hardware_errors_and_short_runs) {
@@ -205,10 +205,20 @@ TEST(hardware_errors_and_short_runs) {
     hwtest_trng_stats(words, HWTEST_TRNG_WORDS, &t.stats);
     hwtest_judge_trng(&t, &r);
     CHECK_EQ(r.status, HEALTH_PASS);
+    t.crngt_errors = HWTEST_TRNG_CRNGT_MAX / 2;
+    t.vn_errors = HWTEST_TRNG_CRNGT_MAX / 2;   // the two kinds count together
+    hwtest_judge_trng(&t, &r);
+    CHECK_EQ(r.status, HEALTH_PASS);
+    t.vn_errors++;
+    hwtest_judge_trng(&t, &r);
+    CHECK_EQ(r.status, HEALTH_FAIL);
+    CHECK(!strcmp(r.text, "TRNG threw away 9 blocks (crngt 4, vn 5), 16 of 16 kept"));
+    t.vn_errors = 0;
+    t.blocks = 3;                       // stopped by the block's own test: says when
     t.autocorr_error = true;
     hwtest_judge_trng(&t, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
-    CHECK(!strcmp(r.text, "the TRNG's own autocorrelation test failed"));
+    CHECK(!strcmp(r.text, "TRNG autocorrelation error after 3 of 16 blocks"));
     memset(&t, 0, sizeof(t));
     t.blocks = 3;
     t.us = 10000;
