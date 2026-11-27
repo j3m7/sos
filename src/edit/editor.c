@@ -58,32 +58,21 @@ static void move_gap(editor_t *ed, size_t pos) {
     }
 }
 
-// Room for n more bytes, growing the buffer (up to EDITOR_MAX_TEXT) if needed.
-static bool reserve(editor_t *ed, size_t n) {
-    if (ed->gap_end - ed->gap >= n)
-        return true;
-    size_t len = editor_len(ed);
-    if (len + n > EDITOR_MAX_TEXT)
-        return false;
-    size_t cap = ed->cap ? ed->cap : 1024;
-    while (cap - len < n)
-        cap *= 2;
-    if (cap > EDITOR_MAX_TEXT)
-        cap = EDITOR_MAX_TEXT;              // still enough: len + n <= EDITOR_MAX_TEXT
-    char *b = heap_realloc(HEAP_EDIT, ed->buf, cap);
-    if (!b)
-        return false;
-    size_t tail = ed->cap - ed->gap_end;
-    memmove(b + cap - tail, b + ed->gap_end, tail);
-    ed->buf = b;
-    ed->gap_end = cap - tail;
-    ed->cap = cap;
-    return true;
+// Room for n more bytes. The buffer is allocated at its limit when the editor opens, so it never
+// grows: a realloc would hold the old and the new block at once, twice the text, when the limit
+// (what the heap could spare, see edit.c) was set for one copy.
+static bool reserve(const editor_t *ed, size_t n) {
+    return ed->gap_end - ed->gap >= n;
 }
 
 static bool insert(editor_t *ed, const char *s, size_t n) {
     if (!reserve(ed, n)) {
-        editor_message(ed, "the text can't grow past 32 KB");
+        char m[80];                         // whole KB once rounding down loses under a tenth
+        if (ed->limit >= 10 * 1024)
+            snprintf(m, sizeof(m), "the text can't grow past %zu KB", ed->limit / 1024);
+        else
+            snprintf(m, sizeof(m), "the text can't grow past %zu bytes", ed->limit);
+        editor_message(ed, m);
         return false;
     }
     move_gap(ed, ed->cursor);
@@ -258,10 +247,19 @@ static size_t pos_at_col(const editor_t *ed, size_t start, size_t want) {
     return p;
 }
 
+// Newlines in [from, to). The status bar counts over the whole text every frame, so this runs
+// memchr over each half of the gap buffer rather than looking at bytes one at a time.
 static size_t count_lines(const editor_t *ed, size_t from, size_t to) {
     size_t n = 0;
-    for (size_t p = from; p < to; p++)
-        n += at(ed, p) == '\n';
+    while (from < to) {
+        bool before = from < ed->gap;
+        size_t end = before && to > ed->gap ? ed->gap : to;
+        const char *p = ed->buf + (before ? from : from + (ed->gap_end - ed->gap));
+        const char *stop = p + (end - from);
+        for (const char *q; (q = memchr(p, '\n', (size_t)(stop - p))) != NULL; p = q + 1)
+            n++;
+        from = end;
+    }
     return n;
 }
 
@@ -287,7 +285,7 @@ void editor_invalidate(editor_t *ed) {
     changed(ed);
 }
 
-bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
+char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit) {
     memset(ed, 0, sizeof(*ed));
     size_t nl = strlen(name);               // a long path: its end, where the file name is
     if (nl < sizeof(ed->name))
@@ -296,32 +294,47 @@ bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
         snprintf(ed->name, sizeof(ed->name), "...%s", name + nl - (sizeof(ed->name) - 4));
     ed->rows = 24;
     ed->cols = 80;
-
-    // CRLF file: every LF has a CR before it (and there's at least one).
-    size_t lf = 0, crlf = 0;
-    for (size_t i = 0; i < len; i++)
-        if (text[i] == '\n') {
-            lf++;
-            crlf += i > 0 && text[i - 1] == '\r';
-        }
-    ed->crlf = lf > 0 && crlf == lf;
-    size_t n = len - (ed->crlf ? crlf : 0);
-    if (n > EDITOR_MAX_TEXT)
-        return false;
-
-    size_t cap = n + 1024 > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : n + 1024;
+    ed->limit = limit > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : limit;
+    if (len > ed->limit)
+        return NULL;
+    size_t cap = ed->limit;                 // all of it at once: see reserve()
     ed->buf = heap_alloc(HEAP_EDIT, cap ? cap : 1);
     if (!ed->buf)
-        return false;
+        return NULL;
     ed->cap = cap;
-    size_t o = 0;
-    for (size_t i = 0; i < len; i++)
-        if (!(ed->crlf && text[i] == '\r' && i + 1 < len && text[i + 1] == '\n'))
-            ed->buf[o++] = text[i];
-    ed->gap = o;
+    ed->gap = len;                          // the caller's bytes, until editor_opened()
     ed->gap_end = cap;
+    return ed->buf;
+}
+
+void editor_opened(editor_t *ed) {
+    // CRLF file: every LF has a CR before it (and there's at least one). Then the CRs go, in
+    // place, and come back when saving.
+    char *t = ed->buf;
+    size_t len = ed->gap, lf = 0, crlf = 0;
+    for (size_t i = 0; i < len; i++)
+        if (t[i] == '\n') {
+            lf++;
+            crlf += i > 0 && t[i - 1] == '\r';
+        }
+    ed->crlf = lf > 0 && crlf == lf;
+    if (ed->crlf) {
+        size_t o = 0;
+        for (size_t i = 0; i < len; i++)
+            if (!(t[i] == '\r' && i + 1 < len && t[i + 1] == '\n'))
+                t[o++] = t[i];
+        ed->gap = o;
+    }
     snprintf(ed->msg, sizeof(ed->msg), "Ctrl-S save, Ctrl-Q quit, Ctrl-F find, Ctrl-L redraw");
     editor_invalidate(ed);
+}
+
+bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
+    char *fill = editor_open(ed, name, len, EDITOR_MAX_TEXT);
+    if (!fill)
+        return false;
+    memcpy(fill, text, len);
+    editor_opened(ed);
     return true;
 }
 
@@ -384,6 +397,33 @@ static void line_down(editor_t *ed) {
     size_t e = line_end(ed, ed->cursor);
     if (e < editor_len(ed))
         ed->cursor = pos_at_col(ed, e + 1, ed->want_col);
+}
+
+// A word is letters, digits, '_' and anything non-ASCII (so every byte of a UTF-8 character,
+// marks included, and the move stays on character boundaries); the rest, newlines included,
+// separates words. Right goes to the end of the next word, left to the start of the previous
+// one, as in Emacs and readline.
+static bool word_byte(unsigned char c) {
+    return c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+static void word_right(editor_t *ed) {
+    size_t len = editor_len(ed), p = ed->cursor;
+    while (p < len && !word_byte(at(ed, p)))
+        p++;
+    while (p < len && word_byte(at(ed, p)))
+        p++;
+    ed->cursor = p;
+}
+
+static void word_left(editor_t *ed) {
+    size_t p = ed->cursor;
+    while (p > 0 && !word_byte(at(ed, p - 1)))
+        p--;
+    while (p > 0 && word_byte(at(ed, p - 1)))
+        p--;
+    ed->cursor = p;
 }
 
 static void find_next(editor_t *ed) {
@@ -489,6 +529,18 @@ editor_action_t editor_key(editor_t *ed, int key) {
         break;
     case KEY_RIGHT:
         ed->cursor = next_pos(ed, ed->cursor);
+        break;
+    case KEY_WORD_LEFT:
+        word_left(ed);
+        break;
+    case KEY_WORD_RIGHT:
+        word_right(ed);
+        break;
+    case KEY_CTRL_HOME:
+        ed->cursor = 0;
+        break;
+    case KEY_CTRL_END:
+        ed->cursor = len;
         break;
     case KEY_UP:
         line_up(ed);
@@ -670,8 +722,20 @@ size_t editor_draw(editor_t *ed, char *out, size_t cap) {
     if (!ed->dirty)
         return 0;
     if (!ed->drawing) {
-        if (cap < 16)
-            return 0;
+        // A row cut short when the frame restarted goes out whole first: stale, but complete, so
+        // the terminal never sees a sequence or character cut by a new one. It's drawn again
+        // below (its row isn't valid).
+        if (ed->row_sent < ed->row_len) {
+            size_t take = ed->row_len - ed->row_sent;
+            if (take > cap)
+                take = cap;
+            n = put(out, n, ed->row + ed->row_sent, take);
+            ed->row_sent += take;
+            if (ed->row_sent < ed->row_len)
+                return n;
+        }
+        if (cap - n < 16)
+            return n;
         scroll(ed);
         ed->drawing = true;
         ed->draw_row = 0;
@@ -683,16 +747,25 @@ size_t editor_draw(editor_t *ed, char *out, size_t cap) {
             ed->clear = false;
         }
     }
-    char *row = ed->row;
     while (ed->draw_row < ed->rows) {
         int r = ed->draw_row;
-        size_t len = render_row(ed, r, row);
-        uint32_t h = hash(row, len);
-        if (!ed->row_valid[r] || ed->drawn[r] != h) {
-            if (n + len > cap)
-                return n;                   // the rest on the next call
-            n = put(out, n, row, len);
+        if (ed->row_sent == ed->row_len) {  // not in the middle of a row: render this one
+            size_t len = render_row(ed, r, ed->row);
+            uint32_t h = hash(ed->row, len);
+            if (ed->row_valid[r] && ed->drawn[r] != h)
+                ed->row_valid[r] = false;   // what it shows is wrong until the whole row is out
             ed->drawn[r] = h;
+            ed->row_len = ed->row_valid[r] ? 0 : len;
+            ed->row_sent = 0;
+        }
+        if (ed->row_sent < ed->row_len) {
+            size_t take = ed->row_len - ed->row_sent;
+            if (take > cap - n)
+                take = cap - n;             // the rest on the next call
+            n = put(out, n, ed->row + ed->row_sent, take);
+            ed->row_sent += take;
+            if (ed->row_sent < ed->row_len)
+                return n;
             ed->row_valid[r] = true;
         }
         if (r < text_rows(ed) && !ed->draw_past_end) {

@@ -584,7 +584,8 @@ while it's exactly the file approved on the console:
 
 ## Editor
 
-`edit <file>` opens a file of up to 32 KB in a full-screen editor, on the console or over SSH
+`edit <file>` opens a file of up to 128 KB (less while memory is short) in a full-screen editor,
+on the console or over SSH
 (a VT100/xterm-compatible terminal; it uses the alternate screen, so the shell's output is back
 afterwards). Ctrl-S saves, Ctrl-Q quits (twice with unsaved changes), Ctrl-F finds, Ctrl-L
 redraws and asks the terminal for its size again. UTF-8 is fine, wide characters take two

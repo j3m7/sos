@@ -19,6 +19,7 @@
 static int t_row, t_col, t_rows, t_cols;
 static bool t_cursor_on;
 static size_t t_bytes;                      // output received in total
+static size_t t_held;                       // bytes of a cut sequence waiting for the rest
 
 // One character per cell, plus up to 3 combining marks; the right half of a wide character is
 // WIDE_RIGHT.
@@ -60,14 +61,19 @@ static void t_reset(int rows, int cols) {
     t_cols = cols;
     t_cursor_on = true;
     t_bytes = 0;
+    t_held = 0;
 }
 
-static void t_feed(const char *s, size_t n) {
-    t_bytes += n;
-    for (size_t i = 0; i < n;) {
+// Act on the output in s: how many bytes were taken (a sequence or character cut short at the
+// end is left for later).
+static size_t t_parse(const char *s, size_t n) {
+    size_t i = 0;
+    while (i < n) {
         unsigned char c = (unsigned char)s[i];
         if (c == 0x1b) {
-            CHECK(i + 1 < n && s[i + 1] == '[');
+            if (i + 1 >= n)
+                return i;
+            CHECK(s[i + 1] == '[');
             size_t j = i + 2;
             bool priv = j < n && s[j] == '?';
             if (priv)
@@ -80,7 +86,8 @@ static void t_feed(const char *s, size_t n) {
                     p[np < 2 ? np : 1] = p[np < 2 ? np : 1] * 10 + (s[j] - '0');
                 j++;
             }
-            CHECK(j < n);
+            if (j >= n)
+                return i;
             char f = s[j];
             if (priv && p[0] == 25)
                 t_cursor_on = f == 'h';
@@ -105,7 +112,8 @@ static void t_feed(const char *s, size_t n) {
         CHECK(c >= 0x20 && c != 0x7f);      // nothing else a terminal could act on
         CHECK(!(c >= 0x80 && c <= 0x9f) || i > 0);
         size_t l = c < 0x80 ? 1 : c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
-        CHECK(i + l <= n);
+        if (i + l > n)
+            return i;
         int w = t_width(t_decode((const unsigned char *)s + i, l));
         static bool last_col_full;          // the character before was written in the last column
         if (w == 0) {                       // joins the cell before (the cursor's, at the edge)
@@ -135,6 +143,21 @@ static void t_feed(const char *s, size_t n) {
             t_col = t_cols - 1;
         i += l;
     }
+    return i;
+}
+
+// Output arrives in pieces, as from edit.c: like a terminal, keep a sequence or character cut at
+// the end of one piece until the next brings the rest.
+static void t_feed(const char *s, size_t n) {
+    static char held[70000];
+    t_bytes += n;
+    CHECK(t_held + n <= sizeof(held));
+    memcpy(held + t_held, s, n);
+    t_held += n;
+    size_t done = t_parse(held, t_held);
+    CHECK(t_held - done < 32);              // only a sequence's tail waits
+    memmove(held, held + done, t_held - done);
+    t_held -= done;
 }
 
 // Row r (0-based) as a string, trailing blanks dropped.
@@ -485,6 +508,50 @@ TEST(crlf_files_keep_their_line_ends) {
     editor_free(&ed);
 }
 
+TEST(word_skip_and_text_start_and_end) {
+    open_text("foo  bar-baz\n  qux", 5, 40);
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 3u);                // to the end of the word
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 8u);                // past the spaces, to the end of "bar"
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 12u);               // "baz": '-' separates
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 18u);               // across the newline and the indentation
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 18u);               // the end: stays
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 15u);               // to the start of "qux"
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 9u);                // "baz"
+    key(KEY_WORD_LEFT);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    key(KEY_CTRL_END);
+    CHECK_EQ(ed.cursor, 18u);
+    draw();
+    CHECK_EQ(t_row, 1);
+    CHECK_EQ(t_col, 5);
+    key(KEY_CTRL_HOME);
+    CHECK_EQ(ed.cursor, 0u);
+    CHECK(!ed.modified);
+    editor_free(&ed);
+
+    open_text("\xc3\xa9t\xc3\xa9 x", 5, 40);     // été x: a word is whole characters
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 5u);
+    draw();
+    CHECK_EQ(t_col, 3);
+    key(KEY_WORD_RIGHT);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 6u);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    editor_free(&ed);
+}
+
 TEST(find_moves_to_the_next_match) {
     open_text("cat dog\nbird dog\ncat", 6, 40);
     keys("\x06" "dog\r");                   // Ctrl-F dog
@@ -520,9 +587,32 @@ TEST(size_limit) {
     keys("b");                              // can't grow
     CHECK_EQ(editor_len(&ed), EDITOR_MAX_TEXT);
     CHECK(!ed.modified);
-    CHECK(strstr(ed.msg, "32 KB") != NULL);
+    CHECK(strstr(ed.msg, "128 KB") != NULL);
     editor_free(&ed);
     free(big);
+}
+
+TEST(open_in_two_steps_with_a_lower_limit) {
+    char *fill = editor_open(&ed, "two.txt", 6, 2000);
+    CHECK(fill != NULL);
+    memcpy(fill, "ab\r\ncd", 6);
+    editor_opened(&ed);
+    CHECK(ed.crlf);                         // looked at once filled, and stripped in place
+    CHECK_EQ(editor_len(&ed), 5);
+    CHECK(!strcmp(saved(), "ab\r\ncd"));
+    CHECK_EQ(ed.limit, 2000);
+    CHECK_EQ(ed.cap, 2000);                 // allocated whole: no growth while typing
+    for (int i = 0; i < 2100; i++)
+        keys("x");
+    CHECK_EQ(editor_len(&ed), 2000);       // the limit holds where EDITOR_MAX_TEXT would not
+    CHECK(strstr(ed.msg, "2000 bytes") != NULL);
+    editor_free(&ed);
+
+    CHECK(editor_open(&ed, "big.txt", 2001, 2000) == NULL);    // over the limit
+    editor_free(&ed);                       // safe after a refusal
+    CHECK(editor_open(&ed, "max.txt", 10, EDITOR_MAX_TEXT * 2) != NULL);
+    CHECK_EQ(ed.limit, EDITOR_MAX_TEXT);    // never more than the compile-time most
+    editor_free(&ed);
 }
 
 TEST(grows_while_typing) {
@@ -530,7 +620,7 @@ TEST(grows_while_typing) {
     for (int i = 0; i < 5000; i++)
         keys(i % 50 == 49 ? "\r" : "q");
     CHECK_EQ(editor_len(&ed), 5000);
-    CHECK(ed.cap >= 5000);
+    CHECK_EQ(ed.cap, (size_t)EDITOR_MAX_TEXT);
     CHECK_EQ(saved()[49], '\n');
     draw();
     CHECK(strstr(t_line(3), "line 101/101") != NULL);
@@ -693,9 +783,10 @@ TEST(a_long_run_of_marks_stays_in_bounds) {
     editor_free(&ed);
 }
 
-TEST(worst_case_rows_fit_one_write) {
+TEST(worst_case_rows_go_out_in_pieces) {
     // Four-byte characters with two four-byte marks each (U+1D400 MATHEMATICAL BOLD CAPITAL A,
-    // U+1D167 combining tremolo), a full screen of them at the widest size.
+    // U+1D167 combining tremolo), a full screen of them at the widest size: a row is far more
+    // than edit.c can send at once.
     static char text[EDITOR_ROWS_MAX * ((EDITOR_COLS_MAX + 5) * 12 + 1) + 1];
     size_t n = 0;
     for (int r = 0; r < EDITOR_ROWS_MAX; r++) {
@@ -709,15 +800,67 @@ TEST(worst_case_rows_fit_one_write) {
     if (n > EDITOR_MAX_TEXT)
         n = EDITOR_MAX_TEXT;                // the editor's limit: as much as it takes
     CHECK(editor_init(&ed, "worst", text, n));
+    t_reset(EDITOR_ROWS_MAX, EDITOR_COLS_MAX);
     editor_resize(&ed, EDITOR_ROWS_MAX, EDITOR_COLS_MAX);
     static char out[2048];                  // what edit.c sends at most
     int calls = 0;
-    while (!editor_drawn(&ed) && calls < 1000) {
+    while (!editor_drawn(&ed) && calls < 100000) {
         size_t got = editor_draw(&ed, out, sizeof(out));
-        CHECK(got > 0);                     // every row fits
+        CHECK(got > 0);                     // progress on every call
+        CHECK(got <= sizeof(out));
+        t_feed(out, got);
         calls++;
     }
     CHECK(editor_drawn(&ed));
+    size_t lines = 0;                       // text rows (the rest show '~'): each took 3 calls
+    for (size_t i = 0; i < n; i++)
+        lines += text[i] == '\n';
+    CHECK(calls > (int)(2 * lines));
+    CHECK(!strncmp(t_line(0), "\xf0\x9d\x90\x80", 4));     // (the test terminal doesn't know
+                                                            // U+1D167 is a mark: no more checks)
+    editor_free(&ed);
+}
+
+TEST(a_row_cut_short_by_a_restart_is_sent_again) {
+    open_text("0123456789abcdefghijklmnopqrstuvwxyz\nsecond\n", 5, 40);
+    static char out[24];                    // less than the first row
+    t_feed(out, editor_draw(&ed, out, sizeof(out)));
+    CHECK(!editor_drawn(&ed));
+    CHECK(strlen(t_line(0)) < 36);          // only part of it has arrived
+    key(KEY_DOWN);                          // a change: the frame restarts
+    while (!editor_drawn(&ed))
+        t_feed(out, editor_draw(&ed, out, sizeof(out)));
+    CHECK_LINE(0, "0123456789abcdefghijklmnopqrstuvwxyz");
+    CHECK_LINE(1, "second");
+    CHECK_EQ(t_row, 1);
+    CHECK(t_cursor_on);
+    editor_free(&ed);
+}
+
+TEST(a_big_terminal_is_used_whole) {
+    char text[8000] = "";
+    for (int i = 1; i <= 150; i++)
+        sprintf(text + strlen(text), "line %d%s\n", i, i == 3 ? " is long: 0123456789"
+                "0123456789" "0123456789" "0123456789" "0123456789" "0123456789" "0123456789"
+                "0123456789" "0123456789" "0123456789" "0123456789" "0123456789" "0123456789"
+                "0123456789" "0123456789" "0123456789" "0123456789" "0123456789" "0123456789"
+                "0123456789" "0123456789" "0123456789" "0123456789" "0123456789" "0123456789"
+                "0123456789" "0123456789" "0123456789" "0123456789" "0123456789" : "");
+    open_text(text, 120, 320);
+    draw();
+    CHECK_LINE(0, "line 1");
+    CHECK_LINE(117, "line 118");
+    CHECK_EQ(strlen(t_line(2)), 316u);     // longer than 160 columns, shown whole
+    CHECK(strstr(t_line(118), "line 1/151") != NULL);
+    CHECK(strstr(t_line(119), "Ctrl-S save") != NULL);
+    for (int i = 0; i < 300; i++)
+        key(KEY_DOWN);
+    draw();
+    CHECK_LINE(117, "");                    // the line after the last newline
+    CHECK_EQ(t_row, 117);
+    editor_resize(&ed, 1000, 1000);         // a terminal beyond the limits: clamped
+    CHECK_EQ(ed.rows, EDITOR_ROWS_MAX);
+    CHECK_EQ(ed.cols, EDITOR_COLS_MAX);
     editor_free(&ed);
 }
 
@@ -750,6 +893,7 @@ TEST(random_keys_keep_invariants) {
         'a', 'z', ' ', '\r', '\t', 0x7f, 0x04, 0xc3, 0xa9, 0xe2, 0x80, 0xae, 0x1b,
         0xe6, 0xbc, 0xa2, 0xcc, 0x81,       // pieces of a wide character and a combining mark
         KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_HOME, KEY_END, KEY_PGUP, KEY_PGDN, KEY_DELETE,
+        KEY_WORD_LEFT, KEY_WORD_RIGHT, KEY_CTRL_HOME, KEY_CTRL_END,
     };
     static char out[600];
     for (int i = 0; i < 20000; i++) {
@@ -780,8 +924,10 @@ TEST_MAIN(
     RUN(save_and_quit);
     RUN(ctrl_l_redraws_and_asks_for_size);
     RUN(crlf_files_keep_their_line_ends);
+    RUN(word_skip_and_text_start_and_end);
     RUN(find_moves_to_the_next_match);
     RUN(size_limit);
+    RUN(open_in_two_steps_with_a_lower_limit);
     RUN(grows_while_typing);
     RUN(log_messages_waiting_show_in_status);
     RUN(wide_characters_take_two_columns);
@@ -794,7 +940,9 @@ TEST_MAIN(
     RUN(combining_mark_with_nothing_to_join_shows_as_question_mark);
     RUN(marks_beyond_the_limit_show_as_question_marks);
     RUN(a_long_run_of_marks_stays_in_bounds);
-    RUN(worst_case_rows_fit_one_write);
+    RUN(worst_case_rows_go_out_in_pieces);
+    RUN(a_row_cut_short_by_a_restart_is_sent_again);
+    RUN(a_big_terminal_is_used_whole);
     RUN(wide_characters_in_the_status_and_search);
     RUN(random_keys_keep_invariants);
 )

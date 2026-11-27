@@ -10,6 +10,15 @@ enum { ST_NONE, ST_ESC, ST_CSI, ST_SS3, ST_ALT_UTF8 };
 
 #define PARAM_MAX 9999
 
+// xterm's modifier, the second parameter: 1 + (1 Shift, 2 Alt, 4 Ctrl, 8 Meta).
+static bool ctrl_or_alt(const keys_t *k) {
+    return k->nparams == 2 && k->param[1] > 1 && ((k->param[1] - 1) & 6) != 0;
+}
+
+static bool ctrl(const keys_t *k) {
+    return k->nparams == 2 && k->param[1] > 1 && ((k->param[1] - 1) & 4) != 0;
+}
+
 // The key a CSI "params final" means, or KEYS_NONE.
 static int csi_key(const keys_t *k, unsigned char final) {
     if (k->priv)
@@ -17,20 +26,26 @@ static int csi_key(const keys_t *k, unsigned char final) {
     switch (final) {
     case 'A': return KEY_UP;
     case 'B': return KEY_DOWN;
-    case 'C': return KEY_RIGHT;
-    case 'D': return KEY_LEFT;
-    case 'H': return KEY_HOME;
-    case 'F': return KEY_END;
+    case 'C': return ctrl_or_alt(k) ? KEY_WORD_RIGHT : KEY_RIGHT;
+    case 'D': return ctrl_or_alt(k) ? KEY_WORD_LEFT : KEY_LEFT;
+    case 'H': return ctrl(k) ? KEY_CTRL_HOME : KEY_HOME;
+    case 'F': return ctrl(k) ? KEY_CTRL_END : KEY_END;
     case 'R':                       // row and column count from 1
         return k->nparams == 2 && k->param[0] && k->param[1] ? KEY_CURSOR_POS : KEYS_NONE;
     case '~':                       // "ESC [ n ~" (vt220), possibly with a modifier "; m"
         switch (k->param[0]) {
-        case 1: case 7: return KEY_HOME;
+        case 1: case 7: return ctrl(k) ? KEY_CTRL_HOME : KEY_HOME;
         case 2:         return KEY_INSERT;
         case 3:         return KEY_DELETE;
-        case 4: case 8: return KEY_END;
+        case 4: case 8: return ctrl(k) ? KEY_CTRL_END : KEY_END;
         case 5:         return KEY_PGUP;
         case 6:         return KEY_PGDN;
+        }
+        return KEYS_NONE;
+    case '^':                       // rxvt: "ESC [ n ^" is Ctrl + the vt220 key
+        switch (k->param[0]) {
+        case 7: return KEY_CTRL_HOME;
+        case 8: return KEY_CTRL_END;
         }
         return KEYS_NONE;
     }
@@ -45,6 +60,8 @@ static int ss3_key(unsigned char c) {
     case 'D': return KEY_LEFT;
     case 'H': return KEY_HOME;
     case 'F': return KEY_END;
+    case 'c': return KEY_WORD_RIGHT;        // rxvt: Ctrl+Right/Left
+    case 'd': return KEY_WORD_LEFT;
     }
     return KEYS_NONE;
 }
@@ -69,6 +86,9 @@ int keys_feed(keys_t *k, unsigned char c) {
             k->param[0] = k->param[1] = 0;
         } else if (c == 'O') {
             k->state = ST_SS3;
+        } else if (c == 'b' || c == 'f') {      // Alt+B, Alt+F: a word back or forward
+            k->state = ST_NONE;
+            return c == 'b' ? KEY_WORD_LEFT : KEY_WORD_RIGHT;
         } else if (c >= 0xc2 && c <= 0xf4) {    // Alt + a UTF-8 character: drop all of it
             k->state = ST_ALT_UTF8;
             k->skip = c >= 0xf0 ? 3 : c >= 0xe0 ? 2 : 1;
