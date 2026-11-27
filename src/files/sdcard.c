@@ -377,31 +377,47 @@ static const char *fs_type(BYTE t) {
 
 static uint32_t mount_generation;   // counts mounts, for sdcard_generation()
 
+typedef enum {
+    CARD_READY,         // initialized, and the layer matches the card (plain, or encrypted and open)
+    CARD_NONE,          // no card (initialization failed)
+    CARD_REFUSED,       // locked or unsupported: kind_why says why (told to `sh` when there is one)
+} card_open_t;
+
+// Initialize the card if it isn't and find its kind, with the retries a mount gets: a card
+// locked for lack of a key is looked at again once there is one, one locked for lack of memory
+// is tried again, and one whose kind was forgotten is detected again. Afterwards disk_read(0)
+// reads the volume (decrypted on an encrypted card). Used by mount() and by `sd check`.
+static card_open_t card_open(shell_t *sh) {
+    if (disk_initialize(0) & STA_NOINIT)
+        return CARD_NONE;
+    if (card_kind == KIND_LOCKED && locked_without_key) {
+        // The board has been set up since (it has an owner secret now): the answer, or at
+        // least the reason, may be different.
+        uint8_t key[CARDKEY_LEN];
+        if (cardkey_get(key))
+            card_kind = KIND_UNKNOWN;
+        sdcrypt_wipe(key, sizeof(key));
+    }
+    if (card_kind == KIND_LOCKED && locked_no_memory)
+        card_kind = KIND_UNKNOWN;           // there may be memory now
+    if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
+        detect();
+    if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
+        if (sh && locked_no_memory)
+            shell_printf(sh, "sd: %s\n", kind_why);
+        else if (sh)
+            shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
+        return CARD_REFUSED;
+    }
+    return CARD_READY;
+}
+
 static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
     uint64_t t0 = time_us_64();
-    if (!(disk_initialize(0) & STA_NOINIT)) {    // no card: f_mount says so below
-        if (card_kind == KIND_LOCKED && locked_without_key) {
-            // The board has been set up since (it has an owner secret now): the answer, or at
-            // least the reason, may be different.
-            uint8_t key[CARDKEY_LEN];
-            if (cardkey_get(key))
-                card_kind = KIND_UNKNOWN;
-            sdcrypt_wipe(key, sizeof(key));
-        }
-        if (card_kind == KIND_LOCKED && locked_no_memory)
-            card_kind = KIND_UNKNOWN;           // there may be memory now
-        if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
-            detect();
-        if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
-            if (sh && locked_no_memory)
-                shell_printf(sh, "sd: %s\n", kind_why);
-            else if (sh)
-                shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
-            return false;
-        }
-    }
+    if (card_open(sh) == CARD_REFUSED)      // no card: f_mount says so below
+        return false;
     FRESULT fr = f_mount(&card.state.fatfs, sd_get_drive_prefix(&card), 1);
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
     if (fr != FR_OK) {
