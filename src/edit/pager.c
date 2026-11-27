@@ -106,26 +106,35 @@ static int text_rows(const pager_t *p) {
     return p->scr.rows - 1;
 }
 
+// The '\n's in [from, to), and the last byte there (*last, left alone for an empty range). False
+// if a read failed. One pass over that part of the text.
+static bool count_nls(pager_t *p, size_t from, size_t to, long *n, unsigned char *last) {
+    size_t off = from;
+    while (off < to) {
+        size_t avail;
+        const unsigned char *s = at(p, off, 1, false, &avail);
+        if (!s || !avail)
+            return false;
+        if (avail > to - off)
+            avail = to - off;
+        for (const unsigned char *q = s, *stop = s + avail; (q = memchr(q, '\n', (size_t)(stop - q))) != NULL; q++)
+            (*n)++;
+        *last = s[avail - 1];
+        off += avail;
+    }
+    return true;
+}
+
 // Lines in the text: '\n's, plus one for a last line without one. One pass over the text.
 static long count_lines(pager_t *p) {
     if (p->lines >= 0)
         return p->lines;
     long n = 0;
-    size_t off = 0, size = p->src.size;
     unsigned char last = '\n';
-    while (off < size) {
-        size_t avail;
-        const unsigned char *s = at(p, off, 1, false, &avail);
-        if (!s || !avail)
-            break;
-        for (const unsigned char *q = s, *stop = s + avail; (q = memchr(q, '\n', (size_t)(stop - q))) != NULL; q++)
-            n++;
-        last = s[avail - 1];
-        off += avail;
-    }
-    if (size > 0 && last != '\n')
+    bool ok = count_nls(p, 0, p->src.size, &n, &last);
+    if (p->src.size > 0 && last != '\n')
         n++;
-    if (!p->failed)                         // a count cut short by a read error isn't kept
+    if (ok && !p->failed)                   // a count cut short by a read error isn't kept
         p->lines = n;
     return n;
 }
@@ -201,7 +210,8 @@ bool pager_init(pager_t *p, const char *name, pager_source_t src, size_t window)
     p->end_top = NO_POS;
     if (!window)
         window = PAGER_WINDOW;
-    p->win_cap = src.size < window ? src.size : window;
+    p->growing = src.growing;
+    p->win_cap = src.size < window && !src.growing ? src.size : window;
     p->win = heap_alloc(HEAP_EDIT, p->win_cap ? p->win_cap : 1);
     if (!p->win)
         return false;
@@ -221,6 +231,45 @@ void pager_resize(pager_t *p, int rows, int cols) {
     p->end_top = NO_POS;
     if (p->top > end_top(p))                // a taller terminal: rows past the end would show '~'
         go_end(p);
+}
+
+// The text now has `size` bytes. The line count is extended over the new bytes when it was known
+// (a last line without its '\n' was counted, and is counted again with what follows it).
+void pager_grow(pager_t *p, size_t size) {
+    size_t old = p->src.size;
+    if (size <= old)
+        return;
+    unsigned char before = '\n';
+    if (p->lines >= 0 && old > 0) {
+        size_t avail;
+        const unsigned char *s = at(p, old - 1, 1, false, &avail);
+        if (s && avail)
+            before = s[0];
+        else
+            p->lines = -1;
+    }
+    p->src.size = size;
+    p->end_top = NO_POS;
+    p->end_top_line = -1;
+    if (p->lines >= 0) {
+        long n = before != '\n' ? p->lines - 1 : p->lines;
+        unsigned char last = '\n';
+        if (count_nls(p, old, size, &n, &last) && !p->failed) {
+            p->lines = last != '\n' ? n + 1 : n;
+        } else {
+            p->lines = -1;
+        }
+    }
+    if (p->follow)
+        go_end(p);
+    changed(p);                             // the end, or the percentage in the status row
+}
+
+void pager_set_growing(pager_t *p, bool growing) {
+    p->growing = growing;
+    if (!growing)
+        p->follow = false;
+    changed(p);
 }
 
 size_t pager_read_mem(void *ctx, size_t off, char *buf, size_t n) {
@@ -365,6 +414,8 @@ pager_action_t pager_key(pager_t *p, int key) {
     if (p->finding)
         return find_key(p, key);
     p->msg[0] = '\0';
+    if (key != 'F' && key != 'h' && key != '?' && key != CTRL('L'))
+        p->follow = false;
     int rows = text_rows(p);
     size_t step = (size_t)p->scr.cols / 2;
 
@@ -418,6 +469,11 @@ pager_action_t pager_key(pager_t *p, int key) {
     case KEY_CTRL_END:
         go_end(p);
         break;
+    case 'F':                               // as in less: stay on the end as text arrives
+        if (p->growing)
+            p->follow = true;
+        go_end(p);
+        break;
     case KEY_LEFT:
         p->col_off = p->col_off > step ? p->col_off - step : 0;
         break;
@@ -440,7 +496,9 @@ pager_action_t pager_key(pager_t *p, int key) {
         return PAGER_RESIZE;
     case 'h':
     case '?':
-        pager_message(p, "Space/b page, j/k line, d/u half, g/G ends, / find, n next, q quit");
+        pager_message(p, p->growing
+                             ? "Space/b page, j/k line, g/G ends, F follow, / find, n next, q quit"
+                             : "Space/b page, j/k line, d/u half, g/G ends, / find, n next, q quit");
         break;
     default:
         break;
@@ -491,10 +549,14 @@ static size_t status_row(pager_t *p, char *out, size_t n) {
     else {
         r += snprintf(right + r, sizeof(right) - (size_t)r, "lines %ld-%ld", p->top_line + 1,
                       p->top_line + p->shown);
-        if (p->lines >= 0)
+        if (p->growing)
+            r += snprintf(right + r, sizeof(right) - (size_t)r, "/...");
+        else if (p->lines >= 0)
             r += snprintf(right + r, sizeof(right) - (size_t)r, "/%ld", p->lines);
+        if (p->follow)
+            r += snprintf(right + r, sizeof(right) - (size_t)r, " FOLLOW");
         if (p->draw_past_end)
-            snprintf(right + r, sizeof(right) - (size_t)r, " END ");
+            snprintf(right + r, sizeof(right) - (size_t)r, p->growing ? " END so far " : " END ");
         else
             snprintf(right + r, sizeof(right) - (size_t)r, " %u%% ",
                      (unsigned)((unsigned long long)p->draw_pos * 100 / p->src.size));

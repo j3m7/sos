@@ -120,6 +120,7 @@ TEST(no_newline_at_the_end_and_empty_text) {
 
     open_text("", 5, 40, 0);
     key('j');
+    key('j');                               // the hint gives way to the status
     draw();
     CHECK_LINE(0, "~");
     CHECK(strstr(status(), "empty") != NULL);
@@ -451,6 +452,219 @@ TEST(random_keys_keep_invariants) {
     free(text);
 }
 
+// --- a text that grows while it is shown ---------------------------------------------------------
+
+static char *grow_buf;                      // the growing text, re-pointed as it moves
+static size_t grow_len, grow_cap;
+
+static void grow_open(int rows, int cols, size_t window) {
+    grow_len = 0;
+    grow_cap = 16;
+    grow_buf = malloc(grow_cap);
+    pager_source_t src = { .read = pager_read_mem, .ctx = grow_buf, .size = 0, .growing = true };
+    CHECK(pager_init(&pg, "grow.txt", src, window));
+    t_reset(rows, cols);
+    pager_resize(&pg, rows, cols);
+}
+
+// Append text the way a caller does: realloc, re-point, tell the pager.
+static void grow_add(const char *s) {
+    size_t n = strlen(s);
+    if (grow_len + n > grow_cap) {
+        while (grow_len + n > grow_cap)
+            grow_cap *= 2;
+        grow_buf = realloc(grow_buf, grow_cap);     // may move: the pager is told below
+        pg.src.ctx = grow_buf;
+    }
+    memcpy(grow_buf + grow_len, s, n);
+    grow_len += n;
+    pager_grow(&pg, grow_len);
+}
+
+static void grow_close(void) {
+    pager_free(&pg);
+    free(grow_buf);
+    grow_buf = NULL;
+}
+
+TEST(a_growing_source_gets_the_whole_window) {
+    grow_open(6, 40, 0);
+    CHECK_EQ(pg.win_cap, PAGER_WINDOW);
+    key('j');                               // the hint gives way to the status
+    draw();
+    CHECK_LINE(0, "~");
+    CHECK(strstr(status(), "empty") != NULL);
+    grow_add("first\n");
+    draw();
+    CHECK_LINE(0, "first");
+    CHECK_LINE(1, "~");
+    grow_close();
+    open_text("abc\n", 6, 40, 0);           // a fixed source keeps the small window
+    CHECK_EQ(pg.win_cap, 4);
+    pager_free(&pg);
+}
+
+TEST(growth_while_the_view_is_at_the_end) {
+    grow_open(6, 40, 0);                    // 5 text rows
+    grow_add("one\ntwo\n");
+    key('j');
+    draw();
+    CHECK_LINE(1, "two");
+    CHECK_LINE(2, "~");
+    CHECK(strstr(status(), "lines 1-2/... END") != NULL);   // no total while growing
+    grow_add("three\nfour\nfive\nsix\nseven\n");   // the realloc moves the block more than once
+    draw();
+    CHECK_LINE(0, "one");                   // the view didn't move: more is below it now
+    CHECK_LINE(4, "five");
+    CHECK(strstr(status(), "END") == NULL);
+    key('G');                               // the end so far
+    draw();
+    CHECK_LINE(0, "three");
+    CHECK_LINE(4, "seven");
+    CHECK(strstr(status(), "lines 3-7/... END") != NULL);
+    grow_add("eight\n");                    // rows past the end were showing: the frame changes
+    CHECK(!screen_drawn(&pg.scr));
+    draw();
+    CHECK_LINE(4, "seven");
+    key(' ');
+    key('G');
+    draw();
+    CHECK_LINE(4, "eight");
+    grow_add("nine");                       // a last line without its '\n'
+    key('G');
+    draw();
+    CHECK_LINE(4, "nine");
+    grow_add(" and more\n");                // the same line, longer
+    draw();
+    CHECK_LINE(4, "nine and more");
+    grow_close();
+}
+
+TEST(growth_while_scrolled_back_does_not_move_the_view) {
+    grow_open(6, 40, 0);
+    for (int i = 1; i <= 20; i++) {
+        char l[32];
+        snprintf(l, sizeof(l), "line %d\n", i);
+        grow_add(l);
+    }
+    key('G');
+    key('b');                               // a page back from the end so far
+    draw();
+    CHECK_LINE(0, "line 11");
+    char before[64];
+    snprintf(before, sizeof(before), "%s", status());
+    size_t top = pg.top;
+    long top_line = pg.top_line;
+    grow_add("line 21\nline 22\nline 23\n");
+    CHECK(!screen_drawn(&pg.scr));          // the percentage changed
+    draw();
+    CHECK_LINE(0, "line 11");
+    CHECK_EQ(pg.top, top);
+    CHECK_EQ(pg.top_line, top_line);
+    CHECK(strcmp(before, status()) != 0);
+    CHECK(strstr(status(), "lines 11-15/...") != NULL);
+    key('G');
+    draw();
+    CHECK_LINE(4, "line 23");
+    grow_close();
+}
+
+// A fresh count of the growing text: '\n's, plus one for a last line without one.
+static long fresh_count(void) {
+    long n = 0;
+    for (size_t i = 0; i < grow_len; i++)
+        n += grow_buf[i] == '\n';
+    return grow_len > 0 && grow_buf[grow_len - 1] != '\n' ? n + 1 : n;
+}
+
+TEST(the_line_count_after_growth_is_a_fresh_count) {
+    const char *pieces[] = { "a\nb\n", "c", "d\ne", "\n", "\n\nf\n", "g", "h", "\n" };
+    grow_open(6, 40, 64);
+    for (size_t i = 0; i < sizeof(pieces) / sizeof(pieces[0]); i++) {
+        key('G');
+        draw();
+        CHECK_EQ(pg.lines, fresh_count());  // counted, as the end was on screen
+        grow_add(pieces[i]);
+        CHECK_EQ(pg.lines, fresh_count());  // extended, not forgotten
+    }
+    pager_set_growing(&pg, false);
+    key('G');
+    draw();
+    CHECK(strstr(status(), "/8 END") != NULL);
+    grow_close();
+}
+
+TEST(the_status_row_while_growing) {
+    grow_open(6, 70, 0);
+    grow_add("x\ny\n");
+    key('h');
+    draw();
+    CHECK(strstr(status(), "F follow") != NULL);
+    key('j');
+    draw();
+    CHECK(strstr(status(), "lines 1-2/... END") != NULL);
+    pager_set_growing(&pg, false);          // complete: the total shows
+    draw();
+    CHECK(strstr(status(), "lines 1-2/2 END") != NULL);
+    CHECK(strstr(status(), "...") == NULL);
+    grow_close();
+}
+
+TEST(follow_stays_on_the_end_until_a_movement_key) {
+    grow_open(5, 40, 0);                    // 4 text rows
+    grow_add("1\n2\n3\n4\n5\n6\n");
+    key('F');
+    draw();
+    CHECK_LINE(0, "3");
+    CHECK(strstr(status(), "FOLLOW") != NULL);
+    grow_add("7\n8\n");
+    draw();
+    CHECK_LINE(0, "5");
+    CHECK_LINE(3, "8");
+    key('h');                               // not a movement key
+    CHECK(pg.follow);
+    key('k');
+    CHECK(!pg.follow);
+    grow_add("9\n");
+    draw();
+    CHECK_LINE(0, "4");                     // stayed where it was left
+    CHECK(strstr(status(), "FOLLOW") == NULL);
+    key('F');
+    grow_add("10\n");
+    draw();
+    CHECK_LINE(3, "10");
+    pager_set_growing(&pg, false);
+    CHECK(!pg.follow);
+    grow_close();
+}
+
+TEST(random_keys_with_growth_keep_invariants) {
+    srand(8765);
+    grow_open(9, 30, 100);
+    static const int pool[] = {
+        ' ', 'b', 'j', 'k', 'd', 'u', 'g', 'G', 'n', '/', 'l', 'i', '\r', 0x7f, 'h', 'F',
+        KEY_UP, KEY_DOWN, KEY_PGUP, KEY_PGDN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
+    };
+    static char out[300];
+    int lines = 0;
+    for (int i = 0; i < 5000; i++) {
+        if (rand() % 4 == 0) {
+            char l[64];
+            snprintf(l, sizeof(l), rand() % 7 ? "line %d words to find\n" : "line %d no end", lines++);
+            grow_add(l);
+        } else {
+            key(pool[rand() % (int)(sizeof(pool) / sizeof(pool[0]))]);
+        }
+        CHECK(pg.top <= pg.src.size);
+        CHECK(pg.top_line >= 0);
+        if (i % 5 == 0)
+            while (!screen_drawn(&pg.scr))
+                t_feed(out, screen_draw(&pg.scr, out, sizeof(out)));
+    }
+    CHECK(!pg.failed);
+    grow_close();
+}
+
 TEST_MAIN(
     RUN(shows_text_and_status);
     RUN(no_newline_at_the_end_and_empty_text);
@@ -467,4 +681,11 @@ TEST_MAIN(
     RUN(frames_in_small_pieces_show_the_same);
     RUN(a_big_terminal_is_used_whole);
     RUN(random_keys_keep_invariants);
+    RUN(a_growing_source_gets_the_whole_window);
+    RUN(growth_while_the_view_is_at_the_end);
+    RUN(growth_while_scrolled_back_does_not_move_the_view);
+    RUN(the_line_count_after_growth_is_a_fresh_count);
+    RUN(the_status_row_while_growing);
+    RUN(follow_stays_on_the_end_until_a_movement_key);
+    RUN(random_keys_with_growth_keep_invariants);
 )
