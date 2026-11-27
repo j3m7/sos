@@ -108,8 +108,9 @@ in: anyone with a cable could load settings that name their own SSH key. So a bo
 switched, once and permanently, to refuse such files and take its settings only from `setup`
 on its console. dev-1 is not switched, so it can still be provisioned from a file. A
 production board is. The switch is one OTP setting of its own, separate from secure boot,
-which is why dev-1 can have secure boot without it. (In the code and elsewhere in this
-document it is called the "sealed-only marker", #84.)
+which is why dev-1 can have secure boot without it. This setting is called
+**console-only setup**: a board with it is a console-only board, and the OTP rows that switch
+it on are the console-only marker (#84; called "sealed-only" before #91).
 
 **10. The board's SSH host key after its settings are wiped.** The SSH host key is the key
 pair an SSH server uses to identify itself. SSH clients remember its fingerprint and warn when
@@ -253,12 +254,12 @@ and merged before anything is burned.
    - **Which backend a board uses depends on whether a valid root secret is in OTP,** not on
      secure boot: the board is set up in step 3.5, after the burn and before secure boot is
      on, and what is sealed then has to open after step 4.
-   - **On a sealed-only board the root secret comes from OTP or not at all.** The flash record
+   - **On a console-only board the root secret comes from OTP or not at all.** The flash record
      is never read, never created and never a fallback there. Otherwise the marker would be
      hollow: someone with a cable could write a root secret record of their own into flash,
      with a configuration sealed under it, and the board would load both as its own.
      Refusing unsealed records (#84) doesn't cover that; this rule does, with a host test. A
-     sealed-only board with no usable secret in OTP has no keys and keeps its console locked.
+     console-only board with no usable secret in OTP has no keys and keeps its console locked.
    - **Finding the page.** The firmware has a short fixed list of pages (say three), tried in
      order. A page holds a complete secret only if a marker row, written last, is there and a
      check over the secret matches; the secret alone has no magic number. A page that is
@@ -281,8 +282,8 @@ and merged before anything is burned.
      read-only", and Secure read-only. A spent page holds 32 bytes and no marker. Left
      writable from the bootloader, someone with a cable could read those bytes, write the
      check rows and the marker, and so make it the board's root secret, one they know; on a
-     sealed-only board they could then load a configuration sealed under it. The firmware
-     checks these locks at every boot (#86): an open board warns, a sealed-only board refuses
+     console-only board they could then load a configuration sealed under it. The firmware
+     checks these locks at every boot (#86): an open board warns, a console-only board refuses
      the secret.
 
    **It is not part of everyday firmware.** It is built only into a separate image for step 3
@@ -292,15 +293,15 @@ and merged before anything is burned.
    BOOTSEL button, or a jumper on a pin).
 3. **Knowing it is secured: a marker of its own, not secure boot** (the owner's decision,
    2026-11-25). A board refuses unsealed configuration and SSH host-key records (`refuse_plain`,
-   already implemented and off) and refuses `rootsecret forget` when its *sealed-only marker*
+   already implemented and off) and refuses `rootsecret forget` when its *console-only marker*
    is set. `SECURE_BOOT_ENABLE` alone does not do it, so that a development board with secure
    boot can still be provisioned from a file. `version` shows the three facts: where the root
-   secret is, whether secure boot is on (#79), and whether the board is sealed-only.
+   secret is, whether secure boot is on (#79), and whether the board is console-only.
 
    **The marker is one OTP row that SOS defines** (agreed by the owner, 2026-11-25), in a free
    page of its own, written on a production board as step 4.6a and never on a development
    board. Why OTP and not the alternatives:
-   - *A build option* would make "sealed-only" a property of the image. Any image without it
+   - *A build option* would make "console-only" a property of the image. Any image without it
      that the board's key has ever signed (an older one, a development one) would then accept
      an unsealed record again.
    - *A field in the sealed configuration* disappears when someone erases the configuration
@@ -308,7 +309,7 @@ and merged before anything is burned.
    - *An OTP row* can't be cleared by rewriting the flash, and is the same for every image.
    Built in #84: rows 0x0c0, 0x0c1 and 0x0c2 (the start of page 3), each the raw 24-bit value
    0x5ea1ed, read by a two-of-three vote through the read aliases of #79. It fails closed:
-   only blank rows mean "not sealed-only"; rows that can't be read, or that are neither blank
+   only blank rows mean "not console-only"; rows that can't be read, or that are neither blank
    nor the marker, count as **set**. Firmware older than #84 ignores the marker; that is the
    rollback case decision 8 leaves open. Page 3 is therefore taken: the root secret's page
    list starts elsewhere.
@@ -381,7 +382,7 @@ be corrected before anyone runs it.
 
 The dev-1 column of the Decisions table in Part 1. In short: the root secret
 in OTP, the two dev boot keys, and secure boot; not debug off, not the watchdog-scratch flag,
-not the glitch detector bit, not the sealed-only marker, and no lock on the boot-flag and
+not the glitch detector bit, not the console-only marker, and no lock on the boot-flag and
 boot-key pages. After the root secret is written the board is set up afresh, as below.
 
 ### dev-1: moving the root secret re-keys the board
@@ -445,7 +446,7 @@ pages, which keeps all three real pages but tests code the production board won'
 **Before any OTP write on dev-1:**
 
 - [ ] Merged and reviewed: the key provider's OTP backend and the burn image (firmware items 1
-      and 2), and the sealed-only marker (item 3), so that secure boot on dev-1 changes nothing
+      and 2), and the console-only marker (item 3), so that secure boot on dev-1 changes nothing
       about how it is provisioned.
 - [ ] "To confirm" items 1 and 7 are closed (the exact commands and files, in
       `docs/otp/dev-1/`; which pages). Items 3 and 4 (reading and soft-locking a page from
@@ -531,7 +532,7 @@ from the bootloader. The list pages are locked by the burn itself; page 3 with `
 
 | # | Write (the owner runs it) | Check |
 |---|---|---|
-| D4.8 | Page 3's lock word: bootloader read-only | Read it back. From BOOTSEL, a raw write of the value 0 to row 0x0ff (the exact command is in `docs/otp/dev-1/README.md`: it changes no bit even if the lock didn't take, and is nowhere near the sealed-only marker's rows) is **refused**; `picotool otp get` of a row in page 1 or 2 is **answered**, showing those pages were left open as intended. No other value or row is used to test a lock |
+| D4.8 | Page 3's lock word: bootloader read-only | Read it back. From BOOTSEL, a raw write of the value 0 to row 0x0ff (the exact command is in `docs/otp/dev-1/README.md`: it changes no bit even if the lock didn't take, and is nowhere near the console-only marker's rows) is **refused**; `picotool otp get` of a row in page 1 or 2 is **answered**, showing those pages were left open as intended. No other value or row is used to test a lock |
 
 What stays possible on dev-1 as a result, knowingly: anyone with a cable can add a boot key to
 a blank slot and run their own firmware, or mark the dev keys invalid and end the board's
@@ -693,7 +694,7 @@ is last, because with it set and a wrong key the board can never run code again.
 | 4.4 | `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` (decision 3). The USB bootloader is kept (decision 2), so none of the `DISABLE_BOOTSEL_*` flags | Read back. Reboot. `picotool load -f` no longer brings the board into BOOTSEL; holding the BOOTSEL button while plugging in does, and a signed image can still be loaded that way. SOS's fault record and watchdog reset detection still work | |
 | 4.5 | `CRIT1.GLITCH_DETECTOR_ENABLE` and sensitivity, **only if decision 5 says so**, at the setting the week-long test supports | Read back. Reboot several times; run the board under normal load (Wi-Fi, SSH, card) with no detector resets | A detector that resets a healthy board can't be turned off again |
 | 4.6 | `CRIT1.DEBUG_DISABLE` (decision 1) | Between the write and the next reset `version` still shows the old state, with `WARNING: the OTP rows say otherwise`: the chip acts on what it latched at reset. That warning is expected here and only here. After a reset: `version` shows `debug port: disabled` with no warning, and a debug probe can no longer attach | |
-| 4.6a | The sealed-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only. **Never before the firmware on the board has the OTP key provider with the "OTP or not at all" rule (item 1), and `rootsecret` reports the secret in OTP:** with older firmware a sealed-only board still takes its root secret from flash, which an attacker can write | Read the three rows back. **If `version` still says `sealed-only: no` after the write and a reboot, stop: do not go on to 4.7.** Reboot: `version` says `sealed-only: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
+| 4.6a | The console-only marker (firmware item 3): the raw value 0x5ea1ed into rows 0x0c0, 0x0c1 and 0x0c2. Production boards only. **Never before the firmware on the board has the OTP key provider with the "OTP or not at all" rule (item 1), and `rootsecret` reports the secret in OTP:** with older firmware a console-only board still takes its root secret from flash, which an attacker can write | Read the three rows back. **If `version` still says `console-only setup: no` after the write and a reboot, stop: do not go on to 4.7.** Reboot: `version` says `console-only setup: yes` with nothing after it about unreadable or damaged rows; the configuration from 3.5 still loads; `rootsecret forget` is refused. **Do not test it by provisioning this board:** that replaces the sealed configuration with a record the board refuses, and it comes up empty (shown on dev-1 with a test build, #84) | From here the board can only be set up on its console. A marker written partly is still "set": the rows can be completed, never cleared |
 | 4.7 | **`CRIT1.SECURE_BOOT_ENABLE`**, only after the on-board key check has said "match" again, for the image on the board at this moment | Before the reset `version` still says `secure boot: off` with `WARNING: the OTP rows say otherwise`, as in 4.6. After it: the board boots the signed firmware. `version` shows `secure boot: on` with no warning. What was set up in 3.5 still loads | If the key in OTP isn't the key the image is signed with, the board is dead. This is why the key is compared off the board twice (4.1) and on the board twice (4.2 and here) |
 
 After 4.7 the RISC-V cores are disabled for good as well; SOS doesn't use them.
@@ -805,7 +806,7 @@ board, while any item is open. The dev-1 items were settled by its run on 2026-1
 6. *(Production only.)* Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
 7. *(Both; settled: pages 4 to 6.)* Which free OTP pages the root secret uses (pages 3 to 60 are free for user data), and that
    a failed write leaves the next page usable. **Page 3 is reserved for SOS's own flags:** the
-   sealed-only marker has its first three rows (#84) and the rest is kept for later ones, so
+   console-only marker has its first three rows (#84) and the rest is kept for later ones, so
    the root secret's list starts at page 4 or later.
 8. *(Both; done.)* **The SSH host key after a wipe: decided by the owner and built (#88, merged).** The SSH host
    key is sealed under a key made from the root secret and the owner secret, the way an
@@ -814,6 +815,6 @@ board, while any item is open. The dev-1 items were settled by its run on 2026-1
    one. Costs the owner accepted: the owner's own `config reset` changes the board's SSH
    identity (clients warn), and losing both configuration copies loses the SSH host key too.
    An open board kept its existing SSH host key when #88 landed (it is taken over once, same
-   fingerprint); a sealed-only board does not take over a key from before #88. On dev-1 the
+   fingerprint); a console-only board does not take over a key from before #88. On dev-1 the
    SSH host key changes during this run, at step 3.5, because the root secret moves to OTP.
    Firmware older than #88 makes a new SSH host key over the record #88 writes.

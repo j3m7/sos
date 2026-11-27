@@ -15,7 +15,7 @@
 #include "core/log.h"
 #include "core/random.h"
 #include "core/seal.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 #include "core/settings.h"
 #include "ssh/hostkey.h"
 #include "ssh/hostkey_record.h"
@@ -62,8 +62,8 @@ bool settings_has_owner_secret(void) {
     return false;
 }
 
-static bool is_sealed_only;
-bool sealedonly(void) { return is_sealed_only; }
+static bool is_console_only;
+bool consoleonly(void) { return is_console_only; }
 
 static unsigned rng;
 bool random_bytes(void *ctx, uint8_t *out, size_t len) {
@@ -117,7 +117,7 @@ static void factory(void) {
     for (unsigned i = 0; i < sizeof(root_base); i++)
         root_base[i] = (uint8_t)(0xc0 + i);
     have_root = true;
-    is_sealed_only = write_fails = false;
+    is_console_only = write_fails = false;
     page_writes = keys_made = 0;
     rng = 99;
     boot();
@@ -254,7 +254,7 @@ TEST(a_key_that_cannot_be_stored_is_not_used) {
 }
 
 // A record from firmware before this (sealed under the base key alone): an open board takes
-// it over, same key; a sealed-only board makes a new one.
+// it over, same key; a console-only board makes a new one.
 TEST(a_version_2_record) {
     uint8_t made[82], k[82], v2[HOSTREC_PAGE];
     factory();
@@ -280,7 +280,7 @@ TEST(a_version_2_record) {
     CHECK_EQ(keys_made, 1);
 
     memcpy(flash_page, v2, sizeof(v2));
-    is_sealed_only = true;
+    is_console_only = true;
     boot();
     CHECK(get(k));
     CHECK(memcmp(k, made, 82) != 0);            // not carried over: a new key

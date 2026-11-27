@@ -20,7 +20,7 @@
 #include "core/log.h"
 #include "core/failflash.h"
 #include "core/rootsource.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -168,7 +168,7 @@ int main(void) {
 
     // The root secret, then configuration and host key: all three may write flash, which is
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
-    sealedonly_init();                  // before anything loads a record from flash
+    consoleonly_init();                  // before anything loads a record from flash
     rootsource_init();                  // OTP, the flash record, or nothing: starts the key provider
     failflash_init();                   // wrong console passwords so far, before the console starts
     settings_init();

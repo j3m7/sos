@@ -140,8 +140,8 @@ set(SOS_SOURCES
     src/core/chipinfo.c
     src/core/bootkey.c
     src/core/otpread.c
-    src/core/sealedonly.c
-    src/core/sealedonly_board.c
+    src/core/consoleonly.c
+    src/core/consoleonly_board.c
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
@@ -319,13 +319,13 @@ if (SOS_BURN_IMAGE)
                     "Do not leave it on a board.")
 endif()
 
-# For trying the sealed-only behaviour (src/core/sealedonly.h) on a development board without
-# writing its OTP marker: -DSOS_FORCE_SEALED_ONLY=ON makes this image treat every board as
-# sealed-only. It can only add the restriction; an image without it reads the board's marker.
-option(SOS_FORCE_SEALED_ONLY "Treat every board as sealed-only (testing)" OFF)
-if (SOS_FORCE_SEALED_ONLY)
-    target_compile_definitions(sos PRIVATE SOS_FORCE_SEALED_ONLY=1)
-    message(STATUS "SOS: this image treats every board as sealed-only (SOS_FORCE_SEALED_ONLY)")
+# For trying the console-only behaviour (src/core/consoleonly.h) on a development board without
+# writing its OTP marker: -DSOS_FORCE_CONSOLE_ONLY=ON makes this image treat every board as
+# console-only. It can only add the restriction; an image without it reads the board's marker.
+option(SOS_FORCE_CONSOLE_ONLY "Treat every board as console-only (testing)" OFF)
+if (SOS_FORCE_CONSOLE_ONLY)
+    target_compile_definitions(sos PRIVATE SOS_FORCE_CONSOLE_ONLY=1)
+    message(STATUS "SOS: this image treats every board as console-only (SOS_FORCE_CONSOLE_ONLY)")
 endif()
 
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map
