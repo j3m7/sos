@@ -26,7 +26,8 @@ server'; 'wifi st' Tab gives 'wifi stats '). When the matches agree no further t
 and a second Tab lists them; words only the console takes are offered only there. Some values are
 offered too: the sensitivity after 'glitch watch|on', 'https://' after 'http get|head|post', the
 key numbers after 'key del', the saved networks' numbers after 'wifi remove|prefer', the NTS
-servers after 'nts ke' and 'time server', and those and the gateway after 'ping'.
+servers after 'nts ke' and 'time server', those and the gateway after 'ping', and the pages on the
+card after 'man'.
 
 After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and after the '>' or '>>' of
 echo, Tab completes file names on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on

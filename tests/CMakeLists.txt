@@ -262,5 +262,10 @@ elseif (TARGET wolfcrypt_host)
     message(WARNING "sdcrypt and seal tests skipped: they also need OpenSSL's libcrypto")
 endif()
 
+# src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
+add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
+target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
+add_test(NAME man_topic COMMAND test_man_topic)
+
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)
