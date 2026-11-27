@@ -246,6 +246,7 @@ set(SOS_SOURCES
     src/lua/lua_core1.c
     src/lua/lua_codec.c
     src/lua/lua_complete.c
+    src/lua/lua_date.c
     src/lua/lua_hash.c
     src/lua/lua_health.c
     src/lua/lua_info.c

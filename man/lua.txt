@@ -38,8 +38,9 @@ DESCRIPTION
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
     and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
-    sos.time, sos.uptime, sos.sleep, sos.log; timers sos.every/after/cancel
-    (a background script keeps going while timers are left);
+    sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
+    sos.sleep, sos.log; timers sos.every/after/cancel (a background script
+    keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
     request took); tables about the board: sos.sensors, sos.mem,
     sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;

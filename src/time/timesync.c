@@ -388,6 +388,31 @@ static void print_duration(shell_t *sh, uint64_t us) {
         shell_printf(sh, "%llud", (unsigned long long)(s / 86400));
 }
 
+static uint32_t seconds_since(uint64_t then_us, uint64_t now) {
+    uint64_t s = (now - then_us) / 1000000;
+    return s >= TIMESYNC_NEVER ? TIMESYNC_NEVER - 1 : (uint32_t)s;
+}
+
+void timesync_info(timesync_info_t *info) {
+    static const char *const names[] = {NULL, "rtc", "nts", "sntp"};
+    uint64_t now = time_us_64();
+    *info = (timesync_info_t){
+        .source = names[source],
+        .syncing = nts_running ? nts_server_used : sntp_running ? sntp_server : NULL,
+        .syncing_sntp = !nts_running && sntp_running,
+        .synced_ago_s = synced_us ? seconds_since(synced_us, now) : TIMESYNC_NEVER,
+        .step_set = step_was_unset,
+        .step_ms = step_ms,
+        .delay_ms = synced_delay_us / 1000,
+        .failed_ago_s = failed_us ? seconds_since(failed_us, now) : TIMESYNC_NEVER,
+        .failed_why = failed_us ? failed_why : NULL,
+        .retry_in_s = failed_us && retry_at_us > now ? (uint32_t)((retry_at_us - now) / 1000000) : 0,
+        .server = configured_server(),
+        .server_default = !settings()->ntp_server[0],
+        .auto_hours = settings()->ntp_sync_hours,
+    };
+}
+
 void timesync_status(shell_t *sh) {
     char buf[24];
     static const char *const names[] = {"not set", "from rtc", "from nts, authenticated",
