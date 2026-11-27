@@ -17,7 +17,7 @@ own; the only consumer that must run *while* the producer runs is the pager, and
 job already. So: filters are plain functions, and the pager steps the producer itself.
 
 Status (2026-11-26): phases 1 and 2 are built (PR #192 for #184, PR #189 for #185); phase 3
-(#186) is built on the `pipes-more` branch; phase 4 (#187) is open. Where this note and the code
+(#186) is merged (PR #196); phase 4 (#187) is `tee` (this PR). Where this note and the code
 differ in detail (phase 2 extends the line count rather than resetting it, and has the F key;
 phase 3 starts the pager on the producer's first output rather than at once, keeps the producer
 in `shell_t.pipe` rather than in `view_t`, and steps it through `shell_pipe_feed()` in
@@ -317,7 +317,19 @@ Depends on phases 1 and 2.
   signature, or a second entry point `shell_page_growing()`); the chain `job | more` now pages
   before the job ends; `q` cancels the job silently; Ctrl-C stops it and the pager stays.
 
-### Phase 4, decided separately: `> <path>` and `>> <path>` as a sink (#187)
+### Phase 4: `tee [-a] <path>` as a stage (#187)
+
+Decision (2026-11-26): the file output is a `tee` stage, not a `>` redirect. A `tee` after a `|`
+starts a stage like the others and nothing else in the line changes meaning; `echo text > file`
+works as before. A `>` on every command would need either a per-command free-text flag or shell
+quoting, which is its own change (#199). `tee` is a filter in pipe.c; the card side (resolve,
+the `echo` write check, open, write, close, `files_hold()`) is behind three functions that
+files.c defines and the host tests stub (`pipe_file_open/write/close`, weak defaults in pipe.c
+that refuse). A write error prints `tee: <path>: <error>` once on the terminal and ends the
+producer as `head` does. The text below is the design as first written, kept for the reasoning
+on `>`.
+
+#### The `>` sink as first considered
 
 Today only `echo` has a redirect, parsed in `cmd_echo()` and known to Tab through
 `SHELL_REDIRECT`. The general form is a sink: a `FIL` opened with `files_hold()`, `f_write()`
