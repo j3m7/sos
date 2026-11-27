@@ -7,7 +7,7 @@
 # laid out as its fuzz_<target>.c reads input. Run it again after changing a format; inputs
 # that once crashed a target are kept there under other names (crash-*) and not touched.
 #
-#   tests/fuzz/seeds.py
+#   python3 -B tests/fuzz/seeds.py      (-B: no __pycache__ next to it)
 
 import os
 import struct

@@ -281,8 +281,8 @@ New interesting inputs collect in `build-fuzz/corpus/<target>/`; a crash is writ
 `build-fuzz/crashes/<target>/` and the run stops. To keep a crash fixed, fix the code and add
 the input to `tests/fuzz/corpus/<target>/` as `crash-<what>`: every target runs over its corpus
 in the ordinary host tests (`fuzz_<target>` in `ctest`, through `tests/fuzz/replay.c`), with that
-build's sanitizers. The `seed-*` files there come from `tests/fuzz/seeds.py`, which writes a
-few valid inputs per target; run it again after changing a format.
+build's sanitizers. The `seed-*` files there come from `python3 -B tests/fuzz/seeds.py`, which
+writes a few valid inputs per target; run it again after changing a format.
 
 ## Developing in a VM
 
