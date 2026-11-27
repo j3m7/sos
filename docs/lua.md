@@ -311,8 +311,8 @@ end)
 `sos.hash(alg, data [, raw])` returns the digest of the string `data`, and `sos.hmac(alg, key,
 data [, raw])` its HMAC with `key` (up to 4 KB; an empty key is allowed, as HMAC defines it), as lower-case hex, or as raw bytes when `raw` is
 true. `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. They run in wolfCrypt on core 0, the
-code TLS uses: about 5 ms for each 4 KB of data, which a long hash spends without stopping
-anything else. Failures (not enough memory) return `nil` and a message.
+code TLS uses: about 8 ms for each 4 KB of data (40 KB in 81 ms with SHA-256, 95 ms with
+SHA-512, measured on the board), which a long hash spends without stopping anything else. Failures (not enough memory) return `nil` and a message.
 
 `sos.base64.encode(s [, "url"])` and `sos.base64.decode(s [, "url"])` convert to and from base64:
 the standard alphabet with `=` padding, or with `"url"` the URL-safe one (`-` and `_`) without
@@ -348,6 +348,11 @@ gives text that isn't valid JSON (decoding doesn't check UTF-8 either). Floats a
 significant digits). Functions, NaN, infinities, keys that are neither strings nor integers, and
 tables nested more than 32 deep (which includes a table that contains itself) raise an error.
 `nil` and `sos.json.null` encode as `null`. Decoding is limited to 32 levels too.
+
+Decoded values live in the script's 128 KB, and Lua tables are larger than their text: about
+180 bytes for a small object (`{"id": 1, "name": "item1", "ok": true}`), so a script can hold
+the decoded form of roughly 20 KB of JSON. Speed, measured on the board: 150 such objects (5.5 KB)
+encode in 26 ms and decode in 21 ms.
 
 ```lua
 local r = sos.http.get("https://api.example/status")
