@@ -121,9 +121,8 @@ void glitchdet_start(unsigned setting) {
         char t[CHIPTEMP_TEXT_MAX];
         chiptemp_format(t, sizeof(t), last_temp);
         if (last_temp != CHIPTEMP_NONE)
-            log_msg(SOS_LOG_ERR, "last reset: the chip's temperature before the glitch detector "
-                                 "reset: %s (the last reading; one is taken every %u s)",
-                    t, CHIPTEMP_SAMPLE_S);
+            log_msg(SOS_LOG_ERR, "last reset: chip at %s before the glitch detector reset (last "
+                                 "reading, taken every %u s)", t, CHIPTEMP_SAMPLE_S);
         else
             log_msg(SOS_LOG_ERR, "last reset: no chip temperature was kept from before the glitch "
                                  "detector reset");

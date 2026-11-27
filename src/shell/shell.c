@@ -311,9 +311,9 @@ static void cmd_temp(shell_t *sh) {
         shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
                      lo, lo_age, hi, hi_age, CHIPTEMP_SAMPLE_S);
     }
-    shell_printf(sh, "This is the chip's temperature, not the room's: the chip runs warmer than "
-                     "the air,\nmore so under Wi-Fi load. Uncalibrated, it's a few degrees off, but "
-                     "good for change\nover time on this board.\n");
+    shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
+                     "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
+                     "time on this board.\n");
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -794,8 +794,8 @@ static void glitch_status(shell_t *sh) {
         char t[CHIPTEMP_TEXT_MAX];
         chiptemp_format(t, sizeof(t), glitchdet_last_temp());
         if (glitchdet_last_temp() != CHIPTEMP_NONE)
-            shell_printf(sh, "the chip's temperature before that reset: %s (the last reading; one "
-                             "is taken every %u s)\n", t, CHIPTEMP_SAMPLE_S);
+            shell_printf(sh, "chip at %s before that reset (last reading, taken every %u s)\n",
+                         t, CHIPTEMP_SAMPLE_S);
         else
             shell_printf(sh, "no chip temperature was kept from before that reset\n");
     }
