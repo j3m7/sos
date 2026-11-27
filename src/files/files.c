@@ -318,6 +318,46 @@ static void cmd_echo(shell_t *sh, char *args) {
         shell_printf(sh, "echo: %s: %s\n", name, files_error(fr));
 }
 
+// --- tee (a pipeline stage, shell/pipe.h) -----------------------------------------------------
+
+struct pipe_file {
+    FIL f;
+};
+
+pipe_file_t *pipe_file_open(shell_t *sh, const char *name, bool append) {
+    char path[PATH_LEN];
+    if (!resolve(sh, name, path) || !may_write(sh, "tee", path))
+        return NULL;
+    pipe_file_t *pf = heap_zalloc(HEAP_FILES, sizeof(*pf));
+    if (!pf) {
+        shell_printf(sh, "tee: out of memory\n");
+        return NULL;
+    }
+    FRESULT fr = f_open(&pf->f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
+    if (fr != FR_OK) {
+        shell_printf(sh, "tee: %s: %s\n", name, files_error(fr));
+        heap_release(HEAP_FILES, pf);
+        return NULL;
+    }
+    files_hold();
+    return pf;
+}
+
+const char *pipe_file_write(pipe_file_t *pf, const char *buf, size_t len) {
+    UINT bw;
+    FRESULT fr = f_write(&pf->f, buf, (UINT)len, &bw);
+    if (fr == FR_OK && bw != len)
+        fr = FR_DENIED;                 // card full
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
+const char *pipe_file_close(pipe_file_t *pf) {
+    FRESULT fr = f_close(&pf->f);
+    heap_release(HEAP_FILES, pf);
+    files_release();
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
 // --- cat ---------------------------------------------------------------------------------------
 
 typedef struct {

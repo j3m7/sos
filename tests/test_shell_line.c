@@ -126,6 +126,44 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     heap_release(HEAP_EDIT, text);
 }
 
+// The card behind `tee`: one file, in memory (the stub of files.c's pipe_file_*()).
+static char tee_card[SHELL_PIPE_MAX + 64];
+static size_t tee_len;
+static char tee_path[SHELL_PATH_MAX];
+static bool tee_append, tee_refuse, tee_open_now;
+static int tee_full_at;                     // the write that would pass this size fails (0: never)
+static int tee_dummy;
+
+pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append) {
+    char abs[SHELL_PATH_MAX];
+    if (tee_refuse || !path_resolve(sh->cwd, path, abs, sizeof(abs))) {
+        shell_printf(sh, "tee: %s: not allowed to change this path\n", path);
+        return NULL;
+    }
+    snprintf(tee_path, sizeof(tee_path), "%s", abs);
+    tee_append = append;
+    tee_open_now = true;
+    if (!append)
+        tee_len = 0;
+    return (pipe_file_t *)&tee_dummy;
+}
+
+const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len) {
+    (void)f;
+    if (tee_full_at && tee_len + len > (size_t)tee_full_at)
+        return "card full";
+    memcpy(tee_card + tee_len, buf, len);
+    tee_len += len;
+    tee_card[tee_len] = '\0';
+    return NULL;
+}
+
+const char *pipe_file_close(pipe_file_t *f) {
+    (void)f;
+    tee_open_now = false;
+    return NULL;
+}
+
 // The pager over a command that still runs (shell_page_growing): a raw-mode job that uses
 // shell_pipe_feed() exactly as view.c does (the same calls, in the same order in a pass: keys,
 // then the command's step or end, then the pager's own output), without the screen. It records
@@ -370,6 +408,10 @@ static void start(const shell_io_t *io) {
     n_executed = 0;
     no_tables = false;
     no_card = false;
+    tee_len = 0;
+    tee_card[0] = '\0';
+    tee_refuse = tee_open_now = false;
+    tee_full_at = 0;
     gp_reset();
     job_silent = 0;
     shell_init(&sh, io, &fake);
@@ -1236,6 +1278,86 @@ TEST(pipe_to_more_ends_with_the_session) {
 
 // --- filters: `| grep`, `| head`, `| tail`, `| wc` --------------------------------------------
 
+TEST(pipe_to_tee_writes_the_file_and_shows_the_output) {
+    start(&io_crlf);
+    type("cmd | tee /f\r");
+    CHECK(!strcmp(executed[0], "cmd"));         // the command runs without the stage
+    CHECK_OUT("cmd | tee /f\r\n<cmd>\r\nsos> ");
+    CHECK(!strcmp(tee_card, "<cmd>\n"));        // the file has the raw bytes
+    CHECK(!strcmp(tee_path, "/f") && !tee_append && !tee_open_now);
+    CHECK(!piped_now());
+    clear_out();
+    type("cmd | tee -a /f | grep -v cm\r");     // after tee, a filter still filters
+    CHECK_OUT("cmd | tee -a /f | grep -v cm\r\nsos> ");
+    CHECK(!strcmp(tee_card, "<cmd>\n<cmd>\n") && tee_append);
+
+    start(&io_plain);
+    strcpy(sh.cwd, "/docs");                    // relative paths: the stub resolves them
+    type("cmd | tee x\r");
+    CHECK(!strcmp(tee_path, "/docs/x"));
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_tee_then_more_pages_what_it_wrote) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("cmd | tee /f | more\r");
+    CHECK_OUT("cmd | tee /f | more\nsos> ");    // nothing on screen: it is in the pager
+    CHECK_EQ(paged_calls, 1);
+    CHECK(!strcmp(paged_text, "<cmd>\n"));
+    CHECK(!strcmp(tee_card, "<cmd>\n"));
+    CHECK(!tee_open_now);
+    start(&io_plain);                           // a job: the file grows as the pager steps it
+    job_steps = 3;
+    type("job | tee /j | more\r");
+    type("");
+    type("");
+    type("");
+    CHECK(!strcmp(tee_card, "step 1\nstep 2\nstep 3\n"));
+    type("q");
+    CHECK(!tee_open_now);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_tee_refused_runs_nothing) {
+    start(&io_plain);
+    tee_refuse = true;
+    type("cmd | tee /certs/x\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("cmd | tee /certs/x\ntee: /certs/x: not allowed to change this path\nsos> ");
+    clear_out();
+    tee_refuse = false;
+    type("cmd | tee\r");
+    CHECK_OUT("cmd | tee\nusage: <command> | tee [-a] <path>\nsos> ");
+    CHECK_EQ(n_executed, 0);
+}
+
+TEST(pipe_to_tee_write_error_ends_the_job_once) {
+    start(&io_plain);
+    job_steps = 100;
+    tee_full_at = 10;                           // "step 1\n" fits, the second line doesn't
+    type("job | tee /f\r");
+    for (int i = 0; i < 4; i++)
+        type("");
+    CHECK(strstr(fake.out, "tee: /f: card full\n") != NULL);
+    CHECK(strstr(strstr(fake.out, "card full") + 1, "card full") == NULL);     // once
+    CHECK_EQ(job_cancels, 1);
+    CHECK(job_calls <= 3);
+    CHECK(!tee_open_now && !piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_tee_cancelled_by_ctrl_c_leaves_the_partial_file) {
+    start(&io_plain);
+    job_steps = 100;
+    type("job | tee /f\r");
+    type("");
+    type("");
+    type("\x03");
+    CHECK(!strncmp(tee_card, "step 1\n", 7));
+    CHECK(!tee_open_now && !piped_now());
+}
+
 TEST(pipe_to_grep_streams_to_the_terminal) {
     start(&io_crlf);
     type("cmd | grep cm\r");
@@ -2094,7 +2216,7 @@ TEST(tab_completes_subcommands) {
 TEST(tab_completes_pipeline_stages_and_their_options) {
     start(&io_plain);
     type("ls | \t\t");                             // the stage names, not the commands
-    CHECK(strstr(fake.out, "grep  head  more  tail  wc") != NULL);
+    CHECK(strstr(fake.out, "grep  head  more  tail  tee   wc") != NULL);
     CHECK(line_is("ls | "));
     start(&io_plain);
     type("cat docs/x | gr\t");                       // after a path command too
@@ -2114,6 +2236,19 @@ TEST(tab_completes_pipeline_stages_and_their_options) {
     start(&io_plain);
     type("ls | x \t");                              // not a stage: as without the '|'
     CHECK(line_is("ls | x "));
+}
+
+TEST(tab_completes_tee_and_its_paths) {
+    start(&io_plain);
+    type("ls | te\t");
+    CHECK(line_is("ls | tee "));
+    type("-\t");
+    CHECK(line_is("ls | tee -a "));
+    type("rea\t");                                // a path on the card, after the option too
+    CHECK(line_is("ls | tee -a readme.txt "));
+    start(&io_plain);
+    type("ls | tee do\t");
+    CHECK(line_is("ls | tee docs/"));
 }
 
 TEST(tab_lists_subcommands_without_hidden_ones) {
@@ -2647,6 +2782,11 @@ TEST_MAIN(
     RUN(pipe_to_more_under_the_pager_sizes_output_by_its_sink);
     RUN(pipe_to_more_pages_at_the_end_if_the_pager_cant_start);
     RUN(pipe_to_more_with_filters_pages_as_it_runs);
+    RUN(pipe_to_tee_writes_the_file_and_shows_the_output);
+    RUN(pipe_to_tee_then_more_pages_what_it_wrote);
+    RUN(pipe_to_tee_refused_runs_nothing);
+    RUN(pipe_to_tee_write_error_ends_the_job_once);
+    RUN(pipe_to_tee_cancelled_by_ctrl_c_leaves_the_partial_file);
     RUN(pipe_to_more_on_a_command_that_ends_the_session);
     RUN(pipe_to_more_ends_with_the_session);
     RUN(pipe_to_grep_streams_to_the_terminal);
@@ -2734,6 +2874,7 @@ TEST_MAIN(
     RUN(tab_question_completer_ends_with_the_question);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
+    RUN(tab_completes_tee_and_its_paths);
     RUN(tab_no_card_or_no_such_directory);
     RUN(tab_words_and_file_names_together);
 )

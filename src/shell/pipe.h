@@ -79,10 +79,27 @@ struct pipeline {
     char name[64];              // the command line, for the pager's status row
 };
 
+// The card side of `tee` (files.c on the firmware; the host tests provide their own). pipe.c
+// holds no FatFs: it calls these three, whose strong definitions replace the weak ones in
+// pipe.c that refuse for want of a card. A handle is opaque to pipe.c.
+typedef struct pipe_file pipe_file_t;
+
+// Resolve `path` against the shell's working directory, check that the shell may write it
+// (the check and message of `echo`) and open it: replaced, or appended to. Holds the card's
+// files (files_hold()) until pipe_file_close(). NULL after printing why ("tee: ...").
+pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append);
+
+// Write `len` bytes (all of them or an error). NULL when written, else the error as text.
+const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len);
+
+// Close and release the handle (the card's files too). NULL, or the error as text (the file may
+// not have been written out).
+const char *pipe_file_close(pipe_file_t *f);
+
 // The stages after `|` for Tab, with each one's options, are pipe_stage_table (declared in
 // complete.h, which knows shell_cmd_t).
 
-// Is `word` (up to a space or the end) the name of a stage: grep, head, tail, wc or more?
+// Is `word` (up to a space or the end) the name of a stage: grep, head, tail, wc, tee or more?
 bool pipe_is_stage(const char *word);
 
 // Find the stages of `line`: the first '|' followed by a stage name (spaces between allowed)

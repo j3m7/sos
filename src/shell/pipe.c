@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Pipelines: the stage parser and the filters grep, head, tail and wc (see pipe.h and
+// Pipelines: the stage parser and the filters grep, head, tail, wc and tee (see pipe.h and
 // docs/design/shell-pipes.md). shell_core.c supplies the sink and routes the producer's output
 // here.
 
@@ -358,10 +358,110 @@ static pipe_stage_t *wc_open(shell_t *sh, const char *args) {
 
 static const pipe_filter_t wc_filter = {"wc", wc_open, wc_write, wc_end, stage_free};
 
+// --- tee [-a] <path> ------------------------------------------------------------------------
+
+// The card side, unless files.c (or a test) supplies it: no card, nothing opens.
+__attribute__((weak)) pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append) {
+    (void)append;
+    shell_printf(sh, "tee: %s: no SD card\n", path);
+    return NULL;
+}
+
+__attribute__((weak)) const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len) {
+    (void)f;
+    (void)buf;
+    (void)len;
+    return "no SD card";
+}
+
+__attribute__((weak)) const char *pipe_file_close(pipe_file_t *f) {
+    (void)f;
+    return NULL;
+}
+
+typedef struct {
+    pipe_stage_t st;
+    pipe_file_t *file;          // NULL once closed (or after a write error)
+    char path[SHELL_PATH_MAX + 1];  // as typed, for the messages
+} tee_t;
+
+static const pipe_filter_t tee_filter;
+
+// Say why on the terminal: not through the line, which would write the message into the file
+// and pass it on.
+static void tee_say(tee_t *t, const char *what) {
+    pipeline_t *p = t->st.pipe;
+    bool aside = p->aside;
+    p->aside = true;
+    shell_printf(p->sh, "tee: %s: %s\n", t->path, what);
+    p->aside = aside;
+}
+
+// Close the file (once); a failure to write it out is reported unless one was already.
+static void tee_finish(tee_t *t, bool report) {
+    if (!t->file)
+        return;
+    const char *err = pipe_file_close(t->file);
+    t->file = NULL;
+    if (err && report)
+        tee_say(t, err);
+}
+
+static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
+    tee_t *t = (tee_t *)st;
+    if (t->file) {
+        const char *err = pipe_file_write(t->file, buf, len);
+        if (err) {                          // once: the file is closed, the line ends
+            tee_finish(t, false);
+            tee_say(t, err);
+            pipe_emit(st, buf, len);        // what the terminal was owed from this write
+            pipe_shut(st);
+            return;
+        }
+    }
+    pipe_emit(st, buf, len);
+}
+
+static void tee_end(pipe_stage_t *st) {
+    tee_finish((tee_t *)st, true);
+}
+
+static void tee_close(pipe_stage_t *st) {
+    tee_finish((tee_t *)st, false);         // cancelled: a partial file stays, as in Unix
+    stage_free(st);
+}
+
+static pipe_stage_t *tee_open(shell_t *sh, const char *args) {
+    bool append = false;
+    const char *a = args ? args : "";
+    if (a[0] == '-' && a[1] == 'a' && (a[2] == ' ' || !a[2])) {
+        append = true;
+        a += 2;
+        while (*a == ' ')
+            a++;
+    }
+    if (!*a || strchr(a, ' ') || strlen(a) > SHELL_PATH_MAX) {
+        shell_printf(sh, "usage: <command> | tee [-a] <path>\n");
+        return NULL;
+    }
+    tee_t *t = stage_new(sh, &tee_filter, sizeof(tee_t));
+    if (!t)
+        return NULL;
+    t->file = pipe_file_open(sh, a, append);
+    if (!t->file) {                         // why was printed
+        stage_free(&t->st);
+        return NULL;
+    }
+    strcpy(t->path, a);
+    return &t->st;
+}
+
+static const pipe_filter_t tee_filter = {"tee", tee_open, tee_write, tee_end, tee_close};
+
 // --- parsing ---------------------------------------------------------------------------------
 
 static const pipe_filter_t *const filters[] = {&grep_filter, &head_filter, &tail_filter,
-                                               &wc_filter, NULL};
+                                               &wc_filter, &tee_filter, NULL};
 
 // The sink `more` is a stage name too, though not a filter.
 static const char *const sink_more = "more";
@@ -478,10 +578,12 @@ fail:
 static const shell_word_t grep_options[4];
 static const shell_word_t grep_options[4] = {
     {"-i", grep_options, 0}, {"-n", grep_options, 0}, {"-v", grep_options, 0}, {0}};
+static const shell_word_t tee_options[2] = {{"-a", NULL, SHELL_PATH}, {0}};
 const shell_cmd_t pipe_stage_table[] = {
     {"grep", NULL, grep_options, 0},
     {"head", NULL, NULL, 0},
     {"more", NULL, NULL, 0},
     {"tail", NULL, NULL, 0},
+    {"tee", NULL, tee_options, SHELL_PATH},
     {"wc", NULL, NULL, 0},
     {0}};
