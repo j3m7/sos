@@ -100,6 +100,11 @@ void sensors_stats_add(sensors_stats_t *st, int value, uint32_t now_s) {
         st->count++;
 }
 
+void sensors_window_add(int *min, int value) {
+    if (value != SENSORS_NONE && (*min == SENSORS_NONE || value < *min))
+        *min = value;
+}
+
 void sensors_stats_shift(sensors_stats_t *st, int delta) {
     if (!st->count)
         return;

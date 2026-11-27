@@ -93,6 +93,11 @@ typedef struct {
 // Count one reading taken at uptime now_s. SENSORS_NONE is ignored.
 void sensors_stats_add(sensors_stats_t *st, int value, uint32_t now_s);
 
+// The lowest reading in a window that its reader restarts (the `supply` health check: the lowest
+// VSYS since its last run). *min starts as SENSORS_NONE and keeps the lower of itself and value;
+// SENSORS_NONE is ignored.
+void sensors_window_add(int *min, int value);
+
 // Move every value by delta (the temperature's calibration changed), keeping the times.
 void sensors_stats_shift(sensors_stats_t *st, int delta);
 
@@ -159,6 +164,10 @@ int sensors_read_temp_uncalibrated(void);
 // After the configuration's temp_offset changed from old_offset: move the lowest, highest and
 // latest temperatures (and the log's last) by the difference, so they stay comparable.
 void sensors_temp_offset_changed(int old_offset);
+
+// The lowest VSYS reading since the last call (SENSORS_NONE if none), and a new window starts.
+// For the `supply` health check: a dip between two of its runs is not missed.
+int sensors_vsys_min_take(void);
 
 // The readings since boot.
 const sensors_stats_t *sensors_temp_stats(void);
