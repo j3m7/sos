@@ -67,8 +67,14 @@ void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn
     sh->ask_prompt = ask_prompt;
     sh->secret = secret;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     sh->answer = answer;
     sh->answer_arg = arg;
+}
+
+void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete) {
+    if (sh->answer && !sh->secret)
+        sh->ask_complete = complete;
 }
 
 char shell_eof[] = "";
@@ -111,6 +117,7 @@ void shell_cancel_question(shell_t *sh) {
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
 }
 
 // Take the pending question, if any, and hand it the answer (NULL = cancelled).
@@ -122,6 +129,7 @@ static bool answer_question(shell_t *sh, char *answer) {
     sh->answer = NULL;                  // cleared first: the callback may ask the next question
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     fn(sh, answer, arg);
     return true;
 }
@@ -268,6 +276,7 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     sh->job = NULL;             // a job of an earlier session was cancelled by shell_end()
     sh->job_arg = NULL;
     sh->key = NULL;
@@ -324,6 +333,7 @@ void shell_end(shell_t *sh) {
         step(sh, sh->job_arg, true);
     }
     sh->answer = NULL;
+    sh->ask_complete = NULL;
     shell_clear_history(sh);    // the session's commands don't wait in RAM for the next one
 }
 
@@ -532,15 +542,31 @@ static void tab_print(const char *word, char end, const char *note, void *arg) {
     }
 }
 
-static void line_tab(shell_t *sh, bool again) {
+// The matches for what's typed: the answer to a question that has a completer (never a secret
+// one), or a command line. False if Tab has nothing to complete from here.
+static bool tab_source(shell_t *sh, size_t *start, size_t *n, complete_fn fn, void *arg,
+                       bool *partial) {
+    if (sh->answer) {
+        if (!sh->ask_complete || sh->secret)
+            return false;
+        *start = 0;
+        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, fn, arg, partial);
+        return true;
+    }
     const shell_cmd_t *const *tables = shell_command_tables(sh);
     if (!tables)
-        return;
+        return false;
     complete_src_t src = {tables, sh->io->admin, shell_list_dir, sh};
-    size_t start;
+    *n = complete_words(&src, sh->line, sh->line_len, start, fn, arg, partial);
+    return true;
+}
+
+static void line_tab(shell_t *sh, bool again) {
+    size_t start, n;
     bool partial;
     tab_matches_t m = {0};
-    size_t n = complete_words(&src, sh->line, sh->line_len, &start, tab_collect, &m, &partial);
+    if (!tab_source(sh, &start, &n, tab_collect, &m, &partial))
+        return;
     size_t typed = sh->line_len - start;
     if (n == 0) {
         write_out(sh, "\a", 1);
@@ -587,9 +613,10 @@ static void line_tab(shell_t *sh, bool again) {
     if (!l.per_row)
         l.per_row = 1;
     write_out(sh, "\n", 1);
-    complete_words(&src, sh->line, sh->line_len, &start, tab_print, &l, &partial);
+    tab_source(sh, &start, &n, tab_print, &l, &partial);
     if (partial)
-        shell_printf(sh, "\n(more: the directory is too large to list here)");
+        shell_printf(sh, sh->answer ? "\n(more may come: Tab again in a moment)"
+                                    : "\n(more: the directory is too large to list here)");
     write_out(sh, "\n", 1);
     prompt(sh);
     write_out(sh, sh->line, sh->line_len);
@@ -609,7 +636,7 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         bool tab_again = sh->tab_pressed;       // any other key in between starts over
         sh->tab_pressed = false;
         if (k == '\t') {
-            if (!sh->answer)                    // questions (passwords) have nothing to complete
+            if (!sh->answer || (sh->ask_complete && !sh->secret))    // never at a password
                 line_tab(sh, tab_again);
             continue;
         }

@@ -30,14 +30,21 @@ static bool unicode_space(uint32_t cp) {
 // Nor what termtext_hidden() names (bidi controls, zero-width and other invisible characters,
 // tag characters, variation selectors) or other spaces: Tab puts the name on the line about to
 // be run, so what it shows must be what it is, and two names must never look the same.
-static bool name_ok(const char *name) {
+// With `spaces`, U+0020 may be in it too (an answer: an SSID can hold spaces), but only between
+// other characters and one at a time: "abc " would look like "abc", and "a  b" like "a b".
+static bool text_ok(const char *name, bool spaces) {
     const unsigned char *p = (const unsigned char *)name;
     if (!*p)
         return false;
+    if (spaces) {
+        size_t n = strlen(name);
+        if (name[0] == ' ' || name[n - 1] == ' ' || strstr(name, "  "))
+            return false;
+    }
     while (*p) {
         unsigned c = *p;
         if (c < 0x80) {
-            if (c <= 0x20 || c == 0x7f)
+            if ((c <= 0x20 && !(spaces && c == ' ')) || c == 0x7f)
                 return false;
             p++;
             continue;
@@ -93,7 +100,7 @@ typedef struct {
 static void take_entry(const char *name, bool is_dir, void *arg) {
     entries_t *e = arg;
     if ((e->dirs_only && !is_dir) || !starts_with_any_case(name, e->prefix, e->plen) ||
-        !name_ok(name) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
+        !text_ok(name, false) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
         return;
     e->fn(name, is_dir ? '/' : ' ', NULL, e->arg);
     e->count++;
@@ -152,7 +159,8 @@ typedef struct {
 // one word and be shown as it is.
 static void take_value(const char *value, const char *note, void *arg) {
     values_t *v = arg;
-    if (strncmp(value, v->prefix, v->plen) || !name_ok(value) || strlen(value) > SHELL_LINE_MAX)
+    if (strncmp(value, v->prefix, v->plen) || !text_ok(value, false) ||
+        strlen(value) > SHELL_LINE_MAX)
         return;
     v->fn(value, ' ', note, v->arg);
     v->count++;
@@ -255,4 +263,27 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
         return count;
     // With a '/' in the path, *start moves past it, but then no word matched (words have none).
     return count + complete_path(src, line, s, len, dirs_only, start, fn, arg, partial);
+}
+
+typedef struct {
+    const char *typed;
+    size_t len;
+    complete_fn fn;
+    void *arg;
+    size_t count;
+} answers_t;
+
+static void take_answer(const char *value, const char *note, void *arg) {
+    answers_t *a = arg;
+    if (strncmp(value, a->typed, a->len) || !text_ok(value, true) || strlen(value) > SHELL_LINE_MAX)
+        return;
+    a->fn(value, '\0', note, a->arg);  // nothing after it: the answer is done, Enter sends it
+    a->count++;
+}
+
+size_t complete_answer(shell_t *sh, shell_ask_complete_fn list, const char *line, size_t len,
+                       complete_fn fn, void *arg, bool *partial) {
+    answers_t a = {line, len, fn, arg, 0};
+    *partial = list(sh, take_answer, &a);
+    return a.count;
 }

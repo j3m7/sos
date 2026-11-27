@@ -20,6 +20,7 @@ typedef enum {
     HEAP_HTTP,      // http requests
     HEAP_TIME,      // NTS time sync
     HEAP_PING,      // ping runs
+    HEAP_WIFI,      // network names a scan heard, while an SSID question wants them for Tab
     HEAP_TAGS
 } heap_tag_t;
 

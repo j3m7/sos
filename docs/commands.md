@@ -34,7 +34,13 @@ echo, Tab completes file names on the SD card ('cat do' Tab gives 'cat docs/', t
 inside it); cd and mkdir offer directories only. Upper and lower case don't matter, as on the card
 itself (ASCII letters only); names with spaces or control characters aren't offered, and Tab
 doesn't mount the card. In a directory of more than 256 entries it lists what it read and says
-there is more. Tab does nothing at a password or other question.
+there is more.
+
+At the question for a Wi-Fi network's name ('wifi set', 'wifi add', setup), Tab completes the names
+of the networks around, strongest first, and a second Tab lists them with their signal. They come
+from a scan that starts when the question is asked and takes about half a second; until it ends Tab
+only lists what it has heard so far. Names with characters that can't be shown as they are aren't
+offered. Tab does nothing at a password or any other question.
 
 The console asks for its password before taking any command, once one is set, and locks itself
 again on logout, when the USB terminal disconnects and after 10 minutes with nothing typed;
