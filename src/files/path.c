@@ -50,6 +50,23 @@ const char *path_basename(const char *path) {
 // trailing spaces and dots from each name, and compares names case-insensitively. Its case
 // table only folds ASCII letters to ASCII, so no non-ASCII name can match "certs". It also takes
 // any control character (< 0x20) as the end of the path.
+// Is the component c[0..n) the name `want` (lower case) as FatFs would compare them: without
+// trailing spaces and dots, ASCII letters case-insensitively?
+static bool name_is(const char *c, size_t n, const char *want) {
+    while (n > 0 && (c[n - 1] == ' ' || c[n - 1] == '.'))
+        n--;
+    if (n != strlen(want))
+        return false;
+    for (size_t i = 0; i < n; i++) {
+        char a = c[i];
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a - 'A' + 'a');
+        if (a != want[i])
+            return false;
+    }
+    return true;
+}
+
 bool path_is_protected(const char *path) {
     char raw[512], norm[512];
     size_t len = strlen(path);
@@ -68,22 +85,17 @@ bool path_is_protected(const char *path) {
     if (!path_resolve("/", raw, norm, sizeof(norm)))
         return true;
 
-    // First component, without trailing spaces and dots.
-    const char *c = norm + 1;
-    size_t n = strcspn(c, "/");
-    while (n > 0 && (c[n - 1] == ' ' || c[n - 1] == '.'))
-        n--;
-    const char *dir = PATH_PROTECTED_DIR;
-    if (n != strlen(dir))
-        return false;
-    for (size_t i = 0; i < n; i++) {
-        char a = c[i], b = dir[i];
-        if (a >= 'A' && a <= 'Z')
-            a = (char)(a - 'A' + 'a');
-        if (a != b)
-            return false;
-    }
-    return true;
+    // The first two components. /certs and what's in it; /var/log and what's in it; and /var
+    // itself (renaming or removing it would take /var/log along), but not the rest of /var.
+    const char *first = norm + 1;
+    size_t first_len = strcspn(first, "/");
+    const char *second = first[first_len] ? first + first_len + 1 : NULL;
+    size_t second_len = second ? strcspn(second, "/") : 0;
+    if (name_is(first, first_len, PATH_PROTECTED_DIR))
+        return true;
+    if (name_is(first, first_len, PATH_LOG_PARENT))
+        return !second || !second_len || name_is(second, second_len, PATH_LOG_DIR);
+    return false;
 }
 
 bool path_join(const char *dir, const char *name, char *out, size_t n) {
