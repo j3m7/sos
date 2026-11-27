@@ -134,10 +134,14 @@ static void wolf_error(tls_conn_t *c, const char *what, int err) {
     cyw43_arch_lwip_begin();
     uint64_t connected = c->tcp_connected_us, closed = c->tcp_closed_us;
     bool reset = c->tcp_failed;
+    err_t tcp_err = c->tcp_err;
     cyw43_arch_lwip_end();
-    if (closed && connected)
-        log_msg(SOS_LOG_WARNING, "tls: %s %s the connection %lu ms after accepting it", c->host,
-                reset ? "reset" : "closed", (unsigned long)((closed - connected) / 1000));
+    if (closed && connected && reset)       // with lwIP's error code: the callback doesn't log it
+        log_msg(SOS_LOG_WARNING, "tls: %s reset the connection (tcp error %d) %lu ms after "
+                "accepting it", c->host, (int)tcp_err, (unsigned long)((closed - connected) / 1000));
+    else if (closed && connected)
+        log_msg(SOS_LOG_WARNING, "tls: %s closed the connection %lu ms after accepting it",
+                c->host, (unsigned long)((closed - connected) / 1000));
 }
 
 // --- lwIP side (interrupt context: no heap, no logging; the main loop reads what they set) -------
