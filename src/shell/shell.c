@@ -237,7 +237,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
     shell_printf(sh, "wall <message>    send a message to every other shell\n");
     shell_printf(sh, "chat              talk with the others in the chat room (Ctrl-D leaves)\n");
-    shell_printf(sh, "dmesg [-f <fac>]  system log [one facility: kern auth daemon user none]\n");
+    shell_printf(sh, "dmesg [-f <fac>]  system log, or one facility's (kern auth daemon user)\n");
     shell_printf(sh, "logger [-p <level>] <message>  add a line to the log\n");
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
@@ -398,9 +398,9 @@ static void cmd_dmesg(shell_t *sh, char *args) {
 
 // `logger [-p <level>] <message>`: a line in the log from any shell, like Unix logger. Always the
 // user facility, tagged with the shell it came from, so a line can't pass for a system message or
-// land in the auth log. Rate limited like scripts' output, for a loop piped into a session.
+// land in the auth log. Rate limited like scripts' output, for a loop piped into a session; each
+// shell has its own limit, so one session's loop doesn't silence the others.
 #define LOGGER_PER_SEC 10
-static log_quota_t logger_quota;
 
 static void cmd_logger(shell_t *sh, char *args) {
     int level = SOS_LOG_NOTICE;
@@ -421,11 +421,11 @@ static void cmd_logger(shell_t *sh, char *args) {
         shell_printf(sh, "usage: logger [-p err|warning|notice|info|debug] <message>\n");
         return;
     }
-    if (!log_quota_take(&logger_quota, LOGGER_PER_SEC)) {
+    if (!log_quota_take(&sh->logger_quota, LOGGER_PER_SEC)) {
         shell_printf(sh, "logger: more than %d messages a second; not logged\n", LOGGER_PER_SEC);
         return;
     }
-    unsigned refused = log_quota_dropped(&logger_quota);
+    unsigned refused = log_quota_dropped(&sh->logger_quota);
     if (refused)
         log_msg(SOS_LOG_USER | SOS_LOG_NOTICE,
                 "logger: %u message%s refused (more than %d a second)", refused,
@@ -457,11 +457,12 @@ static void cmd_log(shell_t *sh, char *args) {
     // (dmesg) but not turn it down.
     if (!require_admin(sh))
         return;
+    // Logged before it applies: `log history err` would otherwise drop its own record.
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     if (!strcmp(what, "console"))
         log_set_console_level(l);
     else
         log_set_history_level(l);
-    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     shell_printf(sh, "%s level: %s (until reboot)\n", what, level);
 }
 

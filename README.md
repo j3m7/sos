@@ -647,8 +647,8 @@ session. One script runs at a time.
 the log, a line at a time (`dmesg`; INFO, so not on the console), and its end is logged
 (finished, stopped, or failed with the error). `lua ps` shows the running script, and `lua stop`
 stops it, wherever it runs. At most 10 lines a second of a script's log lines (a background
-script's output and `sos.log`, together) reach the log; the rest are counted ("... N lines dropped"), so a chatty script can't push everything else
-out of the log history. If the card has `/autorun.lua`, it starts in the background a few seconds
+script's output and `sos.log`, together) reach the log; the rest are counted ("... N lines
+dropped"), so a chatty script can't push everything else out of the log history. If the card has `/autorun.lua`, it starts in the background a few seconds
 after boot. After a crash or watchdog reset it's skipped (and that's logged), so a script that
 brings the device down can't do it at every boot. It stays off until the next normal boot
 (`reboot`, or power), even if the reset had nothing to do with it: on an unattended board, check
