@@ -31,6 +31,7 @@
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/cardkey.h"
+#include "files/fsck.h"
 #include "files/sdcrypt.h"
 
 // --- hardware configuration (called by the library) ------------------------------------------
@@ -388,7 +389,7 @@ static bool checking;
 static bool check_stop;
 
 typedef enum {
-    CARD_READY,         // initialized, and the layer matches the card (plain, or encrypted and open)
+    CARD_READY,         // initialized; the layer matches the card (plain, or encrypted and open)
     CARD_NONE,          // no card (initialization failed)
     CARD_REFUSED,       // locked or unsupported: kind_why says why (told to `sh` when there is one)
 } card_open_t;
@@ -876,27 +877,9 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
 //
 // docs/design/sd-check.md has the design. The check runs only on an unmounted card, as a shell
 // job, with the `checking` flag set throughout: nothing mounts the card meanwhile (sdcard_mount(),
-// sdcard_mount_retry(), mount()) and the other `sd` commands refuse. It reads the volume through
-// the layer (disk_read(0), decrypted on an encrypted card) and never writes. Every way it ends
-// goes through check_end(), which leaves the card as `sd unmount` does.
-//
-// The checker itself (files/fsck.c) is called only from the adapter below (check_begin(),
-// check_run(), check_outcome()). Until it is built in (SD_CHECK_HAVE_FSCK), a stand-in runs the
-// same lifecycle: it confirms that sector 0 of the volume reads as a boot sector or partition
-// table, then reads the first CHECK_STANDIN_SECTORS sectors, and reports read errors.
-
-#ifndef SD_CHECK_HAVE_FSCK
-#define SD_CHECK_HAVE_FSCK 0
-#endif
-
-#if SD_CHECK_HAVE_FSCK
-#include "files/fsck.h"
-#define CHECK_LINE_MAX FSCK_LINE_MAX
-#else
-#define CHECK_LINE_MAX 320
-#define CHECK_STANDIN_SECTORS (64u * 1024)  // 32 MB: about 20 to 30 s, long enough to watch
-#define CHECK_STANDIN_STATE   6144          // stands in for fsck_state_size() (5872 bytes)
-#endif
+// sdcard_mount_retry(), mount()) and the other `sd` commands refuse. The checker (files/fsck.c)
+// reads the volume through the layer (disk_read(0), decrypted on an encrypted card) and never
+// writes. Every way it ends goes through check_end(), which leaves the card as `sd unmount` does.
 
 #define CHECK_STEP_US     20000             // work per job step, as files.c's STEP_US
 #define CHECK_WINDOW_MAX  (16 * 1024)       // cluster window (design §6.2), halved down to MIN
@@ -904,33 +887,14 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
 #define CHECK_BUDGET_MAX  1024              // sector reads per step at most
 #define CHECK_ROOM        1024              // output room wanted before a step (report lines)
 
-enum { CHECK_MORE, CHECK_DONE, CHECK_FAILED };
-
 typedef struct {
     shell_t *sh;                // for the report lines
-    uint64_t sectors;           // the volume as the layer shows it
+    fsck_t *f;                  // in `mem`
     uint32_t budget;            // sector reads per step, adjusted toward CHECK_STEP_US
     uint32_t pass_shown;        // last pass told to the shell
-    size_t window;              // bytes of cluster window in `mem`
-    size_t mem_len;             // bytes in `mem`: the checker's state and the window
-#if SD_CHECK_HAVE_FSCK
-    fsck_t *f;
-#else
-    uint64_t next;              // next sector the stand-in reads
-    uint64_t end;
-    uint32_t problems;
-    const char *why;            // CHECK_FAILED: why
-#endif
+    size_t mem_len;             // bytes in `mem`: the checker's state and the cluster window
     uint8_t mem[];
 } check_job_t;
-
-static size_t check_state_bytes(void) {
-#if SD_CHECK_HAVE_FSCK
-    return fsck_state_size() + 8;           // fsck_new() aligns `mem` to 8 bytes
-#else
-    return CHECK_STANDIN_STATE;
-#endif
-}
 
 static bool check_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
     (void)ctx;
@@ -943,113 +907,41 @@ static bool check_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
 // reach the terminal.
 static void check_report(void *ctx, const char *line) {
     check_job_t *j = ctx;
-    char out[CHECK_LINE_MAX + 1];
+    char out[FSCK_LINE_MAX + 1];
     size_t n = 0;
-    for (; line[n] && n < CHECK_LINE_MAX; n++)
+    for (; line[n] && n < FSCK_LINE_MAX; n++)
         out[n] = (unsigned char)line[n] < 0x20 || line[n] == 0x7f ? '?' : line[n];
     out[n++] = '\n';
     shell_write(j->sh, out, n);
 }
 
-// Set up the checker in j->mem. False (saying why) if it can't start.
-static bool check_begin(check_job_t *j) {
-#if SD_CHECK_HAVE_FSCK
-    fsck_io_t io = {
-        .read = check_read, .report = check_report, .write = NULL, .ctx = j,
-        .sectors = j->sectors,
-    };
-    j->f = fsck_new(&io, j->mem, j->mem_len);
-    if (!j->f)
-        shell_printf(j->sh, "sd check: couldn't start the checker\n");
-    return j->f != NULL;
-#else
-    shell_printf(j->sh, "sd check: the checker isn't built in yet\n");
-    uint8_t *sector = j->mem;
-    if (!check_read(j, 0, 1, sector)) {
-        shell_printf(j->sh, "sd check: reading sector 0 failed\n");
-        return false;
-    }
-    if (sector[510] != 0x55 || sector[511] != 0xaa) {
-        check_report(j, "sector 0: no boot signature (55 AA): no partition table or boot sector");
-        j->problems++;
-    }
-    j->next = 1;
-    j->end = j->sectors < CHECK_STANDIN_SECTORS ? j->sectors : CHECK_STANDIN_SECTORS;
-    shell_printf(j->sh, "reading the first %llu MB of %llu MB%s through the layer\n",
-                 (unsigned long long)(j->end >> 11), (unsigned long long)(j->sectors >> 11),
-                 card_kind == KIND_ENCRYPTED ? ", encrypted," : "");
-    return true;
-#endif
-}
-
-// At most `budget` sector reads: CHECK_MORE, CHECK_DONE or CHECK_FAILED.
-static int check_run(check_job_t *j, uint32_t budget) {
-#if SD_CHECK_HAVE_FSCK
-    int r = fsck_step(j->f, budget);
-    return r == FSCK_MORE ? CHECK_MORE : r == FSCK_DONE ? CHECK_DONE : CHECK_FAILED;
-#else
-    while (budget && j->next < j->end) {
-        uint32_t n = budget < 8 ? budget : 8;               // 4 KB, within the smallest window
-        if (j->end - j->next < n)
-            n = (uint32_t)(j->end - j->next);
-        if (!check_read(j, j->next, n, j->mem)) {
-            j->why = "a read failed (see dmesg)";
-            return CHECK_FAILED;
-        }
-        j->next += n;
-        budget -= n;
-    }
-    return j->next < j->end ? CHECK_MORE : CHECK_DONE;
-#endif
-}
-
-// The header line once the volume is known, then a line per pass (or per 8 MB read).
+// The header line (design §7) once the volume is known, then a line per pass when there are
+// several.
 static void check_progress(check_job_t *j) {
-#if SD_CHECK_HAVE_FSCK
     const fsck_result_t *res = fsck_result(j->f);
     if (!res->passes || res->pass <= j->pass_shown)
         return;
     if (!j->pass_shown) {
         uint64_t tenths = res->volume_sectors * 10 / (2 * 1024 * 1024);     // GB, one decimal
         uint32_t ckb = res->cluster_bytes / 1024;
-        shell_printf(j->sh, "checking %s, %llu.%llu GB, %lu clusters of %lu %s, %s (%lu pass%s)\n",
-                     res->kind == FSCK_KIND_EXFAT ? "exFAT" : "FAT32",
-                     (unsigned long long)(tenths / 10), (unsigned long long)(tenths % 10),
-                     (unsigned long)res->clusters,
-                     (unsigned long)(ckb ? ckb : res->cluster_bytes), ckb ? "KB" : "bytes",
-                     card_kind == KIND_ENCRYPTED ? "encrypted" : "not encrypted",
-                     (unsigned long)res->passes, res->passes == 1 ? "" : "es");
+        char head[128];
+        snprintf(head, sizeof(head),
+                 "checking %s, %llu.%llu GB, %lu clusters of %lu %s, %s (%lu pass%s)",
+                 res->kind == FSCK_KIND_EXFAT ? "exFAT" : "FAT32",
+                 (unsigned long long)(tenths / 10), (unsigned long long)(tenths % 10),
+                 (unsigned long)res->clusters,
+                 (unsigned long)(ckb ? ckb : res->cluster_bytes), ckb ? "KB" : "bytes",
+                 card_kind == KIND_ENCRYPTED ? "encrypted" : "not encrypted",
+                 (unsigned long)res->passes, res->passes == 1 ? "" : "es");
+        shell_printf(j->sh, "%s\n", head);
+        // Logged too: with the last line's entry it times the check (dmesg), and it reaches the
+        // log files once the card is mounted again.
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: check: %s", head);
     }
     if (res->passes > 1)
         shell_printf(j->sh, "pass %lu/%lu\n", (unsigned long)res->pass,
                      (unsigned long)res->passes);
     j->pass_shown = res->pass;
-#else
-    uint32_t mb8 = (uint32_t)(j->next >> 14);               // 8 MB steps
-    if (mb8 > j->pass_shown) {
-        shell_printf(j->sh, "read %lu/%llu MB\n", (unsigned long)mb8 * 8,
-                     (unsigned long long)(j->end >> 11));
-        j->pass_shown = mb8;
-    }
-#endif
-}
-
-// The last line, once check_run() said CHECK_DONE or CHECK_FAILED.
-static void check_outcome(const check_job_t *j, int r, char *out, size_t size) {
-#if SD_CHECK_HAVE_FSCK
-    const fsck_result_t *res = fsck_result(j->f);
-    if (r == CHECK_DONE)
-        snprintf(out, size, "%s", res->summary);
-    else
-        snprintf(out, size, "failed: %s", res->why ? res->why : "?");
-#else
-    if (r == CHECK_DONE)
-        snprintf(out, size, "%lu problem%s in sector 0 and %llu MB read (stand-in, not a check)",
-                 (unsigned long)j->problems, j->problems == 1 ? "" : "s",
-                 (unsigned long long)(j->end >> 11));
-    else
-        snprintf(out, size, "failed: %s", j->why);
-#endif
 }
 
 // Every end of a check, before or during the job: finished, Ctrl-C (or the session ended),
@@ -1071,7 +963,7 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     checking = false;
     check_stop = false;
     unmounted_by_hand = true;
-    char line[CHECK_LINE_MAX];
+    char line[FSCK_LINE_MAX];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
@@ -1090,17 +982,22 @@ static bool check_step(shell_t *sh, void *arg, bool cancel) {
     if (shell_write_space(sh) < CHECK_ROOM)
         return true;                        // wait for the terminal to take the report lines
     uint64_t t0 = time_us_64();
-    int r = check_run(j, j->budget);
+    int r = fsck_step(j->f, j->budget);
     uint64_t us = time_us_64() - t0;
     if (us < CHECK_STEP_US / 2 && j->budget < CHECK_BUDGET_MAX)
         j->budget *= 2;
     else if (us > CHECK_STEP_US * 3 / 2 && j->budget > 1)
         j->budget /= 2;
     check_progress(j);
-    if (r == CHECK_MORE)
+    if (r == FSCK_MORE)
         return true;
-    char line[CHECK_LINE_MAX];
-    check_outcome(j, r, line, sizeof(line));
+    const fsck_result_t *res = fsck_result(j->f);
+    char line[FSCK_SUMMARY_MAX + 64];
+    if (r == FSCK_DONE)
+        snprintf(line, sizeof(line), "%s", res->summary);
+    else    // before the passes began (no volume, a boot sector refused, exFAT): nothing checked
+        snprintf(line, sizeof(line), "%s: %s", res->passes ? "failed" : "not checked",
+                 res->why ? res->why : "?");
     return check_end(sh, j, "%s", line);
 }
 
@@ -1139,7 +1036,7 @@ static void cmd_check(shell_t *sh, const char *arg) {
         check_end(sh, NULL, "not checked: the card's size can't be read");
         return;
     }
-    size_t state = check_state_bytes();
+    size_t state = fsck_state_size() + 8;   // fsck_new() aligns `mem` to 8 bytes
     check_job_t *j = NULL;
     size_t window = CHECK_WINDOW_MAX;
     for (;;) {
@@ -1155,12 +1052,14 @@ static void cmd_check(shell_t *sh, const char *arg) {
         return;
     }
     j->sh = sh;
-    j->sectors = sectors;
     j->budget = 8;
-    j->window = window;
     j->mem_len = state + window;
-    if (!check_begin(j)) {
-        check_end(sh, j, "not checked");
+    fsck_io_t io = {
+        .read = check_read, .report = check_report, .write = NULL, .ctx = j, .sectors = sectors,
+    };
+    j->f = fsck_new(&io, j->mem, j->mem_len);
+    if (!j->f) {
+        check_end(sh, j, "not checked: the checker couldn't start");
         return;
     }
     shell_run_job(sh, check_step, j);
