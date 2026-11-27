@@ -13,7 +13,8 @@ reference.
 Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware and crypto checks,
 built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in §9.2, and waits for
 the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
-waiting for its board run. Phase 4, the background tier: designed in §9.5, for review.
+waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
+changes, #255).
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -915,17 +916,19 @@ buffer).
 
 ### 9.5 Phase 4 design: the background tier
 
-Status: designed, for Reviewer's review (#233); nothing built yet. Phase 4 adds three
-background checks (`rtc-drift`, `heap-walk`, `core1`), widens two existing ones (`resets`, with
-every reset reason the chip can name and a reset history; `supply`, with the brownout
-detector's setting), adds one flash sector (the history sector), and wraps `health state-dump`'s
-long lines. §10 item 4 listed five things; where this design does them differently it says so,
-and the list is at the end of this section.
+Status: approved with changes by Reviewer (#255), and the open points decided by the user:
+the history sector at -6, and `crash brownout` in test builds only. This section reads as
+decided; the decisions are listed at its end. Phase 4 adds three background checks
+(`rtc-drift`, `heap-sum`, `core1`), widens two existing ones (`resets`, with every reset reason
+the chip can name and a reset history; `supply`, with the brownout detector's setting), adds one
+flash sector (the history sector), adds a test-build diagnostic that walks newlib's heap
+(`health heap-walk`), and wraps `health state-dump`'s long lines. §10 item 4 listed five things;
+where this design does them differently it says so, and the list is at the end of this
+section.
 
 **Common rules.**
 
-- **Read only, as in phase 3.** No check writes flash or the RTC (`heap-walk` allocates and frees
-  one small block, once, for its known answer). The writes this phase
+- **Read only, as in phase 3.** No check writes flash, the RTC or the heap. The writes this phase
   adds (a record in the history sector at each boot and at each time sync) belong to the boot
   path and to `timesync.c`, not to a check, so §2.4 still holds.
 - **No gates.** None of the new checks holds KEYS or CRYPTO. A drifting crystal, a past
@@ -936,8 +939,9 @@ and the list is at the end of this section.
 - **Texts are ASCII and under 63 characters**, as §9.4 settled (the tests fail a text that
   reaches 63). Uncertainties are written `+-`.
 - **Judging is pure and host tested**, in a new `src/core/bgcheck.c` (`tests/test_bgcheck.c`),
-  as `statecheck.c` is for phase 3; the reads are in `bgcheck_board.c`. The heap walk's own
-  logic is pure too (`heapwalk.c`, run over synthetic arenas on the host). The history sector's
+  as `statecheck.c` is for phase 3; the reads are in `bgcheck_board.c`. The heap-walk
+  diagnostic's logic is pure too (`heapwalk.c`, run over synthetic arenas on the host). The
+  history sector's
   format is pure (`history.c`, `tests/test_history.c`), with its flash access in
   `history_board.c`, the way `failcount.c` and `failflash.c` are split.
 
@@ -946,11 +950,12 @@ and the list is at the end of this section.
 | `resets` (widened) | boot | — | — | 1 | about 0.3 ms (the history sector scanned in place, 4 KB) |
 | `supply` (widened) | background | 60 s | 60 s | 1 | one more register read |
 | `core1` | background | 10 s | 10 s | 1 | under 10 us (three words read) |
-| `heap-walk` | background | 70 s | 5 min | 1 | 0.1 to 3 ms (estimate), capped at 8 ms |
+| `heap-sum` | background | 70 s | 5 min | 1 | tens of microseconds (one `mallinfo()`, which `heap` already calls) |
 | `rtc-drift` | background | 100 s | 10 min | 1 | under 10 us (reads what `timesync.c` recorded) |
 
 First runs avoid phase 3's (40 to 90 s). The registry then holds 22 checks with the two
-test-only gate checks, within `HEALTH_MAX` (24); phase 5 will need it raised.
+test-only gate checks; `HEALTH_MAX` goes from 24 to 32, room for phase 5's full-tier checks and
+phase 6's counters.
 
 #### Reset reasons: what the chip can say
 
@@ -992,8 +997,16 @@ same three. Phase 4 puts the decoding in one pure function, `resetwhy_decode()` 
 3. Otherwise CHIP_RESET, first the bits of resets that leave older bits standing:
    HAD_GLITCH_DETECT `glitch detector`; HAD_HZD_SYS_RESET_REQ, HAD_DP_RESET_REQ or HAD_RESCUE
    `debugger`; HAD_WATCHDOG_RESET_* or HAD_SWCORE_PD `watchdog` (SOS sets none of the modes that
-   cause them); then HAD_BOR `brownout`, HAD_RUN_LOW `reset pin`, HAD_POR `power-on`.
+   cause them); then HAD_POR `power-on` (with or without HAD_BOR beside it, below), HAD_BOR
+   alone `brownout`, HAD_RUN_LOW `reset pin`.
 4. None of them: `unknown (CHIP_RESET 0x...)`.
+
+**HAD_BOR with HAD_POR is a power-on** (Reviewer): on a cold power-up the brownout detector
+trips as the core rail rises, after the power-on reset has let go, so an ordinary plug-in can
+leave both bits set. Only HAD_BOR without HAD_POR is reported as a brownout: the supply dipped
+under the threshold without falling to nothing. The cost is that a brownout during the first
+moments of a power-up reads as a power-on, which is what it nearly was. `resetwhy_decode()`'s
+comment says so, and a host test pins it.
 
 `main.c` logs `last reset: brownout (core supply under 0.95 V)` at warning (a fault and the
 glitch detector stay at err, a watchdog timeout at warning), `uptime` adds
@@ -1029,7 +1042,7 @@ reads:
 
 #### Reset history and boot loops
 
-**Decision proposed, for review: a new flash sector, the history sector**, written the failcount
+**Decided (the user, on #255): a new flash sector, the history sector**, written the failcount
 way (records programmed into erased flash, the sector erased only when full). §11's other
 option, a POWMAN scratch register for counts plus the `--- boot` lines in
 `/var/log/kern.log`, can't see the resets that matter most here: a brownout, a power cycle and
@@ -1124,7 +1137,7 @@ guard stays as it is (it decides whether to arm the detector; this only reports)
 
 The list itself is a new subcommand, `uptime history` (any shell; reads only): one line per
 recorded boot, newest first, with its time, reason, the uptime before it and the boot number, and
-the RTC records marked. `man/uptime.txt` gets it. (The name is a question for Reviewer.)
+the RTC records marked. `man/uptime.txt` gets it.
 
 #### `rtc-drift`: the RTC's rate and the crystal's
 
@@ -1223,13 +1236,31 @@ hours or more (a restart in between is fine) and a second sync: WARN
 `time cal 92` and a day between two more syncs: PASS with `cal 91.1`. That is the verification of
 `time cal` that the earlier work couldn't do. Before two syncs it is SKIP.
 
-**A known limit, from the dev-1 queue.** An older image that syncs rewrites the RTC with no
-record. Back on a phase 4 image, the first measurement then uses the stale baseline and reads too
-small (the RTC was set right in between). Nothing can detect it (older firmware leaves no trace
-in the sector or the RTC). The board run starts its baseline with a `time sync` on the phase 4
-image, and `docs/time.md` says to sync twice after running older firmware.
+**How long between syncs.** The figure after `+-` is the measurement's uncertainty, and the
+check never WARNs or PASSes while that interval straddles a threshold. Uncalibrated, the
+uncertainty is about 1.05 s (the whole second plus the round trips), so a sure PASS within 20 ppm
+needs at least 1.05 s / 20 ppm, about **14.6 hours** between the baseline and the measuring sync;
+calibrated at dev-1's 21 steps (about 1.7 s) about 24 hours. A shorter gap can still show a
+large error for sure (92 ppm surely over 20 after about 4 hours), but it can't show that the RTC
+is within 20 ppm: until then the result is SKIP `too short to judge`, with the figure. The XOSC's
+uncertainty is only the round trips (tens of ms), so an hour between two syncs in one uptime
+judges it.
 
-#### `heap-walk`: newlib's heap, checked in one bounded step
+**A known limit, from the dev-1 queue.** An older image that syncs rewrites the RTC with no
+record. Nothing can detect it (older firmware leaves no trace in the sector or the RTC). On its
+next sync the phase 4 image measures against the stale baseline: the RTC was set right part of
+the way through, so the error read is only what it gathered since then, divided by the whole
+interval, and the rate reads too small once (nearer zero; for a fast RTC it can be a false PASS).
+That sync writes a new baseline, so the measurement after it is right again. The board run starts
+its baseline with a `time sync` on the phase 4 image, and `docs/time.md` says to sync twice after
+running older firmware.
+
+**The crystal's load (CAP_SEL) is not in this phase.** dev-1's 92 ppm suggests the PCF8523's
+CAP_SEL (7 pF from reset, which `rtc.c` leaves as it finds it) doesn't match the Adalogger's
+crystal; a crystal loaded with less capacitance than it is cut for runs fast. That goes to a
+separate issue, fed by this check's first dev-1 measurements.
+
+#### `heap-sum`: the heap's totals, and a heap walk by hand
 
 **What the allocator is.** The firmware links Arch's arm-none-eabi newlib 4.6.0 (full newlib, not
 nano: `nm` shows `__malloc_av_`, `__malloc_sbrk_base` and `_mallinfo_r` in `sos.elf`), wrapped
@@ -1239,91 +1270,77 @@ recursive mutex. Chunks lie end to end from the start of the arena to the top ch
 with a size word whose bit 0 says whether the chunk before it is in use; a free chunk also holds
 the doubly linked list pointers of its bin and repeats its size at its end.
 
-**The options**, as asked, with Reviewer's pointer that walking allocator metadata while core 1
-allocates is unsafe unless the walk holds the allocator's lock and stays under 10 ms:
+**The options** weighed for review were: (1) the totals that `heaptag` and `mallinfo()` give,
+(2) canaries on `heaptag` blocks, (3) a validated walk of newlib's chunks and bins under its
+lock. **Decided (Reviewer): the background check uses only the totals; the walk is a test-build
+diagnostic run by hand.** The walk's own failure mode, tripping over an allocator change and
+FAILing a healthy board after a toolchain update, is worse than what it finds, and holding the
+allocator's lock for up to 8 ms blocks core 1's allocations meanwhile. Canaries were never
+the choice: they change `heaptag`'s design (blocks carry no header, and freeing needs no size),
+cost bytes on each of the thousands of small blocks a script makes, and see only tagged blocks.
 
-1. **`heaptag` and `mallinfo()` consistency only.** Safe and simple: the sum of the tags' bytes
-   can't exceed what `mallinfo()` says is in use; in use plus free must equal the arena; the arena
-   can't exceed the heap. But these catch accounting mistakes, not damage: a block overrun that
-   overwrites its neighbour's size word changes none of the totals until malloc trips over it.
-   And `mallinfo()` itself already walks every bin without checking a pointer, under the same
-   lock (`heap` calls it every minute): damage to a free list shows today as a hard fault inside
-   `mallinfo()`, with `fault.c`'s record, not as a finding.
-2. **Canaries on `heaptag` blocks** (a word before and after each block, checked on release and
-   by a walk of a list of live blocks). It needs no newlib internals, but it changes `heaptag`'s
-   design (blocks carry no header today, and freeing needs no size), costs 8 to 16 bytes on each
-   of the thousands of small blocks a Lua script makes, needs a list of live blocks to walk
-   (more memory, and its own lock between cores), and sees only tagged blocks: wolfSSL's are
-   tagged, but newlib's own and the SDK's aren't.
-3. **A validated walk of newlib's chunks and bins, under its lock, in one step.** It needs
-   newlib's internals (the chunk layout, the bin array `__malloc_av_`, `__malloc_sbrk_base`),
-   which a newlib change could alter. It is the only one that finds damage before malloc does.
+**`heap-sum` is its own check, not part of `heap`.** `heap` judges how much is free, with
+hysteresis, because ordinary use comes near its WARN line; its status follows load. `heap-sum`
+judges invariants whose failure means a bug. Folding them into one status would let a
+hysteresis WARN hide a broken invariant, or an invariant WARN hold `heap` away from PASS when
+memory is plentiful; two rows say two different things.
 
-**Recommended: option 3, with option 1's totals added and three guards that turn a silent
-breakage into a loud one.** The internals it needs have not changed in newlib's `mallocr.c` for
-over twenty years, and every one is checked:
+**What it reads**, all public: `mallinfo()` (in use `uordblks`, free `fordblks`, the arena
+`arena`), `sbrk(0)` (the heap's current end), the linker's `__end__`, `__HeapLimit` and
+`__StackLimit`, core 0's stack limit register MSPLIM (the stack guard, `PICO_USE_STACK_GUARDS`),
+and the sum of `heaptag`'s tags. The `mallinfo()` and `sbrk(0)` reads are taken under
+`__malloc_lock()` so they describe the same moment; nothing allocates while the lock is held, and
+the step allocates nothing.
 
-- **At build time:** `_NEWLIB_VERSION`'s major must be 4 and `MALLOC_ALIGNMENT` 8, or the check
-  isn't built and reports SKIP `not newlib 4: walk not built`; another minor version than the
-  one tested (4.6) gives a compiler `#warning` naming it, which the strict-warnings build shows
-  (picolibc, which the SDK can also use, has no `_NEWLIB_VERSION` and gets the SKIP).
-- **At its first run, a known answer:** outside the lock, the check allocates a block of a known
-  size (and frees it after the walk); the walk must find that block's chunk, in use, with the
-  size newlib's rounding gives. If it doesn't, the layout isn't what the code assumes: the check
-  logs it once at warning and reports SKIP `newlib's heap layout not recognised: walk off` from
-  then on, and never FAILs on it.
-- **Every run cross-checks two views:** the address-order walk and the bin lists must agree on
-  the number and total size of free chunks, and the top chunk must end where `sbrk(0)` says the
-  heap ends. A layout misread can't agree with itself by chance.
-
-**Why one step and not several.** §10 item 4 said "in steps". A walk can only be trusted while
-nothing allocates, so it holds the lock; a walk resumed after releasing it would continue from a
-chunk that may have been merged, split or freed meanwhile, by core 1's script or by core 0's own
-main loop between two passes (the mutex is recursive and owned by the core, so core 0 never even
-waits for it). Restarting whenever anything allocated, with a counter in `__malloc_lock()`,
-would never finish under a busy script. A whole walk is cheap: about 10 to 20 cycles a chunk in
-SRAM, so the worst case, the heap's 380 KB cut into 16-byte chunks (about 24 000), is about 3 ms
-at 150 MHz, and an idle board's few hundred chunks take tens of microseconds. So one step holds
-the lock for the whole walk, checks the time every 256 chunks, and if it has taken 8 ms it
-releases the lock and reports SKIP `walk over 8 ms at N chunks: not judged; next run`. While it
-runs, core 1 blocks only if its script allocates, for at most those 8 ms.
-
-**Lock order, which the code must keep:** the walk takes `__malloc_lock()`'s mutex alone and must
-not call malloc or free while holding it. `pico_malloc` takes its own mutex first and then
-newlib's, so core 1 may hold the SDK's mutex and wait for newlib's while core 0 walks; if the walk
-then called malloc, core 0 would wait for the SDK's mutex: a deadlock. The known-answer block is
-allocated before the lock is taken and freed after it is released. Nothing allocates from an
-interrupt (`heap.c`), so an interrupt on core 0 during the walk can't touch the heap.
-
-**What it checks**, every chunk from the arena's start to the top:
-
-- the size is a multiple of 8, at least 16, and the chunk ends inside the arena;
-- a chunk marked free (by the next chunk's in-use bit) has its size repeated at its end, and two
-  free chunks are never neighbours (newlib merges them);
-- the walk lands exactly on the top chunk, which ends at `sbrk(0)`;
-- then each of the 128 bins' lists: every pointer inside the arena and aligned, pointing at a
-  chunk the walk saw as free, each node's back pointer naming the node before it, and no more
-  nodes than the walk's free chunks (so a cycle ends);
-- free chunks: the walk's count and bytes equal the bins'; the sum of `heaptag`'s tags is at most
-  the walk's bytes in use (a tag that underflowed, from a double release, shows as a huge sum).
+- **The tags' sum is at most the bytes in use.** Each tag counts `malloc_usable_size()` of its
+  blocks, which is less than the chunk `mallinfo()` counts, and untagged blocks only add to the
+  in-use side. A sum over it means a block released under the wrong tag, or released twice (the
+  counter underflows and the sum becomes huge). The tags are updated outside the lock, just after
+  malloc returns or just before free; only a shrinking realloc briefly counts more than the heap,
+  so a violation is read twice, 1 ms apart, and counts only if both reads show it.
+- **In use plus free equals the arena.** In newlib 4 this holds by construction (`mallinfo()`
+  computes in use as arena minus free), so it can fail only if the allocator or its `mallinfo()`
+  changed; then it says so instead of being trusted.
+- **The arena's end against the stack guard.** The arena ends at `sbrk(0)`, which must be at or
+  above `__end__ + arena`, within `__HeapLimit` and `__StackLimit`, and below core 0's MSPLIM. The
+  SDK's `_sbrk()` refuses to pass `__StackLimit`, so a FAIL here means the layout and the guard
+  disagree: the stack could then grow into the heap without the guard catching it.
 
 | Status | When | Text (example) |
 |---|---|---|
-| PASS | every rule holds | `1312 chunks, 41 free (301 KB, largest 280 KB); 0.4 ms` |
-| FAIL | a chunk's size or end is wrong | `heap damaged: chunk 0x2001f3a8 size 0x00000003; reboot` |
-| FAIL | a bin's pointer is outside the heap, misaligned, or names a chunk in use | `free list: bin 34 points outside the heap (0x00000c41)` |
-| FAIL | the two views disagree | `free chunks: walk 41 (88 KB), bins 40 (86 KB); reboot` |
-| WARN | the tags' sum is over the bytes in use | `tags hold 312 KB, heap in use 120 KB: a double release?` |
-| SKIP | the walk took 8 ms | `walk over 8 ms at 9216 chunks: not judged; next run` |
-| SKIP | the layout isn't recognised, or the build has no newlib 4 | `newlib's heap layout not recognised: walk off` |
+| PASS | all hold | `in use 96 KB (tags 81 KB), arena 210 KB of 380 KB` |
+| WARN | the tags' sum over the bytes in use, twice | `tags hold 312 KB, heap in use 120 KB: a double release?` |
+| WARN | in use plus free isn't the arena | `mallinfo: in use + free 210 KB, arena 212 KB` |
+| FAIL | the arena's end beyond the stack guard or the heap's limit | `heap end 0x2007e010 beyond the stack guard 0x2007e000` |
 
-A FAIL also logs, at err, the chunk's address and the four words around it, so the record
-survives the reboot it asks for (in `/var/log/kern.log`, if a card is in). The check doesn't
-reboot by itself (§2.4). The PASS text gives the **largest free block**, which nothing shows today
-(`mem` gives free bytes, and a TLS handshake needs its memory in blocks, not in total).
+**Expected on dev-1:** PASS, `in use` about 100 KB idle.
 
-**Expected on dev-1:** PASS with a few hundred chunks and a large top chunk, well under 1 ms; the
-figures are measured by the board run.
+**`health heap-walk`, the diagnostic** (test builds, console, run by hand, holds the main loop
+while it runs): the walk of option 3, with every guard of the design kept, since a person reads
+its output:
+
+- **Build time:** newlib 4 with `MALLOC_ALIGNMENT` 8, or the command says it isn't built for this
+  C library. Another minor version than 4.6 gives a compiler `#warning`, in this test-only code
+  and nowhere in the production build.
+- **A known answer first:** outside the lock, it allocates a block of a known size; the walk must
+  find that block's chunk, in use, with the size newlib's rounding gives, or it prints
+  `newlib's heap layout not recognised` and stops before judging anything.
+- **Two views cross-checked:** every chunk from the arena's start to the top (each size a
+  multiple of 8, at least 16, ending inside the arena; a free chunk's size repeated at its end;
+  no two free chunks neighbours; the top chunk ending at `sbrk(0)`), then each of the 128 bins'
+  lists, every pointer checked before it is followed (inside the arena, aligned, naming a chunk
+  the walk saw as free, the back pointer naming the node before, no more nodes than free chunks,
+  so a cycle ends). The two views must agree on the free chunks' count and bytes.
+- **Lock order:** the walk holds `__malloc_lock()`'s mutex alone and never calls malloc or free
+  while holding it. `pico_malloc` takes its own mutex first and then newlib's, so core 1 may hold
+  the SDK's and wait for newlib's while core 0 walks; a malloc inside the walk would then wait for
+  the SDK's: a deadlock. The known-answer block is allocated before the lock and freed after.
+- **Bounded:** it checks the time every 256 chunks and stops at 8 ms (about 24 000 chunks would
+  take some 3 ms), printing how far it got.
+
+It prints the chunks, the free chunks and their bytes, the largest free block, the walk's time,
+and the first rule broken with the chunk's address and the four words around it. It changes
+nothing. The pure part (`heapwalk.c`) is host tested over synthetic arenas.
 
 #### `core1`: a heartbeat while a script runs
 
@@ -1380,25 +1397,29 @@ host key and boot-key-slot lines lose their tails. Phase 4 formats into 256 byte
 through a pure `statecheck_wrap()` that breaks a line at the last `; ` or `, ` before column 79,
 continuing with a two-space indent (a word longer than the line is cut hard), host tested. Phase
 4's own dump lines (CHIP_RESET and the watchdog's REASON as read, the reason decoded, the BOD
-register, the last 8 history records, the drift record, the heap walk's figures and `core1`'s
+register, the last 8 history records, the drift record, `heap-sum`'s figures and `core1`'s
 counters) go through the same function.
 
 #### Test commands and tests
 
 **Test commands** (`SOS_TEST_COMMANDS`):
 
-- **`crash brownout`**: a real brownout reset, by writing the BOD register's VSEL to 0b10001
-  (1.204 V, above DVDD's 1.1 V; with the POWMAN password). The detector resets the chip within
+- **`crash brownout`** (approved by the user: test builds only, never in the normal image, to
+  be run once on dev-1): a real brownout reset, by writing the BOD register's VSEL to 0b10001
+  (1.204 V, above DVDD's 1.1 V), EN kept, with the POWMAN password in the top half
+  (`powman_hw->bod = POWMAN_PASSWORD_BITS | 0x11 << 4 | 1`). The detector resets the chip within
   about 40 us (programming and assertion delays, datasheet §7.6.2.3), and the reset puts the
   register back to its default, so the next boot is ordinary. That is exactly why the datasheet
-  says not to set it above the supply; Reviewer should confirm that a deliberate reset this way
-  is acceptable on dev-1 (it is the same reset as a power dip, and clears what a power cycle
-  clears).
+  says not to set it above the supply. It is the same reset as a power dip and clears what one
+  clears (the POWMAN and watchdog scratch registers). **It refuses** unless nothing is writing
+  flash or the card: no file open (`files_busy()`: SFTP, `cp`, `tee`, a `>` redirection), no
+  `sd check` or format running, no Lua script running (a script writes through core 0), and no
+  log lines waiting for the card; flash writes are synchronous on core 0 (`flashop_run()`), so
+  none can be in progress while a console command runs. It then flushes the log files, as
+  `reboot` does, waits 100 ms, and writes the register. Console only.
 - **`sos.spin(ms)`** in Lua, test builds only: a C loop on core 1 that runs no Lua instruction,
   to make a long C call on purpose.
-- **`mem smash`**: overwrites the size word of a block held with `mem hold`, so `heap-walk` has
-  real damage to find. The board is rebooted right after the check, before anything frees near
-  that block.
+- **`health heap-walk`**: the newlib heap walk described under `heap-sum`, run by hand.
 - **`health history-fill`**: appends test records (kind 0x7f, shown as `test`, never judged)
   until one slot is left, so the next boots exercise the erase and the copy back.
 
@@ -1407,41 +1428,38 @@ HAD_GLITCH_DETECT, and under each watchdog REASON; the history format (append, f
 back, damaged and stray records, a newer version left unwritten, an unconfirmed RTC record); the
 boot-loop rule (known and unknown uptimes, a `reboot` breaking the row); the drift arithmetic
 (signs, the sawtooth term, "too short to judge" at its edges, the suggested `time cal` value, the
-range); the heap walk over synthetic arenas built in newlib's layout (a clean one, then each
-rule broken in turn: a size not a multiple of 8, a missing footer, neighbouring free chunks, a
-bin pointer outside, a cycle, a back pointer wrong, a top chunk short of `sbrk(0)`), and its
-8 ms cut-off with a fake clock; `core1`'s rules with made-up counters and times; the wrapping.
+range); `heap-sum`'s totals; the heap walk over synthetic arenas built in newlib's layout (a
+clean one, then each rule broken in turn: a size not a multiple of 8, a missing footer,
+neighbouring free chunks, a bin pointer outside, a cycle, a back pointer wrong, a top chunk
+short of the heap's end); `core1`'s rules with made-up counters and times; the wrapping.
 
-**Board run** (dev-1 slot; no OTP writes; config untouched):
+**Board run:** the plan, with the commands and the texts to expect, is in the phase 4 PR
+(#255); in short, after backing up the config and history sectors: the new rows in `health run`;
+each reset reason (`reboot`, `crash fault`, `crash hang`, `crash brownout`) and `uptime history`
+across them; a boot loop of three `crash fault`s; `health history-fill` and the erase;
+`health heap-walk` idle and with a script allocating; `core1` with a running script, one waiting
+for core 0 and one in a long C call (`sos.spin()`), stopped; `rtc-drift` over two syncs, at least
+14.6 hours apart for a PASS (the slot may end first: the second sync can be a later slot's, or the
+periodic sync if `time auto` is on); the wrapped `health state-dump`.
 
-1. `health run` and `health state-dump`: the new rows as above; CHIP_RESET and REASON as read
-   after the flash (expect `reboot`: picotool goes through the watchdog). `ssh` "longest" and
-   `mem` before and after.
-2. **Reset reasons:** `reboot` (`reboot`, no WARN), `crash fault` (`fault`), `crash hang`
-   (`watchdog`), `crash brownout` (`last reset: brownout` in the boot log and `uptime`, `resets`
-   WARN, HAD_BOR in `state-dump`, REASON 0). If the user can unplug and replug the board: the next
-   boot must read `power-on`; this also shows whether an ordinary plug-in ever sets HAD_BOR (if it
-   did, the decoder would call a plug-in a brownout; question below).
-3. **History and loops:** `uptime history` lists the boots of step 2 with their reasons and
-   uptimes; three `crash fault`s, each within 3 minutes of its boot: `resets` WARN
-   `3 short runs in a row (fault, fault, fault)`; a fourth boot left up: the next boot PASSes.
-   `health history-fill`, then two reboots: the erase, and the last 16 boots copied back.
-4. **`heap-walk`:** idle; then with a script allocating hard on core 1
-   (`lua -b` of a loop building and dropping tables) and an SFTP transfer: PASS each time, with
-   the walk's time; then `mem hold`, `mem smash`, `health run heap-walk`: FAIL with the chunk
-   named and the err line in `dmesg`; reboot at once.
-5. **`core1`:** a `while true do end` script: PASS with hooks/s; `sos.http.get` of
-   https://letsencrypt.org/: PASS waiting; `sos.spin(45000)`: WARN after 30 s; `sos.spin(60000)`
-   then `lua stop` at once: FAIL after 10 s, then PASS `core 1 free again` when the spin returns.
-6. **`rtc-drift`** (spans the slot, or two): `time sync` (baseline), wait four hours or more
-   (rebooting is fine), `time sync`: WARN with the uncalibrated rate (`no cal`); then
-   `time cal <that rate>`, `time sync`, a day, `time sync`: PASS with the calibration named. The
-   XOSC part needs two syncs in one uptime, an hour or more apart.
+**Cost estimate:** text about +6 KB, bss under 600 bytes (the drift record, the heartbeat words,
+the history's RAM copy of the newest records), one 4 KB flash sector.
 
-**Cost estimate:** text about +6 KB, bss under 200 bytes (the drift record, the heartbeat words,
-the history's RAM copy of the newest 16 records, 256 bytes, kept static), one 4 KB flash sector.
+#### Decisions on review, and changes to §10 item 4
 
-#### Changes to §10 item 4, and questions for Reviewer
+**Decided** (Reviewer and the user, on #255):
+
+1. **The history sector at -6** (0x3fa000), with `flashlayout.h`'s ordering assertions, the
+   image-overlap guard and a version byte (the user).
+2. **No heap walk in the background:** `heap-sum` checks the totals; the walk is the test-build
+   diagnostic `health heap-walk` (Reviewer). The minor-version `#warning` is in the diagnostic
+   only.
+3. **`crash brownout`** is approved for test builds only, refusing while anything writes flash or
+   the card (the user).
+4. **HAD_BOR with HAD_POR decodes as power-on** (Reviewer).
+5. **`uptime history`** is the command's name; `resets` stays the check's.
+6. **Thresholds:** RTC WARN 20 ppm, XOSC WARN 65 and FAIL 1000 ppm, judged only when sure.
+7. **CAP_SEL** goes to a separate issue.
 
 **Changes from §10 item 4:**
 
@@ -1449,28 +1467,12 @@ the history's RAM copy of the newest 16 records, 256 bytes, kept static), one 4 
   writes it. The phase reports brownout resets and checks the setting instead, and adds no
   `brownout` check: reasons go to `resets`, the setting to `supply`, the count to the history.
   No new VSYS threshold, since the detector watches DVDD.
-- **The heap walk is one bounded step, not a stepwise walk**, because a walk resumed after the
-  lock is released can't be trusted. It still follows the 10 ms rule (cut off at 8 ms).
+- **No background heap walk:** `heap-sum` checks the totals in the background, and the walk is
+  a diagnostic run by hand.
 - **RTC drift measures two clocks**: the RTC against NTS, and the RP2350's crystal from the steps
   between syncs in one uptime, which is the measurement §9.2 left to this phase.
 - **Reset history is not a check of its own:** it is judged by `resets`, listed by
   `uptime history`, and stored in a new sector that also holds the RTC's baseline.
-
-**Questions:**
-
-1. The history sector (sector -6) as proposed, or the POWMAN scratch option despite what it
-   can't see?
-2. A newlib-internal heap walk with the guards above, or only option 1's totals (and no walk)?
-3. `crash brownout` by raising VSEL above DVDD: acceptable on dev-1?
-4. If the board run finds HAD_BOR set after an ordinary USB plug-in, should `resets` treat a
-   brownout in the first boot after power-up as a power-on (losing real brownouts at plug-in), or
-   keep reporting it?
-5. `uptime history` as the command's name, or something else (`resets`)?
-6. RTC WARN at 20 ppm and XOSC at 65 ppm: right, or should dev-1's measurements set them?
-7. dev-1's 92 ppm suggests the PCF8523's CAP_SEL (7 pF from reset) doesn't match the Adalogger's
-   crystal (a crystal loaded with less capacitance than it is cut for runs fast, by tens of
-   ppm or more). Changing CAP_SEL is outside
-   `health`; should phase 4's board run try it, or leave it for a separate issue?
 
 ## 10. Phases
 
@@ -1486,8 +1488,9 @@ the history's RAM copy of the newest 16 records, 256 bytes, kept static), one 4 
    flags against `version`. Reads only, never writes OTP. Design: §9.3; as built: §9.4.
 4. **Background tier:** RTC drift as ppm after each NTS sync, the brownout detector and
    `last reset: brownout`, a heap free-list walk in steps, a core 1 heartbeat while a script
-   runs, and reset history. Design: §9.5 (the walk is one bounded step, the detector needs no
-   turning on, and the reset history is judged by `resets`; §9.5 lists the changes).
+   runs, and reset history. Design: §9.5 (heap totals in the background and the walk by hand,
+   the detector needs no turning on, and the reset history is judged by `resets`; §9.5 lists
+   the changes).
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check.
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
@@ -1499,7 +1502,7 @@ the history's RAM copy of the newest 16 records, 256 bytes, kept static), one 4 
   have one).
 - **Reset history (phase 4):** either a flash sector written like the failcount sector (bits
   cleared, rarely erased), or a POWMAN scratch register for the count plus the `--- boot`
-  lines already in `/var/log/kern.log`. *Decision proposed, for review (§9.5):* the flash
+  lines already in `/var/log/kern.log`. *Decided (the user, on #255; §9.5):* the flash
   sector, the sixth from the end of flash, below the failcount sector, because a brownout, a
   power cycle and the reset pin clear the POWMAN scratch registers, and the log lines need a
   mounted card. It also keeps the RTC drift check's baseline across restarts.
