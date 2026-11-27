@@ -14,7 +14,7 @@ Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware an
 built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in §9.2, and waits for
 the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
 waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
-changes, #255).
+changes, #255), built (§9.6), waiting for its board run.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -1474,6 +1474,79 @@ the history's RAM copy of the newest records), one 4 KB flash sector.
 - **Reset history is not a check of its own:** it is judged by `resets`, listed by
   `uptime history`, and stored in a new sector that also holds the RTC's baseline.
 
+### 9.6 As built (phase 4)
+
+Built as §9.5 decides, with these details settled by the code. The judging is in `bgcheck.c`
+(`tests/test_bgcheck.c`, 21 tests), the reset decoding in `resetwhy.c` (`tests/test_resetwhy.c`),
+the history format in `history.c` (`tests/test_history.c`), the heap walk in `heapwalk.c`
+(`tests/test_heapwalk.c`, 13 tests over arenas in newlib's layout); the reads are in
+`bgcheck_board.c`, `resetwhy_board.c` and `history_board.c`. The offsets of the sectors at the end
+of flash moved to `flashlayout.h`, which asserts their order.
+
+**Texts.** As in §9.5, but where they differ:
+
+| Check | §9.5 | As built |
+|---|---|---|
+| `resets` | `3 short runs in a row (brownout, brownout, power-on)` | `3 short runs in a row; last reset: brownout` (three reason names don't fit a line) |
+| `rtc-drift` | `RTC +92.1+-13 ppm in 22 h, no cal: try time cal 92` | the same; a rate of 100 ppm or more has no decimal (`RTC +310+-13 ppm in 22 h: beyond time cal's range`) |
+| `rtc-drift` | `one sync since the RTC was set: drift after the next` | `RTC set 3 h ago (no cal): drift at the next sync`, and before any baseline `RTC: no baseline; drift after two syncs (no cal)` |
+| `rtc-drift` | `XOSC +1210+-3 ppm: beyond the chip's 1000 ppm clock margin` | `XOSC +1210+-3.0 ppm: beyond the chip's 1000 ppm margin` |
+| `core1` | `loop.lua waiting for core 0 (http) for 12 s` | `loop.lua waiting for core 0, running 82 s` (the request's kind isn't kept) |
+| `supply` | `on USB, VSYS min 4.61 V; BOD on at 0.946 V` | phase 1's text plus `; BOD on` (`VSYS min 4.61 V since the last check, USB power; BOD on`) |
+| `heap-sum` | `heap end 0x2007e010 beyond the stack guard 0x2007e000` | the same, and `heap end ... beyond its limit ...` for the lower of `__HeapLimit` and `__StackLimit` |
+
+A result joins its second part (the XOSC after the RTC) only if the whole stays under 63
+characters; `health state-dump` prints both in full.
+
+**Also settled:**
+
+- **The RTC record is written after the RTC, not before.** §9.5 had it appended before
+  `rtc_write()` and confirmed after. But the RTC must be written on the second boundary, and a
+  flash write takes a millisecond (an erase, when the sector is full, up to 400 ms), so the record
+  is appended just after `rtc_write()`, confirmed at once if the RTC took the time and left
+  unconfirmed if not (an unconfirmed record ends the baseline). A power cut in the millisecond
+  between the two leaves the old baseline, and the next measurement reads too small once, as after
+  an older image's sync.
+- **The RTC's uncertainty** is 1000 ms + 32 ms per calibration step + the measuring sync's round
+  trip (the baseline's round trip isn't recorded; one round trip covers half of each). SNTP syncs,
+  which give no round trip, count 50 ms.
+- **The measurement is read at the boundary** with one `rtc_read()` (about 1 ms at 100 kHz), so the
+  RTC is written about 1 ms after the boundary: well inside the second it can resolve.
+- **`time cal`** marks a measurement taken under the old calibration as `calibration changed`, and
+  before any sync since boot the check reads the baseline's calibration from the history sector.
+- **`uptime`** now always names the reason (`(last reset: power-on)`); a fault keeps its own line.
+  `sos.health()`'s `reset` table gains `reason`, the same names (`cause` is unchanged).
+- **`resets`' history** is read in place: the newest 16 boot records, judged with
+  `history_short_runs()`. Damaged and stray records are counted together.
+- **`core1`'s run time** is the script's own (`lua_host_job_seconds()`); its name is the file's base
+  name, `lua -e` or `lua prompt`. `waiting` is set in `request()`, while the output buffer is full,
+  and while the prompt waits for a line; `beats` counts in the hook, `sos.sleep()` and the timers'
+  wait.
+- **`heap-sum`** reads `mallinfo()` and `sbrk(0)` under the heap's lock (`heap_snapshot()`),
+  `__end__`, `__HeapLimit`, `__StackLimit` and MSPLIM; a tags-over-use reading is taken again after
+  1 ms.
+- **`health heap-walk`** starts at `__malloc_sbrk_base` rounded up to 8 and takes the top chunk
+  from `__malloc_av_[2]`; the known block is a `malloc(100)` (a 104-byte chunk). It is built only
+  with newlib 4 and 8-byte alignment (`_Static_assert` on 32-bit pointers); another minor version
+  than 4.6 gives a `#warning` in that test-only block. A broken rule is also logged at err.
+- **`crash brownout`** puts the register back and says so if no reset came within 100 ms.
+- **`health history-fill`** fills the sector to the end, so the next boot's record erases it.
+- **`health state-dump`** prints every line through `statecheck_wrap()` at 79 columns, phase 3's
+  lines formatted into 256 bytes instead of 112.
+- **`HEALTH_MAX`** is 32.
+- **A script's wall error** (`other shells haven't read the last messages yet: try again`) was 66
+  characters and the 64-byte error field cut it: shortened, found by the strict warnings.
+
+**Step times** (estimates): `resets` reads at most 4 KB in place at boot, under 0.5 ms; `core1`,
+`rtc-drift` and `supply` read a few words; `heap-sum` one `mallinfo()` (which `heap` already
+calls). The boot record adds one page program (about 1 ms) to every boot; a sync adds an RTC read
+and a page program or two.
+
+**Cost** (`arm-none-eabi-size`, against main 06e0722): debug text +10.7 KB (1238280 to 1249232),
+bss +1.3 KB (most of it `HEALTH_MAX` 24 to 32; the history's 16-record read buffer, 320 bytes,
+is static); release text +16.0 KB, bss +1.3 KB; the test build text +15.5 KB. One 4 KB flash
+sector.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -1490,7 +1563,7 @@ the history's RAM copy of the newest records), one 4 KB flash sector.
    `last reset: brownout`, a heap free-list walk in steps, a core 1 heartbeat while a script
    runs, and reset history. Design: §9.5 (heap totals in the background and the walk by hand,
    the detector needs no turning on, and the reset history is judged by `resets`; §9.5 lists
-   the changes).
+   the changes); as built: §9.6.
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check.
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
