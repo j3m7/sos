@@ -15,7 +15,9 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
 - **Held console:** while a full-screen program (the editor) runs on the console,
   `log_hooks_t.hold` returns true and `log_flush()` prints nothing. Messages wait in the history
   and are printed once it ends; if they overflowed the history meanwhile, the console says some
-  were dropped. `log_pending()` counts the messages waiting, so the program can say so.
+  were dropped. `log_pending()` says how many messages are waiting, so the program can say so. It
+  reads a count per level kept as messages are added, dropped and shown: the lock is the
+  interrupt disable, so it doesn't walk the history under it.
 - **Interrupt context:** a message logged from an interrupt (lwIP, CYW43) is only stored;
   `log_flush()` in the main loop prints it. What is done in the interrupt is kept small: a
   message above the history level returns before it is formatted, and the others are formatted

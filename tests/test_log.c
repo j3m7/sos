@@ -315,6 +315,40 @@ TEST(prefixed_long_message_truncated) {
     CHECK(!strncmp(buf, "[    1.234] sshd: xxx", 21));
 }
 
+// log_pending() is a count kept as messages come, go and are shown, not a walk of the history.
+// Check it against what a flush then prints, through overflow, levels and a changing console
+// level.
+TEST(pending_count_matches_what_a_flush_prints) {
+    reset();
+    log_set_history_level(SOS_LOG_DEBUG);
+    unsigned seed = 12345;
+    for (int round = 0; round < 300; round++) {
+        held = true;
+        seed = seed * 1103515245u + 12345u;
+        int messages = (int)(seed >> 16) % 90;          // some rounds overflow the history
+        for (int i = 0; i < messages; i++) {
+            seed = seed * 1103515245u + 12345u;
+            int level = SOS_LOG_ERR + (int)(seed >> 16) % 5;
+            int len = (int)(seed >> 8) % 120;
+            log_msg(level, "%d %.*s", i, len,
+                    "........................................................................"
+                    "................................................");
+        }
+        seed = seed * 1103515245u + 12345u;
+        log_set_console_level(SOS_LOG_ERR + (int)(seed >> 16) % 5);
+        int pending = log_pending();
+        held = false;
+        out_len = 0;
+        out[0] = '\0';
+        log_flush();
+        int lines = 0;
+        for (size_t i = 0; i < out_len; i++)
+            lines += out[i] == '\n';
+        CHECK_EQ(pending, lines);
+        CHECK_EQ(log_pending(), 0);
+    }
+}
+
 TEST(nothing_before_init) {
     log_init(NULL);
     log_msg(SOS_LOG_ERR, "ignored");            // must not crash
@@ -343,6 +377,7 @@ TEST_MAIN(
     RUN(prefix_goes_before_the_message);
     RUN(prefixed_message_above_the_level_is_not_formatted);
     RUN(prefixed_long_message_truncated);
+    RUN(pending_count_matches_what_a_flush_prints);
     RUN(level_names);
     RUN(nothing_before_init);
 )
