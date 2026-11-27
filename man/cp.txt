@@ -9,7 +9,8 @@ DESCRIPTION
     it and removes the partial copy, as does the console locking itself. About
     580 KB/s on an unencrypted card, roughly half on an encrypted one. Files a
     running command has open can't be deleted or renamed meanwhile, and the
-    card can't be unmounted or formatted.
+    card can't be unmounted or formatted. A long copy is synced to the card
+    about once a second, so 'ls' shows how far it has got.
 
 SEE ALSO
     mv, rm, ls
