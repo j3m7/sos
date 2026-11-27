@@ -316,7 +316,7 @@ static int64_t cert_date(const byte *raw, int raw_len) {
 static void note_leaf(tls_conn_t *c, const WOLFSSL_X509_STORE_CTX *store) {
     if (!store->certs || store->totalCerts < 1)
         return;
-    DecodedCert *dc = heap_alloc(HEAP_NET, sizeof(*dc));
+    DecodedCert *dc = heap_alloc(HEAP_NET, sizeof(*dc));     // 1004 bytes in this build, briefly
     if (!dc)
         return;
     wc_InitDecodedCert(dc, store->certs[0].buffer, store->certs[0].length, NULL);

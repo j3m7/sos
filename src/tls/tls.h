@@ -41,7 +41,8 @@ typedef struct {
     int64_t cert_not_before;    // valid from, seconds since 1970 (UTC); 0 if unreadable
     int64_t cert_not_after;     // valid until
     char cert_subject[64];      // its common name ("letsencrypt.org")
-    char cert_issuer[128];      // the issuer's name, as wolfSSL writes it ("/C=US/O=.../CN=R11")
+    char cert_issuer[128];      // the issuer's name, as wolfSSL writes it ("/C=US/O=.../CN=R11"),
+                                // cut at 127 characters (a long name may end mid-component)
 } tls_stats_t;
 
 typedef struct tls_conn tls_conn_t;
