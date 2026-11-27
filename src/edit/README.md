@@ -1,7 +1,8 @@
 # edit: the full-screen programs
 
 `edit <file>` (the editor) and `more <file>` (the pager) run full screen on the console or over
-SSH; see [docs/commands.md](../../docs/commands.md#editor) for the keys. The editor edits a file
+SSH; the keys are in the manual pages [man/edit.txt](../../man/edit.txt) and
+[man/more.txt](../../man/more.txt). The editor edits a file
 of up to 128 KB (less while the heap has less to spare); the pager reads a file of any size, or a
 text in RAM (`edit_view()`).
 

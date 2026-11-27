@@ -38,7 +38,10 @@ SEE ALSO
 - SYNOPSIS lists the command's forms, one per line, each marked `(console only)` or `(change:
   console only)` where that applies; `docs/commands.md` takes its *Where* column from the marks.
 - A new page goes into `man/index.txt`, under the section of `docs/commands.md` it belongs to.
-- After adding or changing a page, run `tools/man-bundle.sh`: it checks the pages and rebuilds
+- Every line below a heading is indented four spaces; a line that isn't is a heading, in
+  capitals (the generator stops on anything else).
+- After adding or changing a page, run `tools/man-bundle.sh` (bash and python3): it checks the
+  pages and rebuilds
   `man/pages.bundle` and `docs/commands.md` (`tools/man-docs.py`), both committed. The host tests
   (`just test`) fail while either is out of date or a page breaks a rule above.
 

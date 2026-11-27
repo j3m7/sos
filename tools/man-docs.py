@@ -43,8 +43,10 @@ def read_page(topic):
         fail("man/index.txt names '%s' but there is no man/%s.txt" % (topic, topic))
     lines = open(path, encoding="utf-8").read().split("\n")
     sections, current = {}, None
-    for line in lines:
+    for n, line in enumerate(lines, 1):
         if line and not line.startswith(" "):
+            if not re.fullmatch(r"[A-Z][A-Z ]*", line):
+                fail("man/%s.txt: line %d: a line that isn't indented must be a heading in capitals" % (topic, n))
             current = line
             sections.setdefault(current, [])
         elif current is not None:
