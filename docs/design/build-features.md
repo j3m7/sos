@@ -287,7 +287,10 @@ works. Until then FILES is always on.
 choose the software. The SDK's board files say whether the Wi-Fi chip is there
 (`PICO_CYW43_SUPPORTED`, set by `pico2_w.h`), and `features.cmake` uses it:
 
-- NET defaults to ON when the board has the chip and OFF when it hasn't. This is the one
+- NET defaults to ON when the board has the chip and OFF when it hasn't. `PICO_CYW43_SUPPORTED`
+  exists only after `pico_sdk_init()`, which reads the board header's `pico_board_cmake_set`
+  lines (the SDK's `cmake/generic_board.cmake`), so `features.cmake` is included after that
+  call, not next to the `PICO_BOARD` line at the top of `CMakeLists.txt`. This is the one
   exception to decision 1's "all ON": a default that can't build is no default.
 - `-DSOS_FEATURE_NET=ON` on a board without the chip is a configure error (decision 2), naming
   the board.
@@ -301,13 +304,16 @@ Today the Wi-Fi chip is used outside `src/net` in these places, and each needs a
 |---|---|---|
 | `main.c` | `cyw43_arch_init_with_country()`; the LED blink (`CYW43_WL_GPIO_LED_PIN`) | no init; LED on `PICO_DEFAULT_LED_PIN` (25) |
 | `core/sensors_board.c` | USB power from the chip's GPIO (`CYW43_WL_GPIO_VBUS_PIN`); VSYS read only while holding the chip's lock, because VSYS shares its pin with the chip's SPI clock | USB power from `PICO_VBUS_PIN` (24); VSYS on `PICO_VSYS_PIN` (29) with no lock. The file already tests these macros with `#if defined(...)`, so this is mostly filling in the other branch |
-| `shell/shell.c` | `net` (link state, RSSI, address) and `mem` (lwIP's pools, under `cyw43_arch_lwip_begin()`) | `net` is a NET command (§4.1); `mem` leaves out its lwIP lines |
+| `shell/shell.c` | `cyw43_arch_lwip_begin()` in four places: `mem` (the heap use by feature), `net` (link state, RSSI, address), `wifi stats` (`wifi_stats()`), and Tab completion for `ping` (`tab_ping_hosts()`) | `net`, `wifi stats` and `ping` are NET commands and move with NET (§4.1); `mem` leaves out its lwIP lines |
 | `lua/lua_health.c`, `time/timesync.c`, `time/nts.c`, `tls/tls.c`, `ssh/` | lwIP locking | NET-only code: not built |
 
 Boards are not features: there is no `SOS_FEATURE_PICO2`. `board.h` declares the few things
 that differ (`board_led_set()`, and the sensor reads already in `sensors_board.c`), with one
 implementation per board family chosen by `PICO_BOARD` in CMake. Any other RP2350 board with
 the same pins would work the same way; others are out of scope until someone has one.
+
+The flash size detection in `CMakeLists.txt` already reads `${PICO_BOARD}.h`, so
+`PICO_BOARD=pico2` needs no change there.
 
 Testing needs a plain Pico 2 board, which the board registry doesn't have yet (§11).
 
