@@ -1,7 +1,10 @@
 # files: SD card and file commands
 
 The SD card library ([no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico),
-`lib/sdcard`) provides the SPI driver and FatFs (exFAT and FAT32, long file names).
+`lib/sdcard`) provides the SPI driver and FatFs (exFAT and FAT32, long file names). SOS builds
+only the part of it the SPI slot needs: the top-level `CMakeLists.txt` lists the sources, leaving
+out the SDIO driver and the library's crash handler, and `sd_stubs.c` has the two names the rest
+still refers to.
 
 ## `sdcard.c`: the card
 
