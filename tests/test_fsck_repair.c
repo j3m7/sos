@@ -742,7 +742,7 @@ TEST(empty_file_with_chain) {
     fsck_disk_free(d);
 }
 
-// exFAT isn't repaired (phase 2b checks it): nothing is written.
+// exFAT is checked but not repaired yet: the plan says so and nothing is written.
 TEST(exfat_untouched) {
     fsck_disk_t *d = fsck_disk_format(FSCK_DISK_SMALL_SECTORS, FM_EXFAT, 1, 0);
     CHECK(d != NULL);
@@ -752,8 +752,9 @@ TEST(exfat_untouched) {
     fsck_io_t io = {.read = fsck_disk_read, .write = fsck_disk_write, .ctx = d,
                     .sectors = fsck_disk_sectors(d)};
     rep_t r;
-    int rc = repair_with(&io, WINDOW_BIG, 64, &r);
-    CHECK(rc != 0 || (r.plan.exfat && !fsck_plan_writes(&r.plan)));
+    CHECK_EQ(repair_with(&io, WINDOW_BIG, 64, &r), 0);
+    CHECK(r.plan.exfat && !fsck_plan_writes(&r.plan));
+    CHECK_EQ(r.check.kind, FSCK_KIND_EXFAT);
     CHECK_EQ(r.writes, 0);
     uint64_t lba;
     CHECK_EQ(fsck_disk_changed(d, &lba, 1), 0);

@@ -45,6 +45,10 @@ static void charge(fsck_fix_t *x) {
 
 // One sector. False, with x->why set, if the device refused it.
 static bool put(fsck_fix_t *x, uint64_t lba, const uint8_t *buf) {
+    if (!x->nfats) {                            // no FAT32 boot sector seen: exFAT, or a bug
+        snprintf(x->why, sizeof(x->why), "repair writes only to FAT32");
+        return false;
+    }
     x->writes++;
     charge(x);
     if (lba >= x->io->sectors || !x->io->write(x->io->ctx, lba, 1, buf)) {
@@ -173,7 +177,7 @@ bool fsck_plan_writes(const fsck_plan_t *p) {
 static void plan_from(const fsck_fix_t *x, const fsck_result_t *res, fsck_plan_t *p) {
     memset(p, 0, sizeof(*p));
     if (res->kind == FSCK_KIND_EXFAT) {
-        p->exfat = true;                        // phase 2b's checker; repair not built yet
+        p->exfat = true;                        // checked, but repair isn't built yet
         return;
     }
     p->lost_clusters = x->lost;

@@ -13,9 +13,9 @@ This note sets the rules so that the phases (§9) can be built without deciding 
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): phase 1 (the FAT32 checker) and phase 4's FAT32 part (the fault harness
-and the FAT32 repairs, `src/files/fsck_repair.c`) are built, host tested; the other phases are
-still to be built. Tracking issue: #213.
+Status (2026-11-27): phases 1 (the FAT32 checker, #223), 2 (exFAT) and 3 (`sd check` on the
+device, #226) are built, and phase 4's FAT32 part (`src/files/fsck_repair.c`); the timing in
+§6.2 is still to be measured on dev-1. Tracking issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
@@ -274,16 +274,20 @@ are covered in `ceil(count / 8W)` passes:
 - In each pass a cluster is marked when a chain (or a NoFatChain run) reaches it. A bit that is
   already set is a **cross-link**, reported with the path of the second entry to reach it (one
   line per later entry, in the pass whose window holds the shared run's last cluster, so the
-  lines don't depend on the window size). When a pass ends, the
-  window is compared with the FAT (FAT32: entry non-zero and not marked → lost) or with the
+  lines don't depend on the window size). On exFAT a NoFatChain run can share any part of
+  another entry's clusters, so the shared clusters needn't include either entry's last one:
+  an entry is named when its own last cluster was already reached; when none can be named,
+  one line gives the count, and the summary always counts every shared cluster (`fsck.h`). When a pass ends, the window is
+  compared with the FAT (FAT32: entry non-zero and not marked → lost) or with the
   allocation bitmap (exFAT, same rule). Lost clusters are counted, and reported as runs
   (`lost: clusters 81920-81935 (512 KB)`), up to the report limit.
 - **Window size:** `sdcard.c` asks `HEAP_FILES` for 16 KB, and falls back to 8 KB and then 4 KB.
   If 4 KB isn't available it refuses, naming what it needs: `fsck_state_size()` plus 4 KB,
   about 10 KB. On a 32 GB card with 1 M clusters, 16 KB means 8 passes, 4 KB means 32. The
-  checker's own state (`sizeof(fsck_t)`, 5.9 KB in phase 1) holds the directory stack (64
-  levels × 24 bytes), the sector buffers, two name buffers (255 UTF-16 characters each), the
-  repeated-name filter, the path and the report line. The encryption layer's 7.5 KB is allocated by
+  checker's own state (`sizeof(fsck_t)`, 7.0 KB on the board since phase 2) holds the
+  directory stack (64 levels × 28 bytes), the sector buffers, two name buffers (255 UTF-16
+  characters each), the repeated-name filter, exFAT's entry set reader, the path and the report
+  line. The encryption layer's 7.5 KB is allocated by
   `detect()` as for any mount.
 - **Time:** each pass reads every directory and every FAT sector that a chain passes through,
   plus its window's share of the FAT or bitmap. A NoFatChain exFAT file costs no FAT reads, and
@@ -349,7 +353,12 @@ pass 8/8
 1. **Core and FAT32** (`fsck.c`, `fsck.h`, §4 for FAT32, MBR, GPT and no partition table, §5
    both-kinds and FAT32 checks, §6). `test_fsck.c` with the host FatFs image builder, the FAT32
    damage cases, and the fuzz target. Host only; no board.
-2. **exFAT:** §4 and §5 for exFAT, the exFAT damage cases. Host only.
+2. **exFAT:** §4 and §5 for exFAT, the exFAT damage cases. Host only. *Done:* `fsck_exfat.c`
+   (2a) and its walk in `fsck.c` (2b); `fsck.h` and `fsck_exfat.h` list the rules decided.
+   Departures from this note: on exFAT a cross-linked entry is named only when its last cluster
+   is shared (a count otherwise, §6.2), clusters reached but clear in the bitmap are reported
+   too, and the dirty flag, a media byte that doesn't match FAT entry 0 and an up-case table
+   unlike FatFs's are notes.
 3. **`sd check` on the device:** §2 (the `checking` flag in `sdcard_mount()`,
    `sdcard_mount_retry()` and the other `sd` commands), §3's job, §7's output, the `sd` man page
    (`man/sd.txt`, then the regenerated bundle and `docs/commands.md`), [docs/files.md](../files.md)
@@ -360,7 +369,7 @@ pass 8/8
    after N writes, the random damage generator) comes first, in the same PR or one before it.
    Then the repairs of §10.1 with the write order of §10.2. Host only. *Built for FAT32*
    (`src/files/fsck_repair.c`, `tests/test_fsck_repair.c`; the rules it settles are in
-   `fsck_repair.h`). The exFAT repairs follow phase 2, through the same hooks.
+   `fsck_repair.h`).
 5. **`sd check fix` on the device:** §10.3's command, the test-build-only fault commands of
    §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults.
 

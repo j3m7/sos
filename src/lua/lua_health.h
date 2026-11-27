@@ -19,6 +19,7 @@ typedef enum {
     LH_RESET,                   // sos.reset_reason()
     LH_GLITCH,                  // sos.glitch()
     LH_WIFI,                    // sos.wifi.status()
+    LH_CLOCK,                   // sos.clock()
     LH_DMESG,                   // sos.dmesg(): one page of the log, from cursor `arg`
     LH_TABLES
 } lua_health_table_t;

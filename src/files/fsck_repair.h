@@ -15,7 +15,8 @@
 //   4. the final check, reported like the first. Its plan (fsck_repair_left()) must have
 //      nothing left to do of what was allowed.
 //
-// FAT32 repairs only (exFAT: fsck_plan_t.exfat, nothing is done; see "exFAT" at the end):
+// FAT32 repairs only (exFAT: fsck_plan_t.exfat, nothing is done, and the FAT32 write hooks are
+// only on fsck.c's FAT32 paths; see "exFAT" at the end):
 // - Lost clusters are freed: FAT entry 0 (its top 4 bits kept, as FatFs keeps them), in the
 //   pass whose window holds them. Bad-cluster marks are never lost, so never freed.
 // - A file whose chain ends properly but is longer than the file needs gets an end mark at its
@@ -133,7 +134,7 @@ bool fsck_plan_writes(const fsck_plan_t *p);
 // (a plain check) fsck.c calls them with NULL and they do nothing. In counting mode they count
 // what a repair would do and write nothing; in writing mode they write what the run allows.
 //
-// exFAT (phase 2b's checker): the same shape, with hooks still to add in fsck.c's exFAT paths:
+// exFAT (fsck.c's exFAT walk): the same shape, with hooks still to add in fsck.c's exFAT paths:
 // in the bitmap comparison, bits of lost clusters cleared and bits of clusters reached but free
 // set, a bitmap sector's new state in one write, any set before a clear in that sector (§10.2);
 // trims of FAT chains with the end mark as here (exFAT FAT entries are 32 bits, end mark

@@ -10,7 +10,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
@@ -302,6 +301,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
         shell_printf(sh, "                  showing the card's key once, to store offline\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
+        shell_printf(sh, "sd check          check the unmounted card's file system (reads only)\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
@@ -513,11 +513,11 @@ static void cmd_mem_test(shell_t *sh, char *args) {
             shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
             return;
         }
-        size_t n = memhold_release_first((unsigned)secs * 1000);
-        if (!n)
+        size_t first = memhold_release_first((unsigned)secs * 1000);
+        if (!first)
             shell_printf(sh, "nothing held\n");
         else if (secs)
-            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)n,
+            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)first,
                          secs);
         else
             mem_held_summary(sh);
@@ -2109,9 +2109,7 @@ static void run_reboot(shell_t *sh, char *args) {
     log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
             who && strcmp(who, sh->io->name) ? " " : "",
             who && strcmp(who, sh->io->name) ? who : "");
-    logfile_flush();                    // what the log files haven't written yet
-    sleep_ms(100);
-    watchdog_reboot(0, 0, 0);
+    wdog_reboot();
 }
 
 // --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
@@ -2243,6 +2241,10 @@ static const shell_word_t sd_words[] = {
     {"test", NULL, SHELL_ADMIN},
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
+    {"check", NULL, SHELL_ADMIN},
+#ifdef SOS_TEST_COMMANDS
+    {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("off"), END}, SHELL_ADMIN},
+#endif
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};

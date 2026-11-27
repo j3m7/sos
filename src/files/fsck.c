@@ -19,6 +19,8 @@
 #include "files/fsck.h"
 #include "files/fsck_repair.h"
 
+#include "files/fsck_exfat.h"
+
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -38,6 +40,11 @@
 #define NAME_UNITS        256u          // FF_MAX_LFN + 1: a long name and its terminator
 #define PATH_LEN          256u
 #define NO_LBA            UINT64_MAX
+#define EXFAT_BAD         0xFFFFFFF7u
+#define EXFAT_EOC         0xFFFFFFF8u   // this or above ends an exFAT chain
+#define EXFAT_LAST        0xFFFFFFFFu   // what FatFs writes, and requires at the bitmap's end
+#define DIR_ENTRIES_MAX_EX 0x10000000u  // ff.c's MAX_DIR_EX (8 GB) in entries
+#define BITMAP_PER_SEC    (SECTOR * 8u) // clusters an allocation bitmap sector covers
 
 // FAT boot sector, FSInfo, MBR and GPT offsets (the names of ff.c's).
 #define BPB_BytsPerSec    11
@@ -94,10 +101,14 @@ enum {
     ST_FIND0, ST_GPT_HEADER, ST_GPT_CRC, ST_GPT_SCAN, ST_MBR, ST_BPB,
     ST_BACKUP, ST_FSINFO, ST_FAT01, ST_FATCMP,
     ST_PASS, ST_WALK, ST_COMPARE, ST_FINISH, ST_DONE, ST_FAILED,
+    ST_XBOOT, ST_XBITMAP, ST_XUPCASE, ST_XCOMPARE,
 };
 
 // The directory walk's states.
-enum { WK_ROOT, WK_DIRCHAIN, WK_SCAN, WK_RESCAN, WK_ENTRY, WK_FILECHAIN, WK_POP, WK_END };
+enum {
+    WK_ROOT, WK_DIRCHAIN, WK_SCAN, WK_RESCAN, WK_ENTRY, WK_FILECHAIN, WK_POP, WK_END,
+    WK_XSCAN, WK_XRESCAN, WK_XENTRY, WK_XCHAIN, WK_XPOP,
+};
 
 // How a chain ended (CH_RUN: not yet).
 enum { CH_RUN, CH_EOC, CH_FREE, CH_BAD, CH_RANGE, CH_START_RANGE, CH_LOOP, CH_STOPPED };
@@ -134,14 +145,18 @@ typedef struct {
     uint32_t clus, ci, ord;
 } dirpos_t;
 
-// A directory on the walk's stack (24 bytes).
+// A directory on the walk's stack (28 bytes).
 typedef struct {
     uint32_t start;             // first cluster
     uint32_t nclus;             // clusters of its chain that can be read
     dirpos_t pos;               // the next entry to look at
     uint16_t path_len;          // its path's length in path[]
-    uint16_t pad;
+    uint16_t flags;             // exFAT: FR_*
+    uint32_t limit;             // exFAT: entries that can be read
 } frame_t;
+
+#define FR_CONTIG   0x1u        // exFAT: NoFatChain, the clusters follow each other
+#define FR_ENDED    0x2u        // exFAT: fsck_exfat_dir_end() was called
 
 // FatFs's dir_read() state for long names, and the pending entries of a sequence.
 typedef struct {
@@ -207,6 +222,33 @@ struct fsck {
     char path[PATH_LEN];
     uint16_t path_len;
     char line[FSCK_LINE_MAX];
+
+    // FAT entries: what is read, and the marks (FAT32's unless the volume is exFAT).
+    uint32_t fat_mask, fat_bad, fat_eoc;
+
+    // exFAT: the pieces of fsck_exfat.c, and what the walk keeps between directories.
+    fsck_exfat_upcase_fn upcase;
+    fsck_exfat_geom_t geom;
+    union {
+        fsck_exfat_boot_t boot;     // before the passes
+        fsck_exfat_upcase_t up;     // after pass 1's walk
+    } xb;
+    fsck_exfat_dir_t xd;            // one reader for every directory
+    fsck_bitcmp_t cmp;              // the window against the bitmap, runs carried across passes
+    uint32_t root_bitmaps, root_upcases, root_labels;   // the root's reader's, while away
+    uint32_t bm_first, up_first, up_length, up_sum;
+    bool bm_ok, up_ok;              // usable entries found in pass 1
+    bool x_enter;                   // the chain followed is a directory's, to read next
+    bool x_sized;                   // ...and its size is checked against it
+    bool x_next;                    // the up-case table: the next cluster is to be found
+    bool x_cut;                     // ...the table's chain ended early
+    bool x_cross_lines;             // an entry was named as cross-linked
+    uint64_t x_len;                 // the length of the set being followed
+    uint32_t x_clus, x_sec, x_k;    // the bitmap's or up-case table's cluster, sector, sector
+    uint16_t key_len;               // the rescan: the name looked for (in lfn[]), its length
+    uint16_t m_at;                  //   units matched in the set being read
+    uint8_t m_left, m_pos;          //   that set's secondaries still to come, and read
+    bool m_ok;                      //   it still matches
 };
 
 // --- small helpers --------------------------------------------------------------------------
@@ -320,7 +362,7 @@ static int fat_get(fsck_t *f, uint32_t c, uint32_t *v) {
         }
         f->fat_buf_lba = lba;
     }
-    *v = le32(f->fatbuf + (c % FAT_PER_SEC) * 4) & FAT32_MASK;
+    *v = le32(f->fatbuf + (c % FAT_PER_SEC) * 4) & f->fat_mask;
     return R_OK;
 }
 
@@ -518,15 +560,14 @@ static int st_mbr(fsck_t *f) {
     return R_OK;
 }
 
+static int st_xbpb(fsck_t *f);
+
 // The boot sector (in aux), refused for what mount_volume() refuses, in its order.
 static int st_bpb(fsck_t *f) {
     const uint8_t *b = f->aux;
     f->res.volume_lba = f->vol_lba;
-    if (f->vf_fmt == 1) {
-        f->res.kind = FSCK_KIND_EXFAT;
-        refuse(f, "exFAT is not checked yet");
-        return R_OK;
-    }
+    if (f->vf_fmt == 1)
+        return st_xbpb(f);
     if (le16(b + BPB_BytsPerSec) != SECTOR) {
         refuse(f, "bytes per sector not 512");
         return R_OK;
@@ -667,7 +708,7 @@ static int st_fat01(fsck_t *f) {
         return r;
     uint32_t e0 = le32(f->fatbuf), e1 = le32(f->fatbuf + 4);
     if ((e0 & 0xFF) != f->media)
-        emit(f, false, "FAT entry 0 doesn't match the media byte (%02X, boot sector %02X)",
+        emit(f, true, "FAT entry 0 doesn't match the media byte (%02X, boot sector %02X)",
              (unsigned)(e0 & 0xFF), f->media);
     if (!(e1 & 0x08000000u)) {
         f->res.dirty = true;
@@ -734,7 +775,7 @@ static int chain_run(fsck_t *f) {
         if (r != R_OK)
             return r;
         f->steps++;
-        if (v == 0 || v == FAT32_BAD) {         // c isn't in use: the chain is broken before it
+        if (v == 0 || v == f->fat_bad) {        // c isn't in use: the chain is broken before it
             ch->status = v ? CH_BAD : CH_FREE;
             ch->bad = c;
             break;
@@ -749,7 +790,7 @@ static int chain_run(fsck_t *f) {
             ch->hits++;
             f->res.cross_linked++;
         }
-        if (v >= FAT32_EOC) {
+        if (v >= f->fat_eoc) {
             ch->status = CH_EOC;
             break;
         }
@@ -819,7 +860,13 @@ static void report_chain(fsck_t *f) {
 // marked. Reported in the pass whose window holds that cluster: once, whatever the window.
 static void report_cross_link(fsck_t *f) {
     const chain_t *ch = &f->ch;
-    if (ch->status != CH_LOOP && ch->n && ch->last_in && ch->last_hit)
+    if (ch->status != CH_LOOP && ch->n && ch->last_in && ch->last_hit
+            && f->res.kind == FSCK_KIND_EXFAT) {
+        // exFAT: NoFatChain runs share any part of a chain, so this is only its last cluster.
+        f->x_cross_lines = true;
+        emit(f, false, "%s: cross-linked with an earlier entry (at cluster %" PRIu32 ")", path(f),
+             ch->last);
+    } else if (ch->status != CH_LOOP && ch->n && ch->last_in && ch->last_hit)
         emit(f, false, "%s: cross-linked with an earlier entry (both end at cluster %" PRIu32 ")",
              path(f), ch->last);
 }
@@ -827,7 +874,8 @@ static void report_cross_link(fsck_t *f) {
 // Pass 1: a file's size against its chain (a chain that ended properly).
 static void report_size(fsck_t *f, uint32_t size, uint32_t n) {
     uint32_t need = size ? (size - 1) / f->cbytes + 1 : 0;
-    f->res.long_chains += n > need;
+    if (n > need)
+        f->res.long_chains++;
     if (need != n)
         emit(f, n > need, "%s: %" PRIu32 " %s for %" PRIu32 " bytes, chain has %" PRIu32, path(f),
              need, plural(need, "cluster", "clusters"), size, n);
@@ -1473,12 +1521,436 @@ static int wk_filechain(fsck_t *f) {
     return R_OK;
 }
 
+// --- the exFAT walk -------------------------------------------------------------------------
+//
+// The same shape as FAT32's: in pass 1 each directory is scanned first (every entry through
+// fsck_exfat.c's reader, its problems reported, repeated names looked for), then read again for
+// its entries' clusters, entering directories as they come; later passes only do the second.
+// There is one reader (f->xd, about 600 bytes) for the whole walk. While a subdirectory is
+// read, its parent's reader is gone; when the walk comes back, a fresh reader picks the parent
+// up at the entry after the directory's set (frame pos.ord), which is all the clusters need: a
+// reader holds nothing between sets but the next index and, in the root, the critical entries
+// it has seen (kept in root_bitmaps, root_upcases and root_labels meanwhile). Every read goes
+// through dir_get() or chain_run(), which give up for lack of budget before anything changes,
+// and an entry is fed to the reader only once it is in memory, so a step can stop anywhere: a
+// set handed back stays in the reader until its clusters are followed.
+
+
+// The set's name onto the path ("/<name>"), or for one without a name (a set whose name
+// wasn't read, or one of the root's critical entries) ": <kind> entry <n>", as fsck_exfat.c's
+// lines name it.
+static void xpath_add(fsck_t *f, const fsck_exfat_set_t *s) {
+    if (s->kind == FSCK_EXFAT_FILE && s->name_have) {
+        if (!path_put(f, '/'))
+            return;
+        for (uint32_t i = 0; i < s->name_have && s->name[i]; i++) {   // as FatFs, to a 0
+            uint32_t cp = s->name[i];
+            if (cp >= 0xD800 && cp < 0xDC00 && i + 1u < s->name_have && s->name[i + 1] >= 0xDC00
+                    && s->name[i + 1] < 0xE000) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (s->name[i + 1] - 0xDC00u);
+                i++;
+            }
+            if (!path_put(f, cp))
+                return;
+        }
+        return;
+    }
+    if (!f->path_len && !path_put(f, '/'))
+        return;
+    char tag[48];
+    snprintf(tag, sizeof(tag), ": %s entry %" PRIu32, fsck_exfat_kind_name(s->kind), s->index);
+    for (const char *p = tag; *p; p++)
+        if (!path_put(f, (uint8_t)*p))
+            return;
+}
+
+// Entry ord of the directory `fr`, into `buf` (which holds sector *buf_lba): dir_get() for
+// exFAT, where a NoFatChain directory's clusters follow each other and the FAT isn't read.
+static int xdir_get(fsck_t *f, const frame_t *fr, dirpos_t *p, uint8_t *buf, uint64_t *buf_lba,
+                    const uint8_t **e) {
+    if (p->ord >= fr->limit)
+        return R_END;
+    if (fr->flags & FR_CONTIG) {
+        p->ci = p->ord / f->epc;
+        p->clus = fr->start + p->ci;
+    }
+    return dir_get(f, fr->nclus, p, buf, buf_lba, e);
+}
+
+// The reader set up for the top directory, from its start (`index` 0) or, coming back to it,
+// from entry `index`. A reader between two sets holds only the next index and, in the root,
+// the critical entries seen (which decide whether a second bitmap or up-case table is used).
+static void xdir_open(fsck_t *f, uint32_t index) {
+    bool root = f->depth == 1;
+    fsck_exfat_dir_begin(&f->xd, &f->geom, f->upcase, root);
+    f->xd.index = index;
+    if (root && index) {
+        f->xd.bitmaps = f->root_bitmaps;
+        f->xd.upcases = f->root_upcases;
+        f->xd.labels = f->root_labels;
+    }
+}
+
+static void xstart_dir(fsck_t *f) {
+    frame_t *fr = top(f);
+    fr->pos = (dirpos_t){fr->start, 0, 0};
+    fr->flags &= (uint16_t)~FR_ENDED;
+    xdir_open(f, 0);
+    if (f->pass == 1) {
+        memset(f->bloom, 0, sizeof(f->bloom));
+        f->rescan_max = 4 * (uint64_t)fr->nclus * f->csize + 16;
+        f->rescan_used = 0;
+        f->dup_off = false;
+        f->wk = WK_XSCAN;
+    } else {
+        f->wk = WK_XENTRY;
+    }
+}
+
+// Push the directory whose chain (or run) of `nclus` clusters from `start` was just followed;
+// it holds f->x_len / 32 entries (the root: all its clusters hold).
+static void xpush(fsck_t *f, uint32_t start, uint32_t nclus, bool contig) {
+    uint64_t limit = (uint64_t)nclus * f->epc;
+    if (f->depth && f->x_len / DIRENT < limit)
+        limit = f->x_len / DIRENT;
+    if (limit > DIR_ENTRIES_MAX_EX)
+        limit = DIR_ENTRIES_MAX_EX;
+    if (f->depth == 1) {
+        f->root_bitmaps = f->xd.bitmaps;
+        f->root_upcases = f->xd.upcases;
+        f->root_labels = f->xd.labels;
+    }
+    f->stack[f->depth++] = (frame_t){.start = start, .nclus = nclus, .path_len = f->path_len,
+                                     .flags = (uint16_t)(contig ? FR_CONTIG : 0),
+                                     .limit = (uint32_t)limit};
+    xstart_dir(f);
+}
+
+// Back to the directory being read, after one of its sets.
+static void xentry_done(fsck_t *f) {
+    path_cut(f, top(f)->path_len);
+    f->wk = WK_XENTRY;
+}
+
+static void xemit_dir(fsck_t *f) {
+    char text[FSCK_EXFAT_TEXT_MAX];
+    for (uint32_t bits = f->xd.problems; bits; bits &= bits - 1) {
+        fsck_exfat_dir_text(&f->xd, bits & (~bits + 1), text, sizeof(text));
+        emit(f, false, "%s: %s", path(f), text);
+    }
+}
+
+// Pass 1's scan: the set just read. True when a rescan for its name is to run first.
+static bool xscan_set(fsck_t *f) {
+    const fsck_exfat_set_t *s = &f->xd.set;
+    uint32_t p = s->problems;
+    if (s->kind == FSCK_EXFAT_FILE) {
+        if (s->dir)
+            f->res.dirs++;
+        else
+            f->res.files++;
+    } else if (s->kind == FSCK_EXFAT_BITMAP && s->usable && !f->bm_ok
+               && !(p & (FSCK_EXFAT_S_FIRST_CLUSTER | FSCK_EXFAT_S_BITMAP_SIZE))) {
+        f->bm_ok = true;
+        f->bm_first = s->first_cluster;
+    } else if (s->kind == FSCK_EXFAT_UPCASE && s->usable && !f->up_ok
+               && !(p & (FSCK_EXFAT_S_FIRST_CLUSTER | FSCK_EXFAT_S_UPCASE_SIZE))) {
+        f->up_ok = true;
+        f->up_first = s->first_cluster;
+        f->up_length = (uint32_t)s->length;
+        f->up_sum = s->table_checksum;
+    }
+    bool named = s->kind == FSCK_EXFAT_FILE && s->name_have;
+    if (named)
+        xpath_add(f, s);
+    char text[FSCK_EXFAT_TEXT_MAX];
+    for (uint32_t bits = p; bits; bits &= bits - 1) {
+        fsck_exfat_set_text(s, bits & (~bits + 1), text, sizeof(text));
+        emit(f, false, "%s: %s", path(f), text);
+    }
+    // Repeated names: only whole names, in sets FatFs can read their name from.
+    if (named && !f->dup_off && s->name_have == s->name_len
+            && !(p & (FSCK_EXFAT_S_SHORT | FSCK_EXFAT_S_NO_STREAM | FSCK_EXFAT_S_NOT_NAME
+                      | FSCK_EXFAT_S_NAME_ENTRIES))) {
+        for (uint32_t i = 0; i < s->name_len; i++)
+            f->lfn[i] = (uint16_t)f->upcase(s->name[i]);
+        f->lfn[s->name_len] = 0;
+        f->key_len = s->name_len;
+        if (bloom_add(f, 3, f->lfn, NULL)) {    // maybe seen before: confirm by a rescan
+            f->rpos = (dirpos_t){top(f)->start, 0, 0};
+            f->rescan_from = f->reads;
+            f->m_left = 0;
+            f->wk = WK_XRESCAN;
+            return true;
+        }
+    }
+    path_cut(f, top(f)->path_len);
+    return false;
+}
+
+// One more entry for the rescan; true when it ends a set whose name is the one looked for.
+static bool xmatch(fsck_t *f, const uint8_t *e) {
+    uint8_t t = e[0];
+    if (f->m_left && (t & 0xC0) == 0xC0) {      // a secondary of the set being read
+        f->m_left--;
+        if (!f->m_pos++) {
+            f->m_ok = t == 0xC0 && e[3] == f->key_len;   // the stream entry's name length
+        } else if (f->m_ok && t == 0xC1) {
+            for (uint32_t i = 0; i < 15 && f->m_at < f->key_len; i++, f->m_at++)
+                if ((uint16_t)f->upcase(le16(e + 2 + 2 * i)) != f->lfn[f->m_at]) {
+                    f->m_ok = false;
+                    break;
+                }
+        } else {
+            f->m_ok = false;
+        }
+        return !f->m_left && f->m_ok && f->m_at == f->key_len;
+    }
+    f->m_left = 0;
+    if (t == 0x85 && e[1] >= 2) {               // a File entry: a set starts
+        f->m_left = e[1];
+        f->m_pos = 0;
+        f->m_at = 0;
+        f->m_ok = false;
+    }
+    return false;
+}
+
+// The directory from its start up to the scan's set, looking for the set's name.
+static int wk_xrescan(fsck_t *f) {
+    frame_t *fr = top(f);
+    while (f->rpos.ord < f->xd.set.index) {
+        const uint8_t *e;
+        int r = xdir_get(f, fr, &f->rpos, f->aux, &f->aux_lba, &e);
+        if (r == R_END)
+            break;
+        if (r != R_OK)
+            return r;
+        // Counted in reads, not calls, so the limit falls in the same place whatever the budget.
+        if (f->rescan_used + (f->reads - f->rescan_from) > f->rescan_max) {
+            f->dup_off = true;
+            path_cut(f, fr->path_len);
+            emit(f, true, "%s: too many names to check them all for repeats", path(f));
+            break;
+        }
+        if (xmatch(f, e)) {
+            emit(f, false, "%s: name repeated in the directory", path(f));
+            break;
+        }
+        f->rpos.ord++;
+    }
+    f->rescan_used += f->reads - f->rescan_from;
+    path_cut(f, fr->path_len);
+    f->wk = WK_XSCAN;
+    return R_OK;
+}
+
+// The top directory's next entry through the reader (or its end): the reader's answer, or 0
+// with *r set when there is nothing to answer yet (R_YIELD, R_FAIL).
+static uint32_t xfeed(fsck_t *f, int *r) {
+    frame_t *fr = top(f);
+    const uint8_t *e;
+    *r = xdir_get(f, fr, &fr->pos, f->dirbuf, &f->dir_lba, &e);
+    if (*r == R_END) {
+        *r = R_OK;
+        fr->flags |= FR_ENDED;
+        return fsck_exfat_dir_end(&f->xd);
+    }
+    if (*r != R_OK)
+        return 0;
+    uint32_t a = fsck_exfat_entry(&f->xd, e);
+    if (!(a & FSCK_EXFAT_AGAIN))                // else the same entry goes in again
+        fr->pos.ord++;
+    if (a & FSCK_EXFAT_END) {
+        fr->flags |= FR_ENDED;
+        a |= fsck_exfat_dir_end(&f->xd);
+    }
+    return a;
+}
+
+// Pass 1: every entry of the directory, for its problems.
+static int wk_xscan(fsck_t *f) {
+    for (;;) {
+        if (top(f)->flags & FR_ENDED) {          // then its entries, from the start again
+            top(f)->pos = (dirpos_t){top(f)->start, 0, 0};
+            top(f)->flags &= (uint16_t)~FR_ENDED;
+            xdir_open(f, 0);
+            f->wk = WK_XENTRY;
+            return R_OK;
+        }
+        int r;
+        uint32_t a = xfeed(f, &r);
+        if (r != R_OK)
+            return r;
+        if (a & FSCK_EXFAT_DIR)
+            xemit_dir(f);
+        if ((a & FSCK_EXFAT_SET) && xscan_set(f))
+            return R_OK;
+    }
+}
+
+// Mark the NoFatChain run of `n` clusters from `first` (the set's path is on the path). False
+// when the walk had to stop.
+static bool xmark_run(fsck_t *f, uint32_t first, uint32_t n) {
+    if (n > f->steps_max - f->steps) {
+        stop_walk(f);
+        return false;
+    }
+    f->steps += n;
+    uint32_t last = first + n - 1, cross = 0;
+    bool last_hit = in_window(f, last) && marked(f, last);
+    f->res.cross_linked += fsck_window_mark_run(f->win, f->win_lo, f->win_hi - f->win_lo, first,
+                                                n, &cross);
+    if (last_hit) {
+        f->x_cross_lines = true;
+        emit(f, false, "%s: cross-linked with an earlier entry (at cluster %" PRIu32 ")", path(f),
+             last);
+    }
+    return true;
+}
+
+// A directory's set (usable, with clusters): its clusters, then its entries. True when the
+// walk moved on to another state.
+static bool xenter_dir(fsck_t *f, const fsck_exfat_set_t *s) {
+    int anc = on_stack(f, s->first_cluster);
+    if (anc >= 0) {
+        if (f->pass == 1) {
+            uint16_t alen = f->stack[anc].path_len;
+            emit(f, false, "%s: directory loops back to %.*s", path(f), alen ? (int)alen : 1,
+                 alen ? f->path : "/");
+        }
+        path_cut(f, top(f)->path_len);
+        return false;
+    }
+    bool deep = f->depth >= FSCK_DEPTH_MAX;
+    if (deep && f->pass == 1)
+        emit(f, false, "%s: nested more than %d levels deep: not read", path(f),
+             FSCK_DEPTH_MAX - 1);
+    f->x_len = s->length;
+    if (s->no_fat_chain) {
+        if (!xmark_run(f, s->first_cluster, s->run_clusters))
+            return true;
+        if (deep) {
+            path_cut(f, top(f)->path_len);
+            return false;
+        }
+        xpush(f, s->first_cluster, s->run_clusters, true);
+        return true;
+    }
+    chain_start(f, s->first_cluster, s->clusters);
+    f->x_enter = !deep;
+    f->x_sized = !(s->problems & FSCK_EXFAT_S_TOO_BIG);
+    f->wk = WK_XCHAIN;
+    return true;
+}
+
+// Every pass: the clusters of the set just read. True when the walk moved on.
+static bool xentry_set(fsck_t *f) {
+    const fsck_exfat_set_t *s = &f->xd.set;
+    if (!s->usable || (s->problems & FSCK_EXFAT_S_FIRST_CLUSTER) || !s->length
+            || s->kind == FSCK_EXFAT_LABEL)
+        return false;
+    xpath_add(f, s);
+    if (s->kind == FSCK_EXFAT_FILE && s->dir)
+        return xenter_dir(f, s);
+    if (s->no_fat_chain) {
+        if (!xmark_run(f, s->first_cluster, s->run_clusters))
+            return true;
+        path_cut(f, top(f)->path_len);
+        return false;
+    }
+    f->x_len = s->length;
+    f->x_enter = false;
+    f->x_sized = !(s->problems & FSCK_EXFAT_S_TOO_BIG);
+    chain_start(f, s->first_cluster, s->clusters);
+    f->wk = WK_XCHAIN;
+    return true;
+}
+
+// Every pass: the clusters of every set, entering directories.
+static int wk_xentry(fsck_t *f) {
+    for (;;) {
+        if (top(f)->flags & FR_ENDED) {
+            f->wk = WK_XPOP;
+            return R_OK;
+        }
+        int r;
+        uint32_t a = xfeed(f, &r);
+        if (r != R_OK)
+            return r;
+        if ((a & FSCK_EXFAT_SET) && xentry_set(f))
+            return R_OK;
+    }
+}
+
+// Pass 1: a set's size against its chain (one that ended properly).
+static void xreport_size(fsck_t *f, uint64_t size, uint32_t n) {
+    uint64_t need = size ? (size - 1) / f->cbytes + 1 : 0;
+    if (n > need)
+        f->res.long_chains++;
+    if (need != n)
+        emit(f, n > need, "%s: %" PRIu64 " %s for %" PRIu64 " bytes, chain has %" PRIu32,
+             path(f), need, need == 1 ? "cluster" : "clusters", size, n);
+}
+
+// A FAT chain: the root's, or a set's.
+static int wk_xchain(fsck_t *f) {
+    int r = chain_run(f);
+    if (r != R_OK)
+        return r;
+    const chain_t *ch = &f->ch;
+    if (ch->status == CH_STOPPED) {
+        stop_walk(f);
+        return R_OK;
+    }
+    if (f->pass == 1) {
+        report_chain(f);
+        if (ch->status == CH_EOC && f->depth && f->x_sized)
+            xreport_size(f, f->x_len, ch->n);
+    }
+    report_cross_link(f);
+    if (f->x_enter && ch->status != CH_LOOP && ch->status != CH_START_RANGE && ch->n) {
+        xpush(f, ch->start, ch->n, false);
+        return R_OK;
+    }
+    if (!f->depth)
+        f->wk = WK_END;                         // the root can't be read
+    else
+        xentry_done(f);
+    return R_OK;
+}
+
+static void xroot(fsck_t *f) {
+    path_cut(f, 0);
+    f->depth = 0;
+    if (f->pass == 1)
+        f->res.dirs++;
+    chain_start(f, f->root, f->dir_expected);
+    f->x_enter = true;
+    f->x_sized = false;
+    f->wk = WK_XCHAIN;
+}
+
+static void xpop(fsck_t *f) {
+    f->depth--;
+    if (!f->depth) {
+        f->wk = WK_END;
+        return;
+    }
+    xdir_open(f, top(f)->pos.ord);
+    xentry_done(f);
+}
+
 // The walk of one pass. R_END when it is over.
 static int walk(fsck_t *f) {
     for (;;) {
         int r = R_OK;
         switch (f->wk) {
         case WK_ROOT:
+            if (f->res.kind == FSCK_KIND_EXFAT) {
+                xroot(f);
+                break;
+            }
             path_cut(f, 0);
             f->depth = 0;
             if (f->pass == 1)
@@ -1509,6 +1981,21 @@ static int walk(fsck_t *f) {
             }
             lfn_reset(&f->lf);
             entry_done(f);
+            break;
+        case WK_XSCAN:
+            r = wk_xscan(f);
+            break;
+        case WK_XRESCAN:
+            r = wk_xrescan(f);
+            break;
+        case WK_XENTRY:
+            r = wk_xentry(f);
+            break;
+        case WK_XCHAIN:
+            r = wk_xchain(f);
+            break;
+        case WK_XPOP:
+            xpop(f);
             break;
         case WK_END:
             return R_END;
@@ -1586,9 +2073,211 @@ static int st_compare(fsck_t *f) {
     return R_OK;
 }
 
+// --- exFAT: the boot region, the bitmap, the up-case table ----------------------------------
+
+static uint32_t upcase_subset(uint32_t c) {
+    return c < 0x10000 ? fsck_upcase((uint16_t)c) : c;
+}
+
+// The exFAT boot sector (in aux), refused for what mount_volume() refuses (fsck_exfat_vbr()).
+static int st_xbpb(fsck_t *f) {
+    f->res.kind = FSCK_KIND_EXFAT;
+    const fsck_exfat_geom_t *g = &f->geom;
+    const char *why = fsck_exfat_vbr(f->aux, f->vol_lba, f->io.sectors, &f->geom);
+    if (why) {
+        refuse(f, why);
+        return R_OK;
+    }
+    f->count = g->clusters;
+    f->root = g->root_cluster;
+    f->csize = g->cluster_sectors;
+    f->cbytes = g->cluster_bytes;
+    f->epc = f->csize * ENTRIES_PER_SEC;
+    f->fat_lba = f->vol_lba + g->fat_offset;
+    f->data_lba = f->vol_lba + g->heap_offset;
+    f->tsect = g->volume_sectors;
+    f->fat_mask = 0xFFFFFFFFu;
+    f->fat_bad = EXFAT_BAD;
+    f->fat_eoc = EXFAT_EOC;
+    f->dir_expected = (uint32_t)((uint64_t)DIR_ENTRIES_MAX_EX * DIRENT / f->cbytes);
+    uint64_t steps = 4 * (uint64_t)f->count + 64;
+    f->steps_max = steps > UINT32_MAX ? UINT32_MAX : (uint32_t)steps;
+    f->res.volume_sectors = g->volume_sectors;
+    f->res.clusters = f->count;
+    f->res.cluster_bytes = f->cbytes;
+    f->res.passes = (f->count - 1) / f->win_bits + 1;
+    // VolumeFlags: as FAT32's entry 1, only what another system left behind.
+    if (g->volume_flags & FSCK_EXFAT_FLAG_DIRTY) {
+        f->res.dirty = true;
+        emit(f, true, "the volume is flagged dirty (not unmounted cleanly)");
+    }
+    if (g->volume_flags & 0x0004u)
+        emit(f, true, "the volume is flagged as having had a disk error");
+    fsck_exfat_boot_init(&f->xb.boot);
+    f->vf_i = 0;
+    f->state = ST_XBOOT;
+    return R_OK;
+}
+
+// Pass 1's first: the main and backup boot regions, sectors 0-23.
+static int st_xboot(fsck_t *f) {
+    while (f->vf_i < 24) {
+        int r = rd(f, f->vol_lba + f->vf_i, f->dirbuf);
+        if (r != R_OK)
+            return r;
+        fsck_exfat_boot_sector(&f->xb.boot, f->dirbuf);
+        f->vf_i++;
+    }
+    char text[FSCK_EXFAT_TEXT_MAX];
+    for (uint32_t bits = fsck_exfat_boot_done(&f->xb.boot); bits; bits &= bits - 1) {
+        fsck_exfat_boot_text(&f->xb.boot, bits & (~bits + 1), text, sizeof(text));
+        emit(f, false, "%s", text);
+    }
+    f->state = ST_PASS;
+    return R_OK;
+}
+
+// The window against the bitmap, from the bitmap sector holding the window's first cluster.
+static void xcompare_start(fsck_t *f) {
+    f->x_k = (f->win_lo - 2) / BITMAP_PER_SEC;
+    f->state = ST_XCOMPARE;
+}
+
+static void walk_done(fsck_t *f) {
+    if (f->res.kind != FSCK_KIND_EXFAT) {
+        f->cmp_next = f->win_lo;
+        f->state = ST_COMPARE;
+    } else if (f->pass == 1) {
+        f->x_clus = f->bm_first;
+        f->state = ST_XBITMAP;
+    } else {
+        xcompare_start(f);
+    }
+}
+
+// Pass 1: mount_volume() reads the bitmap as contiguous from its first cluster and refuses
+// the volume unless its FAT chain says so, running on cluster by cluster to 0xFFFFFFFF.
+static int st_xbitmap(fsck_t *f) {
+    while (f->bm_ok) {
+        uint32_t v;
+        int r = fat_get(f, f->x_clus, &v);
+        if (r != R_OK)
+            return r;
+        if (v == EXFAT_LAST)
+            break;
+        if (v != f->x_clus + 1 || v > f->count + 1) {
+            emit(f, false, "the allocation bitmap's chain isn't contiguous at cluster %" PRIu32
+                 " (FatFs won't mount the volume)", f->x_clus);
+            break;
+        }
+        f->x_clus = v;
+    }
+    // The sectors the comparison reads must be in the heap.
+    uint32_t sectors = (f->count - 1) / BITMAP_PER_SEC + 1;
+    if (f->bm_ok && (uint64_t)f->bm_first + (sectors - 1) / f->csize > (uint64_t)f->count + 1)
+        f->bm_ok = false;
+    if (f->up_ok)
+        fsck_exfat_upcase_init(&f->xb.up, f->up_length, f->upcase);
+    f->x_clus = f->up_first;
+    f->x_sec = 0;
+    f->x_next = f->x_cut = false;
+    f->state = ST_XUPCASE;
+    return R_OK;
+}
+
+// Pass 1: the up-case table, a sector at a time along its chain. A chain that ends early was
+// reported by the walk; the table is then not judged.
+static int st_xupcase(fsck_t *f) {
+    while (f->up_ok && !f->x_cut && f->xb.up.fed < f->up_length) {
+        if (f->x_next) {
+            uint32_t v;
+            int r = fat_get(f, f->x_clus, &v);
+            if (r != R_OK)
+                return r;
+            if (v < 2 || v > f->count + 1) {
+                f->x_cut = true;
+                break;
+            }
+            f->x_clus = v;
+            f->x_next = false;
+        }
+        int r = rd(f, clus_lba(f, f->x_clus) + f->x_sec, f->aux);
+        if (r != R_OK)
+            return r;
+        fsck_exfat_upcase_feed(&f->xb.up, f->aux, SECTOR);
+        if (++f->x_sec == f->csize) {
+            f->x_sec = 0;
+            f->x_next = true;
+        }
+    }
+    if (f->up_ok && !f->x_cut) {
+        char text[FSCK_EXFAT_TEXT_MAX];
+        for (uint32_t bits = fsck_exfat_upcase_done(&f->xb.up, f->up_sum); bits;
+             bits &= bits - 1) {
+            uint32_t bit = bits & (~bits + 1);
+            fsck_exfat_upcase_text(&f->xb.up, bit, text, sizeof(text));
+            emit(f, bit == FSCK_EXFAT_U_DIFFERS, "%s", text);
+        }
+    }
+    xcompare_start(f);
+    return R_OK;
+}
+
+static void xrun_line(fsck_t *f, int kind, const fsck_run_t *run) {
+    const char *what = kind == FSCK_RUN_LOST ? "lost" : "reached but free";
+    if (kind == FSCK_RUN_LOST)
+        f->res.lost_clusters += run->count;
+    else
+        f->res.reached_free += run->count;
+    char size[40];
+    fmt_size(size, sizeof(size), (uint64_t)run->count * f->cbytes);
+    if (run->count == 1)
+        emit(f, false, "%s: cluster %" PRIu32 " (%s)", what, run->first, size);
+    else
+        emit(f, false, "%s: clusters %" PRIu32 "-%" PRIu32 " (%s)", what, run->first,
+             run->first + run->count - 1, size);
+}
+
+// Every pass: the window against the allocation bitmap's sectors that cover it. Runs go on
+// from one sector and one window to the next (fsck_bitcmp_*()).
+static int st_xcompare(fsck_t *f) {
+    fsck_run_t run;
+    int kind;
+    while (f->bm_ok) {
+        uint64_t first = 2 + (uint64_t)f->x_k * BITMAP_PER_SEC;
+        if (first >= f->win_hi)
+            break;
+        int r = rd(f, clus_lba(f, f->bm_first) + f->x_k, f->aux);
+        if (r != R_OK)
+            return r;
+        uint32_t lo = first > f->win_lo ? (uint32_t)first : f->win_lo;
+        uint32_t hi = first + BITMAP_PER_SEC < f->win_hi ? (uint32_t)(first + BITMAP_PER_SEC)
+                                                          : f->win_hi;
+        fsck_bitcmp_slice(&f->cmp, f->win + (lo - f->win_lo) / 8, f->aux + (lo - first) / 8, lo,
+                          hi - lo);
+        while ((kind = fsck_bitcmp_next(&f->cmp, &run)))
+            xrun_line(f, kind, &run);
+        f->x_k++;
+    }
+    if (f->pass < f->res.passes) {
+        f->state = ST_PASS;
+        return R_OK;
+    }
+    if (f->bm_ok) {
+        while ((kind = fsck_bitcmp_finish(&f->cmp, &run)))
+            xrun_line(f, kind, &run);
+        f->res.free_clusters = f->count - f->cmp.used_total;
+    }
+    f->state = ST_FINISH;
+    return R_OK;
+}
+
 static void st_finish(fsck_t *f) {
     lost_flush(f);
     fsck_result_t *res = &f->res;
+    if (res->kind == FSCK_KIND_EXFAT && res->cross_linked && !f->x_cross_lines)
+        emit(f, false, "%" PRIu32 " %s used by more than one entry", res->cross_linked,
+             plural(res->cross_linked, "cluster", "clusters"));
     if (f->fsi_valid && f->fsi_free != 0xFFFFFFFFu && f->fsi_free != res->free_clusters)
         emit(f, true, "the FSInfo free count is %" PRIu32 ", counted %" PRIu32, f->fsi_free,
              res->free_clusters);
@@ -1633,6 +2322,10 @@ fsck_t *fsck_new(const fsck_io_t *io, void *mem, size_t mem_len) {
         win = 0x10000000;
     f->win_bits = (uint32_t)(win * 8);
     f->fat_buf_lba = f->dir_lba = f->aux_lba = NO_LBA;
+    f->fat_mask = FAT32_MASK;
+    f->fat_bad = FAT32_BAD;
+    f->fat_eoc = FAT32_EOC;
+    f->upcase = io->upcase ? io->upcase : upcase_subset;
     f->state = ST_FIND0;
     return f;
 }
@@ -1656,13 +2349,16 @@ int fsck_step(fsck_t *f, uint32_t budget) {
         case ST_WALK:
             r = walk(f);
             if (r == R_END) {
-                f->cmp_next = f->win_lo;
-                f->state = ST_COMPARE;
+                walk_done(f);
                 r = R_OK;
             }
             break;
         case ST_COMPARE:    r = st_compare(f); break;
         case ST_FINISH:     st_finish(f); break;
+        case ST_XBOOT:      r = st_xboot(f); break;
+        case ST_XBITMAP:    r = st_xbitmap(f); break;
+        case ST_XUPCASE:    r = st_xupcase(f); break;
+        case ST_XCOMPARE:   r = st_xcompare(f); break;
         case ST_DONE:       return FSCK_DONE;
         case ST_FAILED:     return FSCK_FAILED;
         }

@@ -73,7 +73,7 @@ static int cmp_line(const void *a, const void *b) {
 static void run(run_t *r, size_t window, uint32_t budget) {
     r->n = 0;
     r->reads = 0;
-    fsck_io_t io = {read_fn, report, NULL, r, image.sectors};
+    fsck_io_t io = {read_fn, report, NULL, r, image.sectors, NULL};
     if (sizeof(mem) < fsck_state_size() + window)
         abort();
     fsck_t *f = fsck_new(&io, mem, fsck_state_size() + window);
@@ -145,7 +145,8 @@ static void cow_report(void *ctx, const char *line) {
 static void repair(size_t window, uint32_t budget) {
     cow.n = 0;
     cow.reads = cow.writes = 0;
-    fsck_io_t io = {cow_read, cow_report, cow_write, NULL, image.sectors};
+    fsck_io_t io = {.read = cow_read, .report = cow_report, .write = cow_write,
+                    .sectors = image.sectors};
     if (sizeof(mem) < fsck_repair_state_size() + window)
         abort();
     fsck_repair_t *r = fsck_repair_new(&io, mem, fsck_repair_state_size() + window);

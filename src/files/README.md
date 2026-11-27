@@ -14,9 +14,27 @@ still refers to.
   command, SFTP, or the TLS root certificates. Tab completion never mounts it
   (`sdcard_mounted()`): it lists directories only once the card is mounted.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
+- **`card_open()`:** the part of a mount before `f_mount`: `disk_initialize(0)` (which
+  detects the card's kind on a real initialization), then the retries for a card locked for
+  lack of a key or of memory and the detection of a forgotten kind, and the refusal of a
+  locked or unsupported card. `mount()` and `sd check` both start with it; afterwards
+  `disk_read(0, ...)` reads the volume, decrypted on an encrypted card.
+- **`sd check`** ([design](../../docs/design/sd-check.md)): console only, refused while the
+  card is mounted or files are held. It sets `checking` for the whole check: `sdcard_mount()`
+  and `sdcard_mount_retry()` then return false without touching the card, and the other `sd`
+  subcommands refuse. It unregisters FatFs's volume (a failed mount leaves it registered, and
+  any `f_*` call would remount from it), opens the card with `card_open()`, allocates the
+  checker's state and a 16 KB cluster window (8 KB, then 4 KB, if memory is short) from
+  `HEAP_FILES`, and runs as a shell job of about 20 ms a step, reading through
+  `disk_read(0)`. `sdcard_owner_gone()` (`config reset`) sets `check_stop`, tested before every
+  step. Every end (finished, Ctrl-C, stopped, or refused once started) goes through
+  `check_end()`: the memory wiped and freed, `crypt_off()`, `STA_NOINIT`, `checking` cleared,
+  `unmounted_by_hand` set, and the last line printed and logged. The job's budget (sector
+  reads per `fsck_step()`) doubles or halves to keep a step near 20 ms. Report lines lose
+  their control characters on the way to the terminal (names come from the card).
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
-  end).
+  end), unmounting and checking.
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
 
@@ -111,37 +129,69 @@ its own working directory (`shell_t.cwd`).
 
 ## `fsck.c`: checking the card (pure C, host tested)
 
-The checker behind the coming `sd check` ([design](../../docs/design/sd-check.md)). Not in the
-firmware yet: phase 3 adds the command, which runs it only while the card is unmounted.
+The checker behind `sd check` ([design](../../docs/design/sd-check.md)), which runs it only
+while the card is unmounted (see `sdcard.c` above).
 
 - **Shape:** it reads sectors through a callback and hands back report lines, so it knows
   nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
-  5.9 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
+  7 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
   reads, so a check can run as a shell job a slice at a time.
-- **What it checks (FAT32 for now; exFAT is recognised and refused):** the volume is found and
-  its boot sector judged as FatFs finds and mounts it; then the backup boot sector, FSInfo, the
-  FAT copies, every chain (range, loops, end mark, size against chain), the directory tree
-  (depth, loops, "." and "..", long-name sequences, names FatFs refuses, repeated names), and
-  the clusters: cross-linked, lost, bad. `fsck.h` lists the rules the design note left open.
+- **What it checks, FAT32:** the volume is found and its boot sector judged as FatFs finds and
+  mounts it; then the backup boot sector, FSInfo, the FAT copies, every chain (range, loops,
+  end mark, size against chain), the directory tree (depth, loops, "." and "..", long-name
+  sequences, names FatFs refuses, repeated names), and the clusters: cross-linked, lost, bad.
+  `fsck.h` lists the rules the design note left open.
+- **exFAT:** the same walk, with `fsck_exfat.c`'s pieces: the boot regions, every entry set,
+  the up-case table, NoFatChain runs as well as FAT chains, and the clusters reached against
+  the allocation bitmap (lost, reached but free). Names are hashed with the `upcase` function
+  the caller passes (FatFs's `ff_wtoupper()` on the board). One entry set reader serves the
+  whole walk: coming back from a subdirectory, a fresh one picks the parent up after the
+  directory's set.
 - **Windows:** a bit per cluster for a whole card doesn't fit beside everything else, so the
   clusters are accounted a window at a time, one pass over the tree per window. The report is
   the same whatever the window size; the tests check that.
 - **Tests:** `tests/test_fsck.c` builds FatFs for the host over a RAM disk and makes its images
-  with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
-  sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
-  checks mutated images twice with different windows and requires the same answer.
+  with `f_mkfs` as `sd format` does (FAT32 and exFAT; MBR, no partition table, two FATs, 128 GB
+  GPT images held sparse), then breaks one thing per case (exFAT's with
+  `tests/fuzz/exfat_damage.h`) and expects the exact lines. `tests/fuzz/fuzz_fsck.c` checks
+  mutated images of both kinds twice with different windows and requires the same answer.
+
+## `fsck_exfat.c`: the card checker's exFAT parts (pure C, host tested)
+
+The exFAT pieces of `sd check` ([design note](../../docs/design/sd-check.md) §4, §5, §6):
+`fsck.c`'s walk calls them entry by entry and sector by sector.
+No I/O, no malloc; each piece is a small state struct in the caller's memory, and problems come
+back as bits with `*_text()` lines. `fsck_exfat.h` lists the rules decided here.
+
+- **Boot region:** `fsck_exfat_vbr()` refuses what FatFs's `mount_volume()` refuses, plus what
+  the checker can't read past; `fsck_exfat_boot_*()` take sectors 0-23 once each and check the
+  boot checksum and the backup region (reported, not refused).
+- **Entry sets:** `fsck_exfat_entry()` takes 32-byte entries and hands back finished sets
+  (name, directory flag, first cluster, length, NoFatChain, cluster count) with their problems,
+  checked as FatFs's `load_xdir()` reads them; the root's bitmap, up-case and label entries
+  too.
+- **Name hash:** computed with FatFs's `ff_wtoupper()`, passed in as a function, since FatFs
+  finds names by that hash and never reads the volume's up-case table. The table is streamed
+  (`fsck_exfat_upcase_*()`, no 128 KB copy): its checksum is checked, and mappings that differ
+  from FatFs's are a note.
+- **Cluster accounting:** `fsck_window_mark_run()` marks runs into the window and counts
+  cross-links; `fsck_bitcmp_*()` give the lost and reached-but-free runs against the bitmap,
+  a slice at a time, runs going on across slices and windows.
+- **Tests:** `tests/test_fsck_exfat.c` tests the pieces on their own, on images FatFs makes and
+  fills and on hand-made entries; `fuzz_fsck_exfat` fuzzes the parsers. The damage cases
+  (`tests/fuzz/exfat_damage.h`) run through the whole checker in `tests/test_fsck.c`.
 
 ## `fsck_repair.c`: repairing the card (pure C, host tested)
 
 The repairs behind the coming `sd check fix` ([design](../../docs/design/sd-check.md) §10), on
-top of `fsck.c`. Not in the firmware yet: phase 5 adds the command.
+top of `fsck.c`. Not in the firmware yet: phase 5b adds the command.
 
 - **Shape:** a job of checker runs over the same memory (`fsck_repair_state_size()` plus the
   window): a check whose findings are the plan, a wait for the caller's yes
   (`fsck_repair_confirm()`), a repair run that writes at the checker's hook points, and a final
   check. `fsck_repair_step()` takes the same budget as `fsck_step()`, writes counted in it.
   The hooks reach `fsck.c` through a table, so a plain check links without this file.
-- **What it repairs (FAT32; exFAT is left alone until its checker is in):** lost clusters are
+- **What it repairs (FAT32; exFAT volumes are checked but not repaired yet):** lost clusters are
   freed, chains longer than their file are ended at the file's last cluster (their tail is then
   freed as lost), FSInfo's free count is set to unknown before anything else, and the second FAT
   gets every change after the first (and the first's bytes where it differs). Nothing else is
@@ -156,3 +206,14 @@ top of `fsck.c`. Not in the firmware yet: phase 5 adds the command.
   like after every fault and after a full repair, and that a tiny window gives the same result.
   `tests/fuzz/fuzz_fsck.c` repairs mutated images on a copy-on-write disk when the selector's top
   bit is set.
+
+## `sdfault.c`: injected write faults (test builds only, host tested)
+
+`sd fault fail <N>` and `sd fault reboot <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
+only, for testing repair on a board ([design §10.4](../../docs/design/sd-check.md#104-fault-injection),
+usage in [development.md](../../docs/development.md#test-commands-sd-card-write-faults)).
+`sdfault.c` counts writes and decides. `write_blocks_fed()` in `sdcard.c`, through which every
+card write reaches the driver (FatFs's, the layer's chunks, the header writes), asks it once per
+write. It fails the write, or closes the driver's open multi-block write and resets the board
+(`fault_test_reset()` in `core/fault.c`, so the next boot says why). In other images, neither
+the hook nor the file is built. `tests/test_sdfault.c` covers the counting.

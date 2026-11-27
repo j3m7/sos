@@ -9,6 +9,7 @@
 
 #include "files/sdcard.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +31,12 @@
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/cardkey.h"
+#include "files/fsck.h"
 #include "files/sdcrypt.h"
+#ifdef SOS_TEST_COMMANDS
+#include "core/fault.h"
+#include "files/sdfault.h"
+#endif
 
 // --- hardware configuration (called by the library) ------------------------------------------
 
@@ -110,8 +116,18 @@ static block_dev_err_t read_blocks_logged(sd_card_t *c, uint8_t *buf, uint32_t s
     return r;
 }
 
+#ifdef SOS_TEST_COMMANDS
+static block_dev_err_t fault_fire(sd_card_t *c, sdfault_action_t a, uint32_t sector,
+                                  uint32_t count);
+#endif
+
 static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32_t sector,
                                         uint32_t count) {
+#ifdef SOS_TEST_COMMANDS
+    sdfault_action_t fault = sdfault_write();      // `sd fault`: test builds only
+    if (fault != SDFAULT_PASS)
+        return fault_fire(c, fault, sector, count);
+#endif
     block_dev_err_t r = lib_write_blocks(c, buf, sector, count);
     io_stats.writes++;
     io_stats.sectors += count;
@@ -377,31 +393,58 @@ static const char *fs_type(BYTE t) {
 
 static uint32_t mount_generation;   // counts mounts, for sdcard_generation()
 
+// `sd check` is running (docs/design/sd-check.md §2): nothing else may reach the card, so
+// nothing mounts it, and the other `sd` commands refuse. Set from the check's start to its end
+// (check_end()).
+static bool checking;
+#define CHECKING_MSG "the card is being checked (sd check)"
+// The configuration was erased during the check (sdcard_owner_gone()): the layer is off, so the
+// check would read ciphertext. Tested before every step.
+static bool check_stop;
+
+typedef enum {
+    CARD_READY,         // initialized; the layer matches the card (plain, or encrypted and open)
+    CARD_NONE,          // no card (initialization failed)
+    CARD_REFUSED,       // locked or unsupported: kind_why says why (told to `sh` when there is one)
+} card_open_t;
+
+// Initialize the card if it isn't and find its kind, with the retries a mount gets: a card
+// locked for lack of a key is looked at again once there is one, one locked for lack of memory
+// is tried again, and one whose kind was forgotten is detected again. Afterwards disk_read(0)
+// reads the volume (decrypted on an encrypted card). Used by mount() and by `sd check`.
+static card_open_t card_open(shell_t *sh) {
+    if (disk_initialize(0) & STA_NOINIT)
+        return CARD_NONE;
+    if (card_kind == KIND_LOCKED && locked_without_key) {
+        // The board has been set up since (it has an owner secret now): the answer, or at
+        // least the reason, may be different.
+        uint8_t key[CARDKEY_LEN];
+        if (cardkey_get(key))
+            card_kind = KIND_UNKNOWN;
+        sdcrypt_wipe(key, sizeof(key));
+    }
+    if (card_kind == KIND_LOCKED && locked_no_memory)
+        card_kind = KIND_UNKNOWN;           // there may be memory now
+    if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
+        detect();
+    if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
+        if (sh && locked_no_memory)
+            shell_printf(sh, "sd: %s\n", kind_why);
+        else if (sh)
+            shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
+        return CARD_REFUSED;
+    }
+    return CARD_READY;
+}
+
 static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
+    if (checking)                           // the callers say so (sdcard_mount(), the commands)
+        return false;
     uint64_t t0 = time_us_64();
-    if (!(disk_initialize(0) & STA_NOINIT)) {    // no card: f_mount says so below
-        if (card_kind == KIND_LOCKED && locked_without_key) {
-            // The board has been set up since (it has an owner secret now): the answer, or at
-            // least the reason, may be different.
-            uint8_t key[CARDKEY_LEN];
-            if (cardkey_get(key))
-                card_kind = KIND_UNKNOWN;
-            sdcrypt_wipe(key, sizeof(key));
-        }
-        if (card_kind == KIND_LOCKED && locked_no_memory)
-            card_kind = KIND_UNKNOWN;           // there may be memory now
-        if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
-            detect();
-        if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
-            if (sh && locked_no_memory)
-                shell_printf(sh, "sd: %s\n", kind_why);
-            else if (sh)
-                shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
-            return false;
-        }
-    }
+    if (card_open(sh) == CARD_REFUSED)      // no card: f_mount says so below
+        return false;
     FRESULT fr = f_mount(&card.state.fatfs, sd_get_drive_prefix(&card), 1);
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
     if (fr != FR_OK) {
@@ -558,6 +601,8 @@ static bool files_in_use(shell_t *sh) {
 static bool unmounted_by_hand;
 
 bool sdcard_mount_retry(void) {
+    if (checking)
+        return false;
     if (unmounted_by_hand || card.state.mounted)
         return card.state.mounted;
     quiet = true;
@@ -575,6 +620,11 @@ uint32_t sdcard_generation(void) {
 }
 
 bool sdcard_mount(shell_t *sh) {
+    if (checking) {
+        if (sh)
+            shell_printf(sh, CHECKING_MSG "\n");
+        return false;
+    }
     unmounted_by_hand = false;
     if (!driver_init()) {
         if (sh)
@@ -718,6 +768,10 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "not formatted\n");
         return;
     }
+    if (checking) {
+        shell_printf(sh, CHECKING_MSG "\n");
+        return;
+    }
     if (files_in_use(sh))
         return;
     void *work = heap_alloc(HEAP_FILES, FORMAT_WORK_BYTES);
@@ -833,6 +887,199 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
 }
 
+// --- check (sd check) ----------------------------------------------------------------------------
+//
+// docs/design/sd-check.md has the design. The check runs only on an unmounted card, as a shell
+// job, with the `checking` flag set throughout: nothing mounts the card meanwhile (sdcard_mount(),
+// sdcard_mount_retry(), mount()) and the other `sd` commands refuse. The checker (files/fsck.c)
+// reads the volume through the layer (disk_read(0), decrypted on an encrypted card) and never
+// writes. Every way it ends goes through check_end(), which leaves the card as `sd unmount` does.
+
+#define CHECK_STEP_US     20000             // work per job step, as files.c's STEP_US
+#define CHECK_WINDOW_MAX  (16 * 1024)       // cluster window (design §6.2), halved down to MIN
+#define CHECK_WINDOW_MIN  (4 * 1024)
+#define CHECK_BUDGET_MAX  1024              // sector reads per step at most
+#define CHECK_ROOM        1024              // output room wanted before a step (report lines)
+
+typedef struct {
+    shell_t *sh;                // for the report lines
+    fsck_t *f;                  // in `mem`
+    uint32_t budget;            // sector reads per step, adjusted toward CHECK_STEP_US
+    uint32_t pass_shown;        // last pass told to the shell
+    size_t mem_len;             // bytes in `mem`: the checker's state and the cluster window
+    uint8_t mem[];
+} check_job_t;
+
+static bool check_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
+    (void)ctx;
+    if (count == 0 || lba > UINT32_MAX - count)     // the driver takes 32-bit sector numbers
+        return false;
+    return disk_read(0, buf, (LBA_t)lba, (UINT)count) == RES_OK;
+}
+
+// One problem or note. Names come from the card: control characters (escape sequences) don't
+// reach the terminal.
+static void check_report(void *ctx, const char *line) {
+    check_job_t *j = ctx;
+    char out[FSCK_LINE_MAX + 1];
+    size_t n = 0;
+    for (; line[n] && n < FSCK_LINE_MAX; n++)
+        out[n] = (unsigned char)line[n] < 0x20 || line[n] == 0x7f ? '?' : line[n];
+    out[n++] = '\n';
+    shell_write(j->sh, out, n);
+}
+
+// The header line (design §7) once the volume is known, then a line per pass when there are
+// several.
+static void check_progress(check_job_t *j) {
+    const fsck_result_t *res = fsck_result(j->f);
+    if (!res->passes || res->pass <= j->pass_shown)
+        return;
+    if (!j->pass_shown) {
+        uint64_t tenths = res->volume_sectors * 10 / (2 * 1024 * 1024);     // GB, one decimal
+        uint32_t ckb = res->cluster_bytes / 1024;
+        char head[128];
+        snprintf(head, sizeof(head),
+                 "checking %s, %llu.%llu GB, %lu clusters of %lu %s, %s (%lu pass%s)",
+                 res->kind == FSCK_KIND_EXFAT ? "exFAT" : "FAT32",
+                 (unsigned long long)(tenths / 10), (unsigned long long)(tenths % 10),
+                 (unsigned long)res->clusters,
+                 (unsigned long)(ckb ? ckb : res->cluster_bytes), ckb ? "KB" : "bytes",
+                 card_kind == KIND_ENCRYPTED ? "encrypted" : "not encrypted",
+                 (unsigned long)res->passes, res->passes == 1 ? "" : "es");
+        shell_printf(j->sh, "%s\n", head);
+        // Logged too: with the last line's entry it times the check (dmesg), and it reaches the
+        // log files once the card is mounted again.
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: check: %s", head);
+    }
+    if (res->passes > 1)
+        shell_printf(j->sh, "pass %lu/%lu\n", (unsigned long)res->pass,
+                     (unsigned long)res->passes);
+    j->pass_shown = res->pass;
+}
+
+// Every end of a check, before or during the job: finished, Ctrl-C (or the session ended),
+// stopped by config reset, or refused after `checking` was set. Frees the job, then leaves the
+// card as `sd unmount` does (design §2.5): the key forgotten, reinitialized at the next mount,
+// and no quiet remount by the log writer (whoever checked the card may be about to take it
+// out). Prints and logs the last line. Returns false, for the job's step to return.
+static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
+    if (j) {
+        size_t len = sizeof(*j) + j->mem_len;
+        sdcrypt_wipe(j, len);               // sectors of the decrypted volume
+        heap_release(HEAP_FILES, j);
+    }
+    crypt_off();
+    card.state.m_Status |= STA_NOINIT;
+    checking = false;
+    check_stop = false;
+    unmounted_by_hand = true;
+    char line[FSCK_LINE_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    shell_printf(sh, "%s\n", line);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check: %s", line);
+    return false;
+}
+
+static bool check_step(shell_t *sh, void *arg, bool cancel) {
+    check_job_t *j = arg;
+    if (cancel)
+        return check_end(sh, j, "stopped");
+    if (check_stop)
+        return check_end(sh, j, "stopped: the configuration was erased (the card is locked now)");
+    if (shell_write_space(sh) < CHECK_ROOM)
+        return true;                        // wait for the terminal to take the report lines
+    uint64_t t0 = time_us_64();
+    int r = fsck_step(j->f, j->budget);
+    uint64_t us = time_us_64() - t0;
+    if (us < CHECK_STEP_US / 2 && j->budget < CHECK_BUDGET_MAX)
+        j->budget *= 2;
+    else if (us > CHECK_STEP_US * 3 / 2 && j->budget > 1)
+        j->budget /= 2;
+    check_progress(j);
+    if (r == FSCK_MORE)
+        return true;
+    const fsck_result_t *res = fsck_result(j->f);
+    char line[FSCK_SUMMARY_MAX + 64];
+    if (r == FSCK_DONE)
+        snprintf(line, sizeof(line), "%s", res->summary);
+    else    // before the passes began (no volume, a boot sector refused): nothing checked
+        snprintf(line, sizeof(line), "%s: %s", res->passes ? "failed" : "not checked",
+                 res->why ? res->why : "?");
+    return check_end(sh, j, "%s", line);
+}
+
+static void cmd_check(shell_t *sh, const char *arg) {
+    if (arg) {
+        shell_printf(sh, "usage: sd check\n");
+        return;
+    }
+    // It shuts every other user out of the card until it ends.
+    if (!sh->io->admin) {
+        shell_printf(sh, "the card can only be checked on the serial console\n");
+        return;
+    }
+    if (card.state.mounted) {
+        shell_printf(sh, "the card is mounted: run 'sd unmount' first\n");
+        return;
+    }
+    if (files_in_use(sh))
+        return;
+    checking = true;
+    check_stop = false;
+    // A mount that failed leaves its volume registered with FatFs, and any f_* call would then
+    // try that mount again, reaching the card: unregister it (no card access).
+    f_unmount(sd_get_drive_prefix(&card));
+    card_open_t open = card_open(NULL);
+    if (open == CARD_NONE) {
+        check_end(sh, NULL, "not checked: no card");
+        return;
+    }
+    if (open == CARD_REFUSED) {
+        check_end(sh, NULL, "not checked: %s", kind_why ? kind_why : "the card can't be read");
+        return;
+    }
+    uint64_t sectors = get_num_sectors_layer(&card);
+    if (!sectors) {
+        check_end(sh, NULL, "not checked: the card's size can't be read");
+        return;
+    }
+    size_t state = fsck_state_size() + 8;   // fsck_new() aligns `mem` to 8 bytes
+    check_job_t *j = NULL;
+    size_t window = CHECK_WINDOW_MAX;
+    for (;;) {
+        j = heap_zalloc(HEAP_FILES, sizeof(*j) + state + window);
+        if (j || window <= CHECK_WINDOW_MIN)
+            break;
+        window /= 2;
+    }
+    if (!j) {
+        size_t need = sizeof(*j) + state + CHECK_WINDOW_MIN;
+        check_end(sh, NULL, "not enough memory to check the card (needs %u KB)",
+                  (unsigned)((need + 1023) / 1024));
+        return;
+    }
+    j->sh = sh;
+    j->budget = 8;
+    j->mem_len = state + window;
+    fsck_io_t io = {
+        .read = check_read, .report = check_report, .write = NULL, .ctx = j, .sectors = sectors,
+        .upcase = ff_wtoupper,          // FatFs's own case folding, for exFAT's name hashes
+    };
+    j->f = fsck_new(&io, j->mem, j->mem_len);
+    if (!j->f) {
+        check_end(sh, j, "not checked: the checker couldn't start");
+        return;
+    }
+    shell_run_job(sh, check_step, j);
+}
+
 // --- owner change -------------------------------------------------------------------------------
 
 // The configuration was erased (`config reset`): the owner secret is gone, so an encrypted
@@ -840,11 +1087,104 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
 void sdcard_owner_gone(void) {
     if (card_kind != KIND_ENCRYPTED && card_kind != KIND_LOCKED)
         return;
+    // A check reads through the layer turned off below: it stops before its next step.
+    if (checking)
+        check_stop = true;
     if (card.state.mounted)
         f_unmount(sd_get_drive_prefix(&card));
     card.state.mounted = false;
     crypt_off();
 }
+
+#ifdef SOS_TEST_COMMANDS
+// --- `sd fault`: injected write faults, test builds only (files/sdfault.h) --------------------
+
+// Write N of an armed fault, from write_blocks_fed() before the driver sees it. `sector` and
+// `count` are the card's (on an encrypted card, past the header).
+static block_dev_err_t fault_fire(sd_card_t *c, sdfault_action_t a, uint32_t sector,
+                                  uint32_t count) {
+    uint32_t n = sdfault_state()->writes;
+    if (a == SDFAULT_DO_REBOOT) {
+        // As after a power cut: every write before this one is on the card, this one and later
+        // ones aren't. The driver can leave a multi-block write open between calls (CMD25
+        // without its stop token, continued if the next write is contiguous): close it, as
+        // FatFs's sync does, so the card has finished programming and isn't left mid-transfer,
+        // still powered, across the reset. Each driver call waits for its own SPI transfers, so
+        // nothing else is in flight. Nothing is logged: the log files are on this card. The
+        // next boot says why it reset (fault_last()).
+        c->sync(c);
+        fault_test_reset(n);
+    }
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+            "sd: fault: write %lu (%lu sectors at %lu) not written, failed on purpose (sd fault)",
+            (unsigned long)n, (unsigned long)count, (unsigned long)sector);
+    return SD_BLOCK_DEVICE_ERROR_WRITE;
+}
+
+static bool fault_count(const char *s, uint32_t *n) {
+    size_t len = s ? strlen(s) : 0;
+    if (!len || len > 9 || strspn(s, "0123456789") != len)
+        return false;
+    unsigned long v = strtoul(s, NULL, 10);
+    if (v == 0 || v > SDFAULT_MAX_N)
+        return false;
+    *n = (uint32_t)v;
+    return true;
+}
+
+static void fault_show(shell_t *sh) {
+    const sdfault_state_t *f = sdfault_state();
+    if (!f->counting) {
+        shell_printf(sh, "no fault armed\n");
+        return;
+    }
+    if (f->armed != SDFAULT_OFF)
+        shell_printf(sh, "armed: %s at write %lu; %lu since arming\n",
+                     f->armed == SDFAULT_FAIL ? "fail" : "reboot", (unsigned long)f->at,
+                     (unsigned long)f->writes);
+    else    // a reboot that fired reset the board
+        shell_printf(sh, "fired: write %lu failed; %lu since arming (later writes go through)\n",
+                     (unsigned long)f->at, (unsigned long)f->writes);
+}
+
+// `sd fault [fail <N>|reboot <N>|off]`.
+static void cmd_fault(shell_t *sh, const char *what, const char *count) {
+    if (!sh->io->admin) {
+        shell_printf(sh, "sd fault works only on the serial console\n");
+        return;
+    }
+    uint32_t n = 0;
+    bool extra = strtok(NULL, " ") != NULL;
+    if (!what && !extra) {
+        fault_show(sh);
+        return;
+    }
+    if (what && !strcmp(what, "off") && !count && !extra) {
+        sdfault_off();
+        shell_printf(sh, "no fault armed\n");
+        return;
+    }
+    sdfault_mode_t mode = !what ? SDFAULT_OFF
+                        : !strcmp(what, "fail") ? SDFAULT_FAIL
+                        : !strcmp(what, "reboot") ? SDFAULT_REBOOT : SDFAULT_OFF;
+    if (mode == SDFAULT_OFF || extra || !fault_count(count, &n) || !sdfault_arm(mode, n)) {
+        shell_printf(sh, "usage: sd fault [fail <N>|reboot <N>|off]  (N: 1 to %lu, counting card "
+                         "writes from now)\n", (unsigned long)SDFAULT_MAX_N);
+        return;
+    }
+    if (mode == SDFAULT_FAIL)
+        shell_printf(sh, "armed: card write %lu from now fails and isn't written; "
+                         "later writes go through\n", (unsigned long)n);
+    else
+        shell_printf(sh, "armed: the board resets before card write %lu from now\n",
+                     (unsigned long)n);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: fault: %s armed at card write %lu (test command)",
+            what, (unsigned long)n);
+}
+#define SD_USAGE_FAULT "|fault [fail N|reboot N|off]"
+#else
+#define SD_USAGE_FAULT ""
+#endif
 
 // --- dispatch ------------------------------------------------------------------------------------
 
@@ -852,6 +1192,10 @@ void sdcard_command(shell_t *sh, char *args) {
     char *sub = args ? strtok(args, " ") : NULL;
     char *arg = sub ? strtok(NULL, " ") : NULL;
     char *arg2 = arg ? strtok(NULL, " ") : NULL;
+    if (checking) {
+        shell_printf(sh, CHECKING_MSG "\n");
+        return;
+    }
     if (!driver_init()) {
         shell_printf(sh, "sd: driver init failed\n");
         return;
@@ -864,6 +1208,12 @@ void sdcard_command(shell_t *sh, char *args) {
         cmd_speed(sh, arg);
     else if (!strcmp(sub, "format"))
         cmd_format(sh, arg, arg2);
+    else if (!strcmp(sub, "check"))
+        cmd_check(sh, arg);
+#ifdef SOS_TEST_COMMANDS
+    else if (!strcmp(sub, "fault"))
+        cmd_fault(sh, arg, arg2);
+#endif
     else if (!strcmp(sub, "unmount")) {
         if (files_in_use(sh))
             return;
@@ -881,5 +1231,5 @@ void sdcard_command(shell_t *sh, char *args) {
         shell_printf(sh, "unmounted; safe to remove the card\n");
     } else
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
-                         "unmount]\n");
+                         "unmount|check" SD_USAGE_FAULT "]\n");
 }
