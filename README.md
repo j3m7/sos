@@ -518,8 +518,14 @@ detector's reports.
 
 `temp cal` alone shows the calibration; `temp cal off` removes it. A new `temp cal` replaces
 the old one (it measures against the sensor's own reading, not the calibrated one), and
-`config reset` removes it. It corrects the offset only, so it's best near the temperature it
-was set at. The calibration is stored in two bytes of the configuration that were spare, so
+`config reset` removes it (`temp_cal` in the provisioning file carries a known value back).
+It corrects the offset only, so it's best near the temperature it was set at.
+
+What it stores equates the sensor's reading with the room thermometer at that moment, and by
+then the chip is already a little warmer than the room from running. So that warmth is folded
+into the calibration: a calibrated board reports something closer to the room temperature as
+worked out from the chip than the chip's own temperature, and under load the chip itself is
+warmer than it says. Don't compare a calibrated reading with the chip's rated maximum. The calibration is stored in two bytes of the configuration that were spare, so
 firmware without `temp cal` still reads the configuration (and ignores it).
 
 ## Files (SD card)

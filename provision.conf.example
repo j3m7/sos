@@ -36,3 +36,5 @@ ssh_key = ssh-ed25519 AAAA... user@host
 #                                 the board; or "watch" and a sensitivity: a trigger is only
 #                                 logged. Default: armed at 3, the highest)
 # rtc_cal_ppm = 92               (how fast the RTC runs, in ppm; negative: slow; default 0)
+# temp_cal = 1.8                 (degrees added to the chip temperature, as `temp cal` measured
+#                                 it; -15.0 to 15.0; default 0 = uncalibrated)
