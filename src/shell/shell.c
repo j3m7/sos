@@ -520,11 +520,11 @@ static void cmd_mem_test(shell_t *sh, char *args) {
             shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
             return;
         }
-        size_t n = memhold_release_first((unsigned)secs * 1000);
-        if (!n)
+        size_t first = memhold_release_first((unsigned)secs * 1000);
+        if (!first)
             shell_printf(sh, "nothing held\n");
         else if (secs)
-            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)n,
+            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)first,
                          secs);
         else
             mem_held_summary(sh);
@@ -2373,6 +2373,9 @@ static const shell_word_t sd_words[] = {
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
     {"check", NULL, SHELL_ADMIN},
+#ifdef SOS_TEST_COMMANDS
+    {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("off"), END}, SHELL_ADMIN},
+#endif
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};

@@ -26,8 +26,11 @@
 #include "core/log.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
+#include "lua/lua_codec.h"
 #include "lua/lua_core1.h"
 #include "lua/lua_date.h"
+#include "lua/lua_hash.h"
+#include "lua/lua_json.h"
 #include "lua/lua_health.h"
 #include "lua/lua_info.h"
 #include "net/http.h"
@@ -719,6 +722,119 @@ static int run_timers(lua_State *L) {
     }
 }
 
+// --- sos.hash, sos.hmac (on core 0: lua_hash.c), sos.base64 (lua_codec.c) ---------------------
+
+static const char *const hash_names[] = {"sha1", "sha256", "sha384", "sha512", NULL};
+
+static bool hash_step(unsigned step, unsigned arg, const char *data, size_t len) {
+    lua_req.type = LR_HASH;
+    lua_req.offset = step;
+    lua_req.arg = arg;
+    memcpy(lua_req.data, data, len);
+    lua_req.len = (uint32_t)len;
+    request();
+    return lua_req.result >= 0;
+}
+
+// Hash msg (with key, for an HMAC) on core 0, 4 KB per request; push the digest, raw or in hex.
+static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len, const char *msg,
+                    size_t msg_len, bool raw) {
+    if (key_len > LUA_REQ_DATA)
+        return luaL_error(L, "key longer than %d bytes", LUA_REQ_DATA);
+    bool ok = hash_step(LUA_HASH_BEGIN, arg, key, key_len);
+    for (size_t at = 0; ok && at < msg_len; at += LUA_REQ_DATA) {
+        check_cancel(L);
+        size_t n = msg_len - at < LUA_REQ_DATA ? msg_len - at : LUA_REQ_DATA;
+        ok = hash_step(LUA_HASH_UPDATE, arg, msg + at, n);
+    }
+    check_cancel(L);
+    if (!ok || !hash_step(LUA_HASH_FINAL, arg, "", 0))
+        return fail(L);
+    size_t n = lua_req.len;
+    if (raw) {
+        lua_pushlstring(L, (const char *)lua_req.data, n);
+    } else {
+        char hex[2 * LUA_HASH_MAX];
+        lua_hex(lua_req.data, n, hex);
+        lua_pushlstring(L, hex, 2 * n);
+    }
+    return 1;
+}
+
+// sos.hash(alg, data [, raw]): the digest of data in hex (raw bytes if raw is true).
+static int l_hash(lua_State *L) {
+    unsigned alg = (unsigned)luaL_checkoption(L, 1, NULL, hash_names);
+    size_t len;
+    const char *msg = luaL_checklstring(L, 2, &len);
+    return run_hash(L, alg, "", 0, msg, len, lua_toboolean(L, 3));
+}
+
+// sos.hmac(alg, key, data [, raw]): the HMAC of data with key, in hex (raw bytes if raw).
+static int l_hmac(lua_State *L) {
+    unsigned alg = (unsigned)luaL_checkoption(L, 1, NULL, hash_names);
+    size_t key_len, len;
+    const char *key = luaL_checklstring(L, 2, &key_len);
+    const char *msg = luaL_checklstring(L, 3, &len);
+    return run_hash(L, alg | LUA_HASH_HMAC, key, key_len, msg, len, lua_toboolean(L, 4));
+}
+
+static bool url_variant(lua_State *L, int idx) {
+    static const char *const variants[] = {"std", "url", NULL};
+    return luaL_checkoption(L, idx, "std", variants) == 1;
+}
+
+// sos.base64.encode(s [, "url"])
+static int l_b64_encode(lua_State *L) {
+    size_t n;
+    const uint8_t *s = (const uint8_t *)luaL_checklstring(L, 1, &n);
+    bool url = url_variant(L, 2);
+    luaL_Buffer b;
+    char *out = luaL_buffinitsize(L, &b, lua_b64_encoded_len(n, url));
+    lua_b64_encode(s, n, out, url);
+    luaL_pushresultsize(&b, lua_b64_encoded_len(n, url));
+    return 1;
+}
+
+// sos.base64.decode(s [, "url"]): the bytes, or nil and a message if s isn't base64.
+static int l_b64_decode(lua_State *L) {
+    size_t n, len;
+    const char *s = luaL_checklstring(L, 1, &n);
+    bool url = url_variant(L, 2);
+    luaL_Buffer b;
+    uint8_t *out = (uint8_t *)luaL_buffinitsize(L, &b, n / 4 * 3 + 3);
+    if (!lua_b64_decode(s, n, out, &len, url)) {
+        lua_pushnil(L);
+        lua_pushstring(L, url ? "not URL-safe base64" : "not base64");
+        return 2;
+    }
+    luaL_pushresultsize(&b, len);
+    return 1;
+}
+
+static const luaL_Reg base64_lib[] = {
+    {"encode", l_b64_encode}, {"decode", l_b64_decode}, {NULL, NULL},
+};
+
+// --- sos.json (lua_json.c) ------------------------------------------------------------------------
+
+// sos.json.decode(s): the value, or nil and where the text stops being JSON.
+static int l_json_decode(lua_State *L) {
+    size_t n;
+    const char *s = luaL_checklstring(L, 1, &n);
+    return lua_json_decode(L, s, n);
+}
+
+// sos.json.encode(v): the text.
+static int l_json_encode(lua_State *L) {
+    luaL_checkany(L, 1);
+    lua_json_encode(L, 1);
+    return 1;
+}
+
+static const luaL_Reg json_lib[] = {
+    {"decode", l_json_decode}, {"encode", l_json_encode}, {NULL, NULL},
+};
+
 // --- read-only tables: sos.sensors, sos.mem, ... (lua_health.c on core 0) ---------------------
 
 // Ask core 0 for table `which` (with argument `arg`) and push it, or push nil and the error.
@@ -813,8 +929,8 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
-    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"health", l_health},
-    {NULL, NULL},
+    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
+    {"hmac", l_hmac},     {"health", l_health}, {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -969,6 +1085,12 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "http");
     luaL_newlib(L, wifi_lib);
     lua_setfield(L, -2, "wifi");
+    luaL_newlib(L, base64_lib);
+    lua_setfield(L, -2, "base64");
+    luaL_newlib(L, json_lib);
+    lua_json_push_null(L);
+    lua_setfield(L, -2, "null");
+    lua_setfield(L, -2, "json");
     luaL_newmetatable(L, HTTP_CLOSER);
     lua_pushcfunction(L, http_closer);
     lua_setfield(L, -2, "__close");

@@ -30,6 +30,7 @@
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
+#include "lua/lua_hash.h"
 #include "lua/lua_health.h"
 #include "net/http.h"
 #include "shell/words.h"
@@ -222,6 +223,24 @@ static void serve_reboot(void) {
     wdog_reboot();
 }
 
+// sos.hash, sos.hmac: one step (lua_hash.c).
+static void serve_hash(void) {
+    if (lua_req.len > LUA_REQ_DATA) {
+        req_error("too long");
+        return;
+    }
+    size_t n = 0;
+    uint8_t digest[LUA_HASH_MAX];
+    const char *err = lua_hash_step(lua_req.offset, lua_req.arg, lua_req.data, lua_req.len,
+                                    digest, &n);
+    if (err) {
+        req_error(err);
+        return;
+    }
+    memcpy(lua_req.data, digest, n);
+    lua_req.len = (uint32_t)n;
+}
+
 // sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
 static void serve_info(void) {
     size_t n = lua_req.offset < LH_TABLES
@@ -382,6 +401,7 @@ static void serve(bool main_loop) {
         case LR_MKDIR:  serve_change(do_mkdir); break;
         case LR_INFO:   serve_info(); break;
         case LR_REBOOT: serve_reboot(); break;
+        case LR_HASH:   serve_hash(); break;
         default:        req_error("unknown request"); break;
         }
     }
@@ -417,6 +437,7 @@ static void finish(void) {
     script_log_dropped();
     http_drop();
     http_started = false;
+    lua_hash_drop();                    // one the script didn't finish
     heap_release(HEAP_LUA, owner_code);
     owner_code = NULL;
     lua_job.code = NULL;

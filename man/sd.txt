@@ -21,13 +21,14 @@ DESCRIPTION
     doesn't notice a swap: unmount, swap, and the next file command mounts
     the new card.
 
-    'sd check' checks the card's file system (FAT32) for damage,
+    'sd check' checks the card's file system (exFAT or FAT32) for damage,
     such as a power cut during a write leaves: lost clusters, files whose
     size doesn't match their clusters, clusters two files share, broken
     directory entries. It runs only on an unmounted card: run 'sd unmount'
     first. While it runs nothing else uses the card: file commands, SFTP,
-    Lua and the TLS roots fail as if there were no card, the log files wait,
-    and the other 'sd' commands refuse. It prints one line per problem, then
+    Lua fail as if there were no card, TLS roots not loaded yet can't be
+    read (roots already in memory still work), the log files wait, and the
+    other 'sd' commands refuse. It prints one line per problem, then
     a summary, which also goes to the log. It never writes to the card;
     repairing is a later command. Ctrl-C stops it. Afterwards the card is
     left as 'sd unmount' leaves it: the next file command mounts it.
@@ -35,8 +36,23 @@ DESCRIPTION
     file first, which mounts the card, so the check refuses ('the card is
     mounted') and that line is what lands in the file. 'sd check | more'
     works.
-    Only FAT32 is checked so far: on an exFAT card (what 'sd format' makes by
-    default) it ends with 'not checked: exFAT is not checked yet'.
+
+    The report starts with 'checking exFAT, <size>, <n> clusters of <size>,
+    encrypted (<n> passes)', then 'pass <i>/<n>' lines; the clusters are
+    checked a window at a time, one pass over the directories per window.
+    Problems start with the path when there is one ('/a/b.txt: chain
+    loops'). Lines about clusters: 'lost: clusters <a>-<b> (<size>)' (in
+    use, reached by no file), 'reached but free: ...' (exFAT: used by a
+    file but free in the allocation bitmap), '<path>: cross-linked with an
+    earlier entry', and on exFAT '<n> clusters used by more than one entry'
+    when no file can be named. exFAT also has 'up-case table checksum ...'
+    and 'the allocation bitmap's chain isn't contiguous ...' (FatFs won't
+    mount such a card). Lines starting 'note:' aren't problems: a chain
+    longer than its file, a stale free count, the volume flagged dirty or
+    as having had a disk error (left by a PC or camera; also in the
+    summary), FAT entry 0 not matching the media byte, an up-case table
+    unlike FatFs's. A card that can't be checked at all ends with 'not
+    checked: <why>' (no card, no volume, a boot sector FatFs would refuse).
 
     'sd test [<KB> [keep]]' is a write and read benchmark: 4 to 65536 KB,
     default 256; everything else waits until it finishes. 'keep' leaves

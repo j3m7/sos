@@ -55,7 +55,7 @@ static int cmp_line(const void *a, const void *b) {
 static void run(run_t *r, size_t window, uint32_t budget) {
     r->n = 0;
     r->reads = 0;
-    fsck_io_t io = {read_fn, report, NULL, r, image.sectors};
+    fsck_io_t io = {read_fn, report, NULL, r, image.sectors, NULL};
     if (sizeof(mem) < fsck_state_size() + window)
         abort();
     fsck_t *f = fsck_new(&io, mem, fsck_state_size() + window);

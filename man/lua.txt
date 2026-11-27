@@ -46,7 +46,8 @@ DESCRIPTION
     sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
     sos.health (the self-checks' latest results);
     sos.dmesg for the system log (with a cursor, for only the newer lines);
-    and sos.reboot([why]), refused until the board has been up 10 minutes.
+    sos.hash, sos.hmac (SHA-1, SHA-2), sos.base64 and sos.json; and
+    sos.reboot([why]), refused until the board has been up 10 minutes.
     There is no io, os or debug. Failures return nil and a message. Each
     script may allocate up to 128 KB. Full details: docs/lua.md in the
     repository.
