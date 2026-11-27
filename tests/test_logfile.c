@@ -24,7 +24,7 @@ static bool fail_writes;
 static int appends;
 
 #define FILES 8
-static struct { char path[48]; char data[65536]; size_t len; } files[FILES];
+static struct { char path[64]; char data[65536]; size_t len; } files[FILES];
 
 static uint64_t f_now(void) { return now; }
 static bool f_in_irq(void) { return false; }
@@ -71,8 +71,42 @@ static bool f_append(const char *path, const char *data, size_t n, const char **
 
 static void f_boot(char *buf, size_t len) { snprintf(buf, len, "SOS test, last reset: power-on"); }
 
+static bool fail_renames;
+static bool have_rotated;               // the card has a /var/log/.rotated
+static int64_t card_rotated;
+static int renames;
+
+static bool f_rotate_file(const char *path, const char **why) {
+    renames++;
+    if (fail_renames) {
+        *why = "denied";
+        return false;
+    }
+    char old[64];
+    snprintf(old, sizeof(old), "%s.1", path);
+    for (int i = 0; i < FILES; i++)         // remove the old .1
+        if (!strcmp(files[i].path, old))
+            memset(&files[i], 0, sizeof(files[i]));
+    for (int i = 0; i < FILES; i++)
+        if (!strcmp(files[i].path, path))
+            snprintf(files[i].path, sizeof(files[i].path), "%s", old);
+    return true;
+}
+static bool f_load_rotated(int64_t *s) {
+    if (have_rotated)
+        *s = card_rotated;
+    return have_rotated;
+}
+static bool f_save_rotated(int64_t s, const char **why) {
+    (void)why;
+    card_rotated = s;
+    have_rotated = true;
+    return true;
+}
+
 static const logfile_hooks_t file_hooks = {
-    f_now, f_wall, f_ready, f_generation, f_append, f_boot,
+    f_now, f_wall, f_ready, f_generation, f_append, f_boot, f_rotate_file, f_load_rotated,
+    f_save_rotated,
 };
 
 static void reset(void) {
@@ -83,13 +117,21 @@ static void reset(void) {
     generation = 1;
     fail_writes = false;
     appends = 0;
+    fail_renames = false;
+    have_rotated = false;
+    card_rotated = 0;
+    renames = 0;
     memset(files, 0, sizeof(files));
     log_init(&log_hooks);
     log_set_deferred(true);
     log_set_history_level(SOS_LOG_INFO);
     logfile_init(&file_hooks);
     logfile_set_level(SOS_LOG_INFO);
+    logfile_set_rotation(7, 0);
 }
+
+#define DAY_US (86400 * 1000000LL)
+#define WALL_S(us) ((wall_at_boot + (int64_t)(us)) / 1000000)
 
 // Poll until nothing more is written, letting time pass so every buffer becomes due.
 static void settle(void) {
@@ -297,6 +339,138 @@ TEST(raising_the_file_level_keeps_its_own_record) {
     CHECK(!strstr(a, "after the change"));
 }
 
+// The first mount with the clock set starts the count: nothing is rotated, the time is kept.
+TEST(rotation_count_starts_at_the_first_mount) {
+    reset();
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "x");
+    logfile_poll();
+    CHECK(have_rotated);
+    CHECK_EQ(card_rotated, WALL_S(now));
+    CHECK_EQ(renames, 0);
+    logfile_status_t st;
+    logfile_status(&st);
+    CHECK(st.rotated_known);
+    // 2025-11-26 14:03 + 7 days, at 00:00: 2025-12-03T00:00:00Z.
+    CHECK_EQ(st.next_rotation, 1764720000);
+}
+
+// Due: the files become .1 (replacing the old .1), new ones start with a marker, and the time
+// is kept; it happens again a period later, not before.
+TEST(rotation_when_due) {
+    reset();
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "week one");
+    logfile_poll();
+    now = (uint64_t)((1764720000LL - 1) * 1000000 - wall_at_boot);   // a second before
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "just before");
+    logfile_poll();
+    CHECK_EQ(renames, 0);
+    now += 1000000;
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "week two");
+    logfile_poll();
+    CHECK_EQ(renames, SOS_LOG_FACILITIES);
+    const char *old = file("/var/log/auth.log.1");
+    CHECK(strstr(old, "week one") && strstr(old, "just before"));
+    CHECK(!strstr(old, "week two"));
+    const char *cur = file("/var/log/auth.log");
+    CHECK(strstr(cur, "--- rotated; this boot: SOS test"));
+    CHECK(strstr(cur, "week two"));
+    CHECK_EQ(card_rotated, 1764720000);
+    // The notice about it is in the new daemon.log.
+    settle();
+    CHECK(strstr(file("/var/log/daemon.log"), "log: files rotated"));
+    // A day later: not again. A week later: again, and week one's file is gone.
+    int r = renames;
+    now += (uint64_t)DAY_US;
+    logfile_poll();
+    CHECK_EQ(renames, r);
+    now += (uint64_t)(6 * DAY_US);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "week three");
+    logfile_poll();
+    CHECK_EQ(renames, r + SOS_LOG_FACILITIES);
+    CHECK(!strstr(file("/var/log/auth.log.1"), "week one"));
+    CHECK(strstr(file("/var/log/auth.log.1"), "week two"));
+}
+
+// The kept time survives a reboot (a new writer reads it), and a rotation missed while the board
+// was off happens at the first chance.
+TEST(missed_rotation_happens_after_boot) {
+    reset();
+    have_rotated = true;
+    card_rotated = 1764165792 - 10 * 86400;     // ten days before "now": overdue
+    log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "after boot");
+    logfile_poll();
+    CHECK_EQ(renames, SOS_LOG_FACILITIES);
+    CHECK_EQ(card_rotated, WALL_S(now));
+}
+
+TEST(no_clock_no_rotation) {
+    reset();
+    clock_set = false;
+    have_rotated = true;
+    card_rotated = 1;                           // long overdue
+    log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "x");
+    settle();
+    CHECK_EQ(renames, 0);
+}
+
+TEST(rotation_time_of_day_and_period) {
+    reset();
+    logfile_set_rotation(1, 90);                // daily at 01:30
+    have_rotated = true;
+    card_rotated = 1764165792;                  // 2025-11-26 14:03
+    logfile_poll();
+    logfile_status_t st;
+    logfile_status(&st);
+    CHECK_EQ(st.next_rotation, 1764207000);     // 2025-11-27T01:30:00Z
+    CHECK_EQ(st.rotate_days, 1);
+    CHECK_EQ(st.rotate_minute, 90);
+}
+
+// By hand: rotates now, and the count starts again from today.
+TEST(rotate_by_hand) {
+    reset();
+    log_msg(SOS_LOG_USER | SOS_LOG_NOTICE, "before");   // buffered, not yet written
+    logfile_poll();
+    CHECK(logfile_rotate() == NULL);
+    CHECK(strstr(file("/var/log/user.log.1"), "before"));   // what was buffered went to the old file
+    CHECK_EQ(card_rotated, WALL_S(now));
+    card = false;
+    CHECK(!strcmp(logfile_rotate(), "no card mounted"));
+}
+
+TEST(a_failed_rename_stops_the_files) {
+    reset();
+    logfile_poll();
+    fail_renames = true;
+    CHECK(!strcmp(logfile_rotate(), "denied"));
+    logfile_status_t st;
+    logfile_status(&st);
+    CHECK_EQ(st.state, LOGFILE_STOPPED);
+    CHECK(!strcmp(st.error_path, "/var/log/syslog"));
+}
+
+// A time kept while the clock was wrong, more than a day ahead, doesn't hold rotation back.
+TEST(rotation_time_in_the_future_is_reset) {
+    reset();
+    have_rotated = true;
+    card_rotated = 1764165792 + 100 * 86400;
+    logfile_poll();
+    CHECK_EQ(card_rotated, WALL_S(now));
+    CHECK_EQ(renames, 0);
+}
+
+// Another card has its own time: read again after each mount.
+TEST(rotation_time_read_again_after_a_mount) {
+    reset();
+    have_rotated = true;
+    card_rotated = 1764165792;
+    logfile_poll();
+    card_rotated = 1764165792 - 30 * 86400;     // a different card, overdue
+    generation++;
+    logfile_poll();
+    CHECK_EQ(renames, SOS_LOG_FACILITIES);
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -323,6 +497,15 @@ TEST_MAIN(
     RUN(a_failed_write_stops_until_the_next_mount);
     RUN(file_level_filters);
     RUN(raising_the_file_level_keeps_its_own_record);
+    RUN(rotation_count_starts_at_the_first_mount);
+    RUN(rotation_when_due);
+    RUN(missed_rotation_happens_after_boot);
+    RUN(no_clock_no_rotation);
+    RUN(rotation_time_of_day_and_period);
+    RUN(rotate_by_hand);
+    RUN(a_failed_rename_stops_the_files);
+    RUN(rotation_time_in_the_future_is_reset);
+    RUN(rotation_time_read_again_after_a_mount);
     RUN(not_started);
     RUN(paths);
 )

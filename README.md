@@ -315,7 +315,12 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   mount (a file command, `sd`) writes them, with a line saying how many were dropped meanwhile.
   Encrypted or plain, whichever card is in. A failed write stops the files until the card is
   mounted again. `log` shows the state; `log file <level>` sets what's written (default `info`).
-  For now the files grow without limit; rotation is next (#104).
+- **Rotation:** every 7 days at 00:00 UTC by default, each file becomes `<name>.1` (replacing
+  the previous one) and a new one starts, so the card holds the current period and the one
+  before. `log rotate` rotates now; `log rotate every <N>d` and `log rotate at <HH:MM>` change
+  when (saved in the configuration; console only). The time of the last rotation is kept on
+  the card (`/var/log/.rotated`), so a reboot keeps the count and a rotation missed while the
+  board was off happens at the first chance; without the clock set nothing rotates.
 - `logger [-p <level>] <message>` adds a line to the log from any shell (facility `user`, at
   `notice` unless `-p` says otherwise), tagged with the shell it came from. At most 10 a second.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`

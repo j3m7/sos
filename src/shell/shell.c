@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
@@ -261,6 +262,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
         shell_printf(sh, "log console|history|file <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log rotate [every <N>d|at <HH:MM>]  rotate the log files now / when\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
@@ -439,9 +441,87 @@ static void cmd_logger(shell_t *sh, char *args) {
         log_msg(SOS_LOG_USER | level, "logger (%s): %s", sh->io->name, msg);
 }
 
+static void utc_text(char *buf, size_t len, int64_t unix_s) {
+    time_t t = (time_t)unix_s;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    snprintf(buf, len, "%04d-%02d-%02d %02d:%02d UTC", tm.tm_year + 1900, tm.tm_mon + 1,
+             tm.tm_mday, tm.tm_hour, tm.tm_min);
+}
+
+static void show_rotation(shell_t *sh, const logfile_status_t *st) {
+    shell_printf(sh, "rotate:  every %u day%s at %02u:%02u UTC (each file to <name>.1)\n",
+                 st->rotate_days, st->rotate_days == 1 ? "" : "s", st->rotate_minute / 60,
+                 st->rotate_minute % 60);
+    if (st->rotated_known) {
+        char last[32], next[32];
+        utc_text(last, sizeof(last), st->rotated);
+        utc_text(next, sizeof(next), st->next_rotation);
+        shell_printf(sh, "         last %s, next %s\n", last, next);
+    } else {
+        shell_printf(sh, "         not counting yet (needs the card mounted and the clock set)\n");
+    }
+}
+
+// `log rotate [every <days>d | at <HH:MM>]`: rotate the log files now, or set when they rotate
+// (saved in the configuration). Console only: a rotation deletes the oldest files.
+static void cmd_log_rotate(shell_t *sh, char *what, char *value) {
+    if (!require_admin(sh))
+        return;
+    sos_config_t *cfg = settings();
+    if (!what) {
+        const char *err = logfile_rotate();
+        if (err)
+            shell_printf(sh, "not rotated: %s\n", err);
+        else
+            shell_printf(sh, "rotated: each file in %s is now <name>.1\n", LOGFILE_DIR);
+        return;
+    }
+    char *end = NULL;
+    if (!strcmp(what, "every") && value) {
+        unsigned long days = strtoul(value, &end, 10);
+        if (end == value || (*end && strcmp(end, "d")) || days < 1 ||
+            days > CONFIG_LOG_ROTATE_DAYS_MAX) {
+            shell_printf(sh, "not changed: give days from 1 to %u, e.g. 'log rotate every 7d'\n",
+                         CONFIG_LOG_ROTATE_DAYS_MAX);
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation every %lu day%s", days,
+                days == 1 ? "" : "s");
+        cfg->log_rotate_days = (uint16_t)days;
+    } else if (!strcmp(what, "at") && value) {
+        unsigned long h = strtoul(value, &end, 10), m = 0;
+        bool ok = end != value && *end == ':' && end - value <= 2;
+        if (ok) {
+            char *mm = end + 1;
+            m = strtoul(mm, &end, 10);
+            ok = end - mm == 2 && !*end && h < 24 && m < 60;
+        }
+        if (!ok) {
+            shell_printf(sh, "not changed: give a UTC time of day as HH:MM, e.g. 'log rotate at "
+                             "03:30'\n");
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation at %02lu:%02lu UTC", h, m);
+        cfg->log_rotate_minute = (uint16_t)(h * 60 + m);
+    } else {
+        shell_printf(sh, "usage: log rotate [every <days>d | at <HH:MM>]\n");
+        return;
+    }
+    save(sh);
+    logfile_apply_settings();
+    logfile_status_t st;
+    logfile_status(&st);
+    show_rotation(sh, &st);
+}
+
 static void cmd_log(shell_t *sh, char *args) {
     char *what = args ? strtok(args, " ") : NULL;
     char *level = what ? strtok(NULL, " ") : NULL;
+    if (what && !strcmp(what, "rotate")) {
+        cmd_log_rotate(sh, level, level ? strtok(NULL, " ") : NULL);
+        return;
+    }
     if (!what) {
         shell_printf(sh, "console: %s (printed on the serial console)\n",
                      log_level_name(log_console_level()));
@@ -464,11 +544,13 @@ static void cmd_log(shell_t *sh, char *args) {
         if (st.lost)
             shell_printf(sh, "lost:    %lu messages dropped from the history before they were "
                              "written\n", (unsigned long)st.lost);
+        show_rotation(sh, &st);
         return;
     }
     int l = level ? log_level_parse(level) : -1;
     if (l < 0 || (strcmp(what, "console") && strcmp(what, "history") && strcmp(what, "file"))) {
-        shell_printf(sh, "usage: log [console|history|file err|warning|notice|info|debug]\n");
+        shell_printf(sh, "usage: log [console|history|file err|warning|notice|info|debug | "
+                         "rotate [every <days>d | at <HH:MM>]]\n");
         return;
     }
     // The log is the record of logins and configuration changes: a session can read it

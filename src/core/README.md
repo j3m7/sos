@@ -74,6 +74,17 @@ The log's messages also go to the SD card, one file per facility in `/var/log` (
   minute. Any later mount, by a file command, `sd`, SFTP or Lua, starts the files.
 - **Level:** `logfile_set_level()` takes what's waiting under the old level first, so the
   record of `log file err` (logged just before) isn't filtered out by the change it records.
+- **Rotation:** every `log_rotate_days` days (setting; default 7) at `log_rotate_minute` after
+  midnight UTC (default 00:00), counted from the day of the last rotation. Each file becomes
+  `<name>.1`, replacing the previous one, and the new file starts with a "rotated" marker.
+  The time of the last rotation is kept on the card in `/var/log/.rotated` (Unix seconds),
+  read once per mount: a reboot keeps the count, a rotation missed while the board was off
+  happens at the first chance, and another card has its own. The first mount with the clock
+  set starts the count without rotating; a kept time more than a day ahead (saved while the
+  clock was wrong) starts it again. Nothing rotates by itself without the clock. A scheduled
+  rotation happens before new messages are taken, so they go to the new files; `log rotate`
+  (by hand) takes everything logged so far into the old ones first. A failed rename stops the
+  files like a failed write.
 - **Host tested** with the real `log.c` and a fake card (`tests/test_logfile.c`).
 
 ## Heap (`heap.c`)
@@ -110,7 +121,8 @@ Two layers:
     Each save goes to the slot that doesn't hold the current record, so a power cut mid-save
     leaves the previous version.
   - **Append-only format:** new fields only go at the end, and the stored length says which
-    version wrote the record. `record_lengths` lists every released size (1540, 1606, 1638).
+    version wrote the record. `record_lengths` lists every released size (1540, 1606, 1638,
+    ... 2184, and 2188 with the log rotation settings).
     A record from older firmware loads with the newer fields at their defaults; firmware that
     doesn't know a record's length ignores it. `_Static_assert`s pin the offsets of released
     fields.

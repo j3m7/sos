@@ -27,7 +27,9 @@ _Static_assert(CONFIG_V6_LENGTH == 1676, "fields before console_iterations must 
 #define CONFIG_V7_LENGTH offsetof(sos_config_t, wifi_extra)       // + console fields, glitch_detector
 _Static_assert(CONFIG_V7_LENGTH == 1796, "fields before wifi_extra must not move");
 _Static_assert(offsetof(sos_config_t, glitch_detector) == 1793, "it takes a former padding byte");
-_Static_assert(sizeof(sos_config_t) == 2184, "the record's size is part of the format");
+#define CONFIG_V8_LENGTH offsetof(sos_config_t, log_rotate_days)  // + wifi_extra
+_Static_assert(CONFIG_V8_LENGTH == 2184, "fields before log_rotate_days must not move");
+_Static_assert(sizeof(sos_config_t) == 2188, "the record's size is part of the format");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
@@ -36,7 +38,8 @@ static const uint16_t record_lengths[] = {
     CONFIG_V5_LENGTH,
     CONFIG_V6_LENGTH,
     CONFIG_V7_LENGTH,
-    sizeof(sos_config_t),   // + wifi_extra
+    CONFIG_V8_LENGTH,       // + wifi_extra
+    sizeof(sos_config_t),   // + log_rotate_days, log_rotate_minute
 };
 
 static bool known_length(uint16_t length) {
@@ -115,6 +118,9 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
          (c->ntp_server[0] && config_check_ntp_server(c->ntp_server))))
         return false;
     if (HAS_FIELD(length, wifi_powersave) && c->wifi_powersave > 1)
+        return false;
+    if (HAS_FIELD(length, log_rotate_days) && (c->log_rotate_days > CONFIG_LOG_ROTATE_DAYS_MAX ||
+                                               c->log_rotate_minute > CONFIG_LOG_ROTATE_MINUTE_MAX))
         return false;
     if (HAS_FIELD(length, wifi_country) &&
         (!terminated(c->wifi_country, sizeof(c->wifi_country)) ||
