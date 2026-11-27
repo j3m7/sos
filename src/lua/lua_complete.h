@@ -22,13 +22,13 @@
 // each, `cap` bytes at most. Returns how many; *used gets the bytes written, *more is set if
 // some didn't fit.
 //
-// The global table is walked with raw access only (lua_rawget, lua_next), so no metamethod runs:
-// a Tab never runs the script's code. A value that isn't a table is looked through its
+// The global table is walked with raw access only (lua_rawget, lua_next), so no metamethod
+// runs: a Tab never runs the script's code. A value that isn't a table is looked through its
 // metatable's __index when that is a table, so "s:up" finds the string methods; a table's own
-// names come first, then those its metatable's __index table adds (one level: an __index
-// chain isn't followed further). Only string keys that are
-// names (letters, digits and '_', not a reserved word) are offered: anything else can't follow
-// a '.'. Leaves the stack as it found it.
+// names come first, then those its metatable's __index table adds (one level: an __index chain
+// isn't followed further). Only string keys that are names (letters, digits and '_', not a
+// reserved word) are offered: anything else can't follow a '.'. Leaves the stack as it found
+// it.
 unsigned lua_complete(lua_State *L, const char *token, char *out, size_t cap, size_t *used,
                       bool *more);
 
