@@ -147,7 +147,8 @@ struct ssh_server_t {
 	int (*auth_cb)(void* ctx, const byte *login, word32 login_len,
 		const byte *auth, word32 auth_len, int auth_type);
 	void *auth_cb_ctx;
-	void (*log_cb)(int priority, const char *format, ...);
+	void (*log_cb)(int priority, const char *format, ...)
+		__attribute__((format(printf, 2, 3)));
 	/* Call back to determine if incoming connection should be allowed */
 	int (*allow_connect_cb)(ip_addr_t *src_ip);
 };
