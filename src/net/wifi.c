@@ -12,8 +12,10 @@
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 
+#include "core/heaptag.h"
 #include "core/log.h"
 #include "core/settings.h"
+#include "net/wifi_names.h"
 #include "net/wifi_pick.h"
 
 #define CONNECT_TIMEOUT_MS  30000   // one attempt
@@ -108,6 +110,17 @@ static bool join_bssid_set;             // this attempt joins join_bssid, not ju
 static uint8_t join_bssid[6];
 static bool keepalive = true;
 static absolute_time_t next_keepalive;
+static bool started;                    // wifi_start() has run: the chip can scan
+
+// The names of all the networks a scan hears, for Tab at an SSID question (wifi_names_start()).
+// Allocated only while one wants them, and freed NAMES_KEEP_MS after the last use if nobody
+// says it's done (a question dropped without an answer). Written by scan_result() in the
+// driver's context, so the main loop changes or reads it only under the driver's lock.
+#define NAMES_KEEP_MS (10 * 60 * 1000)
+static wifi_name_t *names;
+static unsigned names_count;
+static bool names_scanning;             // a scan that feeds names is running
+static absolute_time_t names_until;
 
 static struct netif *sta(void) {
     return &cyw43_state.netif[CYW43_ITF_STA];
@@ -124,6 +137,8 @@ static int scan_result(void *env, const cyw43_ev_scan_result_t *r) {
     (void)env;
     if (!r)
         return 0;
+    if (names)                          // every network, for an SSID question's Tab
+        wifi_names_add(names, &names_count, r->ssid, r->ssid_len, r->rssi);
     unsigned net;
     for (net = 0; net < net_count; net++)
         if (r->ssid_len == strlen(nets[net].ssid) && !memcmp(r->ssid, nets[net].ssid, r->ssid_len))
@@ -414,6 +429,7 @@ static void check_country(void) {
 
 void wifi_start(void) {
     cyw43_arch_enable_sta_mode();   // sets the SDK's default power mode
+    started = true;
     check_country();
     wifi_apply_power();
     attempt = 0;
@@ -433,8 +449,59 @@ void wifi_reconnect(void) {
     begin_attempt();
 }
 
+void wifi_names_start(void) {
+    if (!started)
+        return;
+    if (!names) {
+        wifi_name_t *n = heap_zalloc(HEAP_WIFI, WIFI_NAMES_MAX * sizeof(*n));
+        if (!n)
+            return;
+        cyw43_arch_lwip_begin();
+        names = n;
+        names_count = 0;
+        cyw43_arch_lwip_end();
+    }
+    names_until = make_timeout_time_ms(NAMES_KEEP_MS);
+    // A scan of the connection's own already running feeds the names too (one callback for
+    // all scans). Ours running makes a connection attempt meanwhile join by name, unscanned.
+    cyw43_wifi_scan_options_t opts = {0};
+    names_scanning = cyw43_wifi_scan_active(&cyw43_state) ||
+                     cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result) == 0;
+}
+
+bool wifi_names_each(void (*fn)(const char *ssid, int rssi, void *arg), void *arg) {
+    wifi_name_t copy[WIFI_NAMES_MAX];   // 576 bytes: fn may take its time, and print
+    unsigned n = 0;
+    cyw43_arch_lwip_begin();
+    if (names) {
+        n = names_count;
+        memcpy(copy, names, n * sizeof(copy[0]));
+    }
+    cyw43_arch_lwip_end();
+    if (!names)
+        return false;
+    names_until = make_timeout_time_ms(NAMES_KEEP_MS);
+    for (unsigned i = 0; i < n; i++)
+        fn(copy[i].ssid, copy[i].rssi, arg);
+    return names_scanning && cyw43_wifi_scan_active(&cyw43_state);
+}
+
+void wifi_names_stop(void) {
+    cyw43_arch_lwip_begin();
+    wifi_name_t *n = names;
+    names = NULL;
+    names_count = 0;
+    cyw43_arch_lwip_end();
+    names_scanning = false;
+    heap_release(HEAP_WIFI, n);
+}
+
 void wifi_poll(void) {
     int link;
+    if (names_scanning && !cyw43_wifi_scan_active(&cyw43_state))
+        names_scanning = false;
+    if (names && time_reached(names_until))
+        wifi_names_stop();
     switch (state) {
     case W_OFF:
         break;

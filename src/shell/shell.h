@@ -71,6 +71,10 @@ _Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast b
 #define SHELL_VALUES_INIT(fn) {{NULL, NULL, SHELL_VALUES}, (fn)}
 #define SHELL_VALUES_OF(v) (&(v).mark)
 
+// Tab at a question (shell_ask_complete): like shell_values_fn, returning true while the list
+// may still grow (a scan still running, say).
+typedef bool (*shell_ask_complete_fn)(shell_t *sh, shell_value_fn fn, void *arg);
+
 // A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
 // end with an entry whose name is NULL.
 typedef struct {
@@ -108,6 +112,7 @@ struct shell {
     const char *ask_prompt;
     bool secret;                // don't echo the answer (passwords)
     bool ask_eof;               // Ctrl-D on an empty line answers SHELL_EOF (see shell_ask_eof)
+    shell_ask_complete_fn ask_complete;     // Tab's answers to it (shell_ask_complete); NULL: none
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
@@ -169,6 +174,13 @@ void shell_console_start(shell_t *console);
 // kept, not copied (it's redrawn around log lines), so it must stay valid until answered: use a
 // string literal or a static buffer.
 void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
+
+// Let Tab complete the answer to the question just asked from `complete`: the whole answer, as
+// one value (an SSID may hold spaces), offered when it passes the same check as a file name
+// but with spaces allowed (complete.h); a double Tab lists them with their notes. Refused for a
+// secret question: nothing typed at a password prompt is ever completed, listed or rung at.
+// Ends with the question (answered, cancelled, or another asked).
+void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete);
 
 // Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
 // prompt: Ctrl-D on an empty line answers SHELL_EOF ("end of input") instead of logging out.

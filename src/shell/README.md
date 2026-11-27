@@ -20,13 +20,16 @@ translation (`crlf`), and `admin` (true for the console only).
   `shell_bind()` (a new session), `shell_end()` (the session ended), `shell_discard_input()`
   (the console locking itself) and `shell_clear_history()`, which login.c calls on `logout` and
   at login (so a line the gate refused while locked is never offered by Up).
-- **Tab completion:** Tab completes the word at the end of the line from the command tables
-  that `shell_command_tables()` gives (shell.c; NULL while the console is locked):
-  `complete.c` (pure C, host tested) walks the words before it, a command and then the words
-  that may follow (`shell_word_t`), and offers the names that start with it. One match: the
-  rest of it and a space. Several: as far as they agree; when they agree no further, a bell,
-  and a second Tab in a row lists them in columns and redraws the line. `SHELL_ADMIN` words
-  are offered only on an admin channel, `SHELL_HIDDEN` ones never. Nothing at a question.
+- **Tab completion:** Tab completes the word at the end of the line from the command tables that
+  `shell_command_tables()` gives (shell.c; NULL while the console is locked): `complete.c` (pure
+  C, host tested) walks the words before it, a command and then the words that may follow
+  (`shell_word_t`), and offers the names that start with it. One match: the rest of it and a
+  space. Several: as far as they agree; when they agree no further, a bell, and a second Tab in
+  a row lists them in columns and redraws the line. `SHELL_ADMIN` words are offered only on an
+  admin channel, `SHELL_HIDDEN` ones never. At a question, only if it has a completer
+  (`shell_ask_complete()`, refused for a secret one): the whole answer, spaces included, from
+  that function (`complete_answer()`); the SSID questions use the names a scan hears. Nothing at
+  a password.
   After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
   `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
   main loop waits) for the directory named up to the last `/`, and offers its entries that start

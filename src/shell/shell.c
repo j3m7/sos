@@ -805,7 +805,36 @@ static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
     }
 }
 
+// Tab at an SSID question: the networks a scan hears (net/wifi.c), strongest first, each with
+// its signal in the list.
+typedef struct {
+    shell_value_fn fn;
+    void *arg;
+} ssid_tab_t;
+
+static void ssid_one(const char *ssid, int rssi, void *arg) {
+    ssid_tab_t *t = arg;
+    char note[16];
+    snprintf(note, sizeof(note), "%d dBm", rssi);
+    t->fn(ssid, note, t->arg);
+}
+
+static bool tab_ssids(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    ssid_tab_t t = {fn, arg};
+    return wifi_names_each(ssid_one, &t);
+}
+
+// Ask for an SSID, with Tab offering the networks around: a scan starts now (about 0.5 s). The
+// answer's callback calls wifi_names_stop().
+static void ask_ssid(shell_t *sh, const char *prompt, shell_answer_fn fn, void *arg) {
+    shell_ask(sh, prompt, false, fn, arg);
+    wifi_names_start();
+    shell_ask_complete(sh, tab_ssids);
+}
+
 static void on_wifi_ssid(shell_t *sh, char *answer, void *arg) {
+    wifi_names_stop();
     if (!answer)
         return;
     const char *err = config_check_ssid(answer);
@@ -838,10 +867,10 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_show(sh);
     } else if (!strcmp(args, "set")) {
         if (require_admin(sh))
-            shell_ask(sh, "SSID: ", false, on_wifi_ssid, NULL);
+            ask_ssid(sh, "SSID: ", on_wifi_ssid, NULL);
     } else if (!strcmp(args, "add")) {
         if (require_admin(sh))
-            shell_ask(sh, "SSID: ", false, on_wifi_ssid, (void *)1);
+            ask_ssid(sh, "SSID: ", on_wifi_ssid, (void *)1);
     } else if (!strncmp(args, "remove ", 7)) {
         int i;
         if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
@@ -1520,6 +1549,7 @@ static void on_setup_password(shell_t *sh, char *answer, void *arg) {
 
 static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     (void)arg;
+    wifi_names_stop();
     if (!answer) {
         shell_printf(sh, "setup cancelled; nothing changed\n");
         return;
@@ -1531,7 +1561,7 @@ static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     const char *err = config_check_ssid(answer);
     if (err) {
         shell_printf(sh, "%s\n", err);
-        shell_ask(sh, "Wi-Fi network (SSID): ", false, on_setup_ssid, NULL);
+        ask_ssid(sh, "Wi-Fi network (SSID): ", on_setup_ssid, NULL);
         return;
     }
     strcpy(setup_state.ssid, answer);
@@ -1663,7 +1693,7 @@ static void setup_network(shell_t *sh) {
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID) [%s]: ", settings()->wifi_ssid);
     else
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID): ");
-    shell_ask(sh, prompt, false, on_setup_ssid, NULL);
+    ask_ssid(sh, prompt, on_setup_ssid, NULL);
 }
 
 static void show_ntp_sync_hours(shell_t *sh) {

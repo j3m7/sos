@@ -43,6 +43,11 @@ add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
 target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
 add_test(NAME wifi_pick COMMAND test_wifi_pick)
 
+# src/net/wifi_names.c: the network names a scan saw, for Tab at an SSID question.
+add_executable(test_wifi_names test_wifi_names.c ${SOS_ROOT}/src/net/wifi_names.c)
+target_include_directories(test_wifi_names PRIVATE ${SOS_ROOT}/src)
+add_test(NAME wifi_names COMMAND test_wifi_names)
+
 # src/net/ping_msg.c: ping's arguments, echo requests and replies, and statistics.
 add_executable(test_ping_msg test_ping_msg.c ${SOS_ROOT}/src/net/ping_msg.c)
 target_include_directories(test_ping_msg PRIVATE ${SOS_ROOT}/src)

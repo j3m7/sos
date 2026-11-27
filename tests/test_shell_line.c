@@ -1561,6 +1561,103 @@ TEST(tab_values_from_a_function) {
     CHECK_OUT("key del 2 \a");
 }
 
+// A question's completer, like the SSID question's: names with spaces and signal notes, one
+// that would clear the screen, and a "still scanning" answer.
+static bool ssids_partial;
+static int ssids_calls;
+static bool t_ssids(shell_t *s, shell_value_fn fn, void *arg) {
+    (void)s;
+    ssids_calls++;
+    char note[16];
+    static const struct { const char *ssid; int rssi; } nets[] = {
+        {"Home Net", -40}, {"Hotel Guest", -70}, {"Ho\x1b[2J", -50}, {"Cafe", -60}};
+    for (int i = 0; i < 4; i++) {
+        snprintf(note, sizeof(note), "%d dBm", nets[i].rssi);
+        fn(nets[i].ssid, note, arg);
+    }
+    return ssids_partial;
+}
+
+TEST(tab_completes_a_question_from_its_completer) {
+    start_ask(&io_plain);
+    ssids_partial = false;
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    type("C\t");
+    CHECK(line_is("Cafe"));                          // nothing after it: Enter sends it
+    CHECK_OUT("Cafe");                               // "C" typed, "afe" from Tab
+    type("\r");
+    CHECK_EQ(n_answers, 1);
+    CHECK(!strcmp(answers[0], "Cafe"));
+}
+
+TEST(tab_question_answers_hold_spaces) {
+    start_ask(&io_plain);
+    ssids_partial = false;
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    type("H\t");                                     // Home Net, Hotel Guest: not the escape one
+    CHECK(line_is("Ho"));
+    type("m\t");
+    CHECK(line_is("Home Net"));
+    start_ask(&io_plain);
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    type("Ho\t");
+    clear_out();
+    type("\t");
+    CHECK_OUT("\nHome Net     -40 dBm\nHotel Guest  -70 dBm\nSSID: Ho");
+}
+
+TEST(tab_question_list_still_growing) {
+    start_ask(&io_plain);
+    ssids_partial = true;                            // the scan is still running
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    type("C\t");                                     // only Cafe so far: not completed yet
+    CHECK_OUT("C\a");
+    clear_out();
+    type("\t");
+    CHECK_OUT("\nCafe  -60 dBm\n(more may come: Tab again in a moment)\nSSID: C");
+    ssids_partial = false;                           // scan done
+    type("\t");
+    CHECK(line_is("Cafe"));
+}
+
+TEST(tab_never_completes_a_secret_question) {
+    start_ask(&io_plain);
+    ssids_calls = 0;
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);                // refused
+    CHECK(sh.ask_complete == NULL);
+    type("C\t\t");
+    CHECK_OUT("");
+    CHECK_EQ(ssids_calls, 0);
+    CHECK_EQ(sh.line_len, 1);
+}
+
+TEST(tab_question_completer_ends_with_the_question) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    type("\x03");                                    // cancelled
+    CHECK(sh.ask_complete == NULL);
+    type("ti\t");                                    // a command line again: the tables
+    CHECK(line_is("time "));
+    start_ask(&io_plain);
+    shell_ask_complete(&sh, t_ssids);                // no question pending: ignored
+    CHECK(sh.ask_complete == NULL);
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);    // the next question: not inherited
+    CHECK(sh.ask_complete == NULL);
+    shell_cancel_question(&sh);
+    shell_ask(&sh, "SSID: ", false, on_answer, NULL);
+    shell_ask_complete(&sh, t_ssids);
+    shell_cancel_question(&sh);
+    CHECK(sh.ask_complete == NULL);
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1717,6 +1814,11 @@ TEST_MAIN(
     RUN(tab_echo_text_is_free);
     RUN(tab_a_word_that_ends_with_nothing);
     RUN(tab_values_from_a_function);
+    RUN(tab_completes_a_question_from_its_completer);
+    RUN(tab_question_answers_hold_spaces);
+    RUN(tab_question_list_still_growing);
+    RUN(tab_never_completes_a_secret_question);
+    RUN(tab_question_completer_ends_with_the_question);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);

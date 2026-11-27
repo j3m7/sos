@@ -15,14 +15,15 @@ DESCRIPTION
     each with whether a password is set and the connected one marked, then
     the connection state, power saving and country.
 
-    'wifi set' changes the first network: it asks for the SSID and the
-    password (not echoed), saves them and reconnects. 'wifi add' saves another
-    (up to 5 in all), after the others. The board joins the first saved
-    network in reach when it connects; while connected it doesn't notice a
-    preferred network coming into reach until the link drops or 'wifi
-    connect'. 'wifi remove <n>' forgets network n and reconnects if it was in
-    use; 'wifi prefer <n>' moves it to the front, for the next connect. 'wifi
-    connect' reconnects now, trying the saved networks from the first again.
+    'wifi set' changes the first network: it asks for the SSID (Tab offers the
+    networks around) and the password (not echoed), saves them and reconnects.
+    'wifi add' saves another (up to 5 in all), after the others. The board
+    joins the first saved network in reach when it connects; while connected
+    it doesn't notice a preferred network coming into reach until the link
+    drops or 'wifi connect'. 'wifi remove <n>' forgets network n and
+    reconnects if it was in use; 'wifi prefer <n>' moves it to the front, for
+    the next connect. 'wifi connect' reconnects now, trying the saved networks
+    from the first again.
 
     Wi-Fi connects in the background, retries after failures and reconnects
     if the link drops; the console is usable throughout. On a network with

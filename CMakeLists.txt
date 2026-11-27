@@ -168,6 +168,7 @@ set(SOS_SOURCES
     src/chat/chat.c
     src/net/wifi.c
     src/net/wifi_pick.c
+    src/net/wifi_names.c
     src/net/http.c
     src/net/http_msg.c
     src/net/ping.c
