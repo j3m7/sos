@@ -149,3 +149,35 @@ bool failcount_clear(void) {
     cleared = attempts;
     return true;
 }
+
+// Does a track have cleared bits past its count? Bits are cleared lowest first, so after the
+// count every bit must still be set.
+static bool track_stray(const uint8_t *track, unsigned count) {
+    for (unsigned bit = count; bit < FAILCOUNT_CAPACITY; bit++)
+        if (!(track[bit / 8] & (1u << (bit % 8))))
+            return true;
+    return false;
+}
+
+void failcount_inspect(const uint8_t *sector, failcount_info_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!sector) {
+        out->state = FAILCOUNT_SECTOR_NONE;
+        return;
+    }
+    if (memcmp(sector, marker, sizeof(marker)) != 0) {
+        out->state = FAILCOUNT_SECTOR_ERASED;
+        for (size_t i = 0; i < FAILCOUNT_SECTOR; i++)
+            if (sector[i] != 0xff) {
+                out->state = FAILCOUNT_SECTOR_OTHER;
+                break;
+            }
+        return;
+    }
+    out->state = FAILCOUNT_SECTOR_MARKED;
+    out->attempts = track_count(sector + ATTEMPTS_OFFSET);
+    out->cleared = track_count(sector + CLEARED_OFFSET);
+    out->stray = track_stray(sector + ATTEMPTS_OFFSET, out->attempts) ||
+                 track_stray(sector + CLEARED_OFFSET, out->cleared);
+    out->cleared_over = out->cleared > out->attempts;
+}

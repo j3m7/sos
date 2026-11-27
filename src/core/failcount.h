@@ -70,4 +70,21 @@ bool failcount_attempt(void);
 // The password was right: the count is zero again. False if that couldn't be written.
 bool failcount_clear(void);
 
+// What a sector holds, for the `failcount` health check and `health state-dump`. Reads only.
+typedef enum {
+    FAILCOUNT_SECTOR_NONE,      // no sector to read (sector NULL)
+    FAILCOUNT_SECTOR_ERASED,    // every byte 0xff: nothing counted since it was erased
+    FAILCOUNT_SECTOR_MARKED,    // the marker: the tracks are counts
+    FAILCOUNT_SECTOR_OTHER,     // neither: read as 0, and the next check writes a fresh sector
+} failcount_sector_t;
+
+typedef struct {
+    failcount_sector_t state;
+    unsigned attempts, cleared; // each track's count, as failcount_init() reads them (MARKED)
+    bool stray;                 // a track has cleared bits after its count
+    bool cleared_over;          // the cleared track is longer than the attempts track
+} failcount_info_t;
+
+void failcount_inspect(const uint8_t *sector, failcount_info_t *out);
+
 #endif

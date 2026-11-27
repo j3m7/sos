@@ -67,6 +67,7 @@ unsigned failflash_init(void) {
 }
 
 bool failflash_usable(void) { return usable; }
+const uint8_t *failflash_sector(void) { return store_read(NULL); }
 
 unsigned failflash_count(void) { return failcount_get(); }
 

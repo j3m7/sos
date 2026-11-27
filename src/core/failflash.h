@@ -13,6 +13,7 @@
 #define SOS_FAILFLASH_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 // At boot, before the console starts: read the count. Returns it.
 unsigned failflash_init(void);
@@ -20,6 +21,9 @@ unsigned failflash_init(void);
 // False if the firmware image reaches into the sector, so the count can't be kept (it is then
 // counted in RAM only, since boot).
 bool failflash_usable(void);
+
+// The sector as stored (read through XIP), for the `failcount` health check; NULL if unusable.
+const uint8_t *failflash_sector(void);
 
 // For the console's login hooks (shell/login.h): the count now; an answer is about to be
 // checked; the answer was right. failflash_clear() is also called when a console password is
