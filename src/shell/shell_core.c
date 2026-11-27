@@ -444,6 +444,10 @@ static void page_early(shell_t *sh) {
     p->page_later = true;
 }
 
+// Invariant for job authors: a producer's step must not end the session (shell_end) or start a
+// job of its own (shell_run_job, shell_run_raw) while it is paged; it may ask a question. The
+// session's end re-enters the step through the pager's cancel, and a new job would replace the
+// pager's with the terminal left in the alternate screen. No producer does either today.
 shell_fed_t shell_pipe_feed(shell_t *sh, shell_feed_t how, char **text, size_t *len) {
     pipeline_t *p = &sh->pipe;
     *text = NULL;
