@@ -1052,6 +1052,13 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
 static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
+    // Formatted first: the arguments may point into the job's memory (the checker's summary or
+    // why), which is wiped and freed below.
+    char line[FSCK_LINE_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
     if (j) {
         // The driver can leave a multi-block write open between calls: finish it before the
         // card may be taken out.
@@ -1067,11 +1074,6 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     checking = false;
     check_stop = false;
     unmounted_by_hand = true;
-    char line[FSCK_LINE_MAX];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
     if (sh)
         shell_printf(sh, "%s\n", line);
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: %s: %s", check_tag(), line);
