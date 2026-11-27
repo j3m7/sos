@@ -7,9 +7,10 @@
 //
 // `man <topic>` shows a page in the pager (edit_view_file: the file is read as you move, so a
 // page can't send the terminal a sequence). When the output is piped (`man wifi | head 12`) it
-// prints the page as `cat` does instead (files_cat, a job). `man` alone lists the pages: a job (shell/shell.h)
-// that reads the directory, sorts the names and prints each page's one-line description from
-// its NAME section, a few pages per pass. Without any pages, both offer to download them.
+// prints the page as `cat` does instead (files_cat, a job). `man` alone lists the pages: a job
+// (shell/shell.h) that reads the directory, sorts the names and prints each page's one-line
+// description from its NAME section, a few pages per pass. Without any pages, both offer to
+// download them.
 //
 // `man install` fetches one file, man/pages.bundle, built from the repository's pages by
 // tools/man-bundle.sh: a line "@@ <topic>" starts each page. It is taken from the commit the
