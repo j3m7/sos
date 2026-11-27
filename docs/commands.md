@@ -70,7 +70,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | Command | Where | What it does |
 |---|---|---|
 | `help`<br>`?` | any | list the commands this channel may use ([page](../man/help.txt)) |
-| `uptime` | any | time since boot, and what the last reset was ([page](../man/uptime.txt)) |
+| `uptime`<br>`uptime history` | any | time since boot, and what the last reset was ([page](../man/uptime.txt)) |
 | `temp`<br>`temp cal [<degrees> \| off]` *(console only to change)* | any (marked forms: console only) | the chip's temperature, and the lowest and highest since boot ([page](../man/temp.txt)) |
 | `power` | any | the supply voltage, and whether USB power is present ([page](../man/power.txt)) |
 | `version` | any | firmware commit, board serial, chip revision, how it is secured ([page](../man/version.txt)) |
@@ -83,7 +83,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | `log`<br>`log console <level>` *(console only)*<br>`log history <level>` *(console only)*<br>`log file <level>` *(console only)*<br>`log rotate` *(console only)*<br>`log rotate every <N>d` *(console only)*<br>`log rotate at <HH:MM>` *(console only)* | any (marked forms: console only) | the log levels, the log files on the card and their rotation ([page](../man/log.txt)) |
 | `logout`<br>`exit`<br>`Ctrl-D (on an empty line)` | any | end this session, or lock the console ([page](../man/logout.txt)) |
 | `reboot` | any | restart the device ([page](../man/reboot.txt)) |
-| `crash fault \| stack \| panic \| hang` *(console only)* | console only | stop the firmware on purpose, to test the reset reporting ([page](../man/crash.txt)) |
+| `crash fault \| stack \| panic \| hang` *(console only)*<br>`crash brownout                          (console only, test builds)` | any (marked forms: console only) | stop the firmware on purpose, to test the reset reporting ([page](../man/crash.txt)) |
 
 ## Messages
 

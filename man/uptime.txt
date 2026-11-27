@@ -3,15 +3,29 @@ NAME
 
 SYNOPSIS
     uptime
+    uptime history
 
 DESCRIPTION
-    The time since the board started. If the last reset was not a power-on or
-    a 'reboot', it says what it was:
+    The time since the board started, and why it last reset:
 
-        (last reset: watchdog)          the main loop stopped coming round
+        (last reset: power-on)          power applied
+        (last reset: reboot)            asked for: 'reboot', picotool, flashing
+        (last reset: reset pin)         the RUN pin
+        (last reset: brownout)          the core supply dipped under the
+                                        brownout detector's threshold
+        (last reset: watchdog timeout)  the main loop stopped coming round
         (last reset: glitch detector)   the detector reset the chip ('glitch')
+        (last reset: debugger)          a reset asked through SWD
         last reset: hard fault ...      a fault or panic, with the addresses
                                         to look up in build/sos.dis
+
+    'uptime history' lists the boots kept in flash, newest first: when (if
+    the clock was set), why, and how long the board had been up before it ('?'
+    after a power-on, a brownout or the reset pin, which leave nothing to read
+    it from), with the times a sync set the RTC between them. Up to 240
+    records; when full, the newest 16 boots are kept. The 'resets' health
+    check warns when three resets in a row, none asked for, each ended a run
+    of under 3 minutes.
 
     Once flash has been written since boot (a configuration save, a console
     login), a 'flash writes:' line says how many times, and how long the last
@@ -19,4 +33,4 @@ DESCRIPTION
     one.
 
 SEE ALSO
-    version, glitch, reboot, crash
+    version, glitch, reboot, crash, health
