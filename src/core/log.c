@@ -9,11 +9,13 @@
 // History: a byte ring of entries "<priority byte><text>\n", where the priority byte is 0x80 |
 // facility | level. Text is printable ASCII only, so that byte is never '\n' or text. Positions
 // are absolute byte counts; the byte at position p lives at hist[p % LOG_HISTORY_SIZE].
-// start..end is what's stored; printed..end is what the console hasn't shown yet.
+// start..end is what's stored; printed..end is what the console hasn't shown yet; written..end
+// what the log files (core/logfile.c) haven't taken yet.
 
 static char hist[LOG_HISTORY_SIZE];
-static uint32_t start, end, printed;
+static uint32_t start, end, printed, written;
 static bool lost_unprinted;             // entries dropped before the console showed them
+static unsigned lost_unwritten;         // entries dropped before the log files took them
 // Entries the console hasn't been offered yet (from `printed` on), by level, so log_pending()
 // doesn't walk the history with the lock held. Kept in step by append(), drop_oldest() and
 // log_flush(). Levels are syslog's, 0 to 7.
@@ -39,8 +41,9 @@ static unsigned level_slot(int level) {
 
 void log_init(const log_hooks_t *h) {
     hooks = h;
-    start = end = printed = 0;
+    start = end = printed = written = 0;
     lost_unprinted = false;
+    lost_unwritten = 0;
     memset(unprinted, 0, sizeof(unprinted));
     deferred = false;
 }
@@ -105,6 +108,8 @@ static int entry_priority(char c) {
 static void drop_oldest(void) {
     if (before(start, end) && !before(start, printed))  // at its level byte; not shown yet
         unprinted[level_slot(entry_priority(at(start)) & SOS_LOG_LEVEL_MASK)]--;
+    if (before(start, end) && !before(start, written))  // not taken for the files yet
+        lost_unwritten++;
     while (before(start, end) && at(start) != '\n')
         start++;
     if (before(start, end))
@@ -113,6 +118,8 @@ static void drop_oldest(void) {
         printed = start;
         lost_unprinted = true;
     }
+    if (before(written, start))
+        written = start;
 }
 
 // Store one entry. Caller holds the lock.
@@ -280,5 +287,59 @@ bool log_quota_take(log_quota_t *q, unsigned per_sec) {
 unsigned log_quota_dropped(log_quota_t *q) {
     unsigned n = q->dropped;
     q->dropped = 0;
+    return n;
+}
+
+// The parts of a stored line "[    1.234] warning: text": the time since boot, and the text
+// after the time and the level's tag (the level is in the priority).
+static void split_line(const char *line, int level, log_entry_t *e) {
+    const char *p = line;
+    uint64_t secs = 0, ms = 0;
+    if (*p == '[') {
+        p++;
+        while (*p == ' ')
+            p++;
+        while (*p >= '0' && *p <= '9')
+            secs = secs * 10 + (uint64_t)(*p++ - '0');
+        if (*p == '.')
+            p++;
+        for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++)
+            ms = ms * 10 + (uint64_t)(*p++ - '0');
+        if (*p == ']')
+            p++;
+        if (*p == ' ')
+            p++;
+    }
+    e->uptime_ms = secs * 1000 + ms;
+    const char *tag = level <= SOS_LOG_ERR       ? "error: "
+                      : level == SOS_LOG_WARNING ? "warning: "
+                                                 : "";
+    if (*tag && !strncmp(p, tag, strlen(tag)))
+        p += strlen(tag);
+    memmove(e->text, p, strlen(p) + 1);
+}
+
+bool log_file_next(log_entry_t *e) {
+    if (!hooks)
+        return false;
+    uint32_t saved = hooks->lock();
+    if (before(written, start))
+        written = start;
+    bool ok = before(written, end);
+    if (ok)
+        e->priority = copy_entry(&written, e->text, sizeof(e->text));
+    hooks->unlock(saved);
+    if (ok)
+        split_line(e->text, e->priority & SOS_LOG_LEVEL_MASK, e);
+    return ok;
+}
+
+unsigned log_file_lost(void) {
+    if (!hooks)
+        return 0;
+    uint32_t saved = hooks->lock();
+    unsigned n = lost_unwritten;
+    lost_unwritten = 0;
+    hooks->unlock(saved);
     return n;
 }
