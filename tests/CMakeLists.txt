@@ -43,6 +43,14 @@ add_executable(test_files test_files.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}
 target_include_directories(test_files PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
 add_test(NAME files COMMAND test_files)
 
+# src/ssh/sftp_fs.c: the SFTP server's file functions (when an upload's file is synced, #224),
+# with the real src/files/files.c behind them, over the same stand-ins as test_files.
+add_executable(test_sftp_fs test_sftp_fs.c ${SOS_ROOT}/src/ssh/sftp_fs.c ${SOS_ROOT}/src/files/files.c
+    ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_sftp_fs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/sftp ${SOS_ROOT}/src)
+add_test(NAME sftp_fs COMMAND test_sftp_fs)
+
 # src/shell/words.c: the shell's tokenizer (quotes, backslashes, operators) and the join.
 add_executable(test_words test_words.c ${SOS_ROOT}/src/shell/words.c)
 target_include_directories(test_words PRIVATE ${SOS_ROOT}/src)
