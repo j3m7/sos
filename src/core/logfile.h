@@ -57,7 +57,8 @@ typedef struct {
     void (*boot_text)(char *buf, size_t len);
     // Try to mount a card, quietly (called every LOGFILE_RETRY_MS while none is mounted).
     void (*retry_mount)(void);
-    // Rename `path` to `path`.1, replacing that; no `path` is fine. False and *why on failure.
+    // Rename `path` to `path`.1, replacing that. With no `path` (nothing logged to it since the
+    // last rotation) leave `path`.1 as it is. False and *why on failure.
     bool (*rotate_file)(const char *path, const char **why);
     // The time of the last rotation (Unix seconds) kept on the card: read (false if there's
     // none) and write.
@@ -93,6 +94,9 @@ void logfile_start(void);
 void logfile_apply_settings(void);
 void logfile_poll(void);
 void logfile_status(logfile_status_t *st);
+
+// Write everything waiting now (before a reboot), if a card is mounted and writing works.
+void logfile_flush(void);
 
 // Messages above this level aren't written (default info). The history's level still applies
 // first: a message it doesn't keep never reaches the files.

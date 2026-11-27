@@ -1903,6 +1903,11 @@ void shell_execute(shell_t *sh, char *cmd) {
         shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
     } else if (!strcmp(cmd, "reboot")) {
         shell_printf(sh, "rebooting...\n");
+        const char *who = chat_name(sh);
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
+                who && strcmp(who, sh->io->name) ? " " : "",
+                who && strcmp(who, sh->io->name) ? who : "");
+        logfile_flush();                    // what the log files haven't written yet
         sleep_ms(100);
         watchdog_reboot(0, 0, 0);
     } else if (!files_command(sh, cmd, args))

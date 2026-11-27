@@ -63,13 +63,28 @@ static int64_t next_rotation(void) {
 
 static void take(void);
 static const char *rotate(bool take_first);
+static bool flush(int f);
 
-// What's waiting is taken under the old level first: a change is logged just before it's made,
-// and `log file err` mustn't filter out its own record.
+// What's waiting is taken first, under whichever of the old and new levels lets more through:
+// a change is logged just before it's made, and neither `log file err` (raising it) nor
+// `log file info` after it (lowering it again, logged while it's still err) may filter out its
+// own record.
 void logfile_set_level(int level) {
-    if (hooks)
+    if (hooks) {
+        if (level > file_level)
+            file_level = level;
         take();
+    }
     file_level = level;
+}
+
+void logfile_flush(void) {
+    if (!hooks || state == LOGFILE_STOPPED || !hooks->card_ready())
+        return;
+    take();
+    for (int f = 0; f < SOS_LOG_FACILITIES; f++)
+        if (bufs[f].len && !flush(f))
+            return;
 }
 
 int logfile_level(void) { return file_level; }
@@ -130,9 +145,10 @@ static void put_line(int f, uint64_t uptime_ms, const char *level, const char *t
     if (!bufs[f].started) {
         char boot[96];
         hooks->boot_text(boot, sizeof(boot));
-        // The boot's own time; a mount's or rotation's marker, when it's written.
+        // The boot's own time; a mount's or rotation's marker, the time of the line it comes
+        // before (lines logged while no card was in come after a mount, earlier than it).
         bool boot_marker = !strcmp(bufs[f].marker, "boot");
-        stamp(when, sizeof(when), boot_marker ? 0 : hooks->now_us() / 1000);
+        stamp(when, sizeof(when), boot_marker ? 0 : uptime_ms);
         int n = boot_marker
                     ? snprintf(line, sizeof(line), "%s --- boot: %s ---\n", when, boot)
                     : snprintf(line, sizeof(line), "%s --- %s; this boot: %s ---\n", when,

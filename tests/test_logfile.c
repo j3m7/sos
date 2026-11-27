@@ -95,6 +95,11 @@ static bool f_rotate_file(const char *path, const char **why) {
     }
     char old[64];
     snprintf(old, sizeof(old), "%s.1", path);
+    bool exists = false;
+    for (int i = 0; i < FILES; i++)
+        exists |= !strcmp(files[i].path, path);
+    if (!exists)
+        return true;                        // nothing new: keep the old .1
     for (int i = 0; i < FILES; i++)         // remove the old .1
         if (!strcmp(files[i].path, old))
             memset(&files[i], 0, sizeof(files[i]));
@@ -542,6 +547,42 @@ TEST(markers_after_a_card_change) {
     CHECK_EQ(count(file("/var/log/kern.log"), "--- boot: SOS test"), 1);
 }
 
+// Lowering the level again keeps its record too, though it's logged while the level is high.
+TEST(lowering_the_file_level_keeps_its_own_record) {
+    reset();
+    logfile_set_level(SOS_LOG_ERR);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log file level info (until reboot)");
+    logfile_set_level(SOS_LOG_INFO);
+    settle();
+    CHECK(strstr(file("/var/log/auth.log"), "config: log file level info"));
+}
+
+TEST(flush_writes_everything_now) {
+    reset();
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from console)");
+    logfile_poll();
+    CHECK_EQ(appends, 0);               // would wait for LOGFILE_FLUSH_MS
+    logfile_flush();
+    CHECK(strstr(file("/var/log/kern.log"), "reboot (from console)"));
+    card = false;
+    logfile_flush();                    // no card: nothing, no crash
+}
+
+// A file nothing was logged to since the last rotation keeps its .1 (the period before).
+TEST(a_quiet_file_keeps_its_old_copy) {
+    reset();
+    log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "kern before");
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "auth before");
+    logfile_poll();
+    CHECK(logfile_rotate() == NULL);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "auth between");
+    logfile_poll();
+    CHECK(logfile_rotate() == NULL);
+    CHECK(strstr(file("/var/log/kern.log.1"), "kern before"));   // kern: nothing new, kept
+    CHECK(strstr(file("/var/log/auth.log.1"), "auth between"));  // auth: replaced
+    CHECK(!strstr(file("/var/log/auth.log.1"), "auth before"));
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -580,6 +621,9 @@ TEST_MAIN(
     RUN(no_card_retries_every_minute);
     RUN(boot_marker_has_the_boot_time);
     RUN(markers_after_a_card_change);
+    RUN(lowering_the_file_level_keeps_its_own_record);
+    RUN(flush_writes_everything_now);
+    RUN(a_quiet_file_keeps_its_old_copy);
     RUN(not_started);
     RUN(paths);
 )

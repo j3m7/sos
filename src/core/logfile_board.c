@@ -78,7 +78,12 @@ static bool append(const char *path, const char *data, size_t n, const char **wh
 static bool rotate_file(const char *path, const char **why) {
     char old[48];
     snprintf(old, sizeof(old), "%s.1", path);
-    FRESULT fr = f_unlink(old);
+    FILINFO fi;
+    FRESULT fr = f_stat(path, &fi);
+    if (fr == FR_NO_FILE || fr == FR_NO_PATH)
+        return true;                        // nothing since the last rotation: keep its .1
+    if (fr == FR_OK)
+        fr = f_unlink(old);
     if (fr == FR_OK || fr == FR_NO_FILE)
         fr = f_rename(path, old);
     if (fr != FR_OK && fr != FR_NO_FILE) {     // no file to rotate is fine
