@@ -29,6 +29,14 @@ Any command's output can be read the same way: end the line with `| more` (`dmes
 `wifi stats chip | more`). The output is kept instead of printed, up to 32 KB, and paged once
 the command has finished; see [man/more.txt](../man/more.txt).
 
+Before the pager or the screen, the output can go through filters, each after a `|`: `grep
+[-v] [-i] [-n] <text>` (fixed strings), `head [<n>]`, `tail [<n>]` and `wc` (`dmesg | grep wifi`,
+`cat /log/sos.log | grep error | more`, `help | wc`). They run as the command prints, so only
+what they let through counts against the pager's 32 KB, and `head` stops the command once it
+has its lines. Their pages are [grep](../man/grep.txt), [head](../man/head.txt),
+[tail](../man/tail.txt) and [wc](../man/wc.txt); the design is in
+[design/shell-pipes.md](design/shell-pipes.md).
+
 ## Manual pages
 
 `man` lists the manual pages and `man <topic>` reads one in the pager: one page per command,

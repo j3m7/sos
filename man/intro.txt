@@ -59,5 +59,9 @@ DESCRIPTION
     Any command's output can be read that way too: end the line with '| more'
     ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
+    Pipes: a command's output can go through grep, head, tail and wc on its
+    way, each after a '|' ('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep
+    error | more'). They work only after a '|'; 'man more' says how.
+
 SEE ALSO
-    help, man, logout, passwd, setup, edit, more
+    help, man, logout, passwd, setup, edit, more, grep

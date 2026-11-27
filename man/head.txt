@@ -1,0 +1,22 @@
+NAME
+    head - the first lines of a command's output, then stop it
+
+SYNOPSIS
+    <command> | head [<n>]
+
+DESCRIPTION
+    Passes on the first n lines of the command's output (10 without a
+    number; 1 to 999999) and drops the rest. Once it has them the command is
+    stopped at once, as Ctrl-C would stop it but without '^C': 'cat big.log |
+    head 3' doesn't read the rest of the file. A command that isn't a job
+    (dmesg, help) runs to its end, its further output dropped.
+
+    Stages after it still get their turn: 'dmesg | head 5 | wc' counts the
+    five lines.
+
+NOTES
+    head works only after a '|': typed on its own it says so. More about
+    pipes in 'man more'.
+
+SEE ALSO
+    tail, grep, wc, more
