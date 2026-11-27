@@ -233,17 +233,18 @@ static bool read_file(shell_t *sh, edit_t *e, const char *path, size_t size) {
     return true;
 }
 
-void edit_command(shell_t *sh, char *args) {
-    if (!args || !*args || strchr(args, ' ')) {
+void edit_command(shell_t *sh, int argc, char **argv) {
+    if (argc != 2 || !*argv[1]) {           // the file is one word (quoted, it may hold spaces)
         shell_printf(sh, "usage: edit <file>\n");
         return;
     }
+    const char *file = argv[1];
     edit_t *e = heap_zalloc(HEAP_EDIT, sizeof(*e));
     if (!e) {
         shell_printf(sh, "edit: out of memory\n");
         return;
     }
-    if (!path_resolve(sh->cwd, args, e->path, sizeof(e->path))) {
+    if (!path_resolve(sh->cwd, file, e->path, sizeof(e->path))) {
         shell_printf(sh, "path too long\n");
         heap_release(HEAP_EDIT, e);
         return;

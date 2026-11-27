@@ -336,8 +336,9 @@ bool shell_execute(shell_t *sh, int argc, char **argv) {
 }
 
 // Command tables for Tab: two, as shell.c has (its own and the file commands').
+// Tab reads them only (the fake shell_execute() above dispatches by name), so no handlers.
 #define W(name) {name, NULL, 0}
-#define C(name) {name, NULL, NULL, 0}
+#define C(name) {name, NULL, NULL, NULL, 0}
 static const shell_word_t t_levels[] = {W("err"), W("warning"), {0}};
 static const shell_word_t t_time[] = {
     {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, {0}}, 0},
@@ -364,14 +365,15 @@ static const shell_values_t t_keys = SHELL_VALUES_INIT(t_key_numbers);
 static const shell_word_t t_key[] = {{"del", SHELL_VALUES_OF(t_keys), 0}, {0}};
 static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
 static const shell_cmd_t t_commands[] = {
-    C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
-    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0},
-    {"key", NULL, t_key, 0}, {0}};
+    C("help"), C("hostname"), {"time", NULL, NULL, t_time, 0},
+    {"setup", NULL, NULL, NULL, SHELL_ADMIN}, {"?", NULL, NULL, NULL, SHELL_HIDDEN},
+    {"web", NULL, NULL, t_http, 0},
+    {"key", NULL, NULL, t_key, 0}, {0}};
 static const shell_word_t t_lua[] = {{"-b", NULL, SHELL_PATH}, W("ps"), {0}};
 static const shell_cmd_t t_files[] = {
-    C("ls"), {"lua", NULL, t_lua, SHELL_PATH}, {"log", NULL, t_log, 0},
-    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR},
-    {"echo", NULL, NULL, 0}, {0}};
+    C("ls"), {"lua", NULL, NULL, t_lua, SHELL_PATH}, {"log", NULL, NULL, t_log, 0},
+    {"cat", NULL, NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", NULL, NULL, NULL, 0}, {0}};
 static const shell_cmd_t *const t_tables[] = {t_commands, t_files, NULL};
 static bool no_tables;          // as on a locked console
 

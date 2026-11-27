@@ -34,6 +34,13 @@ add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
+# src/files/files.c: the file commands' words (`cat 'my file'`), with FatFs and the SD card
+# stood in for (tests/stubs, a card in memory); and src/shell/cmdcheck.c, the command tables' rule.
+add_executable(test_files test_files.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}/src/files/path.c
+    ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_files PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
+add_test(NAME files COMMAND test_files)
+
 # src/shell/words.c: the shell's tokenizer (quotes, backslashes, operators) and the join.
 add_executable(test_words test_words.c ${SOS_ROOT}/src/shell/words.c)
 target_include_directories(test_words PRIVATE ${SOS_ROOT}/src)
@@ -294,7 +301,7 @@ endif()
 if (EXISTS ${LUA_ROOT}/lua.h)
     set(LUA_HOST_SOURCES)
     foreach(f lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser
-              lstate lstring ltable ltm lundump lvm lzio lauxlib lbaselib lstrlib ltablib)
+              lstate lstring ltable ltm lundump lvm lzio lauxlib lbaselib lstrlib ltablib lmathlib)
         list(APPEND LUA_HOST_SOURCES ${LUA_ROOT}/${f}.c)
     endforeach()
     add_library(lua_host STATIC ${LUA_HOST_SOURCES})
@@ -305,6 +312,10 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_complete PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_complete PRIVATE lua_host)
     add_test(NAME lua_complete COMMAND test_lua_complete)
+    add_executable(test_lua_info test_lua_info.c ${SOS_ROOT}/src/lua/lua_info.c)
+    target_include_directories(test_lua_info PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_info PRIVATE lua_host)
+    add_test(NAME lua_info COMMAND test_lua_info)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()

@@ -118,6 +118,17 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   are for what the person types there, not for code they run. Once the script's shell is gone,
   its requests change nothing.
 
+## Board health: `lua_info.c`, `lua_health.c`
+
+`sos.sensors`, `sos.mem`, `sos.version`, `sos.reset_reason`, `sos.glitch` and `sos.wifi.status`
+are one request, `LR_INFO`, with the table's number (`lua_health_table_t`) in `offset`. Core 0
+(`lua_health_fill()`) writes the table into the request's data as `lua_info.h` records: named
+integers, floats, booleans and strings, and nested tables up to 4 deep. Core 1
+(`lua_info_push()`) turns them into one Lua table. So a new table needs code on core 0 only, and
+the format is tested on the host (`tests/test_lua_info.c`). Each table is read without waiting
+(the sensors' latest readings, not new ones), so `LR_INFO` is answered in the same pass, from a
+shell job too. `sos.mem` adds `script`, the script's own allocation, which core 1 keeps.
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).

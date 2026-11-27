@@ -53,8 +53,8 @@ again on logout, when the USB terminal disconnects and after 10 minutes with not
 whatever it was running is ended.
 
 Paths given to the file commands are relative to the shell's working directory ('cd', 'pwd') unless
-they start with '/'. The file commands don't take names with spaces yet, but tee and a '>' do,
-quoted.
+they start with '/'. A name with spaces is given quoted or escaped ('cat "my file"', 'cp my\ file
+backup'), to the file commands as to tee and a '>'.
 
 Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a screen at a time, and
 'man <topic>' shows a page in the same viewer. Any command's output can be read that way too: end

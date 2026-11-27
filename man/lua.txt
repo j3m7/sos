@@ -23,7 +23,9 @@ DESCRIPTION
 
     Quote the code after -e with '...': the shell takes quotes, '|' and '>'
     for itself (QUOTING in 'man intro'). So: lua -e 'print("hi")', and
-    lua -e 'print(2 > 1)'.
+    lua -e 'print(2 > 1)'. Unquoted words after -e are joined with single
+    spaces (lua -e print(1 + 1) works too). A file name is one word, quoted
+    if it holds spaces: lua 'my script.lua'.
 
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the
@@ -35,13 +37,14 @@ DESCRIPTION
 
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
-    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files,
-    sos.time, sos.uptime, sos.sleep, sos.log, timers sos.every/after/cancel
-    (a background script keeps going while timers are left), and
+    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
+    sos.time, sos.uptime, sos.sleep, sos.log; timers sos.every/after/cancel
+    (a background script keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
-    request took). There is no io, os or debug. Failures return nil and a
-    message. Each script may allocate up to 128 KB. Full details: docs/lua.md
-    in the repository.
+    request took); and tables about the board: sos.sensors, sos.mem,
+    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status. There is
+    no io, os or debug. Failures return nil and a message. Each script may
+    allocate up to 128 KB. Full details: docs/lua.md in the repository.
 
 SEE ALSO
     dmesg, logger, http, mem
