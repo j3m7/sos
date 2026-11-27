@@ -10,6 +10,7 @@
 #include "chat/chat.h"
 #include "shell/complete.h"
 #include "shell/shell.h"
+#include "core/heaptag.h"
 #include "test.h"
 
 // --- fake channels ---------------------------------------------------------------------------
@@ -58,6 +59,11 @@ const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
 complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn, void *arg) {
     (void)s; (void)dir; (void)fn; (void)arg;
     return COMPLETE_DIR_NONE;
+}
+
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    (void)sh; (void)name; (void)len;
+    heap_release(HEAP_EDIT, text);          // not under test here
 }
 
 void shell_execute(shell_t *sh, char *cmd) {
@@ -119,6 +125,11 @@ static void pass(void) {
         shell_poll(&sh[i]);
     for (int i = 0; i < N; i++)
         chat_deliver(&sh[i]);
+}
+
+// Is shell i's line being typed exactly `s`? (The buffer isn't terminated.)
+static bool line_is(int i, const char *s) {
+    return sh[i].line_len == strlen(s) && !memcmp(sh[i].line, s, sh[i].line_len);
 }
 
 static bool has(int i, const char *s) {
@@ -234,6 +245,52 @@ TEST(chat_slash_lines) {
     CHECK(has(1, "/who lists the room"));
     CHECK(has(2, "alice: /slash\n"));
     CHECK_EQ(count(2, "alice:"), 1);            // blank lines aren't sent
+}
+
+TEST(tab_completes_names_and_commands_in_the_room) {
+    setup();
+    chat_register(&sh[0], 0, "console", "console");      // not in the room: not offered
+    chat_register(&sh[1], 1, "alice@laptop", "a");
+    chat_register(&sh[2], 2, "bob", "b");
+    chat_register(&sh[3], 3, "carol smith", "c");        // a space: not one word
+    type(1, "chat\r");
+    type(2, "chat\r");
+    type(3, "chat\r");
+    pass();
+    clear(2);
+    type(2, "hi al\t");                                  // the last word, anywhere in the line
+    pass();
+    CHECK(line_is(2, "hi alice@laptop "));
+    clear(2);
+    type(2, "\x03");                                     // leaves the chat
+    pass();
+    type(2, "chat\r");
+    pass();
+    clear(2);
+    type(2, "/q\t");
+    pass();
+    CHECK(line_is(2, "/quit "));
+    type(2, "\r");                                       // trailing space trimmed: leaves
+    pass();
+    CHECK(has(2, "(left the chat)"));
+    clear(1);
+    type(1, "/\t\t");                                    // the list: the commands, with notes
+    pass();
+    CHECK(has(1, "/who   list the room\n/quit  leave the chat\n"));
+    clear(1);
+    type(1, "\x03chat\r");
+    pass();
+    clear(1);
+    type(1, "c\t");                     // console isn't in the room; "carol smith" has a space
+    pass();
+    CHECK(has(1, "c\a") && line_is(1, "c"));
+    clear(1);
+    type(1, "\x03chat\r");                               // Ctrl-C leaves; join again
+    pass();
+    clear(1);
+    type(1, "bo\t");                                     // bob left: nobody to complete
+    pass();
+    CHECK(has(1, "\a"));
 }
 
 TEST(join_shows_recent_history) {
@@ -494,6 +551,7 @@ TEST_MAIN(
     RUN(wall_alone_and_usage);
     RUN(chat_only_reaches_the_room);
     RUN(chat_slash_lines);
+    RUN(tab_completes_names_and_commands_in_the_room);
     RUN(join_shows_recent_history);
     RUN(slow_client_throttled_then_missed);
     RUN(burst_reaches_readers_that_keep_up);

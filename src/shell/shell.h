@@ -71,6 +71,10 @@ _Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast b
 #define SHELL_VALUES_INIT(fn) {{NULL, NULL, SHELL_VALUES}, (fn)}
 #define SHELL_VALUES_OF(v) (&(v).mark)
 
+// Tab at a question (shell_ask_complete): like shell_values_fn, returning true while the list
+// may still grow (a scan still running, say).
+typedef bool (*shell_ask_complete_fn)(shell_t *sh, shell_value_fn fn, void *arg);
+
 // A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
 // end with an entry whose name is NULL.
 typedef struct {
@@ -108,6 +112,9 @@ struct shell {
     const char *ask_prompt;
     bool secret;                // don't echo the answer (passwords)
     bool ask_eof;               // Ctrl-D on an empty line answers SHELL_EOF (see shell_ask_eof)
+    shell_ask_complete_fn ask_complete;     // Tab's answers to it (shell_ask_complete); NULL: none
+    bool ask_words;             // ...for its last word only (shell_ask_complete_words)
+    const char *ask_chars;      // ...a word of these characters (shell_ask_complete_chars)
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
@@ -128,7 +135,17 @@ struct shell {
     size_t draft_len;
     log_quota_t logger_quota;   // `logger`'s rate limit for this shell
     bool tab_pressed;           // the last key was a Tab that couldn't complete: the next lists
+    // `<command> | more`: the command's output is kept (a HEAP_EDIT block) instead of sent, up to
+    // SHELL_PIPE_MAX bytes, then handed to the pager (shell_page()).
+    char *pipe_buf;             // NULL when not capturing
+    size_t pipe_len, pipe_cap;
+    bool pipe_cut;              // output past SHELL_PIPE_MAX was dropped
+    bool pipe_oom;              // ... or because memory ran out
+    bool pipe_pending;          // the command started a job: page when it ends
+    char pipe_name[64];         // the command line, for the pager's status row
 };
+
+#define SHELL_PIPE_MAX (32 * 1024)
 
 // Bind a shell to a channel and print the greeting and first prompt.
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx);
@@ -155,6 +172,11 @@ void shell_logout(shell_t *sh);
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
 
+// Show `len` bytes of `text`, a HEAP_EDIT block that the callee owns from here on, in the pager
+// under `name` (`<command> | more`). Implemented by the command module (shell.c); shell_core.c
+// calls it with a command's captured output.
+void shell_page(shell_t *sh, const char *name, char *text, size_t len);
+
 // The command tables Tab completes from, NULL-terminated; NULL when this shell takes no command
 // now (the console is locked). Implemented by the command module (shell.c).
 const shell_cmd_t *const *shell_command_tables(const shell_t *sh);
@@ -169,6 +191,22 @@ void shell_console_start(shell_t *console);
 // kept, not copied (it's redrawn around log lines), so it must stay valid until answered: use a
 // string literal or a static buffer.
 void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
+
+// Let Tab complete the answer to the question just asked from `complete`: the whole answer, as
+// one value (an SSID may hold spaces), offered when it passes the same check as a file name but
+// with single spaces between other characters allowed (complete.h); a double Tab lists them
+// with their notes. Refused for a secret question: nothing typed at a password prompt is ever
+// completed, listed or rung at. Ends with the question (answered, cancelled, or another asked).
+void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete);
+
+// The same for a question whose answer is free text (a chat line): Tab completes its last word
+// from `complete`'s values, which must be single words, and adds a space after one, as on the
+// command line.
+void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete);
+
+// The same where a word isn't between spaces (a line of code): the word Tab completes is the
+// run of `chars` (kept, not copied) just before the cursor, and nothing is added after one.
+void shell_ask_complete_chars(shell_t *sh, shell_ask_complete_fn complete, const char *chars);
 
 // Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
 // prompt: Ctrl-D on an empty line answers SHELL_EOF ("end of input") instead of logging out.
@@ -202,6 +240,9 @@ void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
 // A raw-mode job (shell_run_raw) owns the screen: nothing else should write to this shell.
 bool shell_raw_mode(const shell_t *sh);
+// The screen isn't for messages now: a full-screen program owns it (raw mode), or a command's
+// output is being captured for the pager (`| more`). Messages from other shells wait.
+bool shell_screen_held(const shell_t *sh);
 
 // Like shell_run_job, in raw input mode, for full-screen programs: every key typed goes to `key`
 // as it arrives, decoded (keys.h), instead of being kept for afterwards. Ctrl-C is a key like

@@ -166,8 +166,8 @@ void chat_deliver(shell_t *sh) {
     peer_t *p = find(sh);
     if (!p || (!p->missed && p->next == head))
         return;
-    if (shell_raw_mode(sh))     // a full-screen program owns the screen: messages wait
-        return;
+    if (shell_screen_held(sh))  // a full-screen program owns the screen, or `| more` is
+        return;                 // capturing a command's output: messages wait
     char buf[CHAT_STAMP_MAX + CHAT_NAME_MAX + SHELL_LINE_MAX + 32];
     int space = shell_write_space(sh) - redraw_cost(sh);
     bool hidden = false;
@@ -296,8 +296,21 @@ void chat_cmd_wall(shell_t *sh, char *args) {
 
 static void chat_line(shell_t *sh, char *line, void *arg);
 
+// Tab at the chat prompt, on the last word: the room's commands, and the names of the others in
+// the room. Names are already filtered for the terminal (clean()); one with a space can't be
+// completed as a word and isn't offered (shell/complete.h).
+static bool chat_complete(shell_t *sh, shell_value_fn fn, void *arg) {
+    fn("/who", "list the room", arg);
+    fn("/quit", "leave the chat", arg);
+    for (unsigned i = 0; i < CHAT_MAX_PEERS; i++)
+        if (peers[i].sh && peers[i].sh != sh && peers[i].in_room)
+            fn(peers[i].name, NULL, arg);
+    return false;
+}
+
 static void ask_again(shell_t *sh) {
     shell_ask_eof(sh, "chat> ", chat_line, NULL);
+    shell_ask_complete_words(sh, chat_complete);
 }
 
 static void sent(shell_t *sh, peer_t *self, int kind, const char *text) {
@@ -350,14 +363,15 @@ static void chat_line(shell_t *sh, char *line, void *arg) {
     peer_t *self = find(sh);
     if (!self || !self->in_room)
         return;
+    // Trailing spaces go first, so "/quit " (as Tab completes it) is /quit.
+    size_t len = line && line != SHELL_EOF ? strlen(line) : 0;
+    while (len > 0 && line[len - 1] == ' ')
+        line[--len] = '\0';
     if (!line || line == SHELL_EOF || !strcmp(line, "/quit")) {    // Ctrl-C, Ctrl-D, /quit
         leave_room(self);
         shell_printf(sh, "(left the chat)\n");
         return;
     }
-    size_t len = strlen(line);
-    while (len > 0 && line[len - 1] == ' ')
-        line[--len] = '\0';
     if (!strcmp(line, "/who")) {
         cmd_who_room(sh, self);
     } else if (line[0] == '/' && line[1] != '/') {

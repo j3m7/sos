@@ -260,6 +260,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
@@ -880,7 +881,36 @@ static void on_wifi_password(shell_t *sh, char *answer, void *arg) {
     }
 }
 
+// Tab at an SSID question: the networks a scan hears (net/wifi.c), strongest first, each with
+// its signal in the list.
+typedef struct {
+    shell_value_fn fn;
+    void *arg;
+} ssid_tab_t;
+
+static void ssid_one(const char *ssid, int rssi, void *arg) {
+    ssid_tab_t *t = arg;
+    char note[16];
+    snprintf(note, sizeof(note), "%d dBm", rssi);
+    t->fn(ssid, note, t->arg);
+}
+
+static bool tab_ssids(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    ssid_tab_t t = {fn, arg};
+    return wifi_names_each(ssid_one, &t);
+}
+
+// Ask for an SSID, with Tab offering the networks around: a scan starts now (about 0.5 s). The
+// answer's callback calls wifi_names_stop().
+static void ask_ssid(shell_t *sh, const char *prompt, shell_answer_fn fn, void *arg) {
+    shell_ask(sh, prompt, false, fn, arg);
+    wifi_names_start();
+    shell_ask_complete(sh, tab_ssids);
+}
+
 static void on_wifi_ssid(shell_t *sh, char *answer, void *arg) {
+    wifi_names_stop();
     if (!answer)
         return;
     const char *err = config_check_ssid(answer);
@@ -913,10 +943,10 @@ static void cmd_wifi(shell_t *sh, char *args) {
         wifi_show(sh);
     } else if (!strcmp(args, "set")) {
         if (require_admin(sh))
-            shell_ask(sh, "SSID: ", false, on_wifi_ssid, NULL);
+            ask_ssid(sh, "SSID: ", on_wifi_ssid, NULL);
     } else if (!strcmp(args, "add")) {
         if (require_admin(sh))
-            shell_ask(sh, "SSID: ", false, on_wifi_ssid, (void *)1);
+            ask_ssid(sh, "SSID: ", on_wifi_ssid, (void *)1);
     } else if (!strncmp(args, "remove ", 7)) {
         int i;
         if (!require_admin(sh) || (i = wifi_number(sh, args + 7)) < 0)
@@ -1600,6 +1630,7 @@ static void on_setup_password(shell_t *sh, char *answer, void *arg) {
 
 static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     (void)arg;
+    wifi_names_stop();
     if (!answer) {
         shell_printf(sh, "setup cancelled; nothing changed\n");
         return;
@@ -1611,7 +1642,7 @@ static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     const char *err = config_check_ssid(answer);
     if (err) {
         shell_printf(sh, "%s\n", err);
-        shell_ask(sh, "Wi-Fi network (SSID): ", false, on_setup_ssid, NULL);
+        ask_ssid(sh, "Wi-Fi network (SSID): ", on_setup_ssid, NULL);
         return;
     }
     strcpy(setup_state.ssid, answer);
@@ -1743,7 +1774,7 @@ static void setup_network(shell_t *sh) {
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID) [%s]: ", settings()->wifi_ssid);
     else
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID): ");
-    shell_ask(sh, prompt, false, on_setup_ssid, NULL);
+    ask_ssid(sh, prompt, on_setup_ssid, NULL);
 }
 
 static void show_ntp_sync_hours(shell_t *sh) {
@@ -2035,6 +2066,7 @@ static const shell_values_t wifi_numbers = SHELL_VALUES_INIT(tab_wifi_numbers);
 static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
 static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
 static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
+static const shell_values_t man_topics = SHELL_VALUES_INIT(man_tab_topics);
 
 // The words Tab offers after each command (shell.h): the subcommands its parser takes.
 #define END {0}
@@ -2104,7 +2136,6 @@ static const shell_word_t lua_words[] = {
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
-static const shell_word_t man_words[] = {W("install"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2138,7 +2169,7 @@ static const shell_cmd_t commands[] = {
     {"lua", lua_command, lua_words, SHELL_PATH},
     {"edit", edit_command, NULL, SHELL_PATH},
     {"more", view_command, NULL, SHELL_PATH},
-    {"man", man_command, man_words, 0},
+    {"man", man_command, SHELL_VALUES_OF(man_topics), 0},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, SHELL_ADMIN},
@@ -2156,6 +2187,10 @@ const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
     if (sh->io->admin && login_locked())        // nothing to offer before the password
         return NULL;
     return command_tables;
+}
+
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    edit_view_take(sh, name, text, len);
 }
 
 void shell_execute(shell_t *sh, char *cmd) {

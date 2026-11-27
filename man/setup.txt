@@ -6,7 +6,8 @@ SYNOPSIS
 
 DESCRIPTION
     Asks, in order: a new console password if none is set (8 to 64 characters,
-    not echoed, twice), the Wi-Fi network (SSID) and its password (not echoed;
+    not echoed, twice), the Wi-Fi network (SSID; Tab offers the networks
+    around) and its password (not echoed;
     empty for an open network), and a public key to trust (paste one
     authorized_keys line, e.g. ~/.ssh/id_ed25519.pub). Enter keeps the value
     shown in brackets; Ctrl-C cancels without changing anything.

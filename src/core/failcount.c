@@ -39,7 +39,7 @@ static unsigned track_count(const uint8_t *track) {
 
 static void load(void) {
     const uint8_t *s = st->read(st->ctx);
-    have_marker = memcmp(s, marker, sizeof(marker)) == 0;
+    have_marker = s && memcmp(s, marker, sizeof(marker)) == 0;     // no sector: nothing stored
     attempts = cleared = 0;
     if (have_marker) {
         attempts = track_count(s + ATTEMPTS_OFFSET);
@@ -64,7 +64,10 @@ static bool clear_bits(size_t offset, unsigned from, unsigned to) {
             return false;
         // The flash call reports nothing, so a write that didn't take would go unnoticed:
         // read the bits back. Every bit that was to be cleared must now read 0.
-        const uint8_t *now = st->read(st->ctx) + page * FAILCOUNT_PAGE;
+        const uint8_t *now = st->read(st->ctx);
+        if (!now)
+            return false;
+        now += page * FAILCOUNT_PAGE;
         for (unsigned i = 0; i < FAILCOUNT_PAGE; i++)
             if (now[i] & (uint8_t)~buf[i])
                 return false;
@@ -83,12 +86,15 @@ static bool restart(unsigned carry) {
     have_marker = false;
     attempts = cleared = 0;
     const uint8_t *s = st->read(st->ctx);
+    if (!s)
+        return false;
     for (size_t i = 0; i < FAILCOUNT_SECTOR; i++)
         if (s[i] != 0xff)               // an erase that didn't take: the tracks can't be trusted
             return false;
     memset(buf, 0xff, sizeof(buf));
     memcpy(buf, marker, sizeof(marker));
-    if (!st->program(st->ctx, 0, buf) || memcmp(st->read(st->ctx), marker, sizeof(marker)))
+    if (!st->program(st->ctx, 0, buf) || !(s = st->read(st->ctx)) ||
+        memcmp(s, marker, sizeof(marker)))
         return false;
     have_marker = true;
     if (!clear_bits(ATTEMPTS_OFFSET, 0, carry))

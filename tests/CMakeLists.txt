@@ -24,7 +24,7 @@ target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c
+add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c
     ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c
     ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
@@ -33,7 +33,7 @@ add_test(NAME shell_line COMMAND test_shell_line)
 # src/shell/login.c: the console's lock (password prompt, delays, the gate), with the real
 # shell_core.c.
 add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/login.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
     ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
@@ -42,6 +42,11 @@ add_test(NAME login COMMAND test_login)
 add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
 target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
 add_test(NAME wifi_pick COMMAND test_wifi_pick)
+
+# src/net/wifi_names.c: the network names a scan saw, for Tab at an SSID question.
+add_executable(test_wifi_names test_wifi_names.c ${SOS_ROOT}/src/net/wifi_names.c)
+target_include_directories(test_wifi_names PRIVATE ${SOS_ROOT}/src)
+add_test(NAME wifi_names COMMAND test_wifi_names)
 
 # src/net/ping_msg.c: ping's arguments, echo requests and replies, and statistics.
 add_executable(test_ping_msg test_ping_msg.c ${SOS_ROOT}/src/net/ping_msg.c)
@@ -129,7 +134,8 @@ target_include_directories(test_logfile PRIVATE ${SOS_ROOT}/src)
 add_test(NAME logfile COMMAND test_logfile)
 
 # src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
-add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)
+add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c
+               ${SOS_ROOT}/src/time/utc_libc.c)
 target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)
 add_test(NAME timeconv COMMAND test_timeconv)
 
@@ -172,7 +178,7 @@ add_test(NAME http_msg COMMAND test_http_msg)
 
 # src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
 add_executable(test_chat test_chat.c stub_version.c ${SOS_ROOT}/src/chat/chat.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
     ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)
@@ -261,6 +267,37 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
 elseif (TARGET wolfcrypt_host)
     message(WARNING "sdcrypt and seal tests skipped: they also need OpenSSL's libcrypto")
 endif()
+
+# src/lua/lua_complete.c: Tab at the Lua prompt, with a real Lua state. LUA_ROOT: as for the
+# firmware (lib/lua, or local.cmake).
+if (NOT DEFINED LUA_ROOT)
+    include(${SOS_ROOT}/local.cmake OPTIONAL)
+endif()
+if (NOT DEFINED LUA_ROOT)
+    set(LUA_ROOT ${SOS_ROOT}/lib/lua)
+endif()
+if (EXISTS ${LUA_ROOT}/lua.h)
+    set(LUA_HOST_SOURCES)
+    foreach(f lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser
+              lstate lstring ltable ltm lundump lvm lzio lauxlib lbaselib lstrlib ltablib)
+        list(APPEND LUA_HOST_SOURCES ${LUA_ROOT}/${f}.c)
+    endforeach()
+    add_library(lua_host STATIC ${LUA_HOST_SOURCES})
+    target_include_directories(lua_host PUBLIC ${LUA_ROOT})
+    target_compile_options(lua_host PRIVATE -w)     # Lua's own code, not ours to warn about
+    target_link_libraries(lua_host PUBLIC m)
+    add_executable(test_lua_complete test_lua_complete.c ${SOS_ROOT}/src/lua/lua_complete.c)
+    target_include_directories(test_lua_complete PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_complete PRIVATE lua_host)
+    add_test(NAME lua_complete COMMAND test_lua_complete)
+else()
+    message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
+endif()
+
+# src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
+add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
+target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
+add_test(NAME man_topic COMMAND test_man_topic)
 
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)

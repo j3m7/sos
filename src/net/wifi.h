@@ -69,6 +69,15 @@ int wifi_iovar_set(const char *name, uint32_t value);
 // True while associated and holding an IP address.
 bool wifi_up(void);
 
+// The networks around, for Tab at an SSID question. wifi_names_start() starts collecting the
+// names every scan hears (and a scan, unless one is running; it takes about 0.5 s);
+// wifi_names_each() calls fn with them so far, strongest first, and says whether the scan is
+// still running; wifi_names_stop() forgets them (the question was answered). They are kept on
+// the heap only meanwhile, and forgotten 10 minutes after the last use all the same.
+void wifi_names_start(void);
+bool wifi_names_each(void (*fn)(const char *ssid, int rssi, void *arg), void *arg);
+void wifi_names_stop(void);
+
 // The SSID of the network connected to, or NULL while not connected.
 const char *wifi_ssid(void);
 

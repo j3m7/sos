@@ -36,6 +36,12 @@ void timeconv_to_cal(int64_t t, timeconv_cal_t *cal);
 // in that month (wday is ignored).
 bool timeconv_from_cal(const timeconv_cal_t *cal, int64_t *t);
 
+// What mktime() gives for a `struct tm` when the time zone is UTC, without the C library's time
+// zone code (which reads TZ with sscanf and so links scanf): `year` is years since 1900 and
+// `mon` is 0-11, as in struct tm. Fields outside their range carry over as mktime()'s do (month
+// 12 is January of the next year, day 0 is the last day of the month before).
+int64_t timeconv_from_tm(int year, int mon, int mday, int hour, int min, int sec);
+
 // PCF8523 registers 03h..09h (Seconds, Minutes, Hours, Days, Weekdays, Months, Years), 24-hour
 // mode. The OS flag (bit 7 of Seconds) is ignored when decoding and written as 0.
 #define TIMECONV_RTC_REGS 7

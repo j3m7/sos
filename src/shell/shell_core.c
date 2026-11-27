@@ -16,9 +16,92 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/heaptag.h"
+
+// --- `| more`: output captured for the pager -------------------------------------------------------
+
+#define PIPE_STEP 2048                  // the capture grows by this much
+
+static void write_out(shell_t *sh, const char *buf, size_t len);
+
+// Keep the command's output instead of sending it, up to SHELL_PIPE_MAX bytes.
+static void pipe_append(shell_t *sh, const char *buf, size_t len) {
+    if (sh->pipe_cut)
+        return;
+    if (sh->pipe_len + len > SHELL_PIPE_MAX) {
+        len = SHELL_PIPE_MAX - sh->pipe_len;
+        sh->pipe_cut = true;
+    }
+    if (sh->pipe_len + len > sh->pipe_cap) {
+        size_t cap = sh->pipe_cap;
+        while (cap < sh->pipe_len + len)
+            cap += PIPE_STEP;
+        char *b = heap_realloc(HEAP_EDIT, sh->pipe_buf, cap);
+        if (!b) {                       // the rest is lost: say so in the text
+            sh->pipe_cut = sh->pipe_oom = true;
+            return;
+        }
+        sh->pipe_buf = b;
+        sh->pipe_cap = cap;
+    }
+    memcpy(sh->pipe_buf + sh->pipe_len, buf, len);
+    sh->pipe_len += len;
+}
+
+static void pipe_drop(shell_t *sh) {
+    heap_release(HEAP_EDIT, sh->pipe_buf);
+    sh->pipe_buf = NULL;
+    sh->pipe_len = sh->pipe_cap = 0;
+    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
+}
+
+// The command turned out not to be one to page (it asks a question): what it printed so far
+// goes to the screen, and the rest will too.
+static void pipe_release(shell_t *sh) {
+    char *text = sh->pipe_buf;
+    size_t len = sh->pipe_len;
+    sh->pipe_buf = NULL;
+    if (len)
+        write_out(sh, text, len);
+    heap_release(HEAP_EDIT, text);
+    sh->pipe_len = sh->pipe_cap = 0;
+    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
+}
+
+// The command is done: its output goes to the pager (which owns the block from here on).
+static void pipe_finish(shell_t *sh) {
+    char *text = sh->pipe_buf;
+    size_t len = sh->pipe_len;
+    bool cut = sh->pipe_cut, oom = sh->pipe_oom;
+    sh->pipe_buf = NULL;
+    sh->pipe_len = sh->pipe_cap = 0;
+    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
+    if (len == 0) {
+        heap_release(HEAP_EDIT, text);
+        shell_printf(sh, "%s: no output\n", sh->pipe_name);
+        return;
+    }
+    if (cut) {
+        const char *note = oom ? "\n[out of memory: the output is cut here]\n"
+                               : "\n[output cut here: the pager takes 32 KB at most]\n";
+        size_t nl = strlen(note);
+        char *b = heap_realloc(HEAP_EDIT, text, len + nl);
+        if (b) {
+            text = b;
+            memcpy(text + len, note, nl);
+            len += nl;
+        }
+    }
+    shell_page(sh, sh->pipe_name, text, len);
+}
+
 // --- output --------------------------------------------------------------------
 
 static void write_out(shell_t *sh, const char *buf, size_t len) {
+    if (sh->pipe_buf) {                     // `| more`: kept for the pager, nothing on screen
+        pipe_append(sh, buf, len);
+        return;
+    }
     if (len)
         sh->at_line_start = buf[len - 1] == '\n';
     if (!sh->io->crlf) {
@@ -67,8 +150,31 @@ void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn
     sh->ask_prompt = ask_prompt;
     sh->secret = secret;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     sh->answer = answer;
     sh->answer_arg = arg;
+}
+
+// The three ways a question's answer is completed (shell.h); never for a secret question.
+static void ask_complete(shell_t *sh, shell_ask_complete_fn complete, bool words,
+                         const char *chars) {
+    if (sh->answer && !sh->secret) {
+        sh->ask_complete = complete;
+        sh->ask_words = words;
+        sh->ask_chars = chars;
+    }
+}
+
+void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete) {
+    ask_complete(sh, complete, false, NULL);
+}
+
+void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete) {
+    ask_complete(sh, complete, true, NULL);
+}
+
+void shell_ask_complete_chars(shell_t *sh, shell_ask_complete_fn complete, const char *chars) {
+    ask_complete(sh, complete, true, chars);
 }
 
 char shell_eof[] = "";
@@ -111,6 +217,7 @@ void shell_cancel_question(shell_t *sh) {
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
 }
 
 // Take the pending question, if any, and hand it the answer (NULL = cancelled).
@@ -122,12 +229,13 @@ static bool answer_question(shell_t *sh, char *answer) {
     sh->answer = NULL;                  // cleared first: the callback may ask the next question
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     fn(sh, answer, arg);
     return true;
 }
 
 void shell_hide_input(shell_t *sh) {
-    if (!sh->io || shell_raw_mode(sh))          // full-screen program: leave its screen alone
+    if (!sh->io || shell_screen_held(sh))       // full-screen program, or `| more`: nothing shown
         return;
     if (sh->job) {                              // job output on screen: don't erase it
         if (!sh->at_line_start)
@@ -242,17 +350,65 @@ static void history_key(shell_t *sh, int key) {
     }
 }
 
-// Trim spaces and hand non-empty commands to the command module.
+// Where a trailing "| more" starts (the '|'), or NULL. `cmd` is trimmed.
+static char *pipe_suffix(char *cmd) {
+    size_t n = strlen(cmd);
+    if (n < 5 || strcmp(cmd + n - 4, "more"))
+        return NULL;
+    char *p = cmd + n - 4;
+    while (p > cmd && p[-1] == ' ')
+        p--;
+    return p > cmd && p[-1] == '|' ? p - 1 : NULL;
+}
+
+// Trim spaces and hand non-empty commands to the command module. A line ending in "| more" runs
+// the command with its output captured, then pages it.
 static void run_line(shell_t *sh, char *cmd) {
     while (*cmd == ' ')
         cmd++;
     char *end = cmd + strlen(cmd);
     while (end > cmd && end[-1] == ' ')
         *--end = '\0';
-    if (*cmd) {
-        history_add(sh, cmd);
+    if (!*cmd)
+        return;
+    history_add(sh, cmd);
+    char *pipe = pipe_suffix(cmd);
+    if (!pipe) {
         shell_execute(sh, cmd);
+        return;
     }
+    snprintf(sh->pipe_name, sizeof(sh->pipe_name), "%s", cmd);
+    while (pipe > cmd && pipe[-1] == ' ')
+        pipe--;
+    *pipe = '\0';
+    if (!*cmd) {
+        shell_printf(sh, "usage: <command> | more\n");
+        return;
+    }
+    if (!shell_command_tables(sh)) {        // a locked console: the refusal, not a pager
+        shell_execute(sh, cmd);
+        return;
+    }
+    sh->pipe_buf = heap_alloc(HEAP_EDIT, PIPE_STEP);
+    if (!sh->pipe_buf) {
+        shell_printf(sh, "%s: out of memory, running without the pager\n", sh->pipe_name);
+        shell_execute(sh, cmd);
+        return;
+    }
+    sh->pipe_cap = PIPE_STEP;
+    sh->pipe_len = 0;
+    sh->pipe_cut = sh->pipe_oom = false;
+    shell_execute(sh, cmd);
+    if (!sh->pipe_buf)                      // the command ended the session (logout): done
+        return;
+    if (sh->answer)                         // it asks a question: not a thing to page
+        pipe_release(sh);
+    else if (sh->job && sh->key)            // a full-screen program: its own screen; what it
+        pipe_release(sh);                   // printed before (a warning) shows under it
+    else if (sh->job)                       // a job: paged when it ends
+        sh->pipe_pending = true;
+    else
+        pipe_finish(sh);
 }
 
 // --- input ---------------------------------------------------------------------
@@ -268,9 +424,11 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->answer = NULL;
     sh->secret = false;
     sh->ask_eof = false;
+    sh->ask_complete = NULL;
     sh->job = NULL;             // a job of an earlier session was cancelled by shell_end()
     sh->job_arg = NULL;
     sh->key = NULL;
+    pipe_drop(sh);
     sh->ahead_len = 0;
     strcpy(sh->cwd, "/");
     shell_clear_history(sh);    // a new session doesn't see the last one's commands
@@ -305,12 +463,16 @@ bool shell_raw_mode(const shell_t *sh) {
     return sh->job != NULL && sh->key != NULL;
 }
 
+bool shell_screen_held(const shell_t *sh) {
+    return shell_raw_mode(sh) || sh->pipe_buf != NULL;
+}
+
 bool shell_busy(const shell_t *sh) {
     return sh->job != NULL || sh->ahead_len > 0;
 }
 
 int shell_write_space(shell_t *sh) {
-    if (!sh->io->write_space)
+    if (sh->pipe_buf || !sh->io->write_space)   // captured output waits for no channel
         return 1024;
     int n = sh->io->write_space(sh->ctx);
     return n > 0 ? n : 0;
@@ -323,7 +485,9 @@ void shell_end(shell_t *sh) {
         sh->key = NULL;
         step(sh, sh->job_arg, true);
     }
+    pipe_drop(sh);
     sh->answer = NULL;
+    sh->ask_complete = NULL;
     shell_clear_history(sh);    // the session's commands don't wait in RAM for the next one
 }
 
@@ -532,15 +696,31 @@ static void tab_print(const char *word, char end, const char *note, void *arg) {
     }
 }
 
-static void line_tab(shell_t *sh, bool again) {
+// The matches for what's typed: the answer to a question that has a completer (never a secret
+// one), or a command line. False if Tab has nothing to complete from here.
+static bool tab_source(shell_t *sh, size_t *start, size_t *n, complete_fn fn, void *arg,
+                       bool *partial) {
+    if (sh->answer) {
+        if (!sh->ask_complete || sh->secret)
+            return false;
+        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, sh->ask_words,
+                             sh->ask_chars, start, fn, arg, partial);
+        return true;
+    }
     const shell_cmd_t *const *tables = shell_command_tables(sh);
     if (!tables)
-        return;
+        return false;
     complete_src_t src = {tables, sh->io->admin, shell_list_dir, sh};
-    size_t start;
+    *n = complete_words(&src, sh->line, sh->line_len, start, fn, arg, partial);
+    return true;
+}
+
+static void line_tab(shell_t *sh, bool again) {
+    size_t start, n;
     bool partial;
     tab_matches_t m = {0};
-    size_t n = complete_words(&src, sh->line, sh->line_len, &start, tab_collect, &m, &partial);
+    if (!tab_source(sh, &start, &n, tab_collect, &m, &partial))
+        return;
     size_t typed = sh->line_len - start;
     if (n == 0) {
         write_out(sh, "\a", 1);
@@ -587,9 +767,10 @@ static void line_tab(shell_t *sh, bool again) {
     if (!l.per_row)
         l.per_row = 1;
     write_out(sh, "\n", 1);
-    complete_words(&src, sh->line, sh->line_len, &start, tab_print, &l, &partial);
+    tab_source(sh, &start, &n, tab_print, &l, &partial);
     if (partial)
-        shell_printf(sh, "\n(more: the directory is too large to list here)");
+        shell_printf(sh, sh->answer ? "\n(more may come: Tab again in a moment)"
+                                    : "\n(more: the directory is too large to list here)");
     write_out(sh, "\n", 1);
     prompt(sh);
     write_out(sh, sh->line, sh->line_len);
@@ -609,7 +790,7 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         bool tab_again = sh->tab_pressed;       // any other key in between starts over
         sh->tab_pressed = false;
         if (k == '\t') {
-            if (!sh->answer)                    // questions (passwords) have nothing to complete
+            if (!sh->answer || (sh->ask_complete && !sh->secret))    // never at a password
                 line_tab(sh, tab_again);
             continue;
         }
@@ -726,11 +907,23 @@ static void poll_job(shell_t *sh) {
     }
     if (cancel) {
         sh->ahead_len = 0;
+        if (sh->pipe_pending)               // `| more`: the output so far goes, ^C shows
+            pipe_drop(sh);
         shell_printf(sh, "%s^C\n", sh->at_line_start ? "" : "\n");
     }
     if (!sh->job(sh, sh->job_arg, cancel) || cancel) {
         sh->job = NULL;
         sh->job_arg = NULL;
+        if (sh->pipe_pending) {             // `| more`: the pager takes over (a job itself)
+            if (sh->answer) {               // unless the job left a question: it's not paged
+                pipe_release(sh);
+            } else {
+                sh->ahead_len = 0;          // typed meanwhile: not keys for the pager
+                pipe_finish(sh);
+                if (sh->job)
+                    return;
+            }
+        }
         if (!sh->at_line_start)
             write_out(sh, "\n", 1);
         prompt(sh);
