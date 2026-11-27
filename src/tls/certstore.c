@@ -319,27 +319,38 @@ static void cmd_approve(shell_t *sh) {
     shell_ask(sh, prompt, false, on_approve, NULL);
 }
 
-static void cmd_status(shell_t *sh) {
-    shell_printf(sh, "built-in: ");
-    for (unsigned i = 0; i < tls_root_count; i++)
-        shell_printf(sh, "%s%s", i ? ", " : "", tls_roots[i].name);
-    shell_printf(sh, "\n");
+void certstore_info(certstore_info_t *info) {
     uint8_t *file;
     size_t len;
     const char *why = NULL;
     certs_state_t st = read_checked(&file, &len, &why);
-    shell_printf(sh, "sd:       %s %s", CERTSTORE_FILE, state_text[st]);
+    *info = (certstore_info_t){.state = state_text[st], .used = st == ST_OK, .why = why,
+                               .not_approved = st == ST_NOT_APPROVED};
     if (st == ST_OK) {
         static certbundle_cert_t certs[CERTBUNDLE_MAX_CERTS];
         size_t count = 0;
         uint8_t *der = parse(file, len, certs, &count, &why);
         heap_release(HEAP_NET, file);
         heap_release(HEAP_NET, der);
-        shell_printf(sh, ", %u certificate(s)\n", (unsigned)count);
-    } else {
-        shell_printf(sh, why ? " (%s)\n" : "\n", why);
+        info->count = (unsigned)count;
+        if (!der)
+            info->why = why;
     }
-    if (st == ST_NOT_APPROVED)
+}
+
+static void cmd_status(shell_t *sh) {
+    shell_printf(sh, "built-in: ");
+    for (unsigned i = 0; i < tls_root_count; i++)
+        shell_printf(sh, "%s%s", i ? ", " : "", tls_roots[i].name);
+    shell_printf(sh, "\n");
+    certstore_info_t info;
+    certstore_info(&info);
+    shell_printf(sh, "sd:       %s %s", CERTSTORE_FILE, info.state);
+    if (info.used)
+        shell_printf(sh, ", %u certificate(s)\n", info.count);
+    else
+        shell_printf(sh, info.why ? " (%s)\n" : "\n", info.why);
+    if (info.not_approved)
         shell_printf(sh, "          'tls roots approve' on the console trusts the file\n");
     else {
         shell_printf(sh, "pinned:   ");
@@ -347,6 +358,7 @@ static void cmd_status(shell_t *sh) {
         shell_printf(sh, "...\n");
     }
 }
+
 
 void certstore_command(shell_t *sh, char *args) {
     if (!args || !*args) {
