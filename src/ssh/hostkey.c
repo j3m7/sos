@@ -12,6 +12,7 @@
 #include <wolfssh/ssh.h>
 #include <wolfssh/keygen.h>
 
+#include "core/health.h"
 #include "core/keyprov.h"
 #include "core/keysector.h"
 #include "core/log.h"
@@ -42,6 +43,7 @@ static uint8_t key_der[HOSTREC_PAGE];       // the private key in use
 static uint32_t key_len;
 static bool have_key;
 static bool gave_up;                        // it failed for a reason that won't change before a reboot
+static bool refused;                        // ...or because a health check refused a new key
 static bool said_no_owner;
 static uint8_t page[HOSTREC_PAGE];          // a record being built
 
@@ -66,6 +68,15 @@ static bool store_sealed(const sealer_t *sealer, uint32_t len) {
 }
 
 static bool make_new(const sealer_t *sealer, uint32_t *len) {
+    // A new key is random numbers: refused while a check holding HEALTH_GATE_KEYS fails. No host
+    // key means no sshd; the console still works.
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    if (held) {
+        log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "hostkey: no new host key made: health check %s failed",
+                held);
+        refused = true;
+        return false;
+    }
     int n = wolfSSH_MakeEd25519Key(key_der, sizeof(key_der), WOLFSSH_ED25519KEY);
     if (n <= 0 || n > HOSTREC_MAX_KEY) {
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR, "hostkey: key generation failed (%d)", n);
@@ -87,6 +98,10 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     *len = have_key ? key_len : 0;
     if (have_key)
         return true;
+    // A refusal lasts only as long as the check fails (the latest result counts): asked again
+    // once the gate is open.
+    if (gave_up && refused && !health_gate(HEALTH_GATE_KEYS))
+        gave_up = refused = false;
     if (gave_up)
         return false;
 
@@ -214,6 +229,7 @@ void hostkey_owner_gone(void) {
     key_len = 0;
     have_key = false;
     gave_up = false;                    // what failed for the old owner may not for the next
+    refused = false;
     said_no_owner = false;
 }
 

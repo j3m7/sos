@@ -484,6 +484,48 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
+## Health checks (`health.c`, `health_board.c`)
+
+`health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
+with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
+registry, the results, the scheduling, the gates, the `health` table's text, the `sos.health()`
+record, and the functions that judge the seed checks' numbers. It reads the clock through the
+hook given to `health_init()`. `health_board.c` has the firmware's table and the steps that
+gather the numbers.
+
+- **Tiers:** `health_boot()` runs the boot checks in `main()` right after `wolfCrypt_Init()`,
+  before anything can make a key; each finishes in one call (a check that asks for a second is
+  recorded as FAIL), and one log line sums the tier up with its time. `health_poll()`, after
+  `sensors_poll()` in the main loop, does at most one step of one background check per pass,
+  the most overdue first; a check with more work returns `HEALTH_MORE` and is stepped again on
+  later passes. `health run` and `health full` are a shell job over `health_job_step()`, with a
+  budget per call (20 ms); while it runs, `health_poll()` starts nothing, and starting it
+  cancels a background check that was part-way through, so a check's state has one owner.
+- **Results and logging:** the latest result counts. A change of status is logged at `kern`:
+  FAIL at err, WARN at warning, back to PASS at notice (`(was FAIL 3 min ago)`). NONE to PASS
+  or SKIP isn't logged, so a healthy board logs only the boot summary.
+- **Gates:** `health_gate(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO)` names the first FAILed check
+  that holds the gate, or NULL. The callers that make keys or seal ask it first (via
+  `health_gate_refuse()`, which remembers the name for `health_refusal()`), refuse, and log the
+  refusal with the check's name: the root secret (`rootflash.c`'s random source, so
+  `rootsecret.c` stays pure), the burn image's secret (`rootburn_board.c`'s random source), the
+  owner secret and the sealing of the configuration (`settings.c`; `settings_save_refused()`
+  lets each caller of `settings_save()` say `the configuration wasn't saved: health check
+  <name> failed`), the console password's salt, the host key (`hostkey.c`, asked again once the
+  gate opens), and an encrypted card format (`sdcard.c`, before anything is written). On a
+  fresh board whose root secret was refused, the console's rescue state names the check and
+  allows `health`. Reading what is stored is never gated.
+- **Seed checks** (phase 1): `resets` (boot), `glitch`, `stack`, `heap` (with hysteresis:
+  WARN under 64 KB, PASS again only above 96 KB), `chip-temp`, `supply` (the lowest VSYS since
+  its last run, `sensors_vsys_min_take()`), each every 60 s. They read state only and hold no
+  gate. The thresholds are in `health.h`.
+- **Test builds** (`-DSOS_TEST_COMMANDS=ON`): `health inject <name> fail|clear` sets a result by
+  hand; `health inject gate keys|crypto` adds a test-only full-tier check holding that gate at
+  FAIL, to see each refusal on the board (`health full` runs it, and it passes, which opens the
+  gate again).
+- **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 24 at
+  most.
+
 ## Stack monitor (`stackmon.c`)
 
 `stackmon_paint()`, the first call in `main()`, fills the unused part of the core 0 stack with

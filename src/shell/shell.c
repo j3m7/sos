@@ -28,6 +28,7 @@
 #include "core/fault.h"
 #include "core/flashop.h"
 #include "core/glitchdet.h"
+#include "core/health.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -73,7 +74,12 @@ static bool require_admin(shell_t *sh) {
 }
 
 static void save(shell_t *sh) {
-    if (!settings_save())
+    if (settings_save())
+        return;
+    if (settings_save_refused())
+        shell_printf(sh, SETTINGS_REFUSED_FMT "the change holds only until a reboot\n",
+                     settings_save_refused());
+    else
         shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
 }
 
@@ -255,6 +261,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "log               log levels\n");
     shell_printf(sh, "config            show the configuration\n");
     shell_printf(sh, "glitch            glitch detector setting, state and resets\n");
+    shell_printf(sh, "health            self-checks: the latest result of each\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "bootkey           would this firmware start with secure boot on? (its key vs OTP)\n");
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
@@ -303,6 +310,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
         shell_printf(sh, "sd check          check the unmounted card's file system (reads only)\n");
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
+        shell_printf(sh, "health run [<name>]|full  run the self-checks now (full: the slow ones too)\n");
     }
     shell_printf(sh, "logout            end this session (also Ctrl-D)\n");
     shell_printf(sh, "reboot            restart the device\n");
@@ -1591,6 +1599,17 @@ static int console_check_step(void) {
 static const char *console_no_keys(void) {
     if (rootsource_ok())
         return NULL;
+    // A fresh open board whose root secret a failed health check refused (core/health.h): the
+    // root-secret advice would send whoever is here the wrong way. Once the check passes, a
+    // reboot makes the secret as usual. Only that refusal: a host key refused on a board whose
+    // OTP secret is unusable is no reason to blame the check for the secret.
+    const char *held = rootsource() == ROOTSRC_FLASH ? rootflash_refused_by() : NULL;
+    if (held) {
+        static char why[160];
+        snprintf(why, sizeof(why), "key making refused: health check %s failed.\n"
+                 "`health` shows the checks' results, `reboot` restarts.", held);
+        return why;
+    }
     // Only a flash record can be cleared and made again from here. A secret that should be in
     // OTP and isn't usable is not something a command puts right.
     return rootsource() == ROOTSRC_FLASH
@@ -1602,7 +1621,8 @@ static const char *console_no_keys(void) {
 }
 
 static bool console_rescue_allowed(const char *cmd) {
-    return !strcmp(cmd, "rootsecret") || !strcmp(cmd, "rootsecret forget") || !strcmp(cmd, "reboot");
+    return !strcmp(cmd, "rootsecret") || !strcmp(cmd, "rootsecret forget") ||
+           !strcmp(cmd, "reboot") || !strcmp(cmd, "health");    // results only: never run|full
 }
 
 static void console_opened(shell_t *sh) {
@@ -2112,6 +2132,108 @@ static void run_reboot(shell_t *sh, char *args) {
     wdog_reboot();
 }
 
+// --- health: self-checks (core/health.h) ---
+
+#define HEALTH_JOB_STEP_US 20000        // work per job step, as sd check's CHECK_STEP_US
+#define HEALTH_JOB_ROOM    256          // output room wanted before a step (a result line)
+
+static uint64_t health_job_t0;
+
+static void health_print_row(shell_t *sh, unsigned index) {
+    char row[HEALTH_ROW_MAX];
+    health_format_row(row, sizeof(row), index);
+    shell_printf(sh, "%s\n", row);
+}
+
+static void health_job_done(unsigned index, void *arg) {
+    health_print_row(arg, index);
+}
+
+static bool health_job(shell_t *sh, void *arg, bool cancel) {
+    (void)arg;
+    if (cancel) {
+        health_job_step(0, true);
+        shell_printf(sh, "stopped\n");
+        return false;
+    }
+    if (shell_write_space(sh) < HEALTH_JOB_ROOM)
+        return true;                    // wait for the terminal to take the lines so far
+    if (health_job_step(HEALTH_JOB_STEP_US, false))
+        return true;
+    shell_printf(sh, "done in %u ms\n", (unsigned)((time_us_64() - health_job_t0) / 1000));
+    return false;
+}
+
+#ifdef SOS_TEST_COMMANDS
+// `health inject <name> fail|clear` and `health inject gate keys|crypto`, test builds only: set
+// a result by hand, to see the refusals of docs/design/health.md §6 on the board.
+static void health_inject_cmd(shell_t *sh, const char *what, const char *how) {
+    bool ok;
+    if (what && how && !strcmp(what, "gate"))
+        ok = health_board_inject_gate(how);
+    else if (what && how && !strcmp(how, "fail"))
+        ok = health_inject(what, HEALTH_FAIL, "set by hand (health inject)");
+    else if (what && how && !strcmp(how, "clear"))
+        ok = health_inject(what, HEALTH_PASS, "cleared by hand (health inject)");
+    else
+        ok = false;
+    if (!ok) {
+        shell_printf(sh, "usage: health inject <name> fail|clear | health inject gate keys|crypto\n");
+        return;
+    }
+    health_print_row(sh, (unsigned)health_find(!strcmp(what, "gate")
+                                               ? (!strcmp(how, "keys") ? "inj-keys"
+                                                                       : "inj-crypto")
+                                               : what));
+}
+#endif
+
+static void cmd_health(shell_t *sh, char *args) {
+    char row[HEALTH_ROW_MAX];
+    if (!args) {
+        health_format_header(row, sizeof(row));
+        shell_printf(sh, "%s\n", row);
+        for (unsigned i = 0; i < health_count(); i++)
+            health_print_row(sh, i);
+        shell_printf(sh, "boot checks: %u ms\n", (unsigned)health_boot_ms());
+        return;
+    }
+    char *w1 = strtok(args, " "), *w2 = strtok(NULL, " "), *w3 = strtok(NULL, " ");
+    char *w4 = strtok(NULL, " ");
+    bool run = w1 && !strcmp(w1, "run") && !w3, full = w1 && !strcmp(w1, "full") && !w2;
+#ifdef SOS_TEST_COMMANDS
+    bool inject = w1 && !strcmp(w1, "inject") && !w4;
+#else
+    bool inject = false;
+    (void)w4;
+#endif
+    if (!run && !full && !inject) {
+        shell_printf(sh, "usage: health [run [<name>] | full]\n");
+        return;
+    }
+    // They take the CPU for a while (and later phases' full checks, the card): console only.
+    if (!sh->io->admin) {
+        shell_printf(sh, "checks can only be run on the serial console\n");
+        return;
+    }
+#ifdef SOS_TEST_COMMANDS
+    if (inject) {
+        health_inject_cmd(sh, w2, w3);
+        return;
+    }
+#endif
+    const char *err = health_job_start(full ? HEALTH_JOB_FULL : HEALTH_JOB_RUN, run ? w2 : NULL,
+                                       health_job_done, sh);
+    if (err) {
+        shell_printf(sh, "%s\n", err);
+        return;
+    }
+    health_job_t0 = time_us_64();
+    health_format_header(row, sizeof(row));
+    shell_printf(sh, "%s\n", row);
+    shell_run_job(sh, health_job, NULL);
+}
+
 // --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
 
 // `key del <n>`: the trusted keys' numbers, as `key list` shows them, with their comments.
@@ -2178,6 +2300,17 @@ static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
 static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
 static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
 static const shell_values_t man_topics = SHELL_VALUES_INIT(man_tab_topics);
+
+// `health run <name>`: the checks' names, with their latest status.
+static void tab_health_names(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (!sh->io->admin)
+        return;
+    for (unsigned i = 0; i < health_count(); i++) {
+        const health_entry_t *e = health_entry(i);
+        fn(e->check->name, health_status_name(e->result.status), arg);
+    }
+}
+static const shell_values_t health_names = SHELL_VALUES_INIT(tab_health_names);
 
 // The words Tab offers after each command (shell.h): the subcommands its parser takes.
 #define END {0}
@@ -2257,6 +2390,13 @@ static const shell_word_t mem_release_words[] = {W("first"), END};
 static const shell_word_t mem_words[] = {
     {"hold", mem_hold_words, SHELL_ADMIN}, {"release", mem_release_words, SHELL_ADMIN}, END};
 #endif
+static const shell_word_t health_words[] = {
+    {"run", SHELL_VALUES_OF(health_names), SHELL_ADMIN},
+    {"full", NULL, SHELL_ADMIN},
+#ifdef SOS_TEST_COMMANDS
+    {"inject", NULL, SHELL_ADMIN | SHELL_HIDDEN},
+#endif
+    END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2285,6 +2425,7 @@ static const shell_cmd_t commands[] = {
     {"log", cmd_log, NULL, log_words, 0},
     {"config", cmd_config, NULL, config_words, 0},
     {"glitch", cmd_glitch, NULL, glitch_words, 0},
+    {"health", cmd_health, NULL, health_words, 0},
     {"bootkey", run_bootkey, NULL, NULL, 0},
     {"rootsecret", run_rootsecret, NULL, rootsecret_words, 0},
     {"key", cmd_key, NULL, key_words, 0},

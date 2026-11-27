@@ -21,6 +21,7 @@ typedef enum {
     LH_WIFI,                    // sos.wifi.status()
     LH_CLOCK,                   // sos.clock()
     LH_DMESG,                   // sos.dmesg(): one page of the log, from cursor `arg`
+    LH_HEALTH,                  // sos.health()
     LH_TABLES
 } lua_health_table_t;
 

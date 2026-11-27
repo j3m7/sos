@@ -140,6 +140,10 @@ entries as fit (`log_history_entry()`, which also says whether entries after the
 overwritten), with the cursor after the last one and `more`; core 1 asks again from that cursor
 while `more` is set (at most 8 pages) and joins the pages into one list.
 
+`sos.health` is `LR_INFO` too (`LH_HEALTH`): core 0 writes the self-checks' latest results with
+`health_lua_table()` (`core/health.c`, where the record is tested on the host,
+`tests/test_health.c`). It only reads results; no check is run for a script.
+
 ## Dates: `lua_date.c`
 
 `sos.date` and `sos.time(table)` are computed on core 1 (`lua_date.c`, on `time/timeconv.c`);
@@ -147,6 +151,26 @@ only the time now comes from core 0 (`LR_TIME`). The formatter is SOS's own, wit
 conversions, so core 1 needs neither newlib's `strftime` nor its time zone code. It's tested
 against the host's `strftime()` over years 1 to 9999 (`tests/test_lua_date.c`). `sos.clock` is a
 health table (`LH_CLOCK`) from `timesync_info()`.
+
+## Hashes: `lua_hash.c`, `lua_codec.c`
+
+`sos.hash` and `sos.hmac` run on core 0 (`LR_HASH`), not core 1: wolfCrypt is built with
+`WOLFSSL_SMALL_STACK`, so SHA's transform takes its buffer from `XMALLOC`, which goes to the TLS
+module's accounting hooks (`src/tls/tls.c`): plain counters, and a walk over core 0's open
+connections. Core 1 streams the key and message in 4 KB requests (begin, update..., final);
+core 0 keeps one context (from the heap, `lua` in `mem`), freed after the final step, by the next
+begin, or when the script ends. Hex and base64 (`lua_codec.c`) are pure C on core 1. Tested on the
+host: `tests/test_lua_hash.c` (FIPS 180, RFC 2202 and RFC 4231 vectors, with the host wolfCrypt)
+and `tests/test_lua_codec.c`.
+
+## JSON: `lua_json.c`
+
+`sos.json` is pure computation on core 1. The decoder is a strict RFC 8259 recursive descent; the
+encoder writes into a userdata at a fixed stack slot, replaced by a bigger one as the text grows,
+so the collector frees it however the encoding ends (core 1 has no `__gc`). Both stop at 32
+levels, for core 1's C stack. Object keys are sorted (`qsort` over the keys, kept alive in a
+table). Tested on the host (`tests/test_lua_json.c`) and fuzzed (`tests/fuzz/fuzz_json.c`: any
+input decodes or is refused, and encoding what decodes is stable).
 
 ## `lua_port.h`
 

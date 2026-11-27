@@ -16,6 +16,7 @@
 #include "chat/chat.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
+#include "core/health.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/logfile.h"
@@ -170,6 +171,9 @@ int main(void) {
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "crypto init failed");
         return 1;
     }
+    // Self-checks (core/health.h), before anything below can make a key: a failed check closes
+    // the gates that the root secret, the owner secret and the host key ask first.
+    health_boot();
 
     // The root secret, then configuration and host key: all three may write flash, which is
     // simplest before Wi-Fi. Nothing derives a key from the root secret yet.
@@ -223,6 +227,7 @@ int main(void) {
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
         sensors_poll();                 // before glitchdet_poll, which keeps the latest readings
+        health_poll();                  // one step of a background check, when one is due
         glitchdet_poll();
         timesync_poll();
         nts_poll();
