@@ -180,6 +180,9 @@ static void apply_time(int64_t t_us, time_source_t src) {
     int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset);
     if (rtc_ok)
         history_rtc_done(slot);
+    // Nothing to measure against this time: this sync is the baseline the next one measures from.
+    if (drift.rtc == TIMECONV_DRIFT_NO_BASELINE && rtc_ok && slot >= 0)
+        drift.rtc = TIMECONV_DRIFT_BASELINE;
 
     char buf[24], step[40];
     timeconv_format(next / 1000000, buf, sizeof(buf));
@@ -385,6 +388,8 @@ bool timesync_apply_cal(void) {
 void timesync_drift(timeconv_drift_t *out) {
     if (drift_measured) {
         *out = drift;
+        if (drift.rtc == TIMECONV_DRIFT_BASELINE)       // set at the last sync: its age
+            out->rtc_interval_s = (uint32_t)((time_us_64() - synced_us) / 1000000);
         return;
     }
     // No sync since boot: what the history sector says about the RTC's baseline.

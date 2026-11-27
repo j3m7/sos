@@ -1512,6 +1512,8 @@ characters; `health state-dump` prints both in full.
   which give no round trip, count 50 ms.
 - **The measurement is read at the boundary** with one `rtc_read()` (about 1 ms at 100 kHz), so the
   RTC is written about 1 ms after the boundary: well inside the second it can resolve.
+- **The first sync with no baseline** becomes the baseline: the check then says
+  `RTC set 5 min ago (no cal): drift at the next sync`, the age counted from that sync.
 - **`time cal`** marks a measurement taken under the old calibration as `calibration changed`, and
   before any sync since boot the check reads the baseline's calibration from the history sector.
 - **`uptime`** now always names the reason (`(last reset: power-on)`); a fault keeps its own line.
@@ -1542,9 +1544,9 @@ characters; `health state-dump` prints both in full.
 calls). The boot record adds one page program (about 1 ms) to every boot; a sync adds an RTC read
 and a page program or two.
 
-**Cost** (`arm-none-eabi-size`, against main 06e0722): debug text +10.7 KB (1238280 to 1249232),
+**Cost** (`arm-none-eabi-size`, against main 06e0722): debug text +10.8 KB (1238280 to 1249296),
 bss +1.3 KB (most of it `HEALTH_MAX` 24 to 32; the history's 16-record read buffer, 320 bytes,
-is static); release text +16.0 KB, bss +1.3 KB; the test build text +15.5 KB. One 4 KB flash
+is static); release text +16.1 KB, bss +1.3 KB; the test build text +15.6 KB. One 4 KB flash
 sector.
 
 ## 10. Phases
