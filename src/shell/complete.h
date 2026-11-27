@@ -32,6 +32,10 @@ typedef enum {
 typedef complete_dir_t (*complete_dir_fn)(shell_t *sh, const char *dir, complete_entry_fn fn,
                                           void *arg);
 
+// The stages a line's output can go through after a '|' (pipe.c), with their options: Tab
+// offers these after "| " (only their names and options, no `run`).
+extern const shell_cmd_t pipe_stage_table[];
+
 // The SD card's lister (files.c); the host tests have their own.
 complete_dir_t shell_list_dir(shell_t *sh, const char *dir, complete_entry_fn fn, void *arg);
 

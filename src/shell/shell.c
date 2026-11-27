@@ -31,6 +31,9 @@
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#ifdef SOS_TEST_COMMANDS
+#include "core/memhold.h"
+#endif
 #include "core/logfile.h"
 #include "core/otpread.h"
 #include "core/rootflash.h"
@@ -261,6 +264,9 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
     shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
+    shell_printf(sh, "<command> | grep [-v] [-i] [-n] <text>  only the lines with the text\n");
+    shell_printf(sh, "<command> | head|tail [<n>]  the first / last n lines (10); | wc counts\n");
+    shell_printf(sh, "                  stages chain: dmesg | grep wifi | tail 5 | more\n");
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
@@ -459,7 +465,88 @@ static void cmd_mem(shell_t *sh) {
     if (lua_core1_stack_peak())
         shell_printf(sh, "lua:   %u peak of %u bytes of core 1 stack (last script)\n",
                      (unsigned)lua_core1_stack_peak(), (unsigned)LUA_CORE1_STACK);
+#ifdef SOS_TEST_COMMANDS
+    if (memhold_count())
+        shell_printf(sh, "held:  %u in %d blocks by 'mem hold' (counted in other above)\n",
+                     (unsigned)memhold_bytes(), memhold_count());
+#endif
 }
+
+#ifdef SOS_TEST_COMMANDS
+// `mem hold ...` and `mem release`, test builds only (core/memhold.h, issue #188): take heap
+// memory and keep it, to make the out-of-memory paths happen.
+static bool kb_arg(const char *s, size_t *bytes) {
+    char *end;
+    double kb = s ? strtod(s, &end) : -1;
+    if (!s || end == s || *end || !(kb >= 0 && kb <= 1024))     // rejects NaN too
+        return false;
+    *bytes = (size_t)(kb * 1024);
+    return true;
+}
+
+static void mem_held_summary(shell_t *sh) {
+    shell_printf(sh, "held %u bytes in %d blocks; %u bytes of the heap unallocated, "
+                     "largest block that fits: %u\n",
+                 (unsigned)memhold_bytes(), memhold_count(), (unsigned)heap_free(),
+                 (unsigned)memhold_largest());
+}
+
+static void cmd_mem_test(shell_t *sh, char *args) {
+    if (!require_admin(sh))
+        return;
+    char *w1 = strtok(args, " "), *w2 = strtok(NULL, " "), *w3 = strtok(NULL, " ");
+    char *w4 = strtok(NULL, " ");
+    size_t n;
+    if (!strcmp(w1, "release") && !w2) {
+        size_t freed = memhold_release();
+        shell_printf(sh, "released %u bytes; %u unallocated, largest block that fits: %u\n",
+                     (unsigned)freed, (unsigned)heap_free(), (unsigned)memhold_largest());
+        return;
+    }
+    if (!strcmp(w1, "release") && w2 && !strcmp(w2, "first") && !w4) {
+        bool digits = !w3 || (strlen(w3) <= 4 && strspn(w3, "0123456789") == strlen(w3));
+        int secs = digits && w3 ? atoi(w3) : 0;
+        if (!digits || secs > 3600) {
+            shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
+            return;
+        }
+        size_t n = memhold_release_first((unsigned)secs * 1000);
+        if (!n)
+            shell_printf(sh, "nothing held\n");
+        else if (secs)
+            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)n,
+                         secs);
+        else
+            mem_held_summary(sh);
+        return;
+    }
+    if (!strcmp(w1, "hold") && w2 && !strcmp(w2, "leave") && kb_arg(w3, &n) && !w4) {
+        memhold_leave(n);
+        mem_held_summary(sh);
+        return;
+    }
+    if (!strcmp(w1, "hold") && w2 && !strcmp(w2, "holes") && w3 && kb_arg(w4, &n) && n > 0
+        && !strtok(NULL, " ")) {
+        int want = atoi(w3);
+        if (want < 1 || want > 32) {
+            shell_printf(sh, "mem hold holes: 1 to 32 holes\n");
+            return;
+        }
+        int made = memhold_holes(want, n);
+        shell_printf(sh, "%d holes of %u bytes\n", made, (unsigned)n);
+        mem_held_summary(sh);
+        return;
+    }
+    if (!strcmp(w1, "hold") && kb_arg(w2, &n) && n > 0 && !w3) {
+        if (!memhold_block(n))
+            shell_printf(sh, "mem hold: no block of %u bytes to be had\n", (unsigned)n);
+        mem_held_summary(sh);
+        return;
+    }
+    shell_printf(sh, "usage: mem hold <KB> | mem hold leave <KB> | mem hold holes <count> <KB> "
+                     "| mem release [first [<seconds>]]\n");
+}
+#endif
 
 static void cmd_net(shell_t *sh) {
     int link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
@@ -1961,12 +2048,31 @@ static void cmd_nts(shell_t *sh, char *args) {
 
 // --- dispatch ------------------------------------------------------------------------------------
 
+// The pipeline stages (shell/pipe.h) aren't commands: typed first on a line, they say so.
+static void run_stage(shell_t *sh, const char *name, const char *form) {
+    shell_printf(sh, "%s: only after a pipe (<command> | %s)\n", name, form);
+}
+static void run_grep(shell_t *sh, char *args) { (void)args; run_stage(sh, "grep", "grep <text>"); }
+static void run_head(shell_t *sh, char *args) { (void)args; run_stage(sh, "head", "head [<n>]"); }
+static void run_tail(shell_t *sh, char *args) { (void)args; run_stage(sh, "tail", "tail [<n>]"); }
+static void run_wc(shell_t *sh, char *args) { (void)args; run_stage(sh, "wc", "wc"); }
+
 // Commands that take no arguments, and others whose handler has another signature.
 static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
 static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
 static void run_power(shell_t *sh, char *args) { (void)args; cmd_power(sh); }
 static void run_version(shell_t *sh, char *args) { (void)args; cmd_version(sh); }
-static void run_mem(shell_t *sh, char *args) { (void)args; cmd_mem(sh); }
+static void run_mem(shell_t *sh, char *args) {
+    if (!args) {
+        cmd_mem(sh);
+        return;
+    }
+#ifdef SOS_TEST_COMMANDS
+    cmd_mem_test(sh, args);
+#else
+    shell_printf(sh, "usage: mem\n");
+#endif
+}
 static void run_net(shell_t *sh, char *args) { (void)args; cmd_net(sh); }
 static void run_ssh(shell_t *sh, char *args) { (void)args; sshd_status(sh); }
 static void run_bootkey(shell_t *sh, char *args) { (void)args; cmd_bootkey(sh); }
@@ -2136,6 +2242,12 @@ static const shell_word_t lua_words[] = {
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+#ifdef SOS_TEST_COMMANDS
+static const shell_word_t mem_hold_words[] = {W("leave"), W("holes"), END};
+static const shell_word_t mem_release_words[] = {W("first"), END};
+static const shell_word_t mem_words[] = {
+    {"hold", mem_hold_words, SHELL_ADMIN}, {"release", mem_release_words, SHELL_ADMIN}, END};
+#endif
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2148,7 +2260,11 @@ static const shell_cmd_t commands[] = {
     {"time", cmd_time, time_words, 0},
     {"tls", cmd_tls, tls_words, 0},
     {"nts", cmd_nts, nts_words, 0},
+#ifdef SOS_TEST_COMMANDS
+    {"mem", run_mem, mem_words, 0},
+#else
     {"mem", run_mem, NULL, 0},
+#endif
     {"net", run_net, NULL, 0},
     {"ping", ping_command, SHELL_VALUES_OF(ping_hosts), 0},
     {"ssh", run_ssh, NULL, 0},
@@ -2176,6 +2292,10 @@ static const shell_cmd_t commands[] = {
     {"logout", run_logout, NULL, 0},
     {"exit", run_logout, NULL, 0},
     {"crash", run_crash, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
+    {"grep", run_grep, NULL, SHELL_HIDDEN},     // pipeline stages: Tab offers them after "| "
+    {"head", run_head, NULL, SHELL_HIDDEN},
+    {"tail", run_tail, NULL, SHELL_HIDDEN},
+    {"wc", run_wc, NULL, SHELL_HIDDEN},
     {"reboot", run_reboot, NULL, 0},
     END};
 #undef W

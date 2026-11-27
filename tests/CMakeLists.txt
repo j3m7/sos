@@ -26,16 +26,22 @@ target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c
+add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c
+    ${SOS_ROOT}/src/shell/pipe.c ${SOS_ROOT}/src/core/heaptag.c
     ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c
     ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
+# src/shell/pipe.c: the pipeline stages (grep, head, tail, wc) and their parser.
+add_executable(test_pipe test_pipe.c ${SOS_ROOT}/src/shell/pipe.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_pipe PRIVATE ${SOS_ROOT}/src)
+add_test(NAME pipe COMMAND test_pipe)
+
 # src/shell/login.c: the console's lock (password prompt, delays, the gate), with the real
 # shell_core.c.
 add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/login.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/pipe.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
     ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
@@ -180,7 +186,7 @@ add_test(NAME http_msg COMMAND test_http_msg)
 
 # src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
 add_executable(test_chat test_chat.c stub_version.c ${SOS_ROOT}/src/chat/chat.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/pipe.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
     ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)

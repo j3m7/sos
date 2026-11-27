@@ -1,0 +1,34 @@
+NAME
+    grep - only the lines of a command's output that hold a text
+
+SYNOPSIS
+    <command> | grep [-v] [-i] [-n] <text>
+
+DESCRIPTION
+    Passes on the lines of the command's output that hold the text, and drops
+    the others ('dmesg | grep wifi', 'cat /log/sos.log | grep error | more').
+    The text is a fixed string, not a pattern: no regular expressions and no
+    wildcards. It is everything after the options, spaces inside it kept
+    ('grep no route' looks for "no route"), at most 64 bytes.
+
+    -v    the lines without the text instead
+    -i    upper and lower case alike (ASCII letters only)
+    -n    each line starts with its number in the output and a ':'
+
+    Options can be joined ('-vn'). A word starting with '-' that isn't made of
+    these letters begins the text ('grep -x' looks for "-x").
+
+    Lines are passed on whole, as soon as each one ends; a last line without
+    a newline gets one. A line longer than 512 bytes is matched in pieces of
+    512 bytes, each one on its own (and shown as a line of its own); with -n
+    the pieces share the line's number.
+
+NOTES
+    grep works only after a '|': typed on its own it says so. A '|' starts a
+    stage only when a stage name follows it (grep, head, tail, wc, more), so
+    the text may hold a '|' that doesn't ('grep a|b'). Error messages of the
+    command go through grep like its other output. More about pipes in
+    'man more'.
+
+SEE ALSO
+    head, tail, wc, more

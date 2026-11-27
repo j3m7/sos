@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "shell/keys.h"
+#include "shell/pipe.h"
 
 // Minimal line-oriented shell. Each instance has its own line buffer and talks to one channel
 // (the USB/UART console, an SSH session, ...) through a shell_io_t, so sessions don't share
@@ -135,17 +136,12 @@ struct shell {
     size_t draft_len;
     log_quota_t logger_quota;   // `logger`'s rate limit for this shell
     bool tab_pressed;           // the last key was a Tab that couldn't complete: the next lists
-    // `<command> | more`: the command's output is kept (a HEAP_EDIT block) instead of sent, up to
-    // SHELL_PIPE_MAX bytes, then handed to the pager (shell_page()).
-    char *pipe_buf;             // NULL when not capturing
-    size_t pipe_len, pipe_cap;
-    bool pipe_cut;              // output past SHELL_PIPE_MAX was dropped
-    bool pipe_oom;              // ... or because memory ran out
-    bool pipe_pending;          // the command started a job: page when it ends
-    char pipe_name[64];         // the command line, for the pager's status row
+    // `<command> | grep x | more`: the filters the command's output goes through, and the sink
+    // (the terminal, or the capture for the pager), see pipe.h.
+    pipeline_t pipe;
 };
 
-#define SHELL_PIPE_MAX (32 * 1024)
+#define SHELL_PIPE_MAX (32 * 1024)  // the capture for `| more` takes this much at most
 
 // Bind a shell to a channel and print the greeting and first prompt.
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx);

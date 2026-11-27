@@ -1,0 +1,22 @@
+NAME
+    tail - the last lines of a command's output
+
+SYNOPSIS
+    <command> | tail [<n>]
+
+DESCRIPTION
+    Shows the last n lines of the command's output (10 without a number; 1 to
+    999999) once the command has finished ('ls | tail 3', 'dmesg | tail').
+    It keeps at most 4 KB: when the lines asked for are longer than that, it
+    shows the last whole lines that fit, and says nothing about it. A single
+    line longer than 4 KB shows its end. A last line without a newline is
+    counted as a line, as it came.
+
+    Ctrl-C while the command runs drops what tail holds: nothing is shown.
+
+NOTES
+    tail works only after a '|': typed on its own it says so. More about
+    pipes in 'man more'.
+
+SEE ALSO
+    head, grep, wc, more

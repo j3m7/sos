@@ -174,9 +174,44 @@ static char word_end(unsigned flags) {
     return flags & SHELL_NOSPACE ? '\0' : ' ';
 }
 
+// After a '|': the words there are a stage's (pipe.c), when the first of them is a stage name or
+// is the word being typed. Then complete them as a line of their own, from pipe_stage_table (it
+// has no '|' in it, so this doesn't come back here).
+static bool complete_stage(const complete_src_t *src, const char *line, size_t len,
+                           size_t *start, complete_fn fn, void *arg, bool *partial,
+                           size_t *count) {
+    size_t bar = len;
+    while (bar > 0 && line[bar - 1] != '|')
+        bar--;
+    if (bar == 0)
+        return false;
+    size_t w = bar;
+    while (w < len && line[w] == ' ')
+        w++;
+    size_t e = w;
+    while (e < len && line[e] != ' ')
+        e++;
+    if (e < len) {                      // a word before the one being typed: a stage's name?
+        bool stage = false;
+        for (const shell_cmd_t *c = pipe_stage_table; c->name && !stage; c++)
+            stage = is(c->name, line + w, e - w);
+        if (!stage)
+            return false;
+    }
+    static const shell_cmd_t *const tables[] = {pipe_stage_table, NULL};
+    complete_src_t sub = *src;
+    sub.tables = tables;
+    *count = complete_words(&sub, line + bar, len - bar, start, fn, arg, partial);
+    *start += bar;
+    return true;
+}
+
 size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
                       complete_fn fn, void *arg, bool *partial) {
     *partial = false;
+    size_t stage_count;
+    if (complete_stage(src, line, len, start, fn, arg, partial, &stage_count))
+        return stage_count;
     size_t s = len;
     while (s > 0 && line[s - 1] != ' ')
         s--;

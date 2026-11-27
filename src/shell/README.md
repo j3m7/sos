@@ -65,6 +65,21 @@ translation (`crlf`), and `admin` (true for the console only).
   messages back (`log_hooks_t.hold`) until the program ends.
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
+- **Pipes:** `<command> | grep x | head 5 | more` (`pipe.c`, pure C, host tested; design in
+  `docs/design/shell-pipes.md`). `run_line()` finds the stages with `pipe_split()`: a `|` starts
+  one only before `grep`, `head`, `tail`, `wc` or `more`, so `ls | morex` and `lua -e
+  "print(1|2)"` run as typed. `pipe_open()` parses them all before the command runs (one that
+  doesn't parse prints its usage and nothing runs). The command is the only job; `write_out()`
+  hands what it prints to the filters, on its call stack, and the last one emits to the sink:
+  the terminal, or the capture for `more` (a HEAP_EDIT block up to `SHELL_PIPE_MAX` = 32 KB,
+  paged through `shell_page()` when the command ends). The line's state is `shell_t.pipe`, a
+  `pipeline_t`. When the command ends the filters flush (`tail`'s lines, `wc`'s count); Ctrl-C
+  and the session's end drop them and the capture; a command that asks a question or enters
+  raw mode releases the pipeline (filters closed, the capture printed) and runs unpiped. `head`
+  and a full capture set `done`: further output is dropped and a job is ended silently (its step
+  called with `cancel`, no `^C`) at the end of that pass. `shell_screen_held()` is true only while
+  capturing; output between `shell_hide_input()` and `shell_show_input()` (chat messages)
+  skips the filters. A locked console runs the command without its stages.
 
 ## `login.c`: the console's lock (pure C over the shell API, host tested)
 
