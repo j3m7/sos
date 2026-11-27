@@ -30,6 +30,7 @@
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
+#include "lua/lua_health.h"
 #include "net/http.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
@@ -196,6 +197,15 @@ static void serve_change(FRESULT (*op)(const TCHAR *)) {
 static FRESULT do_mkdir(const TCHAR *p) { return f_mkdir(p); }
 static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 
+// sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
+static void serve_info(void) {
+    size_t n = lua_req.offset < LH_TABLES
+        ? lua_health_fill((lua_health_table_t)lua_req.offset, lua_req.data, LUA_REQ_DATA) : 0;
+    if (!n)
+        req_error("no such table, or it didn't fit");
+    lua_req.len = (uint32_t)n;
+}
+
 // --- HTTPS (sos.http) ----------------------------------------------------------------------------
 //
 // The script's request (one at a time) belongs to core 0; core 1 sees only what the answers copy
@@ -344,6 +354,7 @@ static void serve(bool main_loop) {
         case LR_LIST:   serve_list(); break;
         case LR_REMOVE: serve_change(do_unlink); break;
         case LR_MKDIR:  serve_change(do_mkdir); break;
+        case LR_INFO:   serve_info(); break;
         default:        req_error("unknown request"); break;
         }
     }
