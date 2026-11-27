@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+#include "core/heaptag.h"
 #include "files/path.h"
 #include "shell/complete.h"
 #include "shell/shell.h"
@@ -102,10 +103,42 @@ static bool fake_raw_step(shell_t *sh, void *arg, bool cancel) {
     return !raw_quit;
 }
 
+// The pager: records what it was given (`| more`), as shell.c's would show it.
+static char paged_name[64], paged_text[SHELL_PIPE_MAX + 128];
+static size_t paged_len;
+static int paged_calls;
+
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    (void)sh;
+    paged_calls++;
+    snprintf(paged_name, sizeof(paged_name), "%s", name);
+    paged_len = len < sizeof(paged_text) - 1 ? len : sizeof(paged_text) - 1;
+    memcpy(paged_text, text, paged_len);
+    paged_text[paged_len] = '\0';
+    heap_release(HEAP_EDIT, text);
+}
+
+static void fake_answer(shell_t *sh, char *answer, void *arg) {
+    (void)arg;
+    shell_printf(sh, "answered <%s>\n", answer ? answer : "(cancelled)");
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
     n_executed++;
+    if (!strcmp(cmd, "quiet"))
+        return;
+    if (!strcmp(cmd, "big")) {              // more than the pager takes
+        for (int i = 0; i < 400; i++)
+            shell_printf(sh, "line %3d: %-90s|\n", i, "the quick brown fox");
+        return;
+    }
+    if (!strcmp(cmd, "ask")) {
+        shell_printf(sh, "before the question\n");
+        shell_ask(sh, "Really? ", false, fake_answer, NULL);
+        return;
+    }
     if (!strcmp(cmd, "job")) {
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
@@ -648,6 +681,126 @@ TEST(printf_truncates_long_output) {
     start(&io_plain);
     shell_printf(&sh, "%s", long_text);
     CHECK_EQ(fake.out_len, 255);                            // 256-byte buffer, NUL excluded
+}
+
+// --- `| more` --------------------------------------------------------------------------------
+
+TEST(pipe_to_more_pages_a_commands_output) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("help | more\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "help"));        // the command runs without the suffix
+    CHECK_OUT("help | more\nsos> ");            // its output isn't on screen (and the pager
+                                                // stub starts no job, so the prompt follows)
+    CHECK_EQ(paged_calls, 1);
+    CHECK(!strcmp(paged_name, "help | more"));
+    CHECK(!strcmp(paged_text, "<help>\n"));
+    CHECK(sh.pipe_buf == NULL);
+    clear_out();
+    type("hostname |more\r");                   // no space before more is fine
+    CHECK(!strcmp(executed[1], "hostname"));
+    CHECK_EQ(paged_calls, 2);
+    CHECK(!strcmp(paged_text, "<hostname>\n"));
+    CHECK_OUT("hostname |more\nsos> ");
+    type("ls | morex\r");                       // not the suffix: runs as typed
+    CHECK(!strcmp(executed[2], "ls | morex"));
+    CHECK_EQ(paged_calls, 2);
+    type("| more\r");                           // nothing to run
+    CHECK_EQ(n_executed, 3);
+    CHECK(strstr(fake.out, "usage: <command> | more") != NULL);
+    CHECK(sh.history_len > 0 && strstr(sh.history, "help | more") != NULL);   // as typed
+}
+
+TEST(pipe_to_more_waits_for_a_job) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 3;
+    job_partial = false;
+    type("job | more\r");
+    CHECK(shell_job_running(&sh));
+    CHECK(sh.pipe_pending);
+    clear_out();
+    type("");
+    type("");
+    CHECK_OUT("");                              // nothing on screen while it runs
+    CHECK_EQ(paged_calls, 0);
+    type("");                                   // the last step: paged
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(paged_calls, 1);
+    CHECK(!strcmp(paged_text, "step 1\nstep 2\nstep 3\n"));
+    CHECK(!strcmp(paged_name, "job | more"));
+    CHECK_OUT("sos> ");                         // (the pager stub didn't start a job)
+    CHECK(sh.pipe_buf == NULL && !sh.pipe_pending);
+}
+
+TEST(pipe_to_more_is_dropped_by_ctrl_c) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 5;
+    job_partial = false;
+    type("job | more\r");
+    type("");
+    type("\x03");
+    CHECK_EQ(job_cancels, 1);
+    CHECK_EQ(paged_calls, 0);
+    CHECK(sh.pipe_buf == NULL);
+    CHECK(strstr(fake.out, "^C\nsos> ") != NULL);
+}
+
+TEST(pipe_to_more_cuts_at_the_limit) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("big | more\r");
+    CHECK_EQ(paged_calls, 1);
+    CHECK(paged_len > SHELL_PIPE_MAX);          // the limit, then the note
+    CHECK(paged_len < SHELL_PIPE_MAX + 100);
+    CHECK(strstr(paged_text, "[output cut here") != NULL);
+    CHECK(!strncmp(paged_text, "line   0:", 9));
+    CHECK_OUT("big | more\nsos> ");
+}
+
+TEST(pipe_to_more_with_nothing_says_so) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("quiet | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK_OUT("quiet | more\nquiet | more: no output\nsos> ");
+}
+
+TEST(pipe_to_more_lets_a_question_through) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("ask | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK(sh.pipe_buf == NULL);
+    CHECK_OUT("ask | more\nbefore the question\nReally? ");    // output so far, then the prompt
+    type("yes\r");
+    CHECK(strstr(fake.out, "answered <yes>") != NULL);
+    CHECK_EQ(paged_calls, 0);
+}
+
+TEST(pipe_to_more_leaves_a_full_screen_program_alone) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("raw | more\r");
+    CHECK(shell_raw_mode(&sh));
+    CHECK(sh.pipe_buf == NULL);                 // not capturing: it draws its own screen
+    type("x\x11");
+    type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(paged_calls, 0);
+    CHECK_EQ(raw_keys_got[0], 'x');
+}
+
+TEST(pipe_to_more_ends_with_the_session) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 5;
+    type("job | more\r");
+    shell_end(&sh);
+    CHECK(sh.pipe_buf == NULL);
+    CHECK_EQ(paged_calls, 0);
 }
 
 TEST(job_runs_in_steps_then_prompts) {
@@ -1652,6 +1805,14 @@ TEST_MAIN(
     RUN(crlf_channel_translates_newlines);
     RUN(plain_channel_leaves_newlines);
     RUN(printf_truncates_long_output);
+    RUN(pipe_to_more_pages_a_commands_output);
+    RUN(pipe_to_more_waits_for_a_job);
+    RUN(pipe_to_more_is_dropped_by_ctrl_c);
+    RUN(pipe_to_more_cuts_at_the_limit);
+    RUN(pipe_to_more_with_nothing_says_so);
+    RUN(pipe_to_more_lets_a_question_through);
+    RUN(pipe_to_more_leaves_a_full_screen_program_alone);
+    RUN(pipe_to_more_ends_with_the_session);
     RUN(job_runs_in_steps_then_prompts);
     RUN(job_ends_output_with_newline_before_prompt);
     RUN(input_during_job_runs_afterwards);

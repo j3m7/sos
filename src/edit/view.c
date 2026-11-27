@@ -141,16 +141,24 @@ void view_command(shell_t *sh, char *args) {
     edit_view_file(sh, path, "more");
 }
 
-void edit_view(shell_t *sh, const char *name, const char *text, size_t len) {
+void edit_view_take(shell_t *sh, const char *name, char *text, size_t len) {
     view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
-    char *copy = v ? heap_alloc(HEAP_EDIT, len ? len : 1) : NULL;
+    if (!v) {
+        shell_printf(sh, "%s: out of memory\n", name);
+        heap_release(HEAP_EDIT, text);
+        return;
+    }
+    v->text = text;
+    pager_source_t src = { .read = pager_read_mem, .ctx = text, .size = len };
+    run(sh, v, name, src);
+}
+
+void edit_view(shell_t *sh, const char *name, const char *text, size_t len) {
+    char *copy = heap_alloc(HEAP_EDIT, len ? len : 1);
     if (!copy) {
         shell_printf(sh, "%s: out of memory\n", name);
-        heap_release(HEAP_EDIT, v);
         return;
     }
     memcpy(copy, text, len);
-    v->text = copy;
-    pager_source_t src = { .read = pager_read_mem, .ctx = copy, .size = len };
-    run(sh, v, name, src);
+    edit_view_take(sh, name, copy, len);
 }

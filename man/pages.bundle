@@ -394,6 +394,8 @@ DESCRIPTION
 
     Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
     a screen at a time, and 'man <topic>' shows a page in the same viewer.
+    Any command's output can be read that way too: end the line with '| more'
+    ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
 SEE ALSO
     help, man, logout, passwd, setup, edit, more
@@ -637,6 +639,7 @@ NAME
 
 SYNOPSIS
     more <file>
+    <command> | more
 
 DESCRIPTION
     Shows the file a screen at a time, on the same kind of terminal as 'edit'
@@ -668,6 +671,14 @@ KEYS
     q (Ctrl-Q, Ctrl-C)          quit
 
 NOTES
+    '<command> | more' runs the command with its output kept instead of
+    printed, then shows it here once the command has finished ('dmesg | more',
+    'ls | more', 'wifi stats chip | more'). Up to 32 KB of output is kept; the
+    rest is dropped and the text ends with a note saying so. A command that
+    asks a question runs as if there were no '| more', and a full-screen
+    program (edit, more, man) ignores it. Ctrl-C while the command runs drops
+    the output. A command with no output says so instead of opening the pager.
+
     'man <topic>' shows a manual page in this viewer. Log messages are held on
     the console while it runs there, as for the editor.
 

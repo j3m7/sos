@@ -9,6 +9,8 @@
 
 #include "shell/complete.h"
 #include "shell/login.h"
+#include <stdlib.h>
+
 #include "test.h"
 
 // --- fake console channel --------------------------------------------------------------------------
@@ -130,6 +132,11 @@ const shell_cmd_t *const *shell_command_tables(const shell_t *s) {   // as shell
 complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn, void *arg) {
     (void)s; (void)dir; (void)fn; (void)arg;
     return COMPLETE_DIR_NONE;
+}
+
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    (void)sh; (void)name; (void)len;
+    free(text);                             // not under test here
 }
 
 void shell_execute(shell_t *s, char *cmd) {

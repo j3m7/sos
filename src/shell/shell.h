@@ -128,7 +128,16 @@ struct shell {
     size_t draft_len;
     log_quota_t logger_quota;   // `logger`'s rate limit for this shell
     bool tab_pressed;           // the last key was a Tab that couldn't complete: the next lists
+    // `<command> | more`: the command's output is kept (a HEAP_EDIT block) instead of sent, up to
+    // SHELL_PIPE_MAX bytes, then handed to the pager (shell_page()).
+    char *pipe_buf;             // NULL when not capturing
+    size_t pipe_len, pipe_cap;
+    bool pipe_cut;              // output past SHELL_PIPE_MAX was dropped
+    bool pipe_pending;          // the command started a job: page when it ends
+    char pipe_name[64];         // the command line, for the pager's status row
 };
+
+#define SHELL_PIPE_MAX (32 * 1024)
 
 // Bind a shell to a channel and print the greeting and first prompt.
 void shell_init(shell_t *sh, const shell_io_t *io, void *ctx);
@@ -154,6 +163,11 @@ void shell_logout(shell_t *sh);
 // Run one command line (spaces trimmed, never empty). Implemented by the command module
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
+
+// Show `len` bytes of `text`, a HEAP_EDIT block that the callee owns from here on, in the pager
+// under `name` (`<command> | more`). Implemented by the command module (shell.c); shell_core.c
+// calls it with a command's captured output.
+void shell_page(shell_t *sh, const char *name, char *text, size_t len);
 
 // The command tables Tab completes from, NULL-terminated; NULL when this shell takes no command
 // now (the console is locked). Implemented by the command module (shell.c).
