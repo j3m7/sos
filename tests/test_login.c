@@ -140,8 +140,8 @@ void shell_page(shell_t *shell, const char *name, char *text, size_t len) {
     heap_release(HEAP_EDIT, text);          // not under test here
 }
 
-bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
-    (void)sh; (void)name; (void)text; (void)len;
+bool shell_page_growing(shell_t *s, const char *name, char *text, size_t len) {
+    (void)s; (void)name; (void)text; (void)len;
     return false;                           // not under test here: paged when the job ends
 }
 
