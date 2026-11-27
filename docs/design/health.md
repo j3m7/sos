@@ -470,8 +470,9 @@ test of its output would test the mixing. The check reads the TRNG block itself:
   proportion well under 810; if it doesn't, the table shows which setup does.
 - **How much:** 16 blocks of 192 bits, 3072 samples: about 5.3 ms at 150 MHz, with interrupts
   off (it holds pico_rand's spin lock, `PICO_SPINLOCK_ID_RAND`, since Lua on core 1 may read
-  the TRNG through pico_rand at the same time). A timeout of 20 ms ends a TRNG that stopped,
-  so interrupts are off for at most 20 ms. The timeout is not what was wrong in #242 (the
+  the TRNG through pico_rand at the same time). 5.3 ms is the expected hold. A timeout of
+  20 ms ends a TRNG that stopped, so 20 ms is the stall bound: twice the 10 ms step rule, an
+  exception like the 60 ms crypto steps, and reached only if the TRNG stalls. The timeout is not what was wrong in #242 (the
   autocorrelation stop was), and it stays a bound, not a fix.
 - **A false FAIL** (one in 2^30 per test at the stated H) on a fresh open board's first boot
   leaves it without a root secret, on the rescue console where `health run` is refused.

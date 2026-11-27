@@ -12,6 +12,11 @@
 // Curve25519 blinding there, which needs an RNG on the key; this file had WC_NO_RNG, so the host
 // ran the unblinded path and passed.
 //
+// Blinding on the board depends on WOLFSSL_ARMASM staying per file (aes.c and the assembly only,
+// CMakeLists.txt): wolfSSL's settings.h leaves blinding off when WOLFSSL_ARMASM is global. If it
+// ever becomes global, the board stops blinding while this file still blinds, and both builds
+// keep passing: nothing would notice. Change this file with it.
+//
 // What still differs from the firmware, and why it can't matter to the tests:
 // - WOLFCRYPT_ONLY, and no RSA, DH, ECC, ML-KEM, ChaCha, AES-SIV, CMAC, SHA-3: not tested here.
 // - The RNG's seed: getrandom() here (WOLFSSL_GETRANDOM, as NO_FILESYSTEM rules out
