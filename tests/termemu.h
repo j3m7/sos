@@ -108,7 +108,7 @@ static size_t t_parse(const char *s, size_t n) {
             } else if (f == 'm') {
                 // attributes: ignored
             } else {
-                CHECK(!"unexpected escape sequence");
+                CHECK(0 && "unexpected escape sequence");
             }
             i = j + 1;
             continue;

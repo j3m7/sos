@@ -61,7 +61,7 @@ TEST(full_file_loads_like_on_the_device) {
     // The second slot is erased, so nothing the board had saved survives.
     for (size_t i = CONFIG_SLOT_SIZE; i < MKCONFIG_IMAGE_SIZE; i++)
         if (image[i] != 0xff) {
-            CHECK(!"second slot not erased");
+            CHECK(0 && "second slot not erased");
             break;
         }
 }

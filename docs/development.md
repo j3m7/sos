@@ -248,6 +248,22 @@ the script, or, for a finding that is wrong in that place, add a
 skips this with a note. `just lint` (or `tools/lint-shell.sh`) checks every script in the working
 tree; `.shellcheckrc` holds the settings.
 
+## Static analysis
+
+`just tidy` (`tools/tidy.sh`) runs clang-tidy, with the clang static analyzer, on SOS's own C
+sources: `src/` and `tools/host/`, not Lua, wolfSSL, wolfSSH, the SD card driver or the copied
+pico-sshd. It reads the host tests' compile database (`build-tests/`) for the sources the tests
+build and the firmware's (`build/`, debug preset) for the rest, configuring either if needed. It
+takes about a minute and exits 1 if anything is reported; `just tidy src/files/path.c` checks
+named files only.
+
+`.clang-tidy` says which checks are on and, for each one turned off, why. For a finding that is
+wrong in one place, prefer a change the analyzer can follow (an explicit terminator, a zeroed
+buffer); failing that, put `// NOLINT(<check>): <why>` on the line.
+
+The host tests also build with clang (`CC=clang cmake -S tests -B build-tests-clang`), which
+warns about a few things GCC doesn't.
+
 ## Developing in a VM
 
 With the source on a host folder shared into a libvirt VM (for example virtiofs), the Pico's
