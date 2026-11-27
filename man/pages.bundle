@@ -361,9 +361,21 @@ DESCRIPTION
 
     Typing a line: Enter runs it, Backspace deletes, Up and Down recall the
     commands typed in this session (kept in RAM only, never answers such as
-    passwords). Ctrl-C discards the line, cancels a question (setup, wifi set,
-    ...) or stops a running job (ls, cat, cp, a Lua script). Ctrl-D on an empty
-    line logs out. Commands typed while a job runs are kept and run after it.
+    passwords; Down past the newest gives back what you were typing). Ctrl-C
+    discards the line, cancels a question (setup, wifi set, ...) or stops a
+    running job (ls, cat, cp, a Lua script). Ctrl-D on an empty line logs out.
+    Commands typed while a job runs are kept and run after it.
+
+    Tab completes the command name and the subcommand words after it ('time s'
+    Tab Tab lists 'sync server'; 'wifi st' Tab gives 'wifi stats '). When the
+    matches agree no further the terminal beeps, and a second Tab lists them;
+    words only the console takes are offered only there. After a file command
+    (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) Tab completes file names
+    on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on inside
+    it); cd and mkdir offer directories only. Names are matched as typed, names
+    with spaces or control characters aren't offered, and Tab doesn't mount the
+    card. In a directory of more than 256 entries it lists what it read and
+    says there is more. Tab does nothing at a password or other question.
 
     The console asks for its password before taking any command, once one is
     set, and locks itself again on logout, when the USB terminal disconnects

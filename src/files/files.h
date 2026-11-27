@@ -11,8 +11,8 @@
 
 #include "shell/shell.h"
 
-// Run `cmd` if it's a file command; false if it isn't one.
-bool files_command(shell_t *sh, const char *cmd, char *args);
+// The file commands, for shell_execute() and Tab (a table as shell.h describes).
+extern const shell_cmd_t files_commands[];
 void files_help(shell_t *sh);
 
 // A file command or an SFTP transfer holds open files (formatting or unmounting would break it).
