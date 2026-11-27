@@ -258,6 +258,36 @@ TEST(held_console_overflow_is_reported) {
     CHECK(strstr(out, "held 399") != NULL);
 }
 
+// log_pending() must match what log_flush() then prints, with facilities in the entry byte and
+// after entries were dropped while the console was held (a count kept per level has to read the
+// level out of that byte the same way everywhere).
+static int printed_lines(void) {
+    int n = 0;
+    for (const char *p = out; (p = strchr(p, '\n')); p++)
+        n++;
+    return n;
+}
+
+TEST(pending_matches_flush_with_facilities_after_overflow) {
+    static const int facilities[] = {SOS_LOG_KERN, SOS_LOG_AUTH, SOS_LOG_DAEMON, SOS_LOG_USER,
+                                     SOS_LOG_NONE};
+    static const int levels[] = {SOS_LOG_ERR, SOS_LOG_WARNING, SOS_LOG_NOTICE, SOS_LOG_INFO};
+    reset();
+    for (int round = 0; round < 3; round++) {
+        held = true;
+        int count = round == 1 ? 7 : 400;           // overflow, a few, overflow again
+        for (int i = 0; i < count; i++)
+            log_msg(facilities[i % 5] | levels[i % 4], "round %d message %03d", round, i);
+        int pending = log_pending();
+        out_len = 0;
+        out[0] = '\0';
+        held = false;
+        log_flush();
+        CHECK_EQ(printed_lines(), pending);
+        CHECK_EQ(log_pending(), 0);
+    }
+}
+
 TEST(logging_while_printing_does_not_recurse) {
     reset();
     log_from_write = true;
@@ -411,6 +441,7 @@ TEST_MAIN(
     RUN(overflow_before_printing_is_reported);
     RUN(held_console_keeps_messages_for_later);
     RUN(held_console_overflow_is_reported);
+    RUN(pending_matches_flush_with_facilities_after_overflow);
     RUN(logging_while_printing_does_not_recurse);
     RUN(prefix_goes_before_the_message);
     RUN(prefixed_message_above_the_level_is_not_formatted);
