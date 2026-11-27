@@ -182,7 +182,8 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
             snprintf(date, sizeof(date), "%-16s", fi.fattrib & AM_DIR ? "" : "being written");
         else
             snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u", (fi.fdate >> 9) + 1980,
-                 (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63);
+                     (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11,
+                     (fi.ftime >> 5) & 63);
         if (fi.fattrib & AM_DIR) {
             shell_printf(sh, "%12s  %s  %s/\n", "<dir>", date, printable(fi.fname));
             j->dirs++;
