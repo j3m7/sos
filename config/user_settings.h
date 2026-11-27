@@ -156,7 +156,9 @@ extern time_t ssh_server_my_time(time_t *);
  * of 256-entry ones (40 KB) and more compact arithmetic. About 48 KB of flash. P-256 is used
  * for TLS key exchange when a server doesn't take X25519, and both curves to check
  * certificate chains (P-384: time.cloudflare.com's). The handshake time it costs was measured
- * on dev-1; see issue #119. */
+ * on dev-1; see issue #119. (wolfSSL turns this off by itself under clang 12 or later with -Os,
+ * for a compiler bug there: a clang build would lose the saving without saying so. GCC, which
+ * this project builds with, is not affected.) */
 #define WOLFSSL_SP_SMALL
 #else
 /* SP Assembly Speedups - specific to chip type */
