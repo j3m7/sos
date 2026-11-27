@@ -363,6 +363,14 @@ target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
 add_test(NAME sdfault COMMAND test_sdfault)
 
+# src/files/fsck_plan.c: what `sd check fix` says about its plan and its repair. fsck_repair.c
+# (with the checker it needs) for fsck_plan_writes().
+add_executable(test_fsck_plan test_fsck_plan.c ${SOS_ROOT}/src/files/fsck_plan.c
+    ${SOS_ROOT}/src/files/fsck_repair.c ${SOS_ROOT}/src/files/fsck.c
+    ${SOS_ROOT}/src/files/fsck_exfat.c)
+target_include_directories(test_fsck_plan PRIVATE ${SOS_ROOT}/src)
+add_test(NAME fsck_plan COMMAND test_fsck_plan)
+
 # src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
 # ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
 # for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
@@ -387,8 +395,27 @@ if (EXISTS ${FATFS_DIR}/ff.c)
         FSCK_EXFAT_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck_exfat")
     target_link_libraries(test_fsck_exfat PRIVATE fatfs_host)
     add_test(NAME fsck_exfat COMMAND test_fsck_exfat)
+
+    # tests/fsck_disk.c, fsck_faults.c, fsck_damage.c: the fault-injection harness for the card
+    # checker's repair (docs/design/sd-check.md §10.4): RAM disk images made by FatFs, a fault
+    # layer that cuts or fails writes and reads, a runner, file fingerprints and a seeded damage
+    # generator.
+    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    target_include_directories(test_fsck_faults PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
+    add_test(NAME fsck_faults COMMAND test_fsck_faults)
+
+    # src/files/fsck_repair.c: sd check fix's repairs, through the harness above.
+    add_executable(test_fsck_repair test_fsck_repair.c fsck_disk.c fsck_faults.c fsck_damage.c
+        ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
+        ${SOS_ROOT}/src/files/fsck_repair.c)
+    target_include_directories(test_fsck_repair PRIVATE ${SOS_ROOT}/src)
+    # Thousands of full checks of a 130000-cluster image: optimized, the sanitizers still on.
+    target_compile_options(test_fsck_repair PRIVATE -O2)
+    target_link_libraries(test_fsck_repair PRIVATE fatfs_host)
+    add_test(NAME fsck_repair COMMAND test_fsck_repair)
 else()
-    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck and test_fsck_exfat are skipped")
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck, test_fsck_exfat, test_fsck_faults and test_fsck_repair are skipped")
 endif()
 
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
@@ -438,5 +465,6 @@ if (TARGET lua_host)                                # sos.json.decode: what HTTP
     endif()
 endif()
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
-sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c)
+sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
+    ${SOS_ROOT}/src/files/fsck_repair.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)
