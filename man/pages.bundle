@@ -765,7 +765,8 @@ DESCRIPTION
 
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
-    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
+    and the 'sos' library: sos.read/write/append/list/remove/mkdir,
+    rename/copy/stat/exists and sos.sd.info for files;
     sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
     sos.sleep, sos.log; timers sos.every/after/cancel (a background script
     keeps going while timers are left); sos.http.get/post/head/request and
