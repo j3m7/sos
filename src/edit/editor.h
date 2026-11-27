@@ -12,7 +12,9 @@
 // buffer, keys (keys.h codes) in, terminal output out. Pure C, host tested; edit.c connects it to
 // a shell and the card.
 
-#define EDITOR_MAX_TEXT  (32 * 1024)    // bytes of text (RAM is shared with Lua and SSH)
+// Bytes of text at most. The heap (about 345 KB) is shared with SSH, TLS and Lua, so edit.c lowers
+// the limit of an editor it opens to what the heap can spare then (editor_t.limit).
+#define EDITOR_MAX_TEXT  (128 * 1024)
 #define EDITOR_ROWS_MIN  4
 #define EDITOR_ROWS_MAX  60
 #define EDITOR_COLS_MIN  20
@@ -36,6 +38,7 @@ typedef struct {
     // Text: a gap buffer, bytes [0, gap) and [gap_end, cap) of buf.
     char *buf;
     size_t cap, gap, gap_end;
+    size_t limit;               // the text may grow to this many bytes (at most EDITOR_MAX_TEXT)
     bool crlf;                  // the file had CRLF line ends: saved with them again
 
     size_t cursor;              // byte offset into the text
@@ -71,6 +74,13 @@ typedef struct {
 // Start with `len` bytes of file contents (copied; CRLF line ends are stripped and remembered).
 // `name` is shown in the status bar. False if out of memory or over EDITOR_MAX_TEXT.
 bool editor_init(editor_t *ed, const char *name, const char *text, size_t len);
+// The same in two steps, so a file can be read straight into the editor without a second copy
+// of it: editor_open() gives room for `len` bytes, the caller fills it (all of it), then
+// editor_opened() looks at the text (CRLF) and the editor is ready. `limit` is the most text
+// this editor may hold, at most EDITOR_MAX_TEXT. NULL if `len` is over the limit or memory is
+// short; editor_free() is safe after either outcome, and nothing else may be called in between.
+char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit);
+void editor_opened(editor_t *ed);
 void editor_free(editor_t *ed);
 
 // Handle one key: a byte or a KEY_* code (keys.h). Returns what the caller must do next.

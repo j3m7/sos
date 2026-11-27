@@ -15,13 +15,13 @@
 #include "edit/edit.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "pico/stdlib.h"
 
 #include "ff.h"
 
+#include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "edit/editor.h"
@@ -31,6 +31,10 @@
 
 #define PATH_LEN        256
 #define TMP_SUFFIX      ".~edit"
+// Heap left free when a file is opened (a TLS handshake needs about this much, see the README),
+// so an editor can't take what SSH and HTTPS need to keep working. The text can grow to what was
+// free beyond it, up to EDITOR_MAX_TEXT.
+#define HEAP_RESERVE    (64 * 1024)
 #define SIZE_WAIT_US    500000      // first frame: wait this long for the terminal's size
 #define SIZE_ANSWER_US  3000000     // a cursor position report later than this isn't the answer
 #define LOG_CHECK_US    1000000     // how often to count held log messages (console)
@@ -186,12 +190,20 @@ static bool edit_step(shell_t *sh, void *arg, bool cancel) {
 
 // --- the command ---------------------------------------------------------------------------------
 
-// Read the file into a new buffer: *text (NULL for a new file) and *len. False after saying why.
-static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len, bool quiet_missing) {
-    *text = NULL;
-    *len = 0;
+// The most text the editor may hold now: what the heap can spare, up to EDITOR_MAX_TEXT.
+static size_t text_limit(void) {
+    size_t free = heap_free();
+    size_t limit = free > HEAP_RESERVE ? free - HEAP_RESERVE : 0;
+    return limit > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : limit;
+}
+
+// Whether the file is there and can be edited, and its size. False after saying why; true with
+// *exists false for a file that isn't there (if that's allowed).
+static bool stat_file(shell_t *sh, const char *path, bool quiet_missing, bool *exists, size_t *size) {
     FILINFO fi;
     FRESULT fr = f_stat(path, &fi);
+    *exists = fr == FR_OK;
+    *size = 0;
     if (fr == FR_NO_FILE && quiet_missing)
         return true;                        // a new file
     if (fr != FR_OK) {
@@ -202,28 +214,44 @@ static bool load(shell_t *sh, const char *path, FIL *f, char **text, size_t *len
         shell_printf(sh, "edit: %s: is a directory\n", path);
         return false;
     }
-    if (fi.fsize > EDITOR_MAX_TEXT) {
-        shell_printf(sh, "edit: %s: too big to edit (%lu bytes, %u KB at most)\n", path,
-                     (unsigned long)fi.fsize, EDITOR_MAX_TEXT / 1024);
+    *size = (size_t)fi.fsize;
+    return true;
+}
+
+// Open the editor on `size` bytes read from `path` (0 bytes and no path: a new file), straight
+// into the editor's buffer. The status bar shows e->path whichever file the text came from.
+// False after saying why; the editor is then free.
+static bool read_file(shell_t *sh, edit_t *e, const char *path, size_t size) {
+    size_t limit = text_limit();
+    if (size > limit) {
+        if (size > EDITOR_MAX_TEXT)
+            shell_printf(sh, "edit: %s: too big to edit (%lu bytes, %u KB at most)\n", path,
+                         (unsigned long)size, EDITOR_MAX_TEXT / 1024);
+        else
+            shell_printf(sh, "edit: %s: not enough free memory to edit it (%lu bytes, %lu KB "
+                         "free for the editor)\n", path, (unsigned long)size,
+                         (unsigned long)(limit / 1024));
         return false;
     }
-    *text = heap_alloc(HEAP_EDIT, fi.fsize ? (size_t)fi.fsize : 1);
-    if (!*text) {
+    char *fill = editor_open(&e->ed, e->path, size, limit);
+    if (!fill) {
         shell_printf(sh, "edit: out of memory\n");
         return false;
     }
-    UINT got = 0;
-    if ((fr = f_open(f, path, FA_READ)) == FR_OK) {
-        fr = f_read(f, *text, (UINT)fi.fsize, &got);
-        f_close(f);
+    if (path) {
+        UINT got = 0;
+        FRESULT fr = f_open(&e->file, path, FA_READ);
+        if (fr == FR_OK) {
+            fr = f_read(&e->file, fill, (UINT)size, &got);
+            f_close(&e->file);
+        }
+        if (fr != FR_OK || got != size) {
+            shell_printf(sh, "edit: %s: %s\n", path, fr != FR_OK ? files_error(fr) : "short read");
+            editor_free(&e->ed);
+            return false;
+        }
     }
-    if (fr != FR_OK || got != fi.fsize) {
-        shell_printf(sh, "edit: %s: %s\n", path, fr != FR_OK ? files_error(fr) : "short read");
-        heap_release(HEAP_EDIT, *text);
-        *text = NULL;
-        return false;
-    }
-    *len = got;
+    editor_opened(&e->ed);
     return true;
 }
 
@@ -247,9 +275,9 @@ void edit_command(shell_t *sh, char *args) {
         heap_release(HEAP_EDIT, e);
         return;
     }
-    char *text;
-    size_t len;
-    if (!sdcard_mount(sh) || !load(sh, e->path, &e->file, &text, &len, true)) {
+    bool exists;
+    size_t size;
+    if (!sdcard_mount(sh) || !stat_file(sh, e->path, true, &exists, &size)) {
         heap_release(HEAP_EDIT, e);
         return;
     }
@@ -260,25 +288,21 @@ void edit_command(shell_t *sh, char *args) {
     snprintf(tmp, sizeof(tmp), "%s%s", e->path, TMP_SUFFIX);
     FILINFO tfi;
     bool tmp_left = f_stat(tmp, &tfi) == FR_OK && !(tfi.fattrib & AM_DIR);
-    bool recovered = false;
-    if (tmp_left && !text) {
-        if (!load(sh, tmp, &e->file, &text, &len, false)) {
-            heap_release(HEAP_EDIT, e);
-            return;
-        }
-        recovered = true;
+    bool recovered = tmp_left && !exists;
+    bool ok;
+    if (recovered) {
+        bool tmp_exists;
+        ok = stat_file(sh, tmp, false, &tmp_exists, &size) && read_file(sh, e, tmp, size);
+    } else {
+        ok = read_file(sh, e, exists ? e->path : NULL, size);
     }
-    bool ok = editor_init(&e->ed, e->path, text, len);
-    bool is_new = text == NULL;
-    if (recovered)
-        e->ed.modified = true;              // saving puts it under the real name
-    heap_release(HEAP_EDIT, text);
     if (!ok) {
-        shell_printf(sh, "edit: out of memory\n");
-        editor_free(&e->ed);
         heap_release(HEAP_EDIT, e);
         return;
     }
+    bool is_new = !exists && !recovered;
+    if (recovered)
+        e->ed.modified = true;              // saving puts it under the real name
     if (!files_write_allowed(sh, e->path))
         editor_message(&e->ed, "read only: this path can only be changed on the console");
     else if (recovered)

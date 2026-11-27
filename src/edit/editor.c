@@ -58,18 +58,18 @@ static void move_gap(editor_t *ed, size_t pos) {
     }
 }
 
-// Room for n more bytes, growing the buffer (up to EDITOR_MAX_TEXT) if needed.
+// Room for n more bytes, growing the buffer (up to ed->limit) if needed.
 static bool reserve(editor_t *ed, size_t n) {
     if (ed->gap_end - ed->gap >= n)
         return true;
     size_t len = editor_len(ed);
-    if (len + n > EDITOR_MAX_TEXT)
+    if (len + n > ed->limit)
         return false;
     size_t cap = ed->cap ? ed->cap : 1024;
     while (cap - len < n)
         cap *= 2;
-    if (cap > EDITOR_MAX_TEXT)
-        cap = EDITOR_MAX_TEXT;              // still enough: len + n <= EDITOR_MAX_TEXT
+    if (cap > ed->limit)
+        cap = ed->limit;                    // still enough: len + n <= ed->limit
     char *b = heap_realloc(HEAP_EDIT, ed->buf, cap);
     if (!b)
         return false;
@@ -83,7 +83,12 @@ static bool reserve(editor_t *ed, size_t n) {
 
 static bool insert(editor_t *ed, const char *s, size_t n) {
     if (!reserve(ed, n)) {
-        editor_message(ed, "the text can't grow past 32 KB");
+        char m[80];                         // whole KB once rounding down loses under a tenth
+        if (ed->limit >= 10 * 1024)
+            snprintf(m, sizeof(m), "the text can't grow past %zu KB", ed->limit / 1024);
+        else
+            snprintf(m, sizeof(m), "the text can't grow past %zu bytes", ed->limit);
+        editor_message(ed, m);
         return false;
     }
     move_gap(ed, ed->cursor);
@@ -258,10 +263,19 @@ static size_t pos_at_col(const editor_t *ed, size_t start, size_t want) {
     return p;
 }
 
+// Newlines in [from, to). The status bar counts over the whole text every frame, so this runs
+// memchr over each half of the gap buffer rather than looking at bytes one at a time.
 static size_t count_lines(const editor_t *ed, size_t from, size_t to) {
     size_t n = 0;
-    for (size_t p = from; p < to; p++)
-        n += at(ed, p) == '\n';
+    while (from < to) {
+        bool before = from < ed->gap;
+        size_t end = before && to > ed->gap ? ed->gap : to;
+        const char *p = ed->buf + (before ? from : from + (ed->gap_end - ed->gap));
+        const char *stop = p + (end - from);
+        for (const char *q; (q = memchr(p, '\n', (size_t)(stop - p))) != NULL; p = q + 1)
+            n++;
+        from = end;
+    }
     return n;
 }
 
@@ -287,7 +301,7 @@ void editor_invalidate(editor_t *ed) {
     changed(ed);
 }
 
-bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
+char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit) {
     memset(ed, 0, sizeof(*ed));
     size_t nl = strlen(name);               // a long path: its end, where the file name is
     if (nl < sizeof(ed->name))
@@ -296,32 +310,48 @@ bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
         snprintf(ed->name, sizeof(ed->name), "...%s", name + nl - (sizeof(ed->name) - 4));
     ed->rows = 24;
     ed->cols = 80;
-
-    // CRLF file: every LF has a CR before it (and there's at least one).
-    size_t lf = 0, crlf = 0;
-    for (size_t i = 0; i < len; i++)
-        if (text[i] == '\n') {
-            lf++;
-            crlf += i > 0 && text[i - 1] == '\r';
-        }
-    ed->crlf = lf > 0 && crlf == lf;
-    size_t n = len - (ed->crlf ? crlf : 0);
-    if (n > EDITOR_MAX_TEXT)
-        return false;
-
-    size_t cap = n + 1024 > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : n + 1024;
+    ed->limit = limit > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : limit;
+    if (len > ed->limit)
+        return NULL;
+    // Some room to type into before the first realloc.
+    size_t cap = len + 1024 > ed->limit ? ed->limit : len + 1024;
     ed->buf = heap_alloc(HEAP_EDIT, cap ? cap : 1);
     if (!ed->buf)
-        return false;
+        return NULL;
     ed->cap = cap;
-    size_t o = 0;
-    for (size_t i = 0; i < len; i++)
-        if (!(ed->crlf && text[i] == '\r' && i + 1 < len && text[i + 1] == '\n'))
-            ed->buf[o++] = text[i];
-    ed->gap = o;
+    ed->gap = len;                          // the caller's bytes, until editor_opened()
     ed->gap_end = cap;
+    return ed->buf;
+}
+
+void editor_opened(editor_t *ed) {
+    // CRLF file: every LF has a CR before it (and there's at least one). Then the CRs go, in
+    // place, and come back when saving.
+    char *t = ed->buf;
+    size_t len = ed->gap, lf = 0, crlf = 0;
+    for (size_t i = 0; i < len; i++)
+        if (t[i] == '\n') {
+            lf++;
+            crlf += i > 0 && t[i - 1] == '\r';
+        }
+    ed->crlf = lf > 0 && crlf == lf;
+    if (ed->crlf) {
+        size_t o = 0;
+        for (size_t i = 0; i < len; i++)
+            if (!(t[i] == '\r' && i + 1 < len && t[i + 1] == '\n'))
+                t[o++] = t[i];
+        ed->gap = o;
+    }
     snprintf(ed->msg, sizeof(ed->msg), "Ctrl-S save, Ctrl-Q quit, Ctrl-F find, Ctrl-L redraw");
     editor_invalidate(ed);
+}
+
+bool editor_init(editor_t *ed, const char *name, const char *text, size_t len) {
+    char *fill = editor_open(ed, name, len, EDITOR_MAX_TEXT);
+    if (!fill)
+        return false;
+    memcpy(fill, text, len);
+    editor_opened(ed);
     return true;
 }
 

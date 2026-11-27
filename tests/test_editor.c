@@ -520,9 +520,31 @@ TEST(size_limit) {
     keys("b");                              // can't grow
     CHECK_EQ(editor_len(&ed), EDITOR_MAX_TEXT);
     CHECK(!ed.modified);
-    CHECK(strstr(ed.msg, "32 KB") != NULL);
+    CHECK(strstr(ed.msg, "128 KB") != NULL);
     editor_free(&ed);
     free(big);
+}
+
+TEST(open_in_two_steps_with_a_lower_limit) {
+    char *fill = editor_open(&ed, "two.txt", 6, 2000);
+    CHECK(fill != NULL);
+    memcpy(fill, "ab\r\ncd", 6);
+    editor_opened(&ed);
+    CHECK(ed.crlf);                         // looked at once filled, and stripped in place
+    CHECK_EQ(editor_len(&ed), 5);
+    CHECK(!strcmp(saved(), "ab\r\ncd"));
+    CHECK_EQ(ed.limit, 2000);
+    for (int i = 0; i < 2100; i++)
+        keys("x");
+    CHECK_EQ(editor_len(&ed), 2000);       // the limit holds where EDITOR_MAX_TEXT would not
+    CHECK(strstr(ed.msg, "2000 bytes") != NULL);
+    editor_free(&ed);
+
+    CHECK(editor_open(&ed, "big.txt", 2001, 2000) == NULL);    // over the limit
+    editor_free(&ed);                       // safe after a refusal
+    CHECK(editor_open(&ed, "max.txt", 10, EDITOR_MAX_TEXT * 2) != NULL);
+    CHECK_EQ(ed.limit, EDITOR_MAX_TEXT);    // never more than the compile-time most
+    editor_free(&ed);
 }
 
 TEST(grows_while_typing) {
@@ -782,6 +804,7 @@ TEST_MAIN(
     RUN(crlf_files_keep_their_line_ends);
     RUN(find_moves_to_the_next_match);
     RUN(size_limit);
+    RUN(open_in_two_steps_with_a_lower_limit);
     RUN(grows_while_typing);
     RUN(log_messages_waiting_show_in_status);
     RUN(wide_characters_take_two_columns);
