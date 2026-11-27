@@ -134,20 +134,52 @@ while the card is unmounted (see `sdcard.c` above).
 
 - **Shape:** it reads sectors through a callback and hands back report lines, so it knows
   nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
-  5.9 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
+  7 KB plus the cluster window), and `fsck_step()` does at most a given number of sector
   reads, so a check can run as a shell job a slice at a time.
-- **What it checks (FAT32 for now; exFAT is recognised and refused):** the volume is found and
-  its boot sector judged as FatFs finds and mounts it; then the backup boot sector, FSInfo, the
-  FAT copies, every chain (range, loops, end mark, size against chain), the directory tree
-  (depth, loops, "." and "..", long-name sequences, names FatFs refuses, repeated names), and
-  the clusters: cross-linked, lost, bad. `fsck.h` lists the rules the design note left open.
+- **What it checks, FAT32:** the volume is found and its boot sector judged as FatFs finds and
+  mounts it; then the backup boot sector, FSInfo, the FAT copies, every chain (range, loops,
+  end mark, size against chain), the directory tree (depth, loops, "." and "..", long-name
+  sequences, names FatFs refuses, repeated names), and the clusters: cross-linked, lost, bad.
+  `fsck.h` lists the rules the design note left open.
+- **exFAT:** the same walk, with `fsck_exfat.c`'s pieces: the boot regions, every entry set,
+  the up-case table, NoFatChain runs as well as FAT chains, and the clusters reached against
+  the allocation bitmap (lost, reached but free). Names are hashed with the `upcase` function
+  the caller passes (FatFs's `ff_wtoupper()` on the board). One entry set reader serves the
+  whole walk: coming back from a subdirectory, a fresh one picks the parent up after the
+  directory's set.
 - **Windows:** a bit per cluster for a whole card doesn't fit beside everything else, so the
   clusters are accounted a window at a time, one pass over the tree per window. The report is
   the same whatever the window size; the tests check that.
 - **Tests:** `tests/test_fsck.c` builds FatFs for the host over a RAM disk and makes its images
-  with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
-  sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
-  checks mutated images twice with different windows and requires the same answer.
+  with `f_mkfs` as `sd format` does (FAT32 and exFAT; MBR, no partition table, two FATs, 128 GB
+  GPT images held sparse), then breaks one thing per case (exFAT's with
+  `tests/fuzz/exfat_damage.h`) and expects the exact lines. `tests/fuzz/fuzz_fsck.c` checks
+  mutated images of both kinds twice with different windows and requires the same answer.
+
+## `fsck_exfat.c`: the card checker's exFAT parts (pure C, host tested)
+
+The exFAT pieces of `sd check` ([design note](../../docs/design/sd-check.md) §4, §5, §6):
+`fsck.c`'s walk calls them entry by entry and sector by sector.
+No I/O, no malloc; each piece is a small state struct in the caller's memory, and problems come
+back as bits with `*_text()` lines. `fsck_exfat.h` lists the rules decided here.
+
+- **Boot region:** `fsck_exfat_vbr()` refuses what FatFs's `mount_volume()` refuses, plus what
+  the checker can't read past; `fsck_exfat_boot_*()` take sectors 0-23 once each and check the
+  boot checksum and the backup region (reported, not refused).
+- **Entry sets:** `fsck_exfat_entry()` takes 32-byte entries and hands back finished sets
+  (name, directory flag, first cluster, length, NoFatChain, cluster count) with their problems,
+  checked as FatFs's `load_xdir()` reads them; the root's bitmap, up-case and label entries
+  too.
+- **Name hash:** computed with FatFs's `ff_wtoupper()`, passed in as a function, since FatFs
+  finds names by that hash and never reads the volume's up-case table. The table is streamed
+  (`fsck_exfat_upcase_*()`, no 128 KB copy): its checksum is checked, and mappings that differ
+  from FatFs's are a note.
+- **Cluster accounting:** `fsck_window_mark_run()` marks runs into the window and counts
+  cross-links; `fsck_bitcmp_*()` give the lost and reached-but-free runs against the bitmap,
+  a slice at a time, runs going on across slices and windows.
+- **Tests:** `tests/test_fsck_exfat.c` tests the pieces on their own, on images FatFs makes and
+  fills and on hand-made entries; `fuzz_fsck_exfat` fuzzes the parsers. The damage cases
+  (`tests/fuzz/exfat_damage.h`) run through the whole checker in `tests/test_fsck.c`.
 
 ## `sdfault.c`: injected write faults (test builds only, host tested)
 

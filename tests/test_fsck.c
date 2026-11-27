@@ -15,6 +15,7 @@
 #include "diskio.h"
 #include "ff.h"
 #include "files/fsck.h"
+#include "fuzz/exfat_damage.h"
 #include "fuzz/fsck_image.h"
 #include "test.h"
 
@@ -444,6 +445,7 @@ typedef struct {
 } run_t;
 
 static uint8_t mem[65536];
+static bool subset_upcase;          // pass no upcase callback: fsck_upcase()'s subset
 
 static bool read_cb(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
     run_t *r = ctx;
@@ -476,7 +478,8 @@ static void run_check(run_t *r, disk_t *d, uint64_t sectors, size_t window, uint
     memset(r, 0, sizeof(*r));
     r->d = d;
     r->fail_lba = fail_lba;
-    fsck_io_t io = {read_cb, report_cb, NULL, r, sectors ? sectors : d->sectors};
+    fsck_io_t io = {read_cb, report_cb, NULL, r, sectors ? sectors : d->sectors,
+                    subset_upcase ? NULL : ff_wtoupper};
     fsck_t *f = fsck_new(&io, mem, fsck_state_size() + window);
     CHECK(f != NULL);
     if (!f)
@@ -556,6 +559,8 @@ static void expect_full(disk_t *d, uint64_t sectors, size_t tiny_window, uint64_
     }
     CHECK_EQ(tiny.res.problems, big.res.problems);
     CHECK_EQ(tiny.res.notes, big.res.notes);
+    CHECK_EQ(tiny.res.long_chains, big.res.long_chains);
+    CHECK_EQ(tiny.res.reached_free, big.res.reached_free);
     CHECK_EQ(tiny.res.lost_clusters, big.res.lost_clusters);
     CHECK_EQ(tiny.res.cross_linked, big.res.cross_linked);
     CHECK_EQ(tiny.res.free_clusters, big.res.free_clusters);
@@ -588,6 +593,7 @@ TEST(clean_mbr) {
     CHECK_EQ(big.res.clusters, base.count);
     CHECK_EQ(big.res.cluster_bytes, 4096);
     CHECK_EQ(big.res.free_clusters, base_free);
+    CHECK_EQ(big.res.long_chains, 0);
     CHECK_EQ(big.res.files, 159);                 // 9 + 150 in /many
     CHECK_EQ(big.res.dirs, 7);                    // the root, dir, sub, emptydir, var, log, many
     CHECK_EQ(big.res.passes, (base.count - 1) / (16384 * 8) + 1);
@@ -660,14 +666,6 @@ TEST(gpt_entry_array_crc_wrong) {
                 FSCK_DONE, "1 problem; 0 bytes lost, 0 cross-linked");
     disk_free(v.d);
     disk_free(gpt.d);
-}
-
-TEST(exfat_not_checked_yet) {
-    vol_t v = make_volume(1u << 18, FM_EXFAT, 1, 0);
-    unmount();
-    EXPECT_FAIL(v.d, "exFAT is not checked yet");
-    CHECK_EQ(big.res.kind, FSCK_KIND_EXFAT);
-    disk_free(v.d);
 }
 
 TEST(fat16_refused) {
@@ -797,8 +795,7 @@ TEST(media_byte_wrong) {
     vol_t v = copy_base();
     uint8_t b = 0xF0;
     sector_patch(&v, v.fatbase, 0, &b, 1);
-    EXPECT(v.d, "1 problem; 0 bytes lost, 0 cross-linked",
-           "FAT entry 0 doesn't match the media byte (F0, boot sector F8)");
+    EXPECT(v.d, "no problems", "note: FAT entry 0 doesn't match the media byte (F0, boot sector F8)");
     disk_free(v.d);
 }
 
@@ -862,6 +859,7 @@ TEST(cross_link_into_another_chain) {
            "note: /A long file name.txt: 3 clusters for 10000 bytes, chain has 12",
            fmt("/var/log/messages: cross-linked with an earlier entry (both end at cluster %u)",
                m[17]));
+    CHECK_EQ(big.res.long_chains, 1);
     disk_free(v.d);
 }
 
@@ -898,6 +896,8 @@ TEST(size_smaller_than_chain) {
     vol_t v = copy_base();
     entry_set32(&v, at.notes.dir, at.notes.index, 28, 100);
     EXPECT(v.d, "no problems", "note: /notes.txt: 1 cluster for 100 bytes, chain has 2");
+    CHECK_EQ(big.res.long_chains, 1);
+    CHECK_EQ(big.res.notes, 1);
     disk_free(v.d);
 }
 
@@ -1179,10 +1179,506 @@ TEST(upcase_matches_fatfs) {
     CHECK_EQ(fsck_upcase(0x4E00), 0x4E00);
 }
 
+// --- exFAT ----------------------------------------------------------------------------------
+
+// exFAT images as `sd format` makes them (f_mkfs, n_fat 1, align 8192), filled by FatFs, and
+// damaged with tests/fuzz/exfat_damage.h over this file's sparse disk.
+
+static const char *const x_long = "A long file name, longer than thirty characters.txt";
+static const char *const x_greek = "Ünïcödé ñame — ελληνικά.txt";
+static const char *const x_emoji = "emoji \xF0\x9F\x98\x80 name.txt";
+static const char *const x_last = "dir/many/file number 59 with a longer name.txt";
+
+static void append_file(const char *path, uint32_t size) {
+    FIL fp;
+    CHECK_EQ(f_open(&fp, path, FA_WRITE | FA_OPEN_APPEND), FR_OK);
+    uint8_t buf[4096];
+    for (uint32_t done = 0; done < size;) {
+        UINT n = size - done < sizeof(buf) ? size - done : sizeof(buf), wrote;
+        memset(buf, 0x5A, n);
+        CHECK_EQ(f_write(&fp, buf, n, &wrote), FR_OK);
+        done += n;
+    }
+    CHECK_EQ(f_close(&fp), FR_OK);
+}
+
+// The tree of test_fsck_exfat.c: names in several scripts, a NoFatChain file and a
+// fragmented (FAT-chained) one, directories three deep and one of two clusters.
+static void fill_exfat(void) {
+    mkdir_ok("dir");
+    mkdir_ok("dir/sub");
+    mkdir_ok("dir/sub/deeper");
+    mkdir_ok("dir/many");
+    append_file("README.txt", 100);
+    append_file(x_long, 5000);
+    append_file(x_greek, 3000);
+    append_file("日本語のファイル.bin", 700);
+    append_file(x_emoji, 10);
+    append_file("dir/empty.txt", 0);
+    append_file("dir/sub/contig.bin", 200000);      // one write: NoFatChain
+    append_file("dir/frag.bin", 9000);              // then something after it,
+    append_file("dir/other.bin", 9000);
+    append_file("dir/frag.bin", 9000);              // then more: a FAT chain
+    append_file("dir/sub/deeper/deep.txt", 1);
+    for (int i = 0; i < 60; i++) {
+        char p[80];
+        snprintf(p, sizeof(p), "dir/many/file number %02d with a longer name.txt", i);
+        append_file(p, (uint32_t)(i * 100));
+    }
+}
+
+static vol_t xbase;
+
+static uint8_t *x_sector(void *ctx, uint64_t lba) {
+    return disk_sector(ctx, lba, true);
+}
+
+// A copy of the exFAT base image, opened for damage.
+static disk_t *xcopy(exd_t *x) {
+    disk_t *d = disk_copy(xbase.d);
+    CHECK(exd_open(x, x_sector, d, xbase.vol, d->sectors));
+    return d;
+}
+
+static exd_loc_t xfind(const exd_t *x, const char *p) {
+    exd_loc_t l;
+    memset(&l, 0, sizeof(l));
+    bool found = exd_find(x, p, &l);
+    if (!found)
+        fprintf(stderr, "%s: %s not found\n", test_current, p);
+    CHECK(found);
+    return l;
+}
+
+// The clusters of a FAT chain (at most `max`).
+static uint32_t xchain(const exd_t *x, uint32_t c, uint32_t *out, uint32_t max) {
+    uint32_t n = 0;
+    while (n < max && c >= 2 && c <= x->g.clusters + 1) {
+        out[n++] = c;
+        c = exd_fat(x, c);
+    }
+    return n;
+}
+
+// A run line as fsck.c prints it, with its size as fmt_size() gives it.
+static const char *x_run(const char *what, uint32_t first, uint32_t n, uint32_t cbytes) {
+    static const char *const units[] = {"bytes", "KB", "MB", "GB"};
+    uint64_t b = (uint64_t)n * cbytes, div = 1;
+    unsigned u = 0;
+    while (u < 3 && b >= div * 1024)
+        div *= 1024, u++;
+    char size[64];
+    if ((b % div) * 10 / div)
+        snprintf(size, sizeof(size), "%llu.%llu %s", (unsigned long long)(b / div),
+                 (unsigned long long)((b % div) * 10 / div), units[u]);
+    else
+        snprintf(size, sizeof(size), "%llu %s", (unsigned long long)(b / div), units[u]);
+    if (n == 1)
+        return fmt("%s: cluster %u (%s)", what, first, size);
+    return fmt("%s: clusters %u-%u (%s)", what, first, first + n - 1, size);
+}
+
+TEST(exfat_clean) {
+    disk_t *d = disk_copy(xbase.d);
+    EXPECT(d, "no problems", NULL);
+    CHECK_EQ(big.res.kind, FSCK_KIND_EXFAT);
+    CHECK_EQ(big.res.volume_lba, xbase.vol);
+    CHECK(xbase.vol > 0);
+    CHECK_EQ(big.res.cluster_bytes, 4096);
+    CHECK_EQ(big.res.files, 70);
+    CHECK_EQ(big.res.dirs, 5);                     // the root, dir, sub, deeper, many
+    CHECK(big.res.free_clusters > 0 && big.res.free_clusters < big.res.clusters);
+    disk_free(d);
+}
+
+TEST(exfat_clean_no_partition_table) {
+    vol_t v = make_volume(131072, FM_EXFAT | FM_SFD, 1, 0);
+    fill_exfat();
+    unmount();
+    EXPECT(v.d, "no problems", NULL);
+    CHECK_EQ(big.res.volume_lba, 0);
+    disk_free(v.d);
+}
+
+// 300 MB: 32 KB clusters, as f_mkfs picks them for a bigger card.
+TEST(exfat_clean_big_clusters) {
+    vol_t v = make_volume(614400, FM_EXFAT | FM_SFD, 1, 0);
+    fill_exfat();
+    unmount();
+    expect_full(v.d, 0, 64, NO_FAIL, LINES_OF(NULL), FSCK_DONE, "no problems");
+    CHECK_EQ(big.res.cluster_bytes, 32768);
+    disk_free(v.d);
+}
+
+// 128 GB: f_mkfs makes a GPT.
+TEST(exfat_clean_gpt) {
+    vol_t v = make_volume(0x10000000, FM_EXFAT, 1, 0);
+    append_file("README.txt", 100);
+    mkdir_ok("dir");
+    append_file("dir/A long name in a GPT volume.bin", 100000);
+    unmount();
+    uint8_t s[512];
+    disk_get(v.d, 0, s);
+    CHECK_EQ(s[446 + 4], 0xEE);
+    expect_full(v.d, 0, 4096, NO_FAIL, LINES_OF(NULL), FSCK_DONE, "no problems");
+    CHECK_EQ(big.res.volume_lba, v.vol);
+    disk_free(v.d);
+}
+
+// Without FatFs's ff_wtoupper(), the checker's subset differs from the volume's table: a
+// note. The names here are all inside the subset, so their hashes still agree.
+TEST(exfat_subset_upcase) {
+    disk_t *d = disk_copy(xbase.d);
+    subset_upcase = true;
+    run_check(&big, d, 0, 16384, 100, NO_FAIL);
+    subset_upcase = false;
+    CHECK_EQ(big.status, FSCK_DONE);
+    CHECK_EQ(big.n, 1);
+    CHECK_EQ(big.res.problems, 0);
+    CHECK(!strncmp(big.lines[0], "note: the up-case table maps ", 29));
+    disk_free(d);
+}
+
+TEST(exfat_refused) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_vol(&x, 0)[108] = 12;                       // 4096-byte sectors
+    EXPECT_FAIL(d, "bytes per sector not 512");
+    CHECK_EQ(big.res.kind, FSCK_KIND_EXFAT);
+    disk_free(d);
+}
+
+TEST(exfat_set_checksum) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "README.txt");
+    exd_bad_set_checksum(&x, &l);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/README.txt: set checksum 0x%04X, computed 0x%04X",
+               (uint16_t)(l.set.sum_stored + 1), l.set.sum_stored));
+    disk_free(d);
+}
+
+TEST(exfat_name_hash) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, x_greek);
+    exd_bad_name_hash(&x, &l);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/%s: name hash 0x%04X, computed 0x%04X", x_greek,
+               (uint16_t)(l.set.hash_stored + 1), l.set.hash_stored));
+    disk_free(d);
+}
+
+TEST(exfat_secondary_count) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, x_long);                // a stream and 4 name entries
+    exd_secondary_count(&x, &l, -1);
+    // The path shows the name as far as the set holds it: 3 entries of 15 characters.
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "/A long file name, longer than thirty characte: secondary count 4 doesn't fit a "
+           "name of 51 characters (needs 5)");
+    disk_free(d);
+
+    // Under FatFs's minimum: only the stream entry is in the set, so it has no name.
+    d = xcopy(&x);
+    l = xfind(&x, "README.txt");
+    exd_secondary_count(&x, &l, -1);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/: file entry %u: secondary count 1 (FatFs reads 2 to 18)", l.index));
+    disk_free(d);
+
+    // One too many: the next set's File entry cuts it short.
+    d = xcopy(&x);
+    l = xfind(&x, "README.txt");
+    exd_secondary_count(&x, &l, +1);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "/README.txt: entry set ends after 2 of 3 secondary entries");
+    disk_free(d);
+}
+
+TEST(exfat_name_length) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/sub/deeper/deep.txt");
+    exd_name_length(&x, &l, 16);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "/dir/sub/deeper/deep.txt: secondary count 2 doesn't fit a name of 16 characters "
+           "(needs 3)");
+    disk_free(d);
+}
+
+TEST(exfat_valid_length) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/frag.bin");
+    exd_valid_over(&x, &l);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "/dir/frag.bin: valid data length 18001 is larger than the data length 18000");
+    disk_free(d);
+}
+
+// The last file written runs past the heap: its clusters up to the heap's end are reached
+// but clear in the bitmap.
+TEST(exfat_run_past_heap) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, x_last);
+    CHECK(l.set.no_fat_chain);
+    exd_run_past_heap(&x, &l, 3);
+    uint32_t last = x.g.clusters + 1, first = l.set.first_cluster;
+    uint32_t n = last - (first + l.set.clusters) + 1;
+    EXPECT(d, fmt("2 problems; 0 bytes lost, 0 cross-linked"),
+           fmt("/%s: contiguous clusters %u-%u run past the last cluster (%u)", x_last, first,
+               last + 3, last),
+           x_run("reached but free", first + l.set.clusters, n, 4096));
+    CHECK_EQ(big.res.reached_free, n);
+    disk_free(d);
+}
+
+TEST(exfat_bitmap_entries) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    CHECK(exd_no_bitmap(&x));
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked", "/: no allocation bitmap entry");
+    disk_free(d);
+
+    d = xcopy(&x);
+    uint32_t idx;
+    CHECK(exd_second_bitmap(&x, &idx));
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/: allocation bitmap entry %u: a second allocation bitmap entry (FatFs uses the "
+               "first)", idx));
+    disk_free(d);
+}
+
+// The bitmap's chain doesn't end in 0xFFFFFFFF: FatFs refuses the volume.
+TEST(exfat_bitmap_not_contiguous) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_dir_t root = {x.g.root_cluster, false};
+    uint32_t i;
+    CHECK(exd_find_type(&x, root, 0x81, &i));
+    uint32_t bm = exd_le32(exd_entry(&x, root, i) + 20);
+    CHECK_EQ(exd_fat(&x, bm), 0xFFFFFFFF);
+    exd_set_fat(&x, bm, 0xFFFFFFF8);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("the allocation bitmap's chain isn't contiguous at cluster %u (FatFs won't mount "
+               "the volume)", bm));
+    disk_free(d);
+}
+
+TEST(exfat_upcase_checksum) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_dir_t root = {x.g.root_cluster, false};
+    uint32_t i;
+    CHECK(exd_find_type(&x, root, 0x82, &i));
+    uint32_t sum = exd_le32(exd_entry(&x, root, i) + 4);
+    CHECK(exd_bad_upcase_checksum(&x));
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("up-case table checksum 0x%08X, computed 0x%08X", sum + 1, sum));
+    disk_free(d);
+}
+
+TEST(exfat_boot_region) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_bad_boot_checksum(&x);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked", "boot region checksum wrong (sector 11)");
+    disk_free(d);
+
+    d = xcopy(&x);
+    exd_backup_differs(&x, 14);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "backup boot region differs from the main one (sector 14)");
+    disk_free(d);
+
+    d = xcopy(&x);
+    exd_dirty(&x);
+    EXPECT(d, "no problems; volume flagged dirty",
+           "note: the volume is flagged dirty (not unmounted cleanly)");
+    CHECK(big.res.dirty);
+    disk_free(d);
+}
+
+// A bit cleared under a file, and bits set for nothing, across a boundary of the tiny window
+// (512 clusters a pass): still one run.
+TEST(exfat_bitmap_bits) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/sub/contig.bin");
+    uint32_t c = l.set.first_cluster + 10;
+    exd_bitmap_bit(&x, c, false);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked", x_run("reached but free", c, 1, 4096));
+    CHECK_EQ(big.res.reached_free, 1);
+    disk_free(d);
+
+    d = xcopy(&x);
+    uint32_t far = 2 + 512 * 20 - 1;
+    for (uint32_t k = 0; k < 3; k++)
+        exd_bitmap_bit(&x, far + k, true);
+    EXPECT(d, "1 problem; 12 KB lost, 0 cross-linked", x_run("lost", far, 3, 4096));
+    CHECK_EQ(big.res.lost_clusters, 3);
+    disk_free(d);
+}
+
+TEST(exfat_unknown_critical) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/sub");
+    uint32_t idx;
+    CHECK(exd_unknown_critical(&x, (exd_dir_t){l.set.first_cluster, l.set.no_fat_chain}, &idx));
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/dir/sub: unknown critical entry type 0x84 (entry %u)", idx));
+    disk_free(d);
+}
+
+// Two NoFatChain files made to share a cluster: the later one in the walk is named.
+TEST(exfat_cross_link) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t a = xfind(&x, "dir/sub/contig.bin"), b = xfind(&x, "README.txt");
+    CHECK(b.set.no_fat_chain);
+    exd_put32(exd_set_entry(&x, &b, 1) + 20, a.set.first_cluster);
+    exd_resum(&x, &b);
+    EXPECT(d, "2 problems; 4 KB lost, 1 cross-linked",
+           fmt("/README.txt: cross-linked with an earlier entry (at cluster %u)",
+               a.set.first_cluster),
+           x_run("lost", b.set.first_cluster, 1, 4096));
+    disk_free(d);
+}
+
+// A later file made to start one cluster early, on an earlier file's last: they share a
+// cluster, but not the later one's last, so no entry is named; the count is.
+TEST(exfat_cross_link_unnamed) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t a = xfind(&x, x_greek), b = xfind(&x, "日本語のファイル.bin");
+    CHECK(a.set.no_fat_chain && b.set.no_fat_chain);
+    CHECK_EQ(a.set.clusters, 1);
+    CHECK_EQ(b.set.first_cluster, a.set.first_cluster + 1);
+    uint8_t *s = exd_set_entry(&x, &b, 1);
+    exd_put32(s + 20, a.set.first_cluster);
+    exd_put64(s + 24, 2 * 4096);
+    exd_put64(s + 8, 2 * 4096);
+    exd_resum(&x, &b);
+    EXPECT(d, "1 problem; 0 bytes lost, 1 cross-linked", "1 cluster used by more than one entry");
+    disk_free(d);
+}
+
+static void x_set_length(const exd_t *x, const exd_loc_t *l, uint64_t len) {
+    uint8_t *s = exd_set_entry(x, l, 1);
+    exd_put64(s + 24, len);
+    exd_put64(s + 8, len);
+    exd_resum(x, l);
+}
+
+TEST(exfat_size_against_chain) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/frag.bin");
+    CHECK(!l.set.no_fat_chain);
+    x_set_length(&x, &l, 30000);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           "/dir/frag.bin: 8 clusters for 30000 bytes, chain has 5");
+    disk_free(d);
+
+    d = xcopy(&x);
+    x_set_length(&x, &l, 5000);
+    EXPECT(d, "no problems", "note: /dir/frag.bin: 2 clusters for 5000 bytes, chain has 5");
+    CHECK_EQ(big.res.long_chains, 1);
+    disk_free(d);
+}
+
+TEST(exfat_chain_damage) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/frag.bin");
+    uint32_t c[5];
+    CHECK_EQ(xchain(&x, l.set.first_cluster, c, 5), 5);
+    exd_set_fat(&x, c[4], c[0]);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked", "/dir/frag.bin: chain loops");
+    disk_free(d);
+
+    // Into a free cluster: the rest of the chain is lost.
+    d = xcopy(&x);
+    uint32_t free_c = x.g.clusters - 10;
+    exd_set_fat(&x, c[0], free_c);
+    CHECK_EQ(c[1], c[0] + 1);
+    CHECK_EQ(c[2], c[1] + 1);
+    CHECK_EQ(c[4], c[3] + 1);
+    EXPECT(d, "3 problems; 16 KB lost, 0 cross-linked",
+           fmt("/dir/frag.bin: chain reaches free cluster %u", free_c),
+           x_run("lost", c[1], 2, 4096), x_run("lost", c[3], 2, 4096));
+    disk_free(d);
+
+    d = xcopy(&x);
+    exd_set_fat(&x, c[0], x.g.clusters + 100);
+    EXPECT(d, "3 problems; 16 KB lost, 0 cross-linked",
+           fmt("/dir/frag.bin: bad cluster number %u after cluster %u", x.g.clusters + 100, c[0]),
+           x_run("lost", c[1], 2, 4096), x_run("lost", c[3], 2, 4096));
+    disk_free(d);
+}
+
+TEST(exfat_directory_loop) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t dir = xfind(&x, "dir"), deeper = xfind(&x, "dir/sub/deeper");
+    exd_loc_t deep = xfind(&x, "dir/sub/deeper/deep.txt");
+    exd_put32(exd_set_entry(&x, &deeper, 1) + 20, dir.set.first_cluster);
+    exd_resum(&x, &deeper);
+    uint32_t a = deeper.set.first_cluster, b = deep.set.first_cluster;
+    CHECK(a + 1 != b && b + 1 != a);
+    EXPECT(d, "3 problems; 8 KB lost, 0 cross-linked",
+           "/dir/sub/deeper: directory loops back to /dir", x_run("lost", a, 1, 4096),
+           x_run("lost", b, 1, 4096));
+    disk_free(d);
+}
+
+// "file number 01 ..." renamed "FILE number 00 ...": the same name as an earlier one's, in
+// another case. Its hash and checksum are made right, so only the repeat shows.
+TEST(exfat_repeated_name) {
+    exd_t x;
+    disk_t *d = xcopy(&x);
+    exd_loc_t l = xfind(&x, "dir/many/file number 01 with a longer name.txt");
+    const char *nm = "FILE number 00 with a longer name.txt";
+    uint16_t u[64];
+    size_t n = exd_utf16(nm, nm + strlen(nm), u, 64);
+    CHECK_EQ(n, l.set.name_len);
+    for (size_t i = 0; i < n; i++)
+        exd_put16(exd_set_entry(&x, &l, 2 + (uint32_t)(i / 15)) + 2 + 2 * (i % 15), u[i]);
+    exd_put16(exd_set_entry(&x, &l, 1) + 4, fsck_exfat_name_hash(u, n, ff_wtoupper));
+    exd_resum(&x, &l);
+    EXPECT(d, "1 problem; 0 bytes lost, 0 cross-linked",
+           fmt("/dir/many/%s: name repeated in the directory", nm));
+    disk_free(d);
+}
+
+TEST(exfat_nested_too_deep) {
+    vol_t v = make_volume(131072, FM_EXFAT | FM_SFD, 1, 0);
+    char p[256] = "";
+    for (int i = 0; i < 65; i++) {
+        strcat(p, "/n");
+        mkdir_ok(p);
+    }
+    unmount();
+    p[2 * 64] = 0;
+    exd_t x;
+    CHECK(exd_open(&x, x_sector, v.d, 0, v.d->sectors));
+    exd_loc_t last = xfind(&x, "n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/"
+                               "n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n/n");
+    EXPECT(v.d, "2 problems; 4 KB lost, 0 cross-linked",
+           fmt("%s: nested more than 63 levels deep: not read", p),
+           x_run("lost", last.set.first_cluster, 1, 4096));
+    disk_free(v.d);
+}
+
 // --- the interface --------------------------------------------------------------------------
 
 TEST(memory) {
-    fsck_io_t io = {read_cb, NULL, NULL, NULL, 1000};
+    fsck_io_t io = {read_cb, NULL, NULL, NULL, 1000, NULL};
     CHECK(fsck_new(&io, mem, fsck_state_size() + FSCK_WINDOW_MIN - 1) == NULL);
     CHECK(fsck_new(&io, mem + 1, fsck_state_size() + FSCK_WINDOW_MIN + 7) != NULL);
     CHECK(fsck_new(&io, mem + 1, fsck_state_size() + FSCK_WINDOW_MIN + 6) == NULL);
@@ -1209,10 +1705,10 @@ TEST(report_limit) {
 
 // The fuzz seeds (written by seeds.py, not FatFs) are clean volumes too.
 TEST(fuzz_seeds) {
-    static const char *const names[] = {"mbr", "sfd-2fat", "gpt", "exfat"};
+    static const char *const names[] = {"mbr", "sfd-2fat", "gpt", "exfat", "exfat-mbr"};
     static fsck_image_t im;
     static uint8_t buf[16384];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         char path[512];
         snprintf(path, sizeof(path), "%s/seed-%s", FSCK_SEEDS_DIR, names[i]);
         FILE *fp = fopen(path, "rb");
@@ -1223,27 +1719,27 @@ TEST(fuzz_seeds) {
         fclose(fp);
         CHECK(n > 1 && n < sizeof(buf));
         fsck_image_parse(&im, buf + 1, n - 1);    // after the fuzz target's selector byte
-        fsck_io_t io = {fsck_image_read, NULL, NULL, &im, im.sectors};
+        fsck_io_t io = {fsck_image_read, NULL, NULL, &im, im.sectors, NULL};
         fsck_t *f = fsck_new(&io, mem, fsck_state_size() + 2048);
         int st;
         while ((st = fsck_step(f, 64)) == FSCK_MORE)
             ;
         const fsck_result_t *res = fsck_result(f);
-        if (i < 3) {
-            CHECK_EQ(st, FSCK_DONE);
-            CHECK(!strcmp(res->summary, "no problems"));
-            CHECK_EQ(res->notes, 0);
-            CHECK_EQ(res->files, 4);
-            CHECK_EQ(res->dirs, 2);
-        } else {
-            CHECK_EQ(st, FSCK_FAILED);
-            CHECK(res->why && !strcmp(res->why, "exFAT is not checked yet"));
-        }
+        CHECK_EQ(st, FSCK_DONE);
+        CHECK(!strcmp(res->summary, "no problems"));
+        CHECK_EQ(res->notes, 0);
+        CHECK_EQ(res->files, i < 3 ? 4 : 6);
+        CHECK_EQ(res->dirs, 2);
+        CHECK_EQ(res->kind, i < 3 ? FSCK_KIND_FAT32 : FSCK_KIND_EXFAT);
+        CHECK(res->passes > 1);
     }
 }
 
 TEST_MAIN(
     make_base();
+    xbase = make_volume(131072, FM_EXFAT, 1, 0);   // 64 MB, with a partition table
+    fill_exfat();
+    unmount();
     RUN(clean_mbr);
     RUN(clean_no_partition_table);
     RUN(clean_two_fats);
@@ -1251,7 +1747,6 @@ TEST_MAIN(
     RUN(clean_gpt);
     RUN(gpt_header_crc_wrong);
     RUN(gpt_entry_array_crc_wrong);
-    RUN(exfat_not_checked_yet);
     RUN(fat16_refused);
     RUN(no_volume);
     RUN(mbr_without_signature);
@@ -1296,8 +1791,34 @@ TEST_MAIN(
     RUN(repeated_short_name);
     RUN(repeated_long_name);
     RUN(upcase_matches_fatfs);
+    RUN(exfat_clean);
+    RUN(exfat_clean_no_partition_table);
+    RUN(exfat_clean_big_clusters);
+    RUN(exfat_clean_gpt);
+    RUN(exfat_subset_upcase);
+    RUN(exfat_refused);
+    RUN(exfat_set_checksum);
+    RUN(exfat_name_hash);
+    RUN(exfat_secondary_count);
+    RUN(exfat_name_length);
+    RUN(exfat_valid_length);
+    RUN(exfat_run_past_heap);
+    RUN(exfat_bitmap_entries);
+    RUN(exfat_bitmap_not_contiguous);
+    RUN(exfat_upcase_checksum);
+    RUN(exfat_boot_region);
+    RUN(exfat_bitmap_bits);
+    RUN(exfat_unknown_critical);
+    RUN(exfat_cross_link);
+    RUN(exfat_cross_link_unnamed);
+    RUN(exfat_size_against_chain);
+    RUN(exfat_chain_damage);
+    RUN(exfat_directory_loop);
+    RUN(exfat_repeated_name);
+    RUN(exfat_nested_too_deep);
     RUN(memory);
     RUN(report_limit);
     RUN(fuzz_seeds);
     disk_free(base.d);
+    disk_free(xbase.d);
 )

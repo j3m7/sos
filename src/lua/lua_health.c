@@ -13,6 +13,9 @@
 
 #include "lua/lua_health.h"
 
+#include <string.h>
+#include <sys/time.h>
+
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
@@ -36,6 +39,8 @@
 #include "core/wdog.h"
 #include "lua/lua_core1.h"
 #include "net/wifi.h"
+#include "time/rtc.h"
+#include "time/timesync.h"
 
 static void temp(lua_info_t *w, const char *name, int tenths) {
     if (tenths != SENSORS_NONE)
@@ -190,6 +195,55 @@ static void wifi_table(lua_info_t *w) {
     lua_info_int(w, "arp_sent", arp_out);
 }
 
+// What `time` shows. The RTC is read (an I2C transfer of a few bytes).
+static void clock_table(lua_info_t *w) {
+    timesync_info_t i;
+    timesync_info(&i);
+    lua_info_bool(w, "set", i.source != NULL);
+    lua_info_str(w, "source", i.source);
+    if (i.source) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        lua_info_int(w, "time", tv.tv_sec);
+    }
+    lua_info_str(w, "server", i.server);
+    lua_info_bool(w, "server_default", i.server_default);
+    lua_info_int(w, "auto_hours", i.auto_hours);
+    if (i.syncing) {
+        lua_info_str(w, "syncing", i.syncing);
+        lua_info_bool(w, "syncing_sntp", i.syncing_sntp);
+    }
+    if (i.synced_ago_s != TIMESYNC_NEVER) {
+        lua_info_open(w, "last_sync");
+        lua_info_int(w, "ago", i.synced_ago_s);
+        if (!i.step_set)
+            lua_info_int(w, "step_ms", i.step_ms);
+        if (i.source && !strcmp(i.source, "nts"))
+            lua_info_int(w, "delay_ms", i.delay_ms);
+        lua_info_close(w);
+    }
+    if (i.failed_ago_s != TIMESYNC_NEVER) {
+        lua_info_open(w, "last_failure");
+        lua_info_int(w, "ago", i.failed_ago_s);
+        lua_info_str(w, "why", i.failed_why);
+        if (i.retry_in_s)
+            lua_info_int(w, "retry_in", i.retry_in_s);
+        lua_info_close(w);
+    }
+    lua_info_open(w, "rtc");
+    int64_t t;
+    rtc_status_t st = rtc_read(&t);
+    lua_info_str(w, "status", rtc_status_str(st));
+    if (st == RTC_OK) {
+        lua_info_int(w, "time", t);
+        lua_info_bool(w, "battery_low", rtc_battery_low());
+    }
+    char cal[40];
+    timesync_cal_str(cal, sizeof(cal));
+    lua_info_str(w, "cal", cal);
+    lua_info_close(w);
+}
+
 // Room kept after the entries for the list's end and the three fields after it.
 #define DMESG_TAIL 64
 
@@ -241,6 +295,7 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_RESET:   reset_table(&w); break;
     case LH_GLITCH:  glitch_table(&w); break;
     case LH_WIFI:    wifi_table(&w); break;
+    case LH_CLOCK:   clock_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
     default:         return 0;
     }

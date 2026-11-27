@@ -43,6 +43,14 @@ add_executable(test_files test_files.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}
 target_include_directories(test_files PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
 add_test(NAME files COMMAND test_files)
 
+# src/ssh/sftp_fs.c: the SFTP server's file functions (when an upload's file is synced, #224),
+# with the real src/files/files.c behind them, over the same stand-ins as test_files.
+add_executable(test_sftp_fs test_sftp_fs.c ${SOS_ROOT}/src/ssh/sftp_fs.c ${SOS_ROOT}/src/files/files.c
+    ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_sftp_fs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/sftp ${SOS_ROOT}/src)
+add_test(NAME sftp_fs COMMAND test_sftp_fs)
+
 # src/shell/words.c: the shell's tokenizer (quotes, backslashes, operators) and the join.
 add_executable(test_words test_words.c ${SOS_ROOT}/src/shell/words.c)
 target_include_directories(test_words PRIVATE ${SOS_ROOT}/src)
@@ -318,6 +326,11 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_info PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_info PRIVATE lua_host)
     add_test(NAME lua_info COMMAND test_lua_info)
+    add_executable(test_lua_date test_lua_date.c ${SOS_ROOT}/src/lua/lua_date.c
+                   ${SOS_ROOT}/src/time/timeconv.c)
+    target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_date PRIVATE lua_host)
+    add_test(NAME lua_date COMMAND test_lua_date)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()
@@ -329,9 +342,9 @@ target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
 add_test(NAME sdfault COMMAND test_sdfault)
 
-# src/files/fsck.c: the card checker, on images made by FatFs itself (ff.c and ffunicode.c,
-# built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as for the
-# firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
+# src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
+# ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
+# for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
 if (NOT DEFINED SDCARD_ROOT)
     set(SDCARD_ROOT "${SOS_ROOT}/lib/sdcard" CACHE PATH "SD card library source")
 endif()
@@ -340,14 +353,21 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     add_library(fatfs_host STATIC ${FATFS_DIR}/ff.c ${FATFS_DIR}/ffunicode.c)
     target_include_directories(fatfs_host PUBLIC ${FATFS_DIR} ${SDCARD_ROOT}/src/include)
     target_compile_options(fatfs_host PRIVATE -w)     # the library's code, not ours to warn about
-    add_executable(test_fsck test_fsck.c ${SOS_ROOT}/src/files/fsck.c)
+    add_executable(test_fsck test_fsck.c ${SOS_ROOT}/src/files/fsck.c
+        ${SOS_ROOT}/src/files/fsck_exfat.c)
     target_include_directories(test_fsck PRIVATE ${SOS_ROOT}/src)
     target_compile_definitions(test_fsck PRIVATE
         FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
     target_link_libraries(test_fsck PRIVATE fatfs_host)
     add_test(NAME fsck COMMAND test_fsck)
+    add_executable(test_fsck_exfat test_fsck_exfat.c ${SOS_ROOT}/src/files/fsck_exfat.c)
+    target_include_directories(test_fsck_exfat PRIVATE ${SOS_ROOT}/src ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(test_fsck_exfat PRIVATE
+        FSCK_EXFAT_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck_exfat")
+    target_link_libraries(test_fsck_exfat PRIVATE fatfs_host)
+    add_test(NAME fsck_exfat COMMAND test_fsck_exfat)
 else()
-    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck is skipped")
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck and test_fsck_exfat are skipped")
 endif()
 
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
@@ -387,4 +407,5 @@ sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
-sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c)
+sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c)
+sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)

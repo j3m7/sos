@@ -1009,7 +1009,7 @@ static bool check_step(shell_t *sh, void *arg, bool cancel) {
     char line[FSCK_SUMMARY_MAX + 64];
     if (r == FSCK_DONE)
         snprintf(line, sizeof(line), "%s", res->summary);
-    else    // before the passes began (no volume, a boot sector refused, exFAT): nothing checked
+    else    // before the passes began (no volume, a boot sector refused): nothing checked
         snprintf(line, sizeof(line), "%s: %s", res->passes ? "failed" : "not checked",
                  res->why ? res->why : "?");
     return check_end(sh, j, "%s", line);
@@ -1070,6 +1070,7 @@ static void cmd_check(shell_t *sh, const char *arg) {
     j->mem_len = state + window;
     fsck_io_t io = {
         .read = check_read, .report = check_report, .write = NULL, .ctx = j, .sectors = sectors,
+        .upcase = ff_wtoupper,          // FatFs's own case folding, for exFAT's name hashes
     };
     j->f = fsck_new(&io, j->mem, j->mem_len);
     if (!j->f) {
