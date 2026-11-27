@@ -124,7 +124,7 @@ unsigned history_fill(void) {
     for (;;) {
         history_scan_t s;
         history_scan(history_sector(), &s);
-        if (s.state != HISTORY_OURS || s.next + 1 >= HISTORY_SLOTS)
+        if (s.state != HISTORY_OURS || s.next >= HISTORY_SLOTS)
             return n;
         history_rec_t rec = {.kind = HISTORY_KIND_TEST, .uptime_s = HISTORY_NONE,
                              .wall = HISTORY_NONE};

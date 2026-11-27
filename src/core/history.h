@@ -125,7 +125,8 @@ int history_rtc_begin(uint32_t t, int cal_steps);
 void history_rtc_done(int slot);
 
 #ifdef SOS_TEST_COMMANDS
-// `health history-fill`: test records until one slot is left. Returns how many were written.
+// `health history-fill`: test records until the sector is full, so the next record (the next
+// boot's) erases it and copies the newest back. Returns how many were written.
 unsigned history_fill(void);
 #endif
 

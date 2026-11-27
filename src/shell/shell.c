@@ -2364,8 +2364,8 @@ static void cmd_health(shell_t *sh, char *args) {
     }
     if (fill) {
         unsigned n = history_fill();
-        shell_printf(sh, "history: %u test record%s written; the next record erases the sector\n",
-                     n, n == 1 ? "" : "s");
+        shell_printf(sh, "history: %u test record%s written; the next boot's record erases the "
+                     "sector and keeps the newest\n", n, n == 1 ? "" : "s");
         return;
     }
 #endif
