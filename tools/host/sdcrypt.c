@@ -70,14 +70,25 @@ int sdcrypt_tool_header(const uint8_t sector[SECTOR], uint32_t *offset) {
 
 #ifndef SDCRYPT_TOOL_NO_MAIN
 
+// A hex digit's value, or -1. (sscanf's %2x would also take a space, a sign or "0x".)
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
 static int parse_key(const char *hex, uint8_t key[KEY_LEN]) {
     if (strlen(hex) != 2 * KEY_LEN)
         return -1;
     for (int i = 0; i < KEY_LEN; i++) {
-        unsigned v;
-        if (sscanf(hex + 2 * i, "%2x", &v) != 1)
+        int hi = hex_digit(hex[2 * i]), lo = hex_digit(hex[2 * i + 1]);
+        if (hi < 0 || lo < 0)
             return -1;
-        key[i] = (uint8_t)v;
+        key[i] = (uint8_t)(hi << 4 | lo);
     }
     return 0;
 }

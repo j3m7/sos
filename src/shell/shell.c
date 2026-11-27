@@ -149,7 +149,8 @@ static void cmd_bootkey(shell_t *sh) {
     extern char __flash_binary_start, __flash_binary_end;
     // The signature's block is added after linking, just past what the linker calls the end.
     const uint8_t *image = (const uint8_t *)&__flash_binary_start;
-    size_t len = (size_t)(&__flash_binary_end - &__flash_binary_start) + 4096;
+    uintptr_t start = (uintptr_t)&__flash_binary_start, end = (uintptr_t)&__flash_binary_end;
+    size_t len = (size_t)(end - start) + 4096;
     size_t flash_left = XIP_BASE + PICO_FLASH_SIZE_BYTES - (uintptr_t)image;
     if (len > flash_left)
         len = flash_left;

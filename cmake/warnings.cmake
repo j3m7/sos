@@ -37,6 +37,12 @@ set(SOS_WARNINGS
     -Wundef
     -Wvla
     -Wdouble-promotion
-    -Wcast-align=strict
-    -Wnull-dereference -Wduplicated-cond -Wlogical-op -Wpointer-arith
+    -Wnull-dereference -Wpointer-arith
 )
+# GCC's own (the firmware's compiler). The host tests also build with clang (CC=clang), which
+# has no -Wduplicated-cond or -Wlogical-op, and whose -Wcast-align is what =strict is in GCC.
+if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    list(APPEND SOS_WARNINGS -Wcast-align=strict -Wduplicated-cond -Wlogical-op)
+else()
+    list(APPEND SOS_WARNINGS -Wcast-align)
+endif()
