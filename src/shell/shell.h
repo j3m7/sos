@@ -40,6 +40,8 @@ typedef struct shell shell_t;
 #define SHELL_HIDDEN 0x02      // never offered by Tab (an alias, a testing command)
 #define SHELL_PATH   0x04      // the words after it are paths on the SD card: Tab completes them
 #define SHELL_DIR    0x08      // with SHELL_PATH: paths of directories (Tab offers only those)
+#define SHELL_REDIRECT 0x10    // a command: the text after the line's last '>' is a path (echo)
+#define SHELL_NOSPACE  0x20    // a word Tab ends with nothing, not a space ("https://")
 
 // A word that may follow a command or another word, e.g. "sync" after "time". `words` are the
 // words that may follow this one (NULL: none, or free text Tab can't guess). Arrays of them end
@@ -47,7 +49,7 @@ typedef struct shell shell_t;
 typedef struct shell_word {
     const char *name;
     const struct shell_word *words;
-    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR, SHELL_NOSPACE
 } shell_word_t;
 
 // A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
@@ -56,7 +58,7 @@ typedef struct {
     const char *name;
     void (*run)(shell_t *sh, char *args);
     const shell_word_t *words; // words that may follow the name, for Tab
-    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR, SHELL_REDIRECT
 } shell_cmd_t;
 
 // Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the

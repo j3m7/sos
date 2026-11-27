@@ -17,15 +17,17 @@ this page is the reference.
 - **Tab** completes the command name, and the subcommand words after it (`time s` Tab Tab
   lists `sync server`; `wifi st` Tab gives `wifi stats `). When the matches agree no further,
   the terminal beeps; a second Tab lists them. Words only the console takes are offered only
-  there. Tab does nothing at a password or other question.
+  there. Some values are offered too: the sensitivity `0` to `3` after `glitch watch|on`, the
+  default server after `nts ke`, and `https://` after `http get|head|post` (with no space
+  after it, so the URL goes on). Tab does nothing at a password or other question.
 - After a file command (`ls`, `cd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `edit`, `more`, `lua`,
-  `lua -b`), Tab completes **file names** on the SD card: `cat do` Tab gives `cat docs/`, and
-  the next Tab goes on inside it. `cd` and `mkdir` offer directories only. Upper and lower
-  case don't matter, as on the card itself: `cat read` Tab gives `cat README.TXT`, rewriting
-  what you typed in the name's own case (ASCII letters only: `ö` doesn't match `Ö`). Names
-  with spaces or control characters aren't offered. Tab doesn't mount the card: it completes names
-  once a file command (or the boot) has. In a directory of more than 256 entries it reads the
-  first 256 only, and says so when it lists them.
+  `lua -b`), and after the `>` or `>>` of `echo`, Tab completes **file names** on the SD card:
+  `cat do` Tab gives `cat docs/`, and the next Tab goes on inside it. `cd` and `mkdir` offer
+  directories only. Upper and lower case don't matter, as on the card itself: `cat read` Tab
+  gives `cat README.TXT`, rewriting what you typed in the name's own case (ASCII letters only:
+  `ö` doesn't match `Ö`). Names with spaces or control characters aren't offered. Tab doesn't
+  mount the card: it completes names once a file command (or the boot) has. In a directory of
+  more than 256 entries it reads the first 256 only, and says so when it lists them.
 - **Ctrl-C** discards the line, cancels a question (`setup`, `wifi set`, …), or stops a running
   job (`ls`, `cat`, `cp`, a Lua script).
 - **Ctrl-D** on an empty line logs out, like `logout`.
