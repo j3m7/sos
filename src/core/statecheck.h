@@ -176,6 +176,13 @@ health_step_t statecheck_failcount_step(void **state, bool cancel, health_result
 health_step_t statecheck_hostkey_step(void **state, bool cancel, health_result_t *out);
 health_step_t statecheck_card_step(void **state, bool cancel, health_result_t *out);
 
+// health state-dump's lines: print `line` in pieces of at most `cols` characters, each broken
+// after the last "; " or ", " that fits, the pieces after the first indented by two spaces; a
+// piece with no such break is cut at `cols`. Calls emit once per piece. Pure.
+#define STATECHECK_WRAP_COLS 79
+void statecheck_wrap(const char *line, unsigned cols, void (*emit)(void *arg, const char *piece),
+                     void *arg);
+
 #ifdef SOS_TEST_COMMANDS
 // `health state-dump` (test builds; reads only, allowed over SSH): what each check reads, a line
 // at a time, with the time each read took, so one board run shows why each check said what it

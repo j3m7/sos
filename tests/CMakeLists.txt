@@ -154,6 +154,32 @@ target_include_directories(test_statecheck PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_statecheck PRIVATE SOS_KEYS_DIR="${SOS_ROOT}/keys")
 add_test(NAME statecheck COMMAND test_statecheck)
 
+# src/core/bgcheck.c: phase 4's checks, the pure half (docs/design/health.md §9.5): resets,
+# rtc-drift (with the drift arithmetic in timeconv.c), heap-sum, core1 and the brownout detector.
+add_executable(test_bgcheck test_bgcheck.c ${SOS_ROOT}/src/core/bgcheck.c
+               ${SOS_ROOT}/src/core/resetwhy.c ${SOS_ROOT}/src/time/timeconv.c)
+target_include_directories(test_bgcheck PRIVATE ${SOS_ROOT}/src)
+add_test(NAME bgcheck COMMAND test_bgcheck)
+
+# src/core/heapwalk.c: `health heap-walk`'s walk of newlib's chunks and free lists, over arenas
+# built in a buffer in newlib's layout.
+add_executable(test_heapwalk test_heapwalk.c ${SOS_ROOT}/src/core/heapwalk.c)
+target_include_directories(test_heapwalk PRIVATE ${SOS_ROOT}/src)
+add_test(NAME heapwalk COMMAND test_heapwalk)
+
+# src/core/resetwhy.c: the last reset's reason from the fault record, the watchdog and POWMAN
+# CHIP_RESET (docs/design/health.md §9.5).
+add_executable(test_resetwhy test_resetwhy.c ${SOS_ROOT}/src/core/resetwhy.c)
+target_include_directories(test_resetwhy PRIVATE ${SOS_ROOT}/src)
+add_test(NAME resetwhy COMMAND test_resetwhy)
+
+# src/core/history.c: the history sector's format (reset history and the RTC drift baseline),
+# over a buffer that behaves like NOR flash.
+add_executable(test_history test_history.c ${SOS_ROOT}/src/core/history.c
+               ${SOS_ROOT}/src/core/resetwhy.c)
+target_include_directories(test_history PRIVATE ${SOS_ROOT}/src)
+add_test(NAME history COMMAND test_history)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)

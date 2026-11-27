@@ -67,6 +67,56 @@ bool timeconv_parse_ppm(const char *s, int32_t *mppm);
 // can do (-277.76 to 273.42 ppm).
 bool timeconv_cal_steps(int32_t mppm, int *steps);
 
+// --- drift: the RTC's and the crystal's rates against NTS (docs/design/health.md §9.5) ----------
+
+typedef enum {
+    TIMECONV_DRIFT_NO_BASELINE,     // no usable record of when the RTC was last set
+    TIMECONV_DRIFT_BASELINE,        // set at a sync (rtc_interval_s: how long ago, 0 unknown)
+    TIMECONV_DRIFT_CAL_CHANGED,     // the last sync couldn't measure: the calibration had changed
+    TIMECONV_DRIFT_MEASURED,        // the last sync measured it
+} timeconv_drift_state_t;
+
+typedef struct {
+    bool rtc_present;               // the RTC answered at the last look
+    timeconv_drift_state_t rtc;
+    int64_t rtc_err_ms;             // MEASURED: the RTC's reading minus NTS time; positive = fast
+    uint32_t rtc_unc_ms;            // ...its uncertainty
+    uint32_t rtc_interval_s;        // MEASURED: since the RTC was set; BASELINE: its age
+    int cal_steps;                  // the calibration in force (TIMECONV_CAL_* steps)
+    bool xosc;                      // two syncs in one uptime: the crystal measured
+    int64_t xosc_err_ms;            // the system clock's lead over NTS (minus the step)
+    uint32_t xosc_unc_ms;
+    uint32_t xosc_interval_s;
+} timeconv_drift_t;
+
+#define TIMECONV_RTC_TICK_MS     1000   // the RTC counts whole seconds
+// The PCF8523 applies its correction once every two hours (mode 0), so its error swings by up to
+// one step's 4.34 ppm over 7200 s, 31.25 ms, per step: rounded up.
+#define TIMECONV_CAL_SAWTOOTH_MS 32
+
+// The uncertainty of one RTC measurement: the whole second, the calibration's sawtooth, and the
+// sync's round trip (half of each of two syncs').
+uint32_t timeconv_rtc_unc_ms(int cal_steps, uint32_t delay_ms);
+
+// err_ms over interval_s as thousandths of a ppm; 0 for an interval of 0.
+int64_t timeconv_rate_mppm(int64_t err_ms, uint32_t interval_s);
+
+// Judged only when sure: 1 if |rate| - unc is over limit, -1 if |rate| + unc is within it, 0 if
+// the uncertainty straddles it ("too short to judge").
+int timeconv_verdict(int64_t rate_mppm, int64_t unc_mppm, int64_t limit_mppm);
+
+// What a calibration of `steps` does to the RTC's rate, in thousandths of a ppm; positive slows
+// it, as `time cal` takes it.
+int32_t timeconv_cal_mppm(int steps);
+
+// Texts for the check and `time`: "+92.1+-13 ppm" (one decimal under 100 ppm, the uncertainty
+// with one decimal under 10); "no cal" or "cal 91.1"; "45 min", "22 h", "3 d".
+void timeconv_format_rate(char *buf, unsigned len, int64_t rate_mppm, int64_t unc_mppm);
+void timeconv_format_cal(char *buf, unsigned len, int steps);
+void timeconv_format_span(char *buf, unsigned len, uint32_t s);
+// A rate in ppm with one decimal, the ".0" dropped: "92", "-13.4", "114.5".
+void timeconv_format_ppm(char *buf, unsigned len, int64_t mppm);
+
 // "2026-11-23 23:30:05" (UTC) into buf (at least 20 bytes).
 void timeconv_format(int64_t t, char *buf, unsigned buflen);
 
