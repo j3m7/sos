@@ -72,14 +72,27 @@ translation (`crlf`), and `admin` (true for the console only).
   doesn't parse prints its usage and nothing runs). The command is the only job; `write_out()`
   hands what it prints to the filters, on its call stack, and the last one emits to the sink:
   the terminal, or the capture for `more` (a HEAP_EDIT block up to `SHELL_PIPE_MAX` = 32 KB,
-  paged through `shell_page()` when the command ends). The line's state is `shell_t.pipe`, a
+  paged through `shell_page()` when the command ends). A command that became a job is paged as
+  soon as it has given output (`page_early()`, from `run_line()` or `poll_job()`): its job moves
+  into the pipeline (`prod`), the pager becomes the shell's raw-mode job through
+  `shell_page_growing()`, and the pager steps the command itself, once a pass, through
+  `shell_pipe_feed()`, which turns `capturing` on around that step only: while `paging`,
+  `write_out()` sends to the capture only while `capturing` (the pager's frames go to the
+  terminal), and `shell_write_space()` is 1024 for the command and the channel's room for the
+  pager. Typed-ahead input is dropped at the hand-over, not fed to the pager as keys. The feed
+  hands the block to the pager when the command finishes (or is stopped, `SHELL_FEED_STOP`:
+  Ctrl-C; the filters flush), drops it on `SHELL_FEED_CANCEL` (q, the session's end), and
+  releases the line if the command asks a question: the pager leaves, then `poll_raw()` prints
+  the text and resumes the command as an ordinary job if it still runs. If the pager can't start
+  (`page_later`) the line pages at the end, as before. The line's state is `shell_t.pipe`, a
   `pipeline_t`. When the command ends the filters flush (`tail`'s lines, `wc`'s count); Ctrl-C
   and the session's end drop them and the capture; a command that asks a question or enters
   raw mode releases the pipeline (filters closed, the capture printed) and runs unpiped. `head`
   and a full capture set `done`: further output is dropped and a job is ended silently (its step
   called with `cancel`, no `^C`) at the end of that pass. `shell_screen_held()` is true only while
-  capturing; output between `shell_hide_input()` and `shell_show_input()` (chat messages)
-  skips the filters. A locked console runs the command without its stages.
+  capturing or in raw mode (the pager, so console log lines are held too); output between
+  `shell_hide_input()` and `shell_show_input()` (chat messages) skips the filters. A locked
+  console runs the command without its stages.
 
 ## `login.c`: the console's lock (pure C over the shell API, host tested)
 
