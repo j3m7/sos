@@ -118,7 +118,9 @@ sector or the partition table: each needs a choice of whose data wins, which is 
 backup. With cross-links anywhere it cuts no chain (`trims skipped: cross-linked files, fix those
 on a PC first`), and when part of the directory tree couldn't be read it frees and cuts nothing,
 as what that part holds would look lost. An empty file that still has clusters is left alone.
-exFAT cards are checked but not repaired yet (`not repaired: exFAT repair isn't built yet`).
+On exFAT the allocation bitmap is what changes: lost clusters' bits are cleared, and clusters a
+file uses but the bitmap calls free are marked in use; a chain that breaks on a free or bad FAT
+entry means nothing is freed or cut, since the cluster it breaks on would look lost.
 
 ```
 sd unmount

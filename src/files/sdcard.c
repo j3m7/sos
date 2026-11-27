@@ -1110,8 +1110,6 @@ static bool fix_plan(shell_t *sh, check_job_t *j) {
     const fsck_plan_t *p = fsck_repair_plan(j->r);
     shell_printf(sh, "%s\n", chk->summary);
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: %s", chk->summary);
-    if (p->exfat)
-        return check_end(sh, j, "not repaired: exFAT repair isn't built yet");
     fsck_plan_show(p, chk->cluster_bytes, chk->problems > 0, plan_line, sh);
     char brief[2 * FSCK_PLAN_LINE_MAX];
     fsck_plan_brief(p, brief, sizeof(brief));

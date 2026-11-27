@@ -202,15 +202,19 @@ The repairs behind `sd check fix` ([design](../../docs/design/sd-check.md) §10)
   (`fsck_repair_confirm()`), a repair run that writes at the checker's hook points, and a final
   check. `fsck_repair_step()` takes the same budget as `fsck_step()`, writes counted in it.
   The hooks reach `fsck.c` through a table, so a plain check links without this file.
-- **What it repairs (FAT32; exFAT volumes are checked but not repaired yet):** lost clusters are
-  freed, chains longer than their file are ended at the file's last cluster (their tail is then
-  freed as lost), FSInfo's free count is set to unknown before anything else, and the second FAT
-  gets every change after the first (and the first's bytes where it differs). Nothing else is
-  changed. Trims are skipped when anything is cross-linked; nothing is freed or trimmed when
-  part of the tree couldn't be walked. `fsck_repair.h` lists the rules.
+- **What it repairs:** lost clusters are freed, and chains longer than their file are ended at
+  the file's last cluster (their tail is then freed as lost). On FAT32, FSInfo's free count is
+  set to unknown before anything else, and the second FAT gets every change after the first
+  (and the first's bytes where it differs). On exFAT, freeing clears bits in the allocation
+  bitmap, clusters reached but clear in it get their bit set, the end mark is 0xFFFFFFFF, and a
+  NoFatChain file's clusters past its run are simply lost clusters. Nothing else is changed.
+  Trims are skipped when anything is cross-linked; nothing is freed or trimmed when part of the
+  tree couldn't be walked (on exFAT also when a chain breaks on a free or bad entry).
+  `fsck_repair.h` lists the rules.
 - **Writes:** one sector each, ordered so that stopping after any of them leaves every file
-  reading the same bytes and the volume no worse; a failed read or write stops it at once.
-- **Tests:** `tests/test_fsck_repair.c` repairs FatFs-made images damaged by
+  reading the same bytes and the volume no worse; a failed read or write stops it at once. An
+  exFAT bitmap sector's sets and clears go in one write.
+- **Tests:** `tests/test_fsck_repair.c` repairs FatFs-made FAT32 and exFAT images damaged by
   `tests/fsck_damage.c`, one kind at a time and in seeded random mixes, and runs the fault
   harness (`tests/fsck_faults.c`) over them: a power cut after every write, every write failing,
   and reads failing. It checks the plan against the damage, what the volume and its files look

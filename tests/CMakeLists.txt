@@ -400,7 +400,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     # checker's repair (docs/design/sd-check.md §10.4): RAM disk images made by FatFs, a fault
     # layer that cuts or fails writes and reads, a runner, file fingerprints and a seeded damage
     # generator.
-    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c
+        ${SOS_ROOT}/src/files/fsck_exfat.c)
     target_include_directories(test_fsck_faults PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
     add_test(NAME fsck_faults COMMAND test_fsck_faults)
@@ -410,6 +411,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
         ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
         ${SOS_ROOT}/src/files/fsck_repair.c)
     target_include_directories(test_fsck_repair PRIVATE ${SOS_ROOT}/src)
+    target_compile_definitions(test_fsck_repair PRIVATE
+        FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
     # Thousands of full checks of a 130000-cluster image: optimized, the sanitizers still on.
     target_compile_options(test_fsck_repair PRIVATE -O2)
     target_link_libraries(test_fsck_repair PRIVATE fatfs_host)

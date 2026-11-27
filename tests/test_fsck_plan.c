@@ -129,6 +129,27 @@ TEST(only_reported_problems) {
               "Cross-links, broken or short chains and damaged entries are only reported.\n");
 }
 
+TEST(exfat_bits_set) {
+    // exFAT: clusters a file uses but the bitmap calls free get their bits set, even when
+    // frees are skipped (setting a bit never takes data away).
+    fsck_plan_t p = {.lost_clusters = 4, .reached_free = 3};
+    CHECK_STR(show(&p, true),
+              "to repair:\n"
+              "  free 4 lost clusters (128 KB)\n"
+              "  mark 3 clusters in use in the allocation bitmap (files use them, the bitmap "
+              "says free)\n"
+              "Cross-links, broken or short chains and damaged entries are only reported.\n");
+    CHECK_STR(brief(&p), "free 4 lost clusters, mark 3 clusters in use");
+    fsck_plan_t one = {.reached_free = 1, .unread = true};
+    CHECK(fsck_plan_writes(&one));
+    CHECK(strstr(show(&one, true), "  mark 1 cluster in use in the allocation bitmap (files use "
+                                   "it, the bitmap says free)\n") != NULL);
+    char out[256];
+    fsck_plan_t d = {.lost_clusters = 2, .reached_free = 3};
+    fsck_done_line(&d, 32768, 2, out, sizeof(out));
+    CHECK_STR(out, "freed 2 clusters (64 KB), marked 3 clusters in use; 2 sectors written");
+}
+
 TEST(done_lines) {
     char out[256];
     fsck_plan_t d = {.lost_clusters = 21, .trims = 2, .trim_clusters = 5, .fat_sectors = 3,
@@ -158,6 +179,12 @@ TEST(largest_counts_fit) {
     p.unread = true;
     show(&p, true);
     CHECK(strlen(brief(&p)) < 160);         // one log line (LOG_LINE_MAX)
+    // exFAT: bits set instead of FAT copies and FSInfo (the two never come together).
+    fsck_plan_t x = {.lost_clusters = UINT32_MAX, .trims = UINT32_MAX,
+                     .trim_clusters = UINT32_MAX, .empty_chains = UINT32_MAX,
+                     .reached_free = UINT32_MAX};
+    show(&x, true);
+    CHECK(strlen(brief(&x)) < 160);
 }
 
 TEST_MAIN(
@@ -168,6 +195,7 @@ TEST_MAIN(
     RUN(cross_links_skip_trims);
     RUN(unread_tree_skips_frees_and_trims);
     RUN(only_reported_problems);
+    RUN(exfat_bits_set);
     RUN(done_lines);
     RUN(largest_counts_fit);
 )

@@ -1213,8 +1213,9 @@ DESCRIPTION
     chains longer than their file are cut to the file's size (the rest
     freed), a second FAT that differs from the first gets the first's
     sectors, and FSInfo's free count is set to unknown so that the next
-    mount counts it again. FAT32 only for now: on exFAT it ends 'not
-    repaired: exFAT repair isn't built yet'. It never touches cross-linked
+    mount counts it again. On exFAT the allocation bitmap is what's
+    repaired: bits of lost clusters are cleared, and clusters a file uses
+    but the bitmap calls free are marked in use. It never touches cross-linked
     files, broken or short chains, damaged directory entries or names, the
     boot sector or the partition table: each of those means choosing whose
     data wins, which is for a PC and a backup. With cross-links on the card

@@ -67,6 +67,12 @@ void fsck_plan_show(const fsck_plan_t *p, uint32_t cluster_bytes, bool problems,
                      p->trim_clusters, plural(p->trim_clusters, "", "s"), size);
             line(ctx, s);
         }
+        if (p->reached_free) {
+            snprintf(s, sizeof(s), "  mark %" PRIu32 " cluster%s in use in the allocation bitmap "
+                     "(files use %s, the bitmap says free)", p->reached_free,
+                     plural(p->reached_free, "", "s"), plural(p->reached_free, "it", "them"));
+            line(ctx, s);
+        }
         if (p->fat_sectors) {
             snprintf(s, sizeof(s), "  copy %" PRIu32 " sector%s of the first FAT over the second",
                      p->fat_sectors, plural(p->fat_sectors, "", "s"));
@@ -120,6 +126,11 @@ void fsck_plan_brief(const fsck_plan_t *p, char *out, size_t n) {
             plural(p->trims, "", "s"), p->trim_clusters, plural(p->trim_clusters, "", "s"));
         sep = ", ";
     }
+    if (p->reached_free) {
+        add(out, n, "%smark %" PRIu32 " cluster%s in use", sep, p->reached_free,
+            plural(p->reached_free, "", "s"));
+        sep = ", ";
+    }
     if (p->fat_sectors) {
         add(out, n, "%scopy %" PRIu32 " FAT sector%s", sep, p->fat_sectors,
             plural(p->fat_sectors, "", "s"));
@@ -162,6 +173,11 @@ void fsck_done_line(const fsck_plan_t *d, uint32_t cluster_bytes, uint32_t write
     }
     if (d->trims) {
         add(out, n, "%strimmed %" PRIu32 " chain%s", sep, d->trims, plural(d->trims, "", "s"));
+        sep = ", ";
+    }
+    if (d->reached_free) {
+        add(out, n, "%smarked %" PRIu32 " cluster%s in use", sep, d->reached_free,
+            plural(d->reached_free, "", "s"));
         sep = ", ";
     }
     if (d->fat_sectors) {
