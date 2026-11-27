@@ -88,7 +88,7 @@ typedef enum {
 
 typedef struct fsck_repair fsck_repair_t;
 
-// The fixed part of repair's memory: fsck_state_size() and 528 bytes more (ARM). The rest of
+// The fixed part of repair's memory: fsck_state_size() and 544 bytes more (ARM). The rest of
 // `mem` is the cluster window, as for fsck_new().
 size_t fsck_repair_state_size(void);
 
