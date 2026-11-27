@@ -424,23 +424,48 @@ static void line_backspace(shell_t *sh) {
 }
 
 // --- Tab completion ------------------------------------------------------------------------------
-// Tab completes the word at the end of the line: a command, or a word that may follow it
-// (complete.h). One match: the rest of it and a space. Several: as far as they agree; when
-// they agree no further, the terminal's bell, and a second Tab lists them.
+// Tab completes the word at the end of the line: a command, a word that may follow it, or a
+// file name on the SD card (complete.h). One match: the rest of it, then a space, or '/' for a
+// directory. Several: as far as they agree; when they agree no further, the terminal's bell,
+// and a second Tab lists them.
 
 #define TAB_LIST_COLUMNS 80     // the terminal's width isn't known: list for the narrowest
 
+// Columns `text` takes on the terminal (it's valid UTF-8: complete.h).
+static size_t text_columns(const char *text) {
+    size_t cols = 0;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        unsigned n = utf8_len(*p);
+        if (n <= 1) {
+            cols++;
+            p++;
+            continue;
+        }
+        uint32_t cp = p[0] & (0x7f >> n);
+        for (unsigned i = 1; i < n && p[i]; i++)
+            cp = cp << 6 | (p[i] & 0x3f);
+        cols += (size_t)charwidth(cp);
+        p += n;
+    }
+    return cols;
+}
+
 typedef struct {
-    const char *first;          // the first match
+    char first[SHELL_LINE_MAX + 1];     // the first match: a copy (a file name's buffer is reused)
+    bool have;
+    char first_end;             // what follows it: ' ' or '/'
     size_t common;              // bytes all matches have in common
-    size_t widest;
+    size_t widest;              // columns of the widest, with its '/'
 } tab_matches_t;
 
-static void tab_collect(const char *word, void *arg) {
+static void tab_collect(const char *word, char end, void *arg) {
     tab_matches_t *m = arg;
     size_t n = strlen(word);
-    if (!m->first) {
-        m->first = word;
+    if (!m->have) {
+        memcpy(m->first, word, n + 1);  // fits: complete.h offers no longer word
+        m->have = true;
+        m->first_end = end;
         m->common = n;
     } else {
         size_t i = 0;
@@ -448,17 +473,18 @@ static void tab_collect(const char *word, void *arg) {
             i++;
         m->common = i;
     }
-    if (n > m->widest)
-        m->widest = n;
+    size_t cols = text_columns(word) + (end == '/');
+    if (cols > m->widest)
+        m->widest = cols;
 }
 
 typedef struct {
     shell_t *sh;
-    size_t width, per_row, in_row, last;   // `last`: length of the word printed before
+    size_t width, per_row, in_row, last;   // `last`: columns of the match printed before
 } tab_list_t;
 
 // One match of the list, in columns `width` wide; no spaces at the end of a row.
-static void tab_print(const char *word, void *arg) {
+static void tab_print(const char *word, char end, void *arg) {
     tab_list_t *l = arg;
     if (l->in_row == l->per_row) {
         write_out(l->sh, "\n", 1);
@@ -467,33 +493,40 @@ static void tab_print(const char *word, void *arg) {
         shell_printf(l->sh, "%*s", (int)(l->width - l->last), "");
     }
     l->in_row++;
-    l->last = strlen(word);
-    write_out(l->sh, word, l->last);
+    write_out(l->sh, word, strlen(word));
+    if (end == '/')
+        write_out(l->sh, "/", 1);
+    l->last = text_columns(word) + (end == '/');
 }
 
 static void line_tab(shell_t *sh, bool again) {
     const shell_cmd_t *const *tables = shell_command_tables(sh);
     if (!tables)
         return;
-    bool admin = sh->io->admin;
+    complete_src_t src = {tables, sh->io->admin, shell_list_dir, sh};
     size_t start;
+    bool partial;
     tab_matches_t m = {0};
-    size_t n = complete_words(tables, admin, sh->line, sh->line_len, &start, tab_collect, &m);
+    size_t n = complete_words(&src, sh->line, sh->line_len, &start, tab_collect, &m, &partial);
     size_t typed = sh->line_len - start;
     if (n == 0) {
         write_out(sh, "\a", 1);
         return;
     }
-    if (m.common > typed || n == 1) {
-        size_t add = m.common - typed + (n == 1);     // a single match ends with a space
+    // Two names can share the first bytes of different characters: stop before those.
+    while (m.common > typed && ((unsigned char)m.first[m.common] & 0xc0) == 0x80)
+        m.common--;
+    bool whole = n == 1 && !partial;    // a directory cut short may hold more matches
+    if (m.common > typed || whole) {
+        size_t add = m.common - typed + whole;       // a single match ends with ' ' or '/'
         if (sh->line_len + add > SHELL_LINE_MAX) {
             write_out(sh, "\a", 1);
             return;
         }
         history_edited(sh);
         memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
-        if (n == 1)
-            sh->line[sh->line_len + add - 1] = ' ';
+        if (whole)
+            sh->line[sh->line_len + add - 1] = m.first_end;
         write_out(sh, sh->line + sh->line_len, add);
         sh->line_len += add;
         return;
@@ -508,7 +541,9 @@ static void line_tab(shell_t *sh, bool again) {
     if (!l.per_row)
         l.per_row = 1;
     write_out(sh, "\n", 1);
-    complete_words(tables, admin, sh->line, sh->line_len, &start, tab_print, &l);
+    complete_words(&src, sh->line, sh->line_len, &start, tab_print, &l, &partial);
+    if (partial)
+        shell_printf(sh, "\n(more: the directory is too large to list here)");
     write_out(sh, "\n", 1);
     prompt(sh);
     write_out(sh, sh->line, sh->line_len);

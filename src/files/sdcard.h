@@ -16,6 +16,9 @@ void sdcard_command(shell_t *sh, char *args);
 // or in the log when `sh` is NULL.
 bool sdcard_mount(shell_t *sh);
 
+// Is the card mounted now? (Doesn't try to mount it.)
+bool sdcard_mounted(void);
+
 // After the configuration was erased: an encrypted card is unmounted and its key forgotten (the
 // owner secret it was opened with no longer exists).
 void sdcard_owner_gone(void);

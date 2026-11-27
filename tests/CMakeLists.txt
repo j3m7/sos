@@ -25,7 +25,8 @@ add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
 add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c
-    ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c)
+    ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c
+    ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 

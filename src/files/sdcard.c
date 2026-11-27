@@ -477,6 +477,10 @@ static bool files_in_use(shell_t *sh) {
     return true;
 }
 
+bool sdcard_mounted(void) {
+    return card.state.mounted;
+}
+
 bool sdcard_mount(shell_t *sh) {
     if (!driver_init()) {
         if (sh)
