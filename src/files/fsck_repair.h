@@ -15,8 +15,7 @@
 //   4. the final check, reported like the first. Its plan (fsck_repair_left()) must have
 //      nothing left to do of what was allowed.
 //
-// FAT32 repairs only (exFAT: fsck_plan_t.exfat, nothing is done, and the FAT32 write hooks are
-// only on fsck.c's FAT32 paths; see "exFAT" at the end):
+// FAT32:
 // - Lost clusters are freed: FAT entry 0 (its top 4 bits kept, as FatFs keeps them), in the
 //   pass whose window holds them. Bad-cluster marks are never lost, so never freed.
 // - A file whose chain ends properly but is longer than the file needs gets an end mark at its
@@ -31,12 +30,36 @@
 //   the first is copied from the first in pass 1: FatFs reads only the first copy, so the
 //   second is what FatFs would overwrite at its next write there.
 //
+// exFAT (the allocation bitmap, not the FAT, says what is in use; no FSInfo, one FAT):
+// - At the end of each pass, every bitmap sector that covers the window is compared with the
+//   clusters reached: bits of clusters reached but clear are set (reached_free), bits of lost
+//   clusters cleared (lost_clusters). The sector's new state, sets and clears together, goes in
+//   one write, to the sector it was read from (the bitmap read contiguously from its first
+//   cluster, as FatFs reads it), and only when it changed. A sector that covers two windows is
+//   written once in each pass. Bits past the last cluster are left as they are. FAT entries of
+//   freed clusters are left as they are: FatFs doesn't read them.
+// - Bits are set even when frees are skipped (see the rules): setting one only marks a cluster
+//   something reaches as used.
+// - A file with a FAT chain longer than it needs gets the end mark 0xFFFFFFFF (all 32 bits) at
+//   its last needed cluster, in pass 1, as on FAT32; its tail is then lost, and its bits are
+//   cleared as above. A NoFatChain file's clusters past its run are lost clusters already: no
+//   trim, only their bits cleared. Directories, the bitmap and the up-case table aren't trimmed.
+// - Write order (§10.2): a bitmap sector's sets and clears are one write, so no clear in it
+//   lands before a set, and a stop leaves the sector as it was or repaired (for the window).
+//   Each bit changed takes one cluster from a problem to none (a set only for a cluster
+//   reached, a clear only for one nothing reaches), whatever the other bits, so any prefix of
+//   the writes, in any order of sectors, leaves a subset of the problems.
+// - A cluster marked bad in the FAT and set in the bitmap is lost like any other (the checker
+//   doesn't count bad clusters on exFAT), and its bit is cleared. FatFs never marks one.
+//
 // Rules (beside §10.2's):
 // - Trims only when the check found no cross-linked cluster, and neither trims nor frees when
 //   the check couldn't walk all of the tree FatFs can read: a directory whose chain loops or
 //   breaks (FatFs still reads the entries up to the break, and the cluster it breaks on), a
 //   directory nested deeper than FSCK_DEPTH_MAX, or a walk stopped for overlapping chains. What
-//   such a directory holds would look lost.
+//   such a directory holds would look lost. On exFAT also no frees when any chain (a file's too)
+//   breaks on a free or bad FAT entry: FatFs reads the cluster it breaks on, which the checker
+//   doesn't count, and clearing its bit would let FatFs hand it to another file.
 // - The first repair run marks a trimmed chain's tail in pass 1 before the trim is known, so the
 //   tail's clusters in window 1 aren't freed by it. A second repair run of pass 1 alone frees
 //   them (it only frees: nothing else is left to do). Without trims there is one repair run.
@@ -46,11 +69,12 @@
 //   first check's problems, plus at most (a) a "FAT copies differ" note, and (b) lost clusters
 //   that are the tail of a chain being trimmed: its end mark was written and the tail not yet
 //   freed, which costs space, not data, and running repair again frees it. Every file still
-//   reads the same bytes.
+//   reads the same bytes. A subset counts clusters, not lines: a lost or reached-but-free run
+//   that crosses a bitmap sector or a window may be left in part, and is then reported shorter.
 // - Budget: fsck_repair_step()'s budget counts sectors read and written alike, one unit each.
-//   A write that must follow its read (FSInfo, a FAT sector copied to the second FAT) or the
-//   other copy of a FAT write may go past it, so a step transfers at most budget + 2 sectors and
-//   reads at most budget. A step ends with a run: the next run starts at the next step.
+//   A write that must follow its read (FSInfo, a FAT sector copied to the second FAT, an exFAT
+//   bitmap sector) or the other copy of a FAT write may go past it, so a step transfers at most
+//   budget + 2 sectors and reads at most budget. A step ends with a run: the next run starts at the next step.
 
 #ifndef SOS_FSCK_REPAIR_H
 #define SOS_FSCK_REPAIR_H
@@ -66,15 +90,17 @@ enum { FSCK_PLAN = FSCK_FAILED + 1 };   // fsck_repair_step(): the check is done
 // What a check found that repair fixes, and what it will leave. The plan is the first check's;
 // fsck_repair_left() is the final check's; fsck_repair_done() counts what the repair runs did.
 typedef struct {
-    uint32_t lost_clusters;     // lost clusters (done: every cluster freed, trimmed tails too)
+    uint32_t lost_clusters;     // lost clusters (done: every cluster freed, trimmed tails too;
+                                // exFAT: bitmap bits cleared)
+    uint32_t reached_free;      // exFAT: clusters reached but clear in the bitmap (bits set)
     uint32_t trims;             // files whose chain is longer than they need
     uint32_t trim_clusters;     // the clusters past those files' ends
     uint32_t empty_chains;      // empty files with a chain: left alone
     uint32_t fat_sectors;       // sectors where the second FAT differs from the first
     bool fsinfo;                // FSInfo's free count is (done: was) set to unknown
     bool cross_links;           // cross-linked clusters: trims are skipped
-    bool unread;                // part of the tree wasn't walked: frees and trims are skipped
-    bool exfat;                 // an exFAT volume: no repair yet, nothing is done
+    bool unread;                // part of the tree wasn't walked (or, on exFAT, a chain breaks
+                                // on a free or bad entry): frees and trims are skipped
 } fsck_plan_t;
 
 typedef enum {
@@ -88,8 +114,8 @@ typedef enum {
 
 typedef struct fsck_repair fsck_repair_t;
 
-// The fixed part of repair's memory: fsck_state_size() and 544 bytes more (ARM). The rest of
-// `mem` is the cluster window, as for fsck_new().
+// The fixed part of repair's memory: fsck_state_size() and about half a KB more (560 B on
+// ARM, 632 B on the host). The rest of `mem` is the cluster window, as for fsck_new().
 size_t fsck_repair_state_size(void);
 
 // Set up a repair of the device `io` describes (`io` is copied; it needs a write callback) in
@@ -134,13 +160,8 @@ bool fsck_plan_writes(const fsck_plan_t *p);
 // (a plain check) fsck.c calls them with NULL and they do nothing. In counting mode they count
 // what a repair would do and write nothing; in writing mode they write what the run allows.
 //
-// exFAT (fsck.c's exFAT walk): the same shape, with hooks still to add in its exFAT paths:
-// in the bitmap comparison, bits of lost clusters cleared and bits of clusters reached but free
-// set, a bitmap sector's new state in one write, any set before a clear in that sector (§10.2);
-// trims of FAT chains with the end mark as here (exFAT FAT entries are 32 bits, end mark
-// 0xFFFFFFFF), and of NoFatChain files by clearing bitmap bits past the run; no FSInfo and no
-// second FAT. fsck_plan_t then gets the counts for bits set; fsck_repair.c's plan_from() drops
-// the `exfat` refusal.
+// exFAT: the same hooks for the trim (the end mark in exFAT's 32-bit entries, one FAT), and
+// fsck_fix_bitmap() for each bitmap sector compared; no FSInfo, no second FAT, no flush.
 
 enum { FSCK_FIX_OK, FSCK_FIX_YIELD, FSCK_FIX_FAIL, FSCK_FIX_LOAD };
 
@@ -149,14 +170,16 @@ typedef struct fsck_fix fsck_fix_t;
 // The hooks, filled in by fsck_repair.c: fsck.c calls them through the wrappers below, so a
 // plain check links without this file.
 typedef struct {
-    void (*volume)(fsck_fix_t *x, uint64_t fat_lba, uint32_t fsize, uint8_t nfats,
-                   uint16_t nrsv, uint32_t *passes);
+    void (*volume)(fsck_fix_t *x, fsck_kind_t kind, uint64_t fat_lba, uint32_t fsize,
+                   uint8_t nfats, uint16_t nrsv, uint32_t *passes);
     int (*fsinfo)(fsck_fix_t *x, uint64_t lba, uint8_t *sector);
     int (*fat_copy)(fsck_fix_t *x, uint32_t i, const uint8_t *copy0, const uint8_t *copy1);
     int (*trim)(fsck_fix_t *x, uint32_t need, uint32_t n);
     int (*end_mark)(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c);
     void (*lost)(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c);
     int (*flush)(fsck_fix_t *x, const uint8_t *fatbuf, uint64_t next);
+    int (*bitmap)(fsck_fix_t *x, uint64_t lba, uint8_t *sector, uint32_t ofs,
+                  const uint8_t *reached, uint32_t bits);
 } fsck_fix_ops_t;
 
 struct fsck_fix {
@@ -169,6 +192,7 @@ struct fsck_fix {
     // Set by fsck.c.
     uint32_t *budget;           // the step's budget: a unit per sector written
     // Set by the volume hook.
+    fsck_kind_t kind;           // FSCK_KIND_NONE until it is called: nothing is written
     uint64_t fat_lba;
     uint32_t fsize;
     uint16_t nrsv;
@@ -179,6 +203,7 @@ struct fsck_fix {
     bool fsi_done;
     uint32_t fsi_free;
     uint32_t lost, trims_n, trim_clusters, empty_chains, fat_sectors;
+    uint32_t reached_free;      // exFAT: bits of clusters reached but free (set)
     uint32_t pending;           // the clusters past the end of the chain being trimmed
     uint32_t writes;
     uint64_t dirty_lba;         // the FAT sector (in the checker's cache) with frees not written
@@ -188,11 +213,13 @@ struct fsck_fix {
 // fsck.c: attach `fix` to a run made by fsck_new() (before its first step).
 void fsck_set_fix(fsck_t *f, fsck_fix_t *fix);
 
-// The volume, once its boot sector is read; caps *passes at 1 for a one-pass run.
-static inline void fsck_fix_volume(fsck_fix_t *x, uint64_t fat_lba, uint32_t fsize,
-                                   uint8_t nfats, uint16_t nrsv, uint32_t *passes) {
+// The volume, once its boot sector is read (exFAT: nfats 1, nrsv 0); caps *passes at 1 for a
+// one-pass run.
+static inline void fsck_fix_volume(fsck_fix_t *x, fsck_kind_t kind, uint64_t fat_lba,
+                                   uint32_t fsize, uint8_t nfats, uint16_t nrsv,
+                                   uint32_t *passes) {
     if (x)
-        x->ops->volume(x, fat_lba, fsize, nfats, nrsv, passes);
+        x->ops->volume(x, kind, fat_lba, fsize, nfats, nrsv, passes);
 }
 
 // FSInfo with valid signatures was read into `sector` (lba): may set its free count unknown.
@@ -219,7 +246,8 @@ static inline int fsck_fix_trim(fsck_fix_t *x, uint32_t need, uint32_t n) {
     return x ? x->ops->trim(x, need, n) : FSCK_FIX_OK;
 }
 
-// The end mark at cluster `c`, in the cached FAT sector `fatbuf` (sector `lba`), written.
+// The end mark at cluster `c` (FAT32's or exFAT's, by the volume's kind), in the cached FAT
+// sector `fatbuf` (sector `lba`), written.
 static inline int fsck_fix_end_mark(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c) {
     return x ? x->ops->end_mark(x, fatbuf, lba, c) : FSCK_FIX_OK;
 }
@@ -235,6 +263,14 @@ static inline void fsck_fix_lost(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, u
 // in it are written.
 static inline int fsck_fix_flush(fsck_fix_t *x, const uint8_t *fatbuf, uint64_t next) {
     return x ? x->ops->flush(x, fatbuf, next) : FSCK_FIX_OK;
+}
+
+// exFAT, the end of a pass: bitmap sector `lba` was read into `sector`, and its bits from byte
+// `ofs` on stand for `bits` clusters the window `reached` (byte-aligned, bit 0 first) covers.
+// Counts the bits to set and to clear; writing, changes them in `sector` and writes it, once.
+static inline int fsck_fix_bitmap(fsck_fix_t *x, uint64_t lba, uint8_t *sector, uint32_t ofs,
+                                  const uint8_t *reached, uint32_t bits) {
+    return x ? x->ops->bitmap(x, lba, sector, ofs, reached, bits) : FSCK_FIX_OK;
 }
 
 // After FSCK_FIX_FAIL: "write error at sector N".

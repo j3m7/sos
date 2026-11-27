@@ -363,6 +363,14 @@ target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
 add_test(NAME sdfault COMMAND test_sdfault)
 
+# src/files/fsck_plan.c: what `sd check fix` says about its plan and its repair. fsck_repair.c
+# (with the checker it needs) for fsck_plan_writes().
+add_executable(test_fsck_plan test_fsck_plan.c ${SOS_ROOT}/src/files/fsck_plan.c
+    ${SOS_ROOT}/src/files/fsck_repair.c ${SOS_ROOT}/src/files/fsck.c
+    ${SOS_ROOT}/src/files/fsck_exfat.c)
+target_include_directories(test_fsck_plan PRIVATE ${SOS_ROOT}/src)
+add_test(NAME fsck_plan COMMAND test_fsck_plan)
+
 # src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
 # ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
 # for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
@@ -392,7 +400,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     # checker's repair (docs/design/sd-check.md §10.4): RAM disk images made by FatFs, a fault
     # layer that cuts or fails writes and reads, a runner, file fingerprints and a seeded damage
     # generator.
-    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c
+        ${SOS_ROOT}/src/files/fsck_exfat.c)
     target_include_directories(test_fsck_faults PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
     add_test(NAME fsck_faults COMMAND test_fsck_faults)
@@ -402,6 +411,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
         ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
         ${SOS_ROOT}/src/files/fsck_repair.c)
     target_include_directories(test_fsck_repair PRIVATE ${SOS_ROOT}/src)
+    target_compile_definitions(test_fsck_repair PRIVATE
+        FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
     # Thousands of full checks of a 130000-cluster image: optimized, the sanitizers still on.
     target_compile_options(test_fsck_repair PRIVATE -O2)
     target_link_libraries(test_fsck_repair PRIVATE fatfs_host)
@@ -417,6 +428,9 @@ add_test(NAME man_topic COMMAND test_man_topic)
 
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)
+
+# tz/: tz/zones.bundle names the release in tz/VERSION and every line fits (tools/tz-bundle.sh).
+add_test(NAME tz-bundle COMMAND bash ${SOS_ROOT}/tools/tz-bundle.sh --check)
 
 # Fuzz targets (tests/fuzz/): parsers of what the network, the card, the flash and terminals
 # send. Each runs here over its corpus (tests/fuzz/corpus/<name>/: seeds, and any input that

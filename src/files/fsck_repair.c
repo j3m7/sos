@@ -16,6 +16,7 @@
 #define FAT_PER_SEC     (SECTOR / 4u)
 #define FAT32_MASK      0x0FFFFFFFu
 #define FAT32_EOC_MARK  0x0FFFFFFFu     // the end mark FatFs writes
+#define EXFAT_EOC_MARK  0xFFFFFFFFu     // exFAT's: all 32 bits
 #define FSI_Free_Count  488
 #define NO_LBA          UINT64_MAX
 
@@ -43,10 +44,24 @@ static void charge(fsck_fix_t *x) {
         (*x->budget)--;
 }
 
+// Where repair may write: FAT32's reserved area (FSInfo) and FATs; exFAT's FAT and what
+// follows it (the bitmap is in the heap), never its boot regions. Nothing before the volume
+// hook has said which kind the volume is.
+static bool writable(const fsck_fix_t *x, uint64_t lba) {
+    switch (x->kind) {
+    case FSCK_KIND_FAT32:
+        return lba + x->nrsv >= x->fat_lba && lba < x->fat_lba + (uint64_t)x->nfats * x->fsize;
+    case FSCK_KIND_EXFAT:
+        return lba >= x->fat_lba;
+    default:
+        return false;
+    }
+}
+
 // One sector. False, with x->why set, if the device refused it.
 static bool put(fsck_fix_t *x, uint64_t lba, const uint8_t *buf) {
-    if (!x->nfats) {                            // no FAT32 boot sector seen: exFAT, or a bug
-        snprintf(x->why, sizeof(x->why), "repair writes only to FAT32");
+    if (!writable(x, lba)) {                    // a bug: no volume seen, or outside its tables
+        snprintf(x->why, sizeof(x->why), "repair refused to write sector %" PRIu64, lba);
         return false;
     }
     x->writes++;
@@ -66,18 +81,21 @@ static bool put_fat(fsck_fix_t *x, uint64_t lba, const uint8_t *buf) {
     return true;
 }
 
-// Entry `c` of the cached FAT sector, its top 4 bits kept (FatFs's put_fat()).
-static void set_entry(uint8_t *fatbuf, uint32_t c, uint32_t v) {
+// Entry `c` of the cached FAT sector: on FAT32 its top 4 bits kept (FatFs's put_fat()), on
+// exFAT all 32 bits.
+static void set_entry(const fsck_fix_t *x, uint8_t *fatbuf, uint32_t c, uint32_t v) {
     uint8_t *p = fatbuf + (c % FAT_PER_SEC) * 4;
-    v = (v & FAT32_MASK) | ((uint32_t)p[3] << 24 & ~FAT32_MASK);
+    if (x->kind != FSCK_KIND_EXFAT)
+        v = (v & FAT32_MASK) | ((uint32_t)p[3] << 24 & ~FAT32_MASK);
     for (unsigned i = 0; i < 4; i++)
         p[i] = (uint8_t)(v >> (8 * i));
 }
 
 // --- the hooks (fsck_repair.h) --------------------------------------------------------------
 
-static void fix_volume(fsck_fix_t *x, uint64_t fat_lba, uint32_t fsize, uint8_t nfats,
-                       uint16_t nrsv, uint32_t *passes) {
+static void fix_volume(fsck_fix_t *x, fsck_kind_t kind, uint64_t fat_lba, uint32_t fsize,
+                       uint8_t nfats, uint16_t nrsv, uint32_t *passes) {
+    x->kind = kind;
     x->fat_lba = fat_lba;
     x->fsize = fsize;
     x->nfats = nfats;
@@ -131,7 +149,7 @@ static int fix_trim(fsck_fix_t *x, uint32_t need, uint32_t n) {
 }
 
 static int fix_end_mark(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c) {
-    set_entry(fatbuf, c, FAT32_EOC_MARK);
+    set_entry(x, fatbuf, c, x->kind == FSCK_KIND_EXFAT ? EXFAT_EOC_MARK : FAT32_EOC_MARK);
     if (!put_fat(x, lba, fatbuf))
         return FSCK_FIX_FAIL;
     x->trims_n++;
@@ -140,12 +158,12 @@ static int fix_end_mark(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c
 }
 
 static void fix_lost(fsck_fix_t *x, uint8_t *fatbuf, uint64_t lba, uint32_t c) {
-    if ((x->write && !x->frees))
+    if (x->write && !x->frees)
         return;
     x->lost++;
     if (!x->write)
         return;
-    set_entry(fatbuf, c, 0);
+    set_entry(x, fatbuf, c, 0);
     x->dirty_lba = lba;
 }
 
@@ -159,28 +177,46 @@ static int fix_flush(fsck_fix_t *x, const uint8_t *fatbuf, uint64_t next) {
     return put_fat(x, lba, fatbuf) ? FSCK_FIX_OK : FSCK_FIX_FAIL;
 }
 
+// exFAT: the window's bits of one bitmap sector. A bit becomes the cluster's reached bit,
+// but a lost one only when this run may free; set and cleared bits in one write (§10.2).
+static int fix_bitmap(fsck_fix_t *x, uint64_t lba, uint8_t *sector, uint32_t ofs,
+                      const uint8_t *reached, uint32_t bits) {
+    bool frees = !x->write || x->frees, changed = false;
+    for (uint32_t i = 0; i < bits; i += 8) {
+        uint8_t mask = (uint8_t)(bits - i >= 8 ? 0xFFu : (1u << (bits - i)) - 1);
+        uint8_t was = sector[ofs + i / 8], got = (uint8_t)(reached[i / 8] & mask);
+        uint8_t set = got & (uint8_t)~was, clear = was & (uint8_t)~got & mask;
+        x->reached_free += (uint32_t)__builtin_popcount(set);
+        if (!frees)
+            clear = 0;
+        x->lost += (uint32_t)__builtin_popcount(clear);
+        if (set | clear) {
+            sector[ofs + i / 8] = (uint8_t)((was | set) & ~clear);
+            changed = true;
+        }
+    }
+    if (!x->write || !changed)
+        return FSCK_FIX_OK;
+    return put(x, lba, sector) ? FSCK_FIX_OK : FSCK_FIX_FAIL;
+}
+
 static const fsck_fix_ops_t fix_ops = {
     .volume = fix_volume, .fsinfo = fix_fsinfo, .fat_copy = fix_fat_copy, .trim = fix_trim,
-    .end_mark = fix_end_mark, .lost = fix_lost, .flush = fix_flush,
+    .end_mark = fix_end_mark, .lost = fix_lost, .flush = fix_flush, .bitmap = fix_bitmap,
 };
 
 // --- the runs -------------------------------------------------------------------------------
 
 bool fsck_plan_writes(const fsck_plan_t *p) {
-    if (p->exfat)
-        return false;
-    return p->fsinfo || p->fat_sectors || (!p->unread && p->lost_clusters)
+    return p->fsinfo || p->fat_sectors || p->reached_free || (!p->unread && p->lost_clusters)
         || (!p->unread && !p->cross_links && p->trims);
 }
 
 // A counting run's findings as a plan.
 static void plan_from(const fsck_fix_t *x, const fsck_result_t *res, fsck_plan_t *p) {
     memset(p, 0, sizeof(*p));
-    if (res->kind == FSCK_KIND_EXFAT) {
-        p->exfat = true;                        // checked, but repair isn't built yet
-        return;
-    }
     p->lost_clusters = x->lost;
+    p->reached_free = x->reached_free;
     p->trims = x->trims_n;
     p->trim_clusters = x->trim_clusters;
     p->empty_chains = x->empty_chains;
@@ -218,6 +254,7 @@ static void add_done(fsck_repair_t *r) {
     const fsck_fix_t *x = &r->fix;
     fsck_plan_t *d = &r->done;
     d->lost_clusters += x->lost;
+    d->reached_free += x->reached_free;
     d->trims += x->trims_n;
     d->trim_clusters += x->trim_clusters;
     d->fat_sectors += x->fat_sectors;
