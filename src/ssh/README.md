@@ -107,7 +107,8 @@ can be replaced without patching wolfSSH. Its FatFs port ignores the request's f
 can't overwrite a file, and reports failed removes and renames as successes.
 
 - **`sftp_fs.c`** provides the replacements: positioned reads and writes (so resumed transfers
-  work), overwriting, and correct error codes.
+  work), overwriting, and correct error codes. Uploads are synced about once a second while they
+  run (`files_sync_if_due()`, as `tee` and `cp` do), so `ls` shows their size meanwhile.
 - **Write check:** every change passes `files_write_allowed()` (`files/`), so SFTP can't write
   `/certs`.
 - **Open files:** files a transfer has open count as in use (`files_hold()`/`files_release()`),

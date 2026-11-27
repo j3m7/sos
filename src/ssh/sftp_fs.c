@@ -3,11 +3,15 @@
 //
 // File functions for wolfSSH's SFTP server on the SD card. Compared with wolfSSH's FatFs port:
 // reads and writes go to the requested offset, "create" doesn't fail on an existing file, open
-// files are allocated as needed (and count as busy for `sd format`/`sd unmount`).
+// files are allocated as needed (and count as busy for `sd format`/`sd unmount`), and a file being
+// written is synced about once a second (files_sync_if_due()), so `ls` shows an upload's progress
+// and a reset loses at most the last second of it.
 
 #include "ssh/sftp_fs.h"
 
 #include <stdlib.h>
+
+#include "pico/stdlib.h"
 
 #include "ff.h"
 
@@ -20,6 +24,10 @@
 #define SFTP_MAX_OPEN 8         // across all SFTP sessions (FatFs allows FF_FS_LOCK = 16 in all)
 
 static FIL *open_files[SFTP_MAX_OPEN];
+// When each handle was opened or last synced (files_sync_if_due()). Set at every open: a
+// read-only handle never reaches the sync (its f_write() fails), so setting it costs nothing but
+// spares open() a branch. A parallel array keeps the heap blocks FatFs-sized.
+static uint64_t synced_at[SFTP_MAX_OPEN];
 
 // wolfSSH passes FA_* bits built from the SFTP open flags: READ/WRITE, CREAT = FA_CREATE_NEW |
 // FA_OPEN_ALWAYS, TRUNC = FA_CREATE_ALWAYS, APPEND = FA_OPEN_APPEND. Turn them into one FatFs
@@ -52,6 +60,7 @@ int sftp_fs_open(const char *path, int flags) {
             return -1;
         }
         open_files[fd] = f;
+        synced_at[fd] = time_us_64();
         files_hold();
         return fd;
     }
@@ -86,7 +95,10 @@ int sftp_fs_pwrite(int fd, const unsigned char *buf, int len, const unsigned int
     FIL *f = get(fd);
     UINT n;
     // Seeking past the end extends the file (FatFs, in write mode), as pwrite() does.
-    if (!f || len < 0 || !seek(f, offset) || f_write(f, buf, (UINT)len, &n) != FR_OK)
+    // Then a sync if the last one is a second old; its failure is the write's. wolfsftp.c calls
+    // this once per SFTP write request (again only after a short write), never with len 0.
+    if (!f || len < 0 || !seek(f, offset) || f_write(f, buf, (UINT)len, &n) != FR_OK ||
+        files_sync_if_due(f, &synced_at[fd]) != FR_OK)
         return -1;
     return (int)n;
 }
