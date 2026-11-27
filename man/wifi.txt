@@ -1,0 +1,53 @@
+NAME
+    wifi - Wi-Fi networks, state and radio settings
+
+SYNOPSIS
+    wifi
+    wifi set | add | remove <n> | prefer <n> | connect     (console only)
+    wifi country <XX> | worldwide                          (console only)
+    wifi power [on | off]                            (change: console only)
+    wifi stats [chip]
+    wifi iovar <name> [<value>]                            (console only)
+    wifi keepalive on | off                                (console only)
+
+DESCRIPTION
+    'wifi' lists the saved networks, numbered in the order they are preferred,
+    each with whether a password is set and the connected one marked, then
+    the connection state, power saving and country.
+
+    'wifi set' changes the first network: it asks for the SSID and the
+    password (not echoed), saves them and reconnects. 'wifi add' saves another
+    (up to 5 in all), after the others. The board joins the first saved
+    network in reach when it connects; while connected it doesn't notice a
+    preferred network coming into reach until the link drops or 'wifi
+    connect'. 'wifi remove <n>' forgets network n and reconnects if it was in
+    use; 'wifi prefer <n>' moves it to the front, for the next connect. 'wifi
+    connect' reconnects now, trying the saved networks from the first again.
+
+    Wi-Fi connects in the background, retries after failures and reconnects
+    if the link drops; the console is usable throughout. On a network with
+    several access points the board ends up on the strongest; the log names
+    it.
+
+    'wifi country <XX>' sets the country whose radio rules to follow, as two
+    capital letters (US), or 'worldwide' for the chip's worldwide set (the
+    default). Saved; takes effect at the next boot.
+
+    'wifi power on|off' turns power saving on or off (saved; default off).
+    With it on the radio sleeps between beacons when idle: lower power, but
+    the first packet after a quiet spell can take a little longer.
+
+    'wifi stats' is for chasing packet loss: signal, noise floor, channel,
+    access point and transmit rate; packets sent, received and dropped per
+    protocol since boot; TCP segments resent; and how full lwIP's pools got.
+    'wifi stats chip' adds the Wi-Fi chip's own counters, raw (index: value);
+    their layout isn't published, so compare two readings.
+
+    'wifi iovar' reads or sets a 32-bit variable in the Wi-Fi chip (2g_rate,
+    ampdu_tx, qtxpower ...), for debugging; not saved, and an unknown name
+    reads back as a meaningless value, not an error. 'wifi keepalive off'
+    stops the once-a-minute address announcement until reboot, for testing
+    (see 'net').
+
+SEE ALSO
+    net, setup, hostname, config

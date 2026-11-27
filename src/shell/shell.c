@@ -43,6 +43,7 @@
 #include "core/version.h"
 #include "core/wdog.h"
 #include "edit/edit.h"
+#include "man/man.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "lua/lua_core1.h"
@@ -258,6 +259,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
@@ -2099,6 +2101,7 @@ static const shell_word_t lua_words[] = {
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+static const shell_word_t man_words[] = {W("install"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2132,6 +2135,7 @@ static const shell_cmd_t commands[] = {
     {"lua", lua_command, lua_words, SHELL_PATH},
     {"edit", edit_command, NULL, SHELL_PATH},
     {"more", view_command, NULL, SHELL_PATH},
+    {"man", man_command, man_words, 0},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, SHELL_ADMIN},

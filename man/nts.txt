@@ -1,0 +1,19 @@
+NAME
+    nts - NTS state, and its two steps run by hand
+
+SYNOPSIS
+    nts
+    nts ke
+    nts ke <host>      (console only)
+    nts query
+
+DESCRIPTION
+    For diagnosing time sync. 'nts' shows the last key exchange (cookies held,
+    the NTP server it named) and the last query. 'nts ke' runs a key exchange
+    with the build-time default server (not the one set with 'time server');
+    'nts ke <host>' with another server. 'nts query' sends one authenticated
+    NTS time query; 'nts' then shows the offset. None of these sets the clock:
+    'time sync' does.
+
+SEE ALSO
+    time, tls

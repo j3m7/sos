@@ -1,0 +1,15 @@
+NAME
+    logger - add a line to the system log
+
+SYNOPSIS
+    logger [-p <level>] <message>
+
+DESCRIPTION
+    Adds the message to the log under facility 'user', at level 'notice'
+    unless -p gives err, warning, notice, info or debug. The line says which
+    shell it came from: 'logger (console): ...' or 'logger (ssh <name>): ...',
+    the name as 'who' shows it. At most 10 a second; beyond that it says the
+    message wasn't logged. Lua scripts log the same way with sos.log().
+
+SEE ALSO
+    dmesg, log, who

@@ -1,0 +1,42 @@
+NAME
+    glitch - the RP2350 glitch detector: setting, state and resets
+
+SYNOPSIS
+    glitch
+    glitch on <0-3>        (console only)
+    glitch watch <0-3>     (console only)
+    glitch off             (console only)
+    glitch default         (console only)
+    glitch trig            (console only)
+
+DESCRIPTION
+    The chip's glitch detector resets it when its clock or core supply is
+    disturbed, which is what a fault-injection attack does. 'glitch' shows its
+    setting, whether it is armed now, how many times it has reset the board
+    since power-on, and for the last such reset which detectors fired, how
+    long the board had been up, and the chip temperature and supply voltage
+    then (the last readings before the reset, taken every 10 s).
+
+    'glitch on <0-3>' arms it by software, now and at every boot, at that
+    sensitivity (0 lowest, 3 highest). 'on 3' is the default: a board is armed
+    at the highest sensitivity unless set otherwise. This is not protection:
+    it is armed a second or two into boot and software can disarm it; its
+    purpose is to see whether the detector resets a healthy board before it is
+    enabled for good in OTP. If it resets the board three times in a row
+    within three minutes of starting, the next boot leaves it unarmed and says
+    so. A detector reset loses the fault record.
+
+    'glitch watch <0-3>' runs the circuits at that sensitivity without arming
+    them: a trigger is logged, followed by a line with the chip temperature
+    and supply voltage, and shown by 'glitch' ("armed, it would have reset the
+    board"); nothing is reset. A
+    detector that has triggered may stay triggered until the next reset, so
+    each of the four is reported once per boot.
+
+    'glitch off' disarms it, now and at boot: the way out if it resets a
+    healthy board. 'glitch default' goes back to armed at 3. 'glitch trig'
+    makes one detector fire, to check that a detector reset is seen and
+    reported; it resets the board if the detector is armed.
+
+SEE ALSO
+    uptime, temp, power, version

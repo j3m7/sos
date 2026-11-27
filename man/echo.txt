@@ -1,0 +1,15 @@
+NAME
+    echo - print text, or write or append it to a file
+
+SYNOPSIS
+    echo <text>
+    echo <text> > <file>
+    echo <text> >> <file>
+
+DESCRIPTION
+    Prints the text, or with '>' writes it as a line to the file (replacing
+    it), or with '>>' appends it as a line. Only the console may write under
+    /certs.
+
+SEE ALSO
+    cat, edit

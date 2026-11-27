@@ -406,7 +406,7 @@ slot added (`alice@laptop/2`). A message arrives between keystrokes: the line be
 redrawn after it, and a full-screen `edit` holds messages until it quits. Messages are kept only
 in memory (the last 16), never in the log or on the card. A client that stops reading holds
 a sender up for at most 2 seconds; after that it misses messages, and is told how many. See
-[docs/commands.md](docs/commands.md#messages) and [`src/chat/`](src/chat/README.md).
+[man/wall.txt](man/wall.txt), [man/chat.txt](man/chat.txt) and [`src/chat/`](src/chat/README.md).
 
 ## Watchdog
 
@@ -676,7 +676,7 @@ columns, and CRLF line ends are kept.
   when it quits; `wall` and `chat` messages wait too.
 - `/certs` can be opened from SSH but saved only from the console.
 
-The keys and details are in [docs/commands.md](docs/commands.md#editor) and
+The keys and details are in the manual page [man/edit.txt](man/edit.txt) and
 [`src/edit/`](src/edit/README.md).
 
 ## HTTPS client
@@ -692,15 +692,23 @@ bidi characters); `sos.http` gives a script the bytes as they are.
   until one finishes. One more TLS connection is always kept free for time sync (NTS).
 - A request is refused while the heap is too low for a TLS handshake (about 64 KB free).
 
-See [docs/commands.md](docs/commands.md#https) and [`src/net/`](src/net/README.md).
+See [man/http.txt](man/http.txt) and [`src/net/`](src/net/README.md).
 
 ## Pager
 
 `more <file>` reads a file of any size a screen at a time (a 16 KB window of it is in memory),
 with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches, q
 quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
-it is the viewer for any command with more text to show than a screen (`edit_view()`; the
-manual pages, when they come, will use it). See [docs/commands.md](docs/commands.md#pager).
+it is the viewer for any command with more text to show than a screen, the manual pages first
+of all. The keys are in [man/more.txt](man/more.txt).
+
+## Manual pages
+
+`man` lists the manual pages and `man <topic>` reads one in the pager: one page per command,
+written in [`man/`](man/README.md) and kept on the SD card as `/man/<topic>.txt`. A board without
+them is offered a download: `man install` fetches them from this repository on GitHub over HTTPS,
+matching the firmware's commit; `tools/man-install.sh <host>` copies them over SFTP instead. See
+[man/README.md](man/README.md) and [man/man.txt](man/man.txt).
 
 ## Lua scripts (prototype)
 
