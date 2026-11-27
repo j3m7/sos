@@ -16,6 +16,7 @@ working directory:
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
+| `sd check` | console only, on an unmounted card: check its file system, reporting problems without writing (in progress, see below) |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -30,6 +31,30 @@ working directory:
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
+
+## Checking the card
+
+FatFs keeps no journal, so a power cut during a write (and the log writer writes all the time)
+can leave lost clusters, a file whose size doesn't match its clusters, or clusters two files
+share. `sd check` looks for these, on the console, on an unmounted card:
+
+```
+sd unmount
+sd check
+```
+
+It refuses while the card is mounted (`the card is mounted: run 'sd unmount' first`) or a file
+is open. While it runs, nothing else reaches the card: file commands, SFTP and Lua fail as when
+there's no card, an `http` request has no TLS roots, the log writer keeps its lines in memory,
+and the other `sd` commands say `the card is being checked (sd check)`. It prints one line per
+problem and a summary, which also goes to the log (`sd: check: ...`). It reads only; repair is
+a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
+next file command mounts it again, and the log writer's once-a-minute retry doesn't.
+
+In progress: the checker itself (design: [docs/design/sd-check.md](design/sd-check.md)) isn't
+built in yet. Until it is, `sd check` opens the card, confirms that sector 0 of the volume reads
+as a partition table or boot sector, reads the first 32 MB through the encryption layer, and
+reports read errors.
 
 ## Encrypted cards
 
