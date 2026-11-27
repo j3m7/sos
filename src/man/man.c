@@ -106,7 +106,7 @@ static bool bundle_url(char *ref, size_t ref_cap, char *url, size_t url_cap) {
     bool commit = strlen(v) == 12;
     for (const char *p = v; commit && *p; p++)
         commit = isxdigit((unsigned char)*p);
-    snprintf(ref, ref_cap, "%s", commit ? v : "main");
+    snprintf(ref, ref_cap, "%.12s", commit ? v : "main");  // a commit is 12 digits
     snprintf(url, url_cap, MAN_URL_FMT, ref);
     return commit;
 }

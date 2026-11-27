@@ -23,4 +23,7 @@ const char *fault_last(void);
 // isn't one of them.
 void fault_test(const char *how);
 
+// The SDK's panic() (PICO_PANIC_FUNCTION in CMakeLists.txt): records the panic and resets.
+void sos_panic(const char *fmt, ...) __attribute__((noreturn));
+
 #endif

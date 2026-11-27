@@ -16,6 +16,10 @@
 
 #include "time/timeconv.h"
 
+// Reached only through -Wl,--wrap, so no header declares them.
+struct tm *__wrap_localtime_r(const time_t *t, struct tm *result);
+time_t __wrap_mktime(struct tm *tm);
+
 struct tm *__wrap_localtime_r(const time_t *t, struct tm *result) {
     return gmtime_r(t, result);
 }

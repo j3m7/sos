@@ -11,12 +11,8 @@
 #include <string.h>
 
 #include "files/sdcrypt.h"
+#include "sdcrypt_tool.h"       // tools/host/sdcrypt.c, built with SDCRYPT_TOOL_NO_MAIN
 #include "test.h"
-
-// tools/host/sdcrypt.c, built with SDCRYPT_TOOL_NO_MAIN.
-int sdcrypt_tool_xts(int encrypt, const uint8_t key[32], uint64_t lsector,
-                     const uint8_t *in, uint8_t *out, unsigned count);
-int sdcrypt_tool_header(const uint8_t sector[512], uint32_t *offset);
 
 static uint8_t devkey[32], other_devkey[32], card_id[16], nonce[12], data_key[32];
 

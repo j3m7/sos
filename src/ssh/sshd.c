@@ -58,7 +58,7 @@ static void printable_name(char *out, const char *in) {
 }
 
 static void put_u32be(uint8_t *p, uint32_t v) {
-    p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
 }
 
 // "SHA256:<base64 without padding>", as printed by ssh-keygen -l.

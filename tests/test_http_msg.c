@@ -474,7 +474,7 @@ TEST(resp_fuzz) {
         }
         result_t *r = &results[0];
         // buf may now contain NULs; feed len bytes regardless.
-        run(r, buf, len, false, 1 + iter % 9, 1 + iter % 5, iter % 2);
+        run(r, buf, len, false, (size_t)(1 + iter % 9), (size_t)(1 + iter % 5), iter % 2);
         CHECK(r->p.state <= HTTP_P_ERROR);
         CHECK(r->body_len <= len);
     }

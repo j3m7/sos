@@ -288,7 +288,7 @@ TEST(random_operations_match_model) {
                         model_drop(&m, n - (m.cap - m.len));
                     memcpy(m.data + m.len, in, n);
                     m.len += n;
-                    next += n;
+                    next += (unsigned)n;
                 }
             } else if (op == 2) {                            // read
                 int expect = n == 0 ? -1 : n > m.len ? -2 : 0;

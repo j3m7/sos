@@ -135,8 +135,8 @@ complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn,
     return COMPLETE_DIR_NONE;
 }
 
-void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
-    (void)sh; (void)name; (void)len;
+void shell_page(shell_t *shell, const char *name, char *text, size_t len) {
+    (void)shell; (void)name; (void)len;
     heap_release(HEAP_EDIT, text);          // not under test here
 }
 
@@ -201,9 +201,6 @@ static void type(const char *text) {
 
 // Run the main loop for a while (each pass 5 ms, as on the device): the shell, then the
 // console's own lock, as main.c does.
-static bool connected;
-static uint32_t idle_limit;
-
 static void run_ms(unsigned ms) {
     for (unsigned t = 0; t < ms; t += 5) {
         size_t before = in_pos;

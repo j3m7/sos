@@ -29,7 +29,7 @@
     )
 
     add_library(wolfssl INTERFACE)
-    target_include_directories(wolfssl INTERFACE ${WOLFSSL_ROOT})
+    target_include_directories(wolfssl SYSTEM INTERFACE ${WOLFSSL_ROOT})  # third-party: no SOS warnings
     target_sources(wolfssl INTERFACE ${WOLFSSL_SRC})
 
     target_compile_definitions(wolfssl INTERFACE

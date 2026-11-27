@@ -56,7 +56,12 @@ static sd_card_t card = {
     .use_card_detect = false,
 };
 
+// hw_config.h declares sd_get_num() without (void), which isn't a prototype, and declaring it
+// again is a redundant declaration: the warning is the library's, not this definition's.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 size_t sd_get_num(void) { return 1; }
+#pragma GCC diagnostic pop
 sd_card_t *sd_get_by_num(size_t num) { return num == 0 ? &card : NULL; }
 
 // The library's messages (weak hooks, silent by default) go to the system log, except during a
@@ -458,7 +463,7 @@ static void test_line(uint32_t n, char *line) {
 #define TEST_BLOCK 4096                 // written and read back at a time
 
 // The test itself, with `buf` (TEST_BLOCK bytes) from cmd_test().
-static void test_run(shell_t *sh, int blocks, const char *keep, uint8_t *buf) {
+static void test_run(shell_t *sh, uint32_t blocks, const char *keep, uint8_t *buf) {
     const uint32_t lines_per_block = TEST_BLOCK / TEST_LINE;
     const char *name = "/sos-test.txt";
     FIL f;
@@ -468,7 +473,7 @@ static void test_run(shell_t *sh, int blocks, const char *keep, uint8_t *buf) {
         return;
     }
     uint64_t t0 = time_us_64(), worst = 0;
-    for (int i = 0; i < blocks && fr == FR_OK; i++) {
+    for (uint32_t i = 0; i < blocks && fr == FR_OK; i++) {
         for (uint32_t l = 0; l < lines_per_block; l++)
             test_line(i * lines_per_block + l, (char *)buf + l * TEST_LINE);
         UINT bw;
@@ -491,7 +496,7 @@ static void test_run(shell_t *sh, int blocks, const char *keep, uint8_t *buf) {
     fr = f_open(&f, name, FA_READ);
     t0 = time_us_64();
     bool ok = fr == FR_OK;
-    for (int i = 0; i < blocks && ok; i++) {
+    for (uint32_t i = 0; i < blocks && ok; i++) {
         UINT br;
         ok = f_read(&f, buf, TEST_BLOCK, &br) == FR_OK && br == TEST_BLOCK;
         char line[TEST_LINE];
@@ -537,7 +542,7 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
         shell_printf(sh, "sd test: out of memory\n");
         return;
     }
-    test_run(sh, blocks, keep, buf);
+    test_run(sh, (uint32_t)blocks, keep, buf);
     heap_release(HEAP_FILES, buf);
 }
 

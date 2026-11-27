@@ -275,7 +275,11 @@ static void cmd_mv(shell_t *sh, char *args) {
 
 // echo <text> [> file | >> file]
 static void cmd_echo(shell_t *sh, char *args) {
-    char *text = args ? args : "";
+    if (!args) {
+        shell_printf(sh, "\n");
+        return;
+    }
+    char *text = args;
     char *redir = strrchr(text, '>');
     if (!redir) {
         shell_printf(sh, "%s\n", text);

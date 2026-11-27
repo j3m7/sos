@@ -67,7 +67,7 @@ TEST(matches_libc) {
     srand(12345);
     for (int i = 0; i < 200000; i++) {
         int64_t t = -2208988800LL + (int64_t)(((uint64_t)rand() << 31 | (uint64_t)rand()) %
-                                              9467107200ULL);
+                                              UINT64_C(9467107200));
         time_t tt = (time_t)t;
         struct tm tm;
         gmtime_r(&tt, &tm);
@@ -120,7 +120,7 @@ time_t __wrap_mktime(struct tm *tm);
 TEST(utc_replacements_for_localtime_and_mktime) {
     srand(777);
     for (int i = 0; i < 100000; i++) {
-        time_t t = (time_t)(((uint64_t)rand() << 16 ^ (uint64_t)rand()) % 4102444800ULL);
+        time_t t = (time_t)(((uint64_t)rand() << 16 ^ (uint64_t)rand()) % UINT64_C(4102444800));
         struct tm want, got;
         gmtime_r(&t, &want);
         CHECK(__wrap_localtime_r(&t, &got) == &got);
@@ -189,7 +189,7 @@ TEST(rtc_round_trip) {
     srand(678);
     for (int i = 0; i < 100000; i++) {
         int64_t t = 946684800LL + (int64_t)(((uint64_t)rand() << 31 | (uint64_t)rand()) %
-                                            3155760000ULL);     // 2000..2099
+                                            UINT64_C(3155760000));     // 2000..2099
         uint8_t r[TIMECONV_RTC_REGS];
         int64_t back;
         if (!timeconv_to_rtc(t, r) || !timeconv_from_rtc(r, &back) || back != t) {

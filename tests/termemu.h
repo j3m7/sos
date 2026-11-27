@@ -121,12 +121,12 @@ static size_t t_parse(const char *s, size_t n) {
         int w = t_width(t_decode((const unsigned char *)s + i, l));
         static bool last_col_full;          // the character before was written in the last column
         if (w == 0) {                       // joins the cell before (the cursor's, at the edge)
-            int c = t_col == t_cols - 1 && last_col_full ? t_col : t_col - 1;
-            if (c >= 0 && !strcmp(screen[t_row][c], WIDE_RIGHT))
-                c--;
-            CHECK(c >= 0 && screen[t_row][c][0]);      // there's a character to join
-            if (c >= 0 && strlen(screen[t_row][c]) + l < CELL)
-                strncat(screen[t_row][c], s + i, l);
+            int col = t_col == t_cols - 1 && last_col_full ? t_col : t_col - 1;
+            if (col >= 0 && !strcmp(screen[t_row][col], WIDE_RIGHT))
+                col--;
+            CHECK(col >= 0 && screen[t_row][col][0]);  // there's a character to join
+            if (col >= 0 && strlen(screen[t_row][col]) + l < CELL)
+                strncat(screen[t_row][col], s + i, l);
             i += l;
             continue;
         }
