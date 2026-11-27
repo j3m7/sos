@@ -13,8 +13,10 @@ DESCRIPTION
     /x.txt' writes the line to the file (replacing it), and '>> /x.txt'
     appends it. The same works for every command: 'dmesg > /d.txt'. The file
     is written even when the command prints nothing (it is then empty; 'echo
-    > /x.txt' gives it one empty line). Only the console may write under
-    /certs and /var/log.
+    > /x.txt' gives it one empty line). The command's own messages (its
+    usage, its errors) go into the file too; only an unknown command is said
+    on the screen, and then no file is made. Only the console may write
+    under /certs and /var/log.
 
 SEE ALSO
     cat, edit, tee

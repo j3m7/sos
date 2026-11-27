@@ -277,59 +277,62 @@ static void fake_answer(shell_t *sh, char *answer, void *arg) {
 
 // The command as the fake sees it: its name, then words_join()'s text (as shell.c's handlers
 // get it), e.g. "echo a   b" for `echo "a   b"`.
-void shell_execute(shell_t *sh, int argc, char **argv) {
+bool shell_execute(shell_t *sh, int argc, char **argv) {
     char cmd[SHELL_LINE_MAX + 2];
     const char *args = words_join(argc, argv);
     snprintf(cmd, sizeof(cmd), args ? "%s %s" : "%s", argv[0], args);
+    if (!strcmp(argv[0], "nosuch"))        // no such command: shell.c's returns false
+        return false;
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
     n_executed++;
     if (!strcmp(cmd, "quiet"))
-        return;
+        return true;
     if (!strcmp(cmd, "probe")) {            // records whether its output is piped
         piped_seen = shell_output_piped(sh);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "bye")) {              // ends the session, as logout does on SSH
         shell_printf(sh, "bye\n");
         shell_end(sh);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "big")) {              // more than the pager takes
         for (int i = 0; i < 400; i++)
             shell_printf(sh, "line %3d: %-90s|\n", i, i % 10 ? "the lazy dog" : "the quick brown fox");
-        return;
+        return true;
     }
     if (!strcmp(cmd, "ask")) {
         shell_printf(sh, "before the question\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "askjob")) {           // a job with a question pending (as chat's can be)
         shell_printf(sh, "hold on\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "jobnow")) {           // a job that prints before its first step
         shell_printf(sh, "now\n");
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "job")) {
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "raw")) {
         n_raw_keys = raw_steps = raw_cancels = 0;
         raw_quit = false;
         shell_run_raw(sh, fake_raw_step, fake_raw_key, &job_arg_token);
-        return;
+        return true;
     }
     shell_printf(sh, "<%s>\n", cmd);
+    return true;
 }
 
 // Command tables for Tab: two, as shell.c has (its own and the file commands').
@@ -1615,6 +1618,30 @@ TEST(redirect_writes_the_output_to_a_file_and_nothing_to_the_terminal) {
     CHECK(!strcmp(tee_card, "step 1\nstep 2\nstep 3\n"));
     CHECK(strstr(fake.out, "step") == NULL);
     CHECK(!tee_open_now && !piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+// An unknown command feeds no stage: the message is on the terminal, unfiltered, and a
+// redirect's file isn't made (the line is dropped, never ended).
+TEST(unknown_command_is_said_on_the_terminal_and_runs_no_stage) {
+    start(&io_plain);
+    type("nosuch\r");
+    CHECK_OUT("nosuch\nnosuch: unknown command (try 'help')\nsos> ");
+    clear_out();
+    tee_path[0] = '\0';
+    type("nosuch a b > /x\r");
+    CHECK_OUT("nosuch a b > /x\nnosuch: unknown command (try 'help')\nsos> ");
+    CHECK(tee_path[0] == '\0' && !tee_open_now);   // the tee stub saw no open
+    clear_out();
+    type("nosuch | grep zzz\r");
+    CHECK_OUT("nosuch | grep zzz\nnosuch: unknown command (try 'help')\nsos> ");
+    clear_out();
+    paged_calls = 0;
+    type("nosuch | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK_OUT("nosuch | more\nnosuch: unknown command (try 'help')\nsos> ");
+    CHECK(!piped_now());
+    CHECK_EQ(n_executed, 0);
     CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
@@ -2985,6 +3012,7 @@ TEST_MAIN(
     RUN(quotes_keep_spaces_and_unquoted_words_are_single_spaced);
     RUN(a_line_that_does_not_split_runs_nothing);
     RUN(redirect_writes_the_output_to_a_file_and_nothing_to_the_terminal);
+    RUN(unknown_command_is_said_on_the_terminal_and_runs_no_stage);
     RUN(redirect_refused_runs_nothing);
     RUN(lines_against_the_grammar_run_nothing);
     RUN(pipe_stage_that_does_not_parse_runs_nothing);

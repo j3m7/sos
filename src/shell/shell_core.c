@@ -534,7 +534,8 @@ static void run_line(shell_t *sh, char *cmd) {
         return;
     }
     if (argc == w.n) {                      // no stages
-        shell_execute(sh, argc, w.v);
+        if (!shell_execute(sh, argc, w.v))
+            shell_printf(sh, "%s: unknown command (try 'help')\n", w.v[0]);
         return;
     }
     if (!pipe_open(sh, p, &w, argc))        // a stage doesn't parse: why, and nothing runs
@@ -550,7 +551,11 @@ static void run_line(shell_t *sh, char *cmd) {
             shell_printf(sh, "%s: out of memory, running without the pager\n", p->name);
         }
     }
-    shell_execute(sh, argc, w.v);
+    if (!shell_execute(sh, argc, w.v)) {    // no such command: no stage runs (a redirect's file
+        pipe_drop(sh);                      // isn't made), and the message is the terminal's
+        shell_printf(sh, "%s: unknown command (try 'help')\n", w.v[0]);
+        return;
+    }
     if (!piped(sh))                         // nothing to pipe through (the pager was out of
         return;                             // memory), or the command ended the session
     if (sh->answer)                         // it asks a question: not a thing to pipe

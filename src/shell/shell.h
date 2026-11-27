@@ -166,9 +166,11 @@ void shell_logout(shell_t *sh);
 
 // Run one command: its words (argc >= 1, argv[0] the name, argv[argc] NULL), as words_split()
 // left them in the line buffer (words.h), in line order and without operators; the line's
-// stages, if any, are set up already. The words are clobbered (joined in place). Implemented
-// by the command module (shell.c); shell_core.c (line editing) calls it.
-void shell_execute(shell_t *sh, int argc, char **argv);
+// stages, if any, are set up already. The words are clobbered (joined in place). False, with
+// nothing printed, when there is no command of that name: the caller tears the line's stages
+// down and says so on the terminal. Implemented by the command module (shell.c); shell_core.c
+// (line editing) calls it.
+bool shell_execute(shell_t *sh, int argc, char **argv);
 
 // Show `len` bytes of `text`, a HEAP_EDIT block that the callee owns from here on, in the pager
 // under `name` (`<command> | more`). Implemented by the command module (shell.c); shell_core.c

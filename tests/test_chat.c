@@ -80,7 +80,7 @@ bool login_gate(shell_t *s, const char *cmd) {
     return false;
 }
 
-void shell_execute(shell_t *sh, int argc, char **argv) {
+bool shell_execute(shell_t *sh, int argc, char **argv) {
     const char *cmd = argv[0];
     char *args = words_join(argc, argv);    // as shell.c passes it
     if (!strcmp(cmd, "wall"))
@@ -91,6 +91,7 @@ void shell_execute(shell_t *sh, int argc, char **argv) {
         chat_cmd_who(sh, args);
     else
         shell_printf(sh, "<%s>\n", cmd);
+    return true;
 }
 
 static uint64_t fake_now;

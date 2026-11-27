@@ -147,13 +147,13 @@ bool shell_page_growing(shell_t *s, const char *name, char *text, size_t len) {
 }
 
 // The lock was checked by run_line() (shell_core.c) on the raw line before it got here.
-void shell_execute(shell_t *s, int argc, char **argv) {
+bool shell_execute(shell_t *s, int argc, char **argv) {
     char cmd[SHELL_LINE_MAX + 2];
     const char *args = words_join(argc, argv);
     snprintf(cmd, sizeof(cmd), args ? "%s %s" : "%s", argv[0], args);
     if (!strcmp(cmd, "job")) {
         shell_run_job(s, endless_job, NULL);
-        return;
+        return true;
     }
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
@@ -162,6 +162,7 @@ void shell_execute(shell_t *s, int argc, char **argv) {
         shell_logout(s);
     else
         shell_printf(s, "ran %s\n", cmd);
+    return true;
 }
 
 // --- helpers -----------------------------------------------------------------------------------------
