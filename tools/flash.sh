@@ -49,7 +49,7 @@
 
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-dry= work=
+dry='' work=''
 while getopts "nw:" opt; do
     case $opt in
     n) dry=1 ;;
@@ -81,7 +81,7 @@ else
     # The accepted hashes for this board, lower case: its own section's, or, in a list with
     # no sections, all of them. A line that is none of comment, hash, [serial] or "open" is a
     # mistake in the list, and a list with a mistake is not trusted.
-    default=() own=() own_open= has_own= section= sections=
+    default=() own=() own_open='' has_own='' section='' sections=
     lineno=0
     while IFS= read -r line || [[ -n $line ]]; do
         lineno=$((lineno + 1))
