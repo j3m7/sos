@@ -14,6 +14,11 @@
 static char hist[LOG_HISTORY_SIZE];
 static uint32_t start, end, printed;
 static bool lost_unprinted;             // entries dropped before the console showed them
+// Entries the console hasn't been offered yet (from `printed` on), by level, so log_pending()
+// doesn't walk the history with the lock held. Kept in step by append(), drop_oldest() and
+// log_flush(). Levels are syslog's, 0 to 7.
+#define LOG_LEVELS 8
+static uint16_t unprinted[LOG_LEVELS];
 static bool flushing;
 static bool deferred;
 static int console_level = SOS_LOG_NOTICE;
@@ -28,10 +33,15 @@ static char at(uint32_t pos) {
     return hist[pos % LOG_HISTORY_SIZE];
 }
 
+static unsigned level_slot(int level) {
+    return level < 0 ? 0 : level >= LOG_LEVELS ? LOG_LEVELS - 1 : (unsigned)level;
+}
+
 void log_init(const log_hooks_t *h) {
     hooks = h;
     start = end = printed = 0;
     lost_unprinted = false;
+    memset(unprinted, 0, sizeof(unprinted));
     deferred = false;
 }
 
@@ -93,6 +103,8 @@ static int entry_priority(char c) {
 
 // Drop the oldest entry. Caller holds the lock.
 static void drop_oldest(void) {
+    if (before(start, end) && !before(start, printed))  // at its level byte; not shown yet
+        unprinted[level_slot(entry_priority(at(start)) & SOS_LOG_LEVEL_MASK)]--;
     while (before(start, end) && at(start) != '\n')
         start++;
     if (before(start, end))
@@ -109,6 +121,7 @@ static void append(int facility, int level, const char *text, size_t n) {
     while (end - start + need > LOG_HISTORY_SIZE)
         drop_oldest();
     hist[end++ % LOG_HISTORY_SIZE] = entry_byte(facility, level);
+    unprinted[level_slot(level)]++;
     for (size_t i = 0; i < n; i++)
         hist[end++ % LOG_HISTORY_SIZE] = text[i];
     hist[end++ % LOG_HISTORY_SIZE] = '\n';
@@ -195,6 +208,8 @@ void log_flush(void) {
         lost_unprinted = false;
         bool more = before(printed, end);
         int level = more ? copy_entry(&printed, line, sizeof(line) - 1) & SOS_LOG_LEVEL_MASK : 0;
+        if (more)
+            unprinted[level_slot(level)]--;
         hooks->unlock(saved);
 
         if (!lost && !more)
@@ -225,14 +240,8 @@ int log_pending(void) {
         return 0;
     uint32_t saved = hooks->lock();
     int n = lost_unprinted ? 1 : 0;
-    uint32_t pos = printed;
-    while (before(pos, end)) {              // pos is at an entry's priority byte
-        if ((entry_priority(at(pos)) & SOS_LOG_LEVEL_MASK) <= console_level)
-            n++;
-        while (before(pos, end) && at(pos) != '\n')
-            pos++;
-        pos++;
-    }
+    for (int level = 0; level < LOG_LEVELS && level <= console_level; level++)
+        n += unprinted[level];
     hooks->unlock(saved);
     return n;
 }

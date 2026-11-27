@@ -19,7 +19,10 @@ lists every change. It runs wolfSSH over lwIP's raw TCP API.
 - **Sessions:** up to `SOS_SSH_MAX_SESSIONS` (3) run at once, each an `ssh_session_t`. Its
   buffers are allocated when a connection is set up and freed when it closes, so an idle slot
   costs no heap. When every slot is busy, the client gets an SSH disconnect message saying so
-  (no bare reset).
+  (no bare reset). That message is built once when the server starts, and the refusal is
+  logged from the main loop, counted, at most one line every 10 s: the accept callback runs in
+  interrupt context and anyone who can reach the port can cause it, so it only queues the
+  message.
 - **Connections that don't log in:** the login grace time is 30 s, or 5 s while every slot is
   in use (`SSH_LOGIN_GRACE_BUSY_US`). Each such connection counts against its address
   (`ssh_penalty_t`, 4 addresses tracked): at `SSH_PENALTY_FAILS` (30) within
