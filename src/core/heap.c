@@ -22,6 +22,7 @@
 
 #include <malloc.h>
 #include <reent.h>
+#include <unistd.h>
 
 #include "pico/mutex.h"
 
@@ -46,6 +47,17 @@ heap_info_t heap_info(void) {
         .arena = mi.arena,
     };
     return h;
+}
+
+void heap_snapshot(heap_snapshot_t *out) {
+    recursive_mutex_enter_blocking(&heap_lock);     // mallinfo() takes it again: recursive
+    struct mallinfo mi = mallinfo();
+    void *end = sbrk(0);
+    recursive_mutex_exit(&heap_lock);
+    out->used = mi.uordblks;
+    out->free = mi.fordblks;
+    out->arena = mi.arena;
+    out->end = (uintptr_t)end;
 }
 
 size_t heap_free(void) {

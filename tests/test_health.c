@@ -447,28 +447,6 @@ TEST(lua_record) {
 
 // --- the seed checks' judging --------------------------------------------------------------------
 
-TEST(judge_resets) {
-    health_result_t r;
-    health_judge_resets(NULL, false, false, &r);
-    CHECK_EQ(r.status, HEALTH_PASS);
-    health_judge_resets(NULL, false, true, &r);
-    CHECK_EQ(r.status, HEALTH_WARN);
-    CHECK(!strcmp(r.text, "last reset: watchdog timeout"));
-    health_judge_resets(NULL, true, true, &r);
-    CHECK(!strcmp(r.text, "last reset: glitch detector"));
-    health_judge_resets("hard fault at 0x10001234", true, true, &r);    // the fault says most
-    CHECK_EQ(r.status, HEALTH_WARN);
-    CHECK(!strcmp(r.text, "last reset: hard fault at 0x10001234"));
-    health_judge_resets("hard fault on core 0 at 0x1000409c, called from 0x1000409b "
-                        "(undefined instruction, CFSR 0x00010000)", false, false, &r);
-    CHECK(!strcmp(r.text, "last reset: hard fault on core 0 at 0x1000409c (see uptime)"));
-    char longer[200];
-    memset(longer, 'x', sizeof(longer) - 1);
-    longer[sizeof(longer) - 1] = '\0';
-    health_judge_resets(longer, false, false, &r);
-    CHECK_EQ(strlen(r.text), HEALTH_TEXT_MAX - 1);
-}
-
 TEST(judge_glitch) {
     health_result_t r;
     health_judge_glitch(false, &r);
@@ -591,7 +569,6 @@ TEST_MAIN(
     RUN(job_cancels_a_background_check_part_way);
     RUN(text_table);
     RUN(lua_record);
-    RUN(judge_resets);
     RUN(judge_glitch);
     RUN(judge_stack);
     RUN(judge_heap_with_hysteresis);

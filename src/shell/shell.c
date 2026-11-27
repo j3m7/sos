@@ -10,6 +10,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "hardware/regs/powman.h"
+#include "hardware/structs/powman.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
@@ -28,10 +30,13 @@
 #include "core/fault.h"
 #include "core/flashop.h"
 #include "core/glitchdet.h"
+#include "core/resetwhy.h"
 #include "core/health.h"
 #include "core/statecheck.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
+#include "core/history.h"
+#include "core/bgcheck_board.h"
 #include "core/log.h"
 #ifdef SOS_TEST_COMMANDS
 #include "core/memhold.h"
@@ -239,7 +244,7 @@ static void cmd_bootkey(shell_t *sh) {
 
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
-    shell_printf(sh, "uptime            time since boot\n");
+    shell_printf(sh, "uptime [history]  time since boot, and why it last reset; recorded boots\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
     shell_printf(sh, "temp cal          chip temperature calibration\n");
     shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
@@ -319,12 +324,13 @@ static void cmd_help(shell_t *sh) {
 
 static void cmd_uptime(shell_t *sh) {
     uint64_t s = to_us_since_boot(get_absolute_time()) / 1000000;
-    shell_printf(sh, "up %llud %02llu:%02llu:%02llu%s\n",
+    // The reason (core/resetwhy.h); a fault's record gets a line of its own (it's long).
+    bool fault = resetwhy() == RESETWHY_FAULT;
+    shell_printf(sh, "up %llud %02llu:%02llu:%02llu (last reset: %s)\n",
                  s / 86400, (s / 3600) % 24, (s / 60) % 60, s % 60,
-                 fault_last() ? "" : glitchdet_caused_reset() ? " (last reset: glitch detector)"
-                                    : wdog_caused_reset() ? " (last reset: watchdog)" : "");
-    if (fault_last())
-        shell_printf(sh, "last reset: %s\n", fault_last());
+                 fault ? "fault" : resetwhy_text());
+    if (fault)
+        shell_printf(sh, "last reset: %s\n", resetwhy_text());
     // Each flash write stops everything else for as long as it takes (core/flashop.h).
     flashop_stats_t f = flashop_stats();
     if (f.count)
@@ -2087,7 +2093,64 @@ static void run_wc(shell_t *sh, char *args) { (void)args; run_stage(sh, "wc", "w
 
 // Commands that take no arguments, and others whose handler has another signature.
 static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
-static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
+// "12 s", "14 min", "3 h", or "?" for unknown.
+static void format_up(char *buf, size_t len, uint32_t s) {
+    if (s == HISTORY_NONE)
+        snprintf(buf, len, "?");
+    else if (s < 120)
+        snprintf(buf, len, "%lu s", (unsigned long)s);
+    else if (s < 7200)
+        snprintf(buf, len, "%lu min", (unsigned long)(s / 60));
+    else
+        snprintf(buf, len, "%lu h", (unsigned long)(s / 3600));
+}
+
+// `uptime history`: the history sector (core/history.h), newest first: each boot with its reason
+// and how long the board had been up before it, and each time sync that set the RTC.
+static void cmd_uptime_history(shell_t *sh) {
+    const uint8_t *sector = history_sector();
+    history_scan_t s;
+    history_scan(sector, &s);
+    if (s.state != HISTORY_OURS) {
+        shell_printf(sh, "%s\n", s.state == HISTORY_ABSENT ? "no history: the image overlaps its sector"
+                                 : s.state == HISTORY_NEWER ? "the history sector has a newer format"
+                                                            : "nothing recorded yet");
+        return;
+    }
+    shell_printf(sh, " boot  when (UTC)           reason            up before\n");
+    for (unsigned i = s.next; i-- > 0;) {
+        history_rec_t r;
+        if (!history_slot(sector, i, &r)) {
+            shell_printf(sh, "    -  (damaged record)\n");
+            continue;
+        }
+        char when[24] = "(clock not set)", up[16], cal[16];
+        if (r.wall != HISTORY_NONE)
+            timeconv_format(r.wall, when, sizeof(when));
+        if (r.kind == HISTORY_KIND_RTC) {
+            timeconv_format_cal(cal, sizeof(cal), r.cal_steps);
+            shell_printf(sh, "    -  %-19s  rtc set (%s)%s\n", when, cal,
+                         r.confirmed ? "" : ", not taken");
+        } else if (r.kind == HISTORY_KIND_BOOT) {
+            format_up(up, sizeof(up), r.uptime_s);
+            shell_printf(sh, "%5u  %-19s  %-16s  %s\n", r.boot_no, when,
+                         resetwhy_name((resetwhy_t)r.reason), up);
+        } else {
+            shell_printf(sh, "    -  (test record)\n");
+        }
+    }
+    shell_printf(sh, "%u of %u records used%s\n", s.next, (unsigned)HISTORY_SLOTS,
+                 s.damaged || s.stray ? "; some damaged (see health)" : "");
+}
+
+static void run_uptime(shell_t *sh, char *args) {
+    if (args && !strcmp(args, "history"))
+        cmd_uptime_history(sh);
+    else if (args)
+        shell_printf(sh, "usage: uptime [history]\n");
+    else
+        cmd_uptime(sh);
+}
 static void run_power(shell_t *sh, char *args) { (void)args; cmd_power(sh); }
 static void run_version(shell_t *sh, char *args) { (void)args; cmd_version(sh); }
 static void run_mem(shell_t *sh, char *args) {
@@ -2114,10 +2177,48 @@ static void run_hostname(shell_t *sh, char *args) {
               config_check_hostname);
 }
 
+#ifdef SOS_TEST_COMMANDS
+// `crash brownout` (test builds only, docs/design/health.md §9.5): a real brownout reset, by
+// raising the brownout detector's threshold to 1.204 V, above the core supply's 1.1 V. The reset
+// puts the register back to its default (0.946 V), so the next boot is ordinary, and the boot
+// says `last reset: brownout`. Like a power dip it clears the POWMAN and watchdog scratch
+// registers. Refused while anything writes the card or flash: open files, sd check or a format, a
+// Lua script (it writes through core 0). Flash writes are synchronous on core 0 (flashop.h), so
+// none is in progress while a command runs; the log files are flushed first, as `reboot` does.
+static void crash_brownout(shell_t *sh) {
+    sdcard_health_t sd;
+    sdcard_health_state(&sd);
+    const char *busy = files_busy() ? "files are open (SFTP, cp, tee or a > redirection)"
+                     : sd.busy ? sd.busy
+                     : lua_host_running() ? "a Lua script is running"
+                     : NULL;
+    if (busy) {
+        shell_printf(sh, "crash brownout: refused: %s\n", busy);
+        return;
+    }
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "crash brownout (test): the detector's threshold raised "
+            "above the core supply");
+    logfile_flush();
+    sleep_ms(100);
+    uint32_t was = powman_hw->bod;
+    powman_hw->bod = POWMAN_PASSWORD_BITS | (0x11u << POWMAN_BOD_VSEL_LSB) | POWMAN_BOD_EN_BITS;
+    busy_wait_ms(100);                  // the detector acts within about 40 us
+    powman_hw->bod = POWMAN_PASSWORD_BITS | (was & 0xffffu);
+    shell_printf(sh, "crash brownout: the detector didn't reset the chip (BOD 0x%08lx put back)\n",
+                 (unsigned long)was);
+}
+#endif
+
 static void run_crash(shell_t *sh, char *args) {
     // Testing the fault record (core/fault.h): stops the firmware on purpose.
     if (!require_admin(sh))
         return;
+#ifdef SOS_TEST_COMMANDS
+    if (args && !strcmp(args, "brownout")) {
+        crash_brownout(sh);
+        return;
+    }
+#endif
     if (args)
         fault_test(args);
     shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
@@ -2191,6 +2292,11 @@ static void health_inject_cmd(shell_t *sh, const char *what, const char *how) {
 static void health_print_line(void *arg, const char *line) {
     shell_printf(arg, "%s\n", line);
 }
+
+// state-dump's lines are long (up to 256 bytes): wrapped at the terminal's usual 80 columns.
+static void health_print_wrapped(void *arg, const char *line) {
+    statecheck_wrap(line, STATECHECK_WRAP_COLS, health_print_line, arg);
+}
 #endif
 
 static void cmd_health(shell_t *sh, char *args) {
@@ -2210,17 +2316,21 @@ static void cmd_health(shell_t *sh, char *args) {
     bool inject = w1 && !strcmp(w1, "inject") && !w4;
     bool times = w1 && !strcmp(w1, "crypto-times") && !w2;
     bool diag = w1 && !strcmp(w1, "trng-diag") && !w2;
-    // What the checks of stored state read (docs/design/health.md §9.3). It only reads and
-    // prints no secret, so any shell may: the console may be locked at its password prompt.
+    // What the checks of stored state and of the background tier read (docs/design/health.md
+    // §9.3, §9.5). It only reads and prints no secret, so any shell may: the console may be
+    // locked at its password prompt.
     if (w1 && !strcmp(w1, "state-dump") && !w2) {
-        statecheck_board_dump(health_print_line, sh);
+        statecheck_board_dump(health_print_wrapped, sh);
+        bgcheck_board_dump(health_print_wrapped, sh);
         return;
     }
+    bool walk = w1 && !strcmp(w1, "heap-walk") && !w2;
+    bool fill = w1 && !strcmp(w1, "history-fill") && !w2;
 #else
-    bool inject = false, times = false, diag = false;
+    bool inject = false, times = false, diag = false, walk = false, fill = false;
     (void)w4;
 #endif
-    if (!run && !full && !inject && !times && !diag) {
+    if (!run && !full && !inject && !times && !diag && !walk && !fill) {
         shell_printf(sh, "usage: health [run [<name>] | full]\n");
         return;
     }
@@ -2244,6 +2354,18 @@ static void cmd_health(shell_t *sh, char *args) {
             health_board_crypto_times(health_print_line, sh);
         else
             health_board_trng_diag(health_print_line, sh);
+        return;
+    }
+    // §9.5: newlib's heap walked by hand (holds the allocator's lock up to 8 ms), and test records
+    // that fill the history sector so the next boots exercise its erase.
+    if (walk) {
+        bgcheck_board_heap_walk(health_print_wrapped, sh);
+        return;
+    }
+    if (fill) {
+        unsigned n = history_fill();
+        shell_printf(sh, "history: %u test record%s written; the next record erases the sector\n",
+                     n, n == 1 ? "" : "s");
         return;
     }
 #endif
@@ -2421,14 +2543,21 @@ static const shell_word_t health_words[] = {
 #ifdef SOS_TEST_COMMANDS
     {"inject", NULL, SHELL_ADMIN | SHELL_HIDDEN},
     {"state-dump", NULL, SHELL_HIDDEN},
+    {"heap-walk", NULL, SHELL_ADMIN | SHELL_HIDDEN},
+    {"history-fill", NULL, SHELL_ADMIN | SHELL_HIDDEN},
 #endif
     END};
-static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
+static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"),
+#ifdef SOS_TEST_COMMANDS
+                                           W("brownout"),
+#endif
+                                           END};
+static const shell_word_t uptime_words[] = {W("history"), END};
 
 static const shell_cmd_t commands[] = {
     {"help", run_help, NULL, NULL, 0},
     {"?", run_help, NULL, NULL, SHELL_HIDDEN},
-    {"uptime", run_uptime, NULL, NULL, 0},
+    {"uptime", run_uptime, NULL, uptime_words, 0},
     {"temp", cmd_temp, NULL, temp_words, 0},
     {"power", run_power, NULL, NULL, 0},
     {"version", run_version, NULL, NULL, 0},

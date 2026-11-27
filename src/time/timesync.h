@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "shell/shell.h"
+#include "time/timeconv.h"
 
 // Set up the RTC and set the system clock from it. Call early in main(), before the network.
 void timesync_boot(void);
@@ -66,6 +67,12 @@ typedef struct {
     unsigned auto_hours;        // periodic sync interval, 0: off
 } timesync_info_t;
 void timesync_info(timesync_info_t *info);
+
+// Drift (docs/design/health.md §9.5): what the last accepted sync measured of the RTC's rate
+// against its baseline (the time it was set to at a sync before, kept in the history sector across
+// restarts) and of the crystal's (the step, when the sync before was in this uptime). Before any
+// sync since boot: whether a baseline is waiting. Read by the `rtc-drift` health check and `time`.
+void timesync_drift(timeconv_drift_t *out);
 
 void timesync_status(shell_t *sh);
 

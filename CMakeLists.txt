@@ -184,6 +184,10 @@ set(SOS_SOURCES
     src/core/heap.c
     src/core/heaptag.c
     src/core/glitchdet.c
+    src/core/resetwhy.c
+    src/core/resetwhy_board.c
+    src/core/history.c
+    src/core/history_board.c
     src/core/chipinfo.c
     src/core/sensors.c
     src/core/sensors_board.c
@@ -192,6 +196,9 @@ set(SOS_SOURCES
     src/core/hwtest.c
     src/core/statecheck.c
     src/core/statecheck_board.c
+    src/core/bgcheck.c
+    src/core/bgcheck_board.c
+    src/core/heapwalk.c
     src/core/selftest.c
     src/core/logfile.c
     src/core/logfile_board.c

@@ -20,4 +20,10 @@ void lua_command(shell_t *sh, int argc, char **argv);
 // requests are served too; shell jobs pass false.
 void lua_host_poll(bool main_loop);
 
+// How long the running script has been running, in seconds; 0 if none runs. For the `core1`
+// health check.
+uint32_t lua_host_job_seconds(void);
+// A script (or the prompt) is running or ending.
+bool lua_host_running(void);
+
 #endif
