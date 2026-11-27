@@ -11,4 +11,8 @@
 // SFTP). Without a topic, lists the pages; with one, shows it in the pager (edit/edit.h).
 void man_command(shell_t *sh, char *args);
 
+// Tab after `man` (a shell_values_fn, shell.h): `install` and the topics of the pages on the
+// card.
+void man_tab_topics(shell_t *sh, shell_value_fn fn, void *arg);
+
 #endif

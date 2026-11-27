@@ -374,7 +374,8 @@ DESCRIPTION
     offered too: the sensitivity after 'glitch watch|on', 'https://' after
     'http get|head|post', the key numbers after 'key del', the saved networks'
     numbers after 'wifi remove|prefer', the NTS servers after 'nts ke' and
-    'time server', and those and the gateway after 'ping'.
+    'time server', those and the gateway after 'ping', and the pages on the
+    card after 'man'.
 
     After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
     after the '>' or '>>' of echo, Tab completes file names on the SD card
@@ -587,7 +588,8 @@ SYNOPSIS
 DESCRIPTION
     'man' lists the pages on the card with a line on each; 'man <topic>' shows
     one in the pager (q quits, h lists the keys, / searches). A topic is a
-    command name ('man wifi'); 'man intro' is a place to start.
+    command name ('man wifi'); 'man intro' is a place to start. Tab after
+    'man' completes the topics of the pages on the card.
 
     The pages live on the SD card as /man/<topic>.txt; the firmware holds
     none. When there are none, 'man' offers to download them. 'man install'

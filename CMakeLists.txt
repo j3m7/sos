@@ -206,6 +206,7 @@ set(SOS_SOURCES
     src/edit/screen.c
     src/edit/view.c
     src/man/man.c
+    src/man/man_topic.c
     src/chat/chat.c
     src/net/wifi.c
     src/net/wifi_pick.c

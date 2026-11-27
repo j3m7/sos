@@ -2035,6 +2035,7 @@ static const shell_values_t wifi_numbers = SHELL_VALUES_INIT(tab_wifi_numbers);
 static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
 static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
 static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
+static const shell_values_t man_topics = SHELL_VALUES_INIT(man_tab_topics);
 
 // The words Tab offers after each command (shell.h): the subcommands its parser takes.
 #define END {0}
@@ -2104,7 +2105,6 @@ static const shell_word_t lua_words[] = {
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
-static const shell_word_t man_words[] = {W("install"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2138,7 +2138,7 @@ static const shell_cmd_t commands[] = {
     {"lua", lua_command, lua_words, SHELL_PATH},
     {"edit", edit_command, NULL, SHELL_PATH},
     {"more", view_command, NULL, SHELL_PATH},
-    {"man", man_command, man_words, 0},
+    {"man", man_command, SHELL_VALUES_OF(man_topics), 0},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, SHELL_ADMIN},
