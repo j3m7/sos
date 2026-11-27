@@ -11,9 +11,9 @@
 
 #include "shell/shell.h"
 
-// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check]`;
-// test, speed <MHz>, format, unmount and check need an admin channel. While `sd check` runs
-// (docs/design/sd-check.md) the others refuse.
+// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check [fix]]`;
+// test, speed <MHz>, format, unmount and check need an admin channel. While `sd check` or
+// `sd check fix` runs (docs/design/sd-check.md), its question included, the others refuse.
 void sdcard_command(shell_t *sh, char *args);
 
 // Mount the card if it isn't yet (initializing the driver first). Says why on failure: to `sh`,
@@ -29,6 +29,20 @@ bool sdcard_mount_retry(void);
 
 // Is a card mounted now? Never mounts one.
 bool sdcard_mounted(void);
+
+// What `sd info` shows, as values (for Lua's sos.sd.info()). Mounts the card if it can; false
+// (and *info zeroed) if there's no card or it won't mount. total and free are the volume's bytes;
+// free_ok is false if counting the free space failed.
+typedef struct {
+    const char *card;           // "SDHC/SDXC", ...
+    uint64_t card_bytes;
+    bool encrypted;
+    const char *fs;             // "exFAT", "FAT32", ...
+    uint64_t total, free;
+    uint32_t cluster;
+    bool free_ok;
+} sdcard_info_t;
+bool sdcard_info(sdcard_info_t *info);
 // Changes every time a card is mounted (the same card again too).
 uint32_t sdcard_generation(void);
 

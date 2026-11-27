@@ -30,12 +30,28 @@ if grep -qE '^(man/|docs/commands\.md$|tools/man-bundle\.sh$|tools/man-docs\.py$
     fi
 fi
 
+# The time zone bundle: tz/zones.bundle is built by tools/tz-bundle.sh from the release in
+# tz/VERSION (which needs the network, so the hook only checks it): its header must name that
+# release and every line must be well formed and fit the board's config fields.
+if grep -qE '^(tz/|tools/tz-bundle\.sh$)' <<<"$staged"; then
+    tzc=$(mktemp -d)
+    trap 'rm -rf "${tmp:-}" "$tzc"' EXIT
+    git ls-files -z -- tz tools/tz-bundle.sh | git checkout-index -z --stdin --prefix="$tzc/"
+    if ! out=$(bash "$tzc/tools/tz-bundle.sh" --check 2>&1); then
+        echo "$out" >&2
+        echo >&2
+        echo "pre-commit: tz/zones.bundle doesn't match tz/VERSION or isn't well formed." >&2
+        echo "Run tools/tz-bundle.sh, then git add tz/zones.bundle." >&2
+        exit 1
+    fi
+fi
+
 # Shell scripts: shellcheck (tools/lint-shell.sh) on the staged versions, when the commit touches
 # a script or .shellcheckrc. Skipped, with a note, where shellcheck isn't installed.
 if grep -qE '(\.sh$|^\.githooks/|^tools/host/pico-vm-attach$|^\.shellcheckrc$)' <<<"$staged"; then
     if command -v shellcheck >/dev/null; then
         sc=$(mktemp -d)
-        trap 'rm -rf "${tmp:-}" "$sc"' EXIT
+        trap 'rm -rf "${tmp:-}" "${tzc:-}" "$sc"' EXIT
         git checkout-index -a --prefix="$sc/"
         if ! out=$(bash "$sc/tools/lint-shell.sh" "$sc" 2>&1); then
             echo "$out" >&2
