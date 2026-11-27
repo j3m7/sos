@@ -62,13 +62,19 @@ flash serial="" dir="build":
     tools/flash.sh {{ quote(dir / "sos.bin") }}
 
 # Build the configuration record and say where it would go; writes nothing
-provision-check file="":
-    tools/provision.sh -n {{ quote(file) }}
+provision-check serial="" file="":
+    tools/provision.sh -n {{ if serial != "" { "-s " + quote(serial) } else { "" } }} {{ quote(file) }}
 
-# Replace the configuration of the board on USB (file: default $SOS_PROVISION_FILE, provision.conf)
-[confirm("Replace the saved configuration of the board on USB? Have only that board attached. [y/N]")]
-provision file="":
-    {{ if file != "" { "SOS_PROVISION_FILE=" + quote(file) } else { "" } }} cmake --build build --target provision
+# Ask, then replace a board's configuration (serial: default $SOS_FLASH_SERIAL; file: provision.conf)
+provision serial="" file="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -z {{ quote(serial) }} ]] || export SOS_FLASH_SERIAL={{ quote(serial) }}
+    [[ -z {{ quote(file) }} ]] || export SOS_PROVISION_FILE={{ quote(file) }}
+    board=${SOS_FLASH_SERIAL:+board ${SOS_FLASH_SERIAL^^}}
+    read -rp "Replace the saved configuration of ${board:-the only board on USB} from ${SOS_PROVISION_FILE:-provision.conf}? [y/N] " answer
+    [[ $answer == [yY]* ]] || { echo "not provisioned"; exit 1; }
+    cmake --build build --target provision
 
 # SSH hardware test, e.g. `just hw-ssh 192.168.1.20 -u me -q`
 hw-ssh host *opts:

@@ -261,6 +261,11 @@ ninja -C build provision          # from provision.conf, or the file named by $S
 tools/provision.sh other.conf     # the same, from another file; -n only builds and checks it
 ```
 
+With more than one board on USB, name the board by its serial (`version` on its console, or
+`picotool info`): `tools/provision.sh -s <serial>`, or `SOS_FLASH_SERIAL=<serial>`, the
+variable `ninja flash` uses, which `ninja provision` follows too. Without one, picotool writes
+to whichever board is attached.
+
 `provision.conf` (git-ignored; see `provision.conf.example`) lists the console password, the Wi-Fi network, hostname,
 trusted keys and the optional settings. The script builds the saved record on this
 machine, with the same code the device uses, and loads it into the two configuration sectors
