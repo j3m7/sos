@@ -82,7 +82,8 @@ extern "C"
 #define WOLFSSH_FATFS_MAX_FILES 1
 /* WOLFSSH_MAX_SFTP_RW stays at wolfSSH's default, 32 KB: wolfSSH refuses (fatally) a READ for
  * more than it, and OpenSSH's sftp asks for 32 KB. Each request is handled in one main-loop pass,
- * so a 32 KB reply holds the loop while it's encrypted (see README: Files). */
+ * so a 32 KB reply holds the loop while it's encrypted (see docs/files.md,
+ * "File transfer (SFTP)"). */
 
 /* The hybrid post-quantum SSH key exchange (mlkem768x25519-sha256). About 30 KB of flash with
  * SHA-3; why it is on anyway: "Key exchange" in src/ssh/README.md (issue #120). */
