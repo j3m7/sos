@@ -1320,6 +1320,10 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    unsigned days = c->log_rotate_days ? c->log_rotate_days : CONFIG_LOG_ROTATE_DAYS_DEFAULT;
+    shell_printf(sh, "log rotation:  every %u day%s at %02u:%02u UTC%s\n", days,
+                 days == 1 ? "" : "s", c->log_rotate_minute / 60u, c->log_rotate_minute % 60u,
+                 c->log_rotate_days || c->log_rotate_minute ? "" : " (default)");
     if (!settings_persistent())
         shell_printf(sh, "warning:       flash storage unavailable; changes aren't saved\n");
 }

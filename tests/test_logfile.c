@@ -520,6 +520,28 @@ TEST(boot_marker_has_the_boot_time) {
     CHECK(strstr(file("/var/log/kern.log"), "2025-11-26T14:03:12.000Z --- boot:"));
 }
 
+// Each mount's files start with a marker; "rotated" only after a rotation.
+TEST(markers_after_a_card_change) {
+    reset();
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "first card");
+    logfile_poll();
+    CHECK(logfile_rotate() == NULL);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "after rotating");
+    logfile_poll();
+    CHECK_EQ(count(file("/var/log/auth.log"), "--- rotated; this boot:"), 1);
+    // Another card: auth.log gets a "card mounted" marker; kern.log, never written, a boot one.
+    memset(files, 0, sizeof(files));
+    generation++;
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "second card");
+    log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "kern on the second card");
+    settle();
+    const char *a = file("/var/log/auth.log");
+    CHECK_EQ(count(a, "--- card mounted; this boot: SOS test"), 1);
+    CHECK(!strstr(a, "rotated"));
+    CHECK(strstr(a, "--- card mounted") < strstr(a, "second card"));
+    CHECK_EQ(count(file("/var/log/kern.log"), "--- boot: SOS test"), 1);
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -557,6 +579,7 @@ TEST_MAIN(
     RUN(rotation_time_read_again_after_a_mount);
     RUN(no_card_retries_every_minute);
     RUN(boot_marker_has_the_boot_time);
+    RUN(markers_after_a_card_change);
     RUN(not_started);
     RUN(paths);
 )

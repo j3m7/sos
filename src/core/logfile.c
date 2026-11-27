@@ -19,7 +19,8 @@ typedef struct {
     size_t len;
     uint64_t first_us;          // when its oldest line came in
     bool urgent;                // holds a warning or an error: write it out now
-    bool started;               // the boot (or rotation) marker has gone in
+    bool started;               // the marker has gone in (this boot, mount or rotation)
+    const char *marker;         // the next marker: "boot", "mounted" or "rotated"
 } buffer_t;
 
 static const logfile_hooks_t *hooks;
@@ -29,7 +30,7 @@ static int file_level = SOS_LOG_INFO;
 static uint32_t stopped_generation;
 static const char *error, *error_path;
 static uint32_t bytes, lines, lost;
-static bool rotated_once;               // the next markers say "rotated", not "boot"
+static uint32_t seen_generation;        // the mount the files were last written on
 static unsigned rotate_days = 7, rotate_minute;
 static bool rotated_known;              // `rotated` was read from the card (or set)
 static int64_t rotated;
@@ -42,7 +43,10 @@ void logfile_init(const logfile_hooks_t *h) {
     state = LOGFILE_NO_CARD;
     error = error_path = NULL;
     bytes = lines = lost = 0;
-    rotated_once = rotated_known = false;
+    rotated_known = false;
+    seen_generation = 0;
+    for (int f = 0; f < SOS_LOG_FACILITIES; f++)
+        bufs[f].marker = "boot";
     last_retry_us = h ? h->now_us() : 0;    // logfile_start() has just tried
 }
 
@@ -126,10 +130,14 @@ static void put_line(int f, uint64_t uptime_ms, const char *level, const char *t
     if (!bufs[f].started) {
         char boot[96];
         hooks->boot_text(boot, sizeof(boot));
-        // The boot's own time; a rotation's marker, when it's written.
-        stamp(when, sizeof(when), rotated_once ? hooks->now_us() / 1000 : 0);
-        int n = snprintf(line, sizeof(line), rotated_once ? "%s --- rotated; this boot: %s ---\n"
-                                                          : "%s --- boot: %s ---\n", when, boot);
+        // The boot's own time; a mount's or rotation's marker, when it's written.
+        bool boot_marker = !strcmp(bufs[f].marker, "boot");
+        stamp(when, sizeof(when), boot_marker ? 0 : hooks->now_us() / 1000);
+        int n = boot_marker
+                    ? snprintf(line, sizeof(line), "%s --- boot: %s ---\n", when, boot)
+                    : snprintf(line, sizeof(line), "%s --- %s; this boot: %s ---\n", when,
+                               !strcmp(bufs[f].marker, "rotated") ? "rotated" : "card mounted",
+                               boot);
         put(f, line, n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
         bufs[f].started = true;
     }
@@ -211,11 +219,22 @@ void logfile_poll(void) {
     }
     state = LOGFILE_WRITING;
 
+    // Another mount (perhaps another card): each file that already had its marker gets one
+    // again, so every card's files say which boot their lines are from.
+    uint32_t gen = hooks->card_generation();
+    if (gen != seen_generation) {
+        seen_generation = gen;
+        for (int f = 0; f < SOS_LOG_FACILITIES; f++)
+            if (bufs[f].started) {
+                bufs[f].started = false;
+                bufs[f].marker = "mounted";
+            }
+    }
+
     // Rotation: the last one's time is read once per mount (another card has its own); none
     // yet starts the count now. Due: rotate before taking anything more, so what's logged from
     // now on goes to the new files (what was taken before goes to the old ones).
     int64_t wall_us;
-    uint32_t gen = hooks->card_generation();
     if (rotated_known && rotated_generation != gen)
         rotated_known = false;
     if (!rotated_known && hooks->wall_us(&wall_us)) {
@@ -298,15 +317,21 @@ static const char *rotate(bool take_first) {
     for (int f = 0; f < SOS_LOG_FACILITIES; f++)
         if (!flush(f))
             return error;
+    // A rename failing part-way leaves the files before it rotated and .rotated as it was, so
+    // after the next mount the rotation is due again and those files are rotated a second time
+    // (their fresh .1 replaced by an almost empty one). Only on a card failing mid-operation, and
+    // at most one period's lines: accepted rather than tracking each file's rotation.
     for (int f = 0; f < SOS_LOG_FACILITIES; f++) {
         const char *why = "rename failed";
         if (!hooks->rotate_file(paths[f], &why)) {
             stop("rotating", paths[f], why);
             return error;
         }
-        bufs[f].started = false;            // the new file starts with a marker
+        if (bufs[f].started) {              // the new file starts with a marker
+            bufs[f].started = false;
+            bufs[f].marker = "rotated";
+        }                                   // (one not written this boot keeps its boot marker)
     }
-    rotated_once = true;
     // The time is kept only with the clock set: without it the count goes on from the last.
     int64_t wall_us;
     if (hooks->wall_us(&wall_us)) {
