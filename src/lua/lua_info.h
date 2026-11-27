@@ -10,7 +10,8 @@
 //   type (1 byte), then for every type but '}': name length (1 byte) and the name, then
 //   'i' int64 | 'n' double | 'b' 1 byte (0 or 1) | 's' uint16 length and the bytes |
 //   '{' nothing (a table starts) | '}' no name, nothing (the table ends).
-// Tables nest at most LUA_INFO_DEPTH deep.
+// Tables nest at most LUA_INFO_DEPTH deep. A record with an empty name (length 0) goes at the next
+// array index of its table instead (t[#t + 1]), so a table can be a list of tables.
 
 #ifndef SOS_LUA_INFO_H
 #define SOS_LUA_INFO_H

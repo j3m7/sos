@@ -211,6 +211,51 @@ TEST(history_drops_oldest_when_full) {
     CHECK(last && strstr(buf, "msg 399"));
 }
 
+TEST(history_entries_split_and_follow) {
+    log_entry_t e;
+    uint32_t cur = 0;
+    bool lost = true;
+    reset();
+    CHECK(!log_history_entry(&cur, &e, &lost));
+    CHECK(!lost);
+    now = 5678000;                              // 5.678 s
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: gone");
+    log_msg(SOS_LOG_USER | SOS_LOG_NOTICE, "hello");
+    CHECK(log_history_entry(&cur, &e, &lost) && !lost);
+    CHECK_EQ(e.uptime_ms, 5678);
+    CHECK_EQ(e.priority, SOS_LOG_DAEMON | SOS_LOG_WARNING);
+    CHECK(!strcmp(e.text, "wifi: gone"));            // without the time and the "warning: " tag
+    CHECK(log_history_entry(&cur, &e, &lost) && !lost);
+    CHECK(!strcmp(e.text, "hello"));
+    uint32_t caught_up = cur;
+    CHECK(!log_history_entry(&cur, &e, &lost) && !lost);
+    CHECK_EQ(cur, caught_up);                   // stays put: the next call sees only new ones
+    log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "boom");
+    CHECK(log_history_entry(&cur, &e, &lost) && !lost);
+    CHECK(!strcmp(e.text, "boom"));
+    CHECK_EQ(e.priority & SOS_LOG_LEVEL_MASK, SOS_LOG_ERR);
+}
+
+TEST(history_entries_report_lost_and_bad_cursors) {
+    log_entry_t e;
+    uint32_t cur = 0;
+    bool lost;
+    reset();
+    log_msg(SOS_LOG_INFO, "first");
+    CHECK(log_history_entry(&cur, &e, &lost) && !lost);
+    for (int i = 0; i < 400; i++)               // far more than the history holds
+        log_msg(SOS_LOG_INFO, "msg %03d", i);
+    CHECK(log_history_entry(&cur, &e, &lost) && lost);      // "first" + the next ones are gone
+    CHECK(strstr(e.text, "msg ") != NULL);
+    CHECK(log_history_entry(&cur, &e, &lost) && !lost);     // only the call that jumped says so
+    uint32_t zero = 0;
+    CHECK(log_history_entry(&zero, &e, &lost) && !lost);    // 0 is "from the oldest", not lost
+    uint32_t ahead = cur + 100000;              // a cursor this boot never gave (an old boot's)
+    CHECK(log_history_entry(&ahead, &e, &lost) && lost);    // lost: from the oldest kept
+    CHECK(strstr(e.text, "msg ") != NULL);
+    CHECK(log_history_entry(&ahead, &e, &lost) && !lost);
+}
+
 TEST(overflow_before_printing_is_reported) {
     reset();
     irq = true;                                 // nothing printed while these pile up
@@ -474,6 +519,8 @@ TEST_MAIN(
     RUN(long_message_truncated);
     RUN(history_cursor_continues);
     RUN(history_drops_oldest_when_full);
+    RUN(history_entries_split_and_follow);
+    RUN(history_entries_report_lost_and_bad_cursors);
     RUN(overflow_before_printing_is_reported);
     RUN(held_console_keeps_messages_for_later);
     RUN(held_console_overflow_is_reported);

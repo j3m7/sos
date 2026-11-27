@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // Core 0's answers to LR_INFO: the read-only tables of sos.sensors, sos.mem, sos.version,
-// sos.reset_reason, sos.glitch and sos.wifi.status, written with lua_info.h. Each reads what the
-// matching shell command (temp and power, mem, version, uptime, glitch, net and wifi) shows, and
-// all of it may be shown over SSH. None of it waits: the sensors' latest readings are used (taken
+// sos.reset_reason, sos.glitch, sos.wifi.status and sos.dmesg, written with lua_info.h. Each
+// reads what the matching shell command (temp and power, mem, version, uptime, glitch, net and
+// wifi, dmesg) shows, and all of it may be shown over SSH. None of it waits: the sensors' latest readings are used (taken
 // every SENSORS_SAMPLE_S by the main loop), not a new reading.
 //
 // A field the board doesn't know is left out, so the script sees nil: the temp() and volts()
@@ -26,6 +26,7 @@
 #include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
+#include "core/log.h"
 #include "core/otpread.h"
 #include "core/rootsource.h"
 #include "core/sensors.h"
@@ -189,7 +190,48 @@ static void wifi_table(lua_info_t *w) {
     lua_info_int(w, "arp_sent", arp_out);
 }
 
-size_t lua_health_fill(lua_health_table_t which, uint8_t *buf, size_t cap) {
+// Room kept after the entries for the list's end and the three fields after it.
+#define DMESG_TAIL 64
+
+// One page of the log after `cursor`: {entries = { {time=, level=, facility=, text=}, ... },
+// cursor=, more=, lost=}. As many entries as fit; `more` says there are others after them, which
+// the next page (from the returned cursor) gives. `lost`: entries after the given cursor were
+// overwritten (the history keeps only LOG_HISTORY_SIZE bytes).
+static void dmesg_table(lua_info_t *w, uint32_t cursor) {
+    bool lost = false, more = false, first = true;
+    log_entry_t e;
+    lua_info_open(w, "entries");
+    for (;;) {
+        uint32_t at = cursor;
+        bool jumped;
+        if (!log_history_entry(&cursor, &e, &jumped))
+            break;
+        if (first)
+            lost = jumped;
+        first = false;
+        lua_info_t saved = *w;
+        int level = e.priority & SOS_LOG_LEVEL_MASK;
+        lua_info_open(w, "");
+        lua_info_num(w, "time", (double)e.uptime_ms / 1000.0);
+        lua_info_str(w, "level", log_level_name(level < SOS_LOG_ERR ? SOS_LOG_ERR : level));
+        const char *facility = log_facility_name(e.priority & SOS_LOG_FACILITY_MASK);
+        lua_info_str(w, "facility", facility ? facility : "none");
+        lua_info_str(w, "text", e.text);
+        lua_info_close(w);
+        if (w->failed || w->cap - w->len < DMESG_TAIL) {
+            *w = saved;                         // the next page starts with this one
+            cursor = at;                        // a position read before: not the first entry,
+            more = true;                        // which always fits
+            break;
+        }
+    }
+    lua_info_close(w);
+    lua_info_int(w, "cursor", cursor);
+    lua_info_bool(w, "more", more);
+    lua_info_bool(w, "lost", lost);
+}
+
+size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, size_t cap) {
     lua_info_t w;
     lua_info_begin(&w, buf, cap);
     switch (which) {
@@ -199,6 +241,7 @@ size_t lua_health_fill(lua_health_table_t which, uint8_t *buf, size_t cap) {
     case LH_RESET:   reset_table(&w); break;
     case LH_GLITCH:  glitch_table(&w); break;
     case LH_WIFI:    wifi_table(&w); break;
+    case LH_DMESG:   dmesg_table(&w, arg); break;
     default:         return 0;
     }
     return lua_info_end(&w);

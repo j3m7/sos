@@ -112,6 +112,12 @@ typedef struct {
 } log_entry_t;
 
 bool log_file_next(log_entry_t *e);
+
+// The history entry after *cursor, as log_history_next() but split like log_file_next()'s (for
+// Lua's sos.dmesg). *cursor = 0 starts at the oldest. *lost (if not NULL) is set when the entries
+// after *cursor are gone: overwritten before this call, or a cursor past the newest entry (not
+// one this boot gave). The cursor then jumps to the oldest kept.
+bool log_history_entry(uint32_t *cursor, log_entry_t *e, bool *lost);
 // How many entries were dropped from the history before the log files took them, since the
 // last call (which resets the count).
 unsigned log_file_lost(void);

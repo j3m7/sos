@@ -96,22 +96,33 @@ static bool take(reader_t *r, void *out, size_t n) {
     return true;
 }
 
+// Store the value on top into the table below it at the next array index.
+static void append(lua_State *L) {
+    lua_rawseti(L, -2, (lua_Integer)lua_rawlen(L, -2) + 1);
+}
+
 // The records, each pushed as key and value and stored with lua_rawset into the table below
-// them. A table's key and table stay on the stack until its '}'.
+// them; one without a name is appended instead (no key pushed). A table's key (if it has one)
+// and the table stay on the stack until its '}'.
 static bool read_all(lua_State *L, reader_t *r) {
     int depth = 0;
+    bool keyed[LUA_INFO_DEPTH + 1] = {false};
     while (r->p < r->end) {
         uint8_t type = *r->p++;
         if (type == '}') {
-            if (depth-- == 0)
+            if (depth == 0)
                 return false;
-            lua_rawset(L, -3);
+            if (keyed[depth--])
+                lua_rawset(L, -3);
+            else
+                append(L);
             continue;
         }
         uint8_t n;
         if (!take(r, &n, 1) || n > (size_t)(r->end - r->p))
             return false;
-        lua_pushlstring(L, (const char *)r->p, n);
+        if (n)
+            lua_pushlstring(L, (const char *)r->p, n);
         r->p += n;
         switch (type) {
         case 'i': {
@@ -146,12 +157,16 @@ static bool read_all(lua_State *L, reader_t *r) {
         case '{':
             if (++depth > LUA_INFO_DEPTH)
                 return false;
+            keyed[depth] = n != 0;
             lua_newtable(L);
             continue;                           // filled until its '}'
         default:
             return false;
         }
-        lua_rawset(L, -3);
+        if (n)
+            lua_rawset(L, -3);
+        else
+            append(L);
     }
     return depth == 0;
 }
