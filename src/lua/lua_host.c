@@ -198,6 +198,30 @@ static void serve_change(FRESULT (*op)(const TCHAR *)) {
 static FRESULT do_mkdir(const TCHAR *p) { return f_mkdir(p); }
 static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 
+// sos.reboot([why]). Refused in the first LUA_REBOOT_MIN_S after boot: a normal restart runs
+// /autorun.lua again (only a crash or watchdog reset skips it), so a script that reboots at once
+// would otherwise loop. A script whose shell has gone changes nothing more, this included.
+static void serve_reboot(void) {
+    uint64_t up_s = time_us_64() / 1000000;
+    if (!script_alive()) {
+        req_error("the script's session has ended");
+        return;
+    }
+    if (up_s < LUA_REBOOT_MIN_S) {
+        char msg[sizeof(lua_req.error)];
+        snprintf(msg, sizeof(msg), "refused: up %u s, reboot needs %u", (unsigned)up_s,
+                 (unsigned)LUA_REBOOT_MIN_S);
+        req_error(msg);
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "%s asked for a reboot after %u s up: refused",
+                job_tag, (unsigned)up_s);
+        return;
+    }
+    const char *why = (const char *)lua_req.data;
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from Lua script %s%s%s)", job_tag,
+            *why ? ": " : "", why);
+    wdog_reboot();
+}
+
 // sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
 static void serve_info(void) {
     size_t n = lua_req.offset < LH_TABLES
@@ -357,6 +381,7 @@ static void serve(bool main_loop) {
         case LR_REMOVE: serve_change(do_unlink); break;
         case LR_MKDIR:  serve_change(do_mkdir); break;
         case LR_INFO:   serve_info(); break;
+        case LR_REBOOT: serve_reboot(); break;
         default:        req_error("unknown request"); break;
         }
     }
