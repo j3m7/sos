@@ -660,8 +660,9 @@ DESCRIPTION
     loop, so the console, SSH and the watchdog keep going, and Ctrl-C stops it.
     Files are dated with the system clock (UTC). A file that a command is
     still writing ('tee', '>', 'cp') and that hasn't been synced yet shows
-    'being written' in place of the date, and size 0; after a sync, the size
-    and date as of that sync.
+    size 0, with 'being written' in place of the date (on an exFAT card) or
+    the time it was opened (FAT32 stores that at once); after a sync, the
+    size and date as of that sync.
 
     Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
     used. Paths are relative to the shell's working directory unless they
