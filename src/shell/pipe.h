@@ -60,6 +60,16 @@ struct pipeline {
     bool aside;                 // output from outside the line (a chat message, between
                                 // shell_hide_input() and shell_show_input()): straight to the
                                 // terminal
+    // `| more` with a producer that is a job: the pager starts on the first output and steps
+    // the producer itself (shell_pipe_feed()); the producer's job is kept here meanwhile.
+    bool paging;                // the pager is on screen while the producer runs: the shell's
+                                // output goes to the terminal (the pager's frames) ...
+    bool capturing;             // ... except during the producer's steps, which go to the line
+    bool (*prod)(shell_t *sh, void *arg, bool cancel);  // the producer (a shell_job_fn)
+    void *prod_arg;
+    bool released;              // it asked a question while paged: the pager has left, and the
+                                // shell shows the text and the question (and resumes `prod`)
+    bool page_later;            // the pager couldn't start early: page when the producer ends
     // `| more`: the output is kept (a HEAP_EDIT block) instead of sent, up to SHELL_PIPE_MAX
     // bytes, then handed to the pager (shell_page()).
     char *buf;                  // NULL when not capturing

@@ -26,8 +26,10 @@ quits. It draws text the way the editor does, so a file can't send the terminal 
 it is the viewer for any command with more text to show than a screen, the manual pages first
 of all. The keys are in [man/more.txt](../man/more.txt).
 Any command's output can be read the same way: end the line with `| more` (`dmesg | more`,
-`wifi stats chip | more`). The output is kept instead of printed, up to 32 KB, and paged once
-the command has finished; see [man/more.txt](../man/more.txt).
+`wifi stats chip | more`). The output is kept instead of printed, up to 32 KB, and paged as
+soon as the command has printed something: a command that runs for a while (`cat big.log |
+more`, `ping host | more`) goes on adding to the text while you read it, and q or Ctrl-C stop
+it; see [man/more.txt](../man/more.txt).
 
 Before the pager or the screen, the output can go through filters, each after a `|`: `grep
 [-v] [-i] [-n] <text>` (fixed strings), `head [<n>]`, `tail [<n>]` and `wc` (`dmesg | grep wifi`,

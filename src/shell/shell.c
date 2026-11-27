@@ -2313,6 +2313,10 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     edit_view_take(sh, name, text, len);
 }
 
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
+    return edit_view_growing(sh, name, text, len);
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     // The console takes no command while it's locked (shell/login.h).
     if (sh->io->admin && login_gate(sh, cmd))

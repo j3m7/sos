@@ -748,20 +748,32 @@ KEYS
                                 the last search again), wrapping around to
                                 the start; Ctrl-C cancels
     n                           the next match
+    F                           follow: stay on the end as output arrives
+                                ('<command> | more' while the command runs;
+                                any movement key leaves it)
     Ctrl-L                      redraw, and ask the terminal for its size
     h, ?                        list the keys
-    q (Ctrl-Q, Ctrl-C)          quit
+    q (Ctrl-Q, Ctrl-C)          quit (Ctrl-C first stops a command that is
+                                still running: see NOTES)
 
 NOTES
     '<command> | more' runs the command with its output kept instead of
-    printed, then shows it here once the command has finished ('dmesg | more',
-    'ls | more', 'wifi stats chip | more'). Up to 32 KB of output is kept; the
-    rest is dropped and the text ends with a note saying so. A command that
-    asks a question runs as if there were no '| more', and a full-screen
-    program (edit, more, man) ignores it. Ctrl-C while the command runs drops
-    the output, and so is anything typed while it runs (it would be keys for
-    the pager). A command with no output says so instead of opening the pager.
-    Messages from other shells wait until the pager is left.
+    printed, and shows it here ('dmesg | more', 'ls | more', 'wifi stats chip
+    | more'). A command that runs for a while ('cat big.log | more', 'ping
+    host | more') is shown as soon as it has printed something, and its output
+    keeps arriving while you read: the bottom row shows '...' for the total
+    and 'END so far' at its end until the command has finished, and F follows
+    the end. While it runs, q ends the command and leaves, and Ctrl-C stops
+    it and keeps what it printed ('stopped' in the bottom row; Ctrl-C again,
+    or q, leaves). Up to 32 KB of output is kept; then the command is
+    stopped and the text ends with a note saying so. A command that asks a
+    question runs as if there were no '| more' (if it asks while being
+    shown, the pager leaves and its output so far is printed above the
+    question), and a full-screen program (edit, more, man) ignores it.
+    Ctrl-C before the command has printed anything drops it, as does
+    anything typed before the pager opens (it would be keys for the pager).
+    A command with no output says so instead of opening the pager. Messages
+    from other shells wait until the pager is left.
 
 PIPES
     A command's output can go through filters on its way to the screen or to

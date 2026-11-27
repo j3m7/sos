@@ -173,6 +173,41 @@ void shell_execute(shell_t *sh, char *cmd);
 // calls it with a command's captured output.
 void shell_page(shell_t *sh, const char *name, char *text, size_t len);
 
+// The same while the command still runs (`cat big.log | more`, `ping host | more`): the
+// command became a job, and the pager starts on its first output instead of waiting for its end.
+// `text` and `len` are the output so far; the block stays the shell's (it grows and moves) until
+// shell_pipe_feed() says the command has finished. The pager steps the command itself through
+// shell_pipe_feed(), once per pass. False if the pager can't start (after saying why): the line
+// is then paged with shell_page() when the command ends. Implemented by the command module
+// (shell.c).
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len);
+
+// What shell_pipe_feed() does to the command under the pager.
+typedef enum {
+    SHELL_FEED_STEP,            // run one step of it, its output going to the capture
+    SHELL_FEED_STOP,            // end it now, silently, and keep the text (Ctrl-C in the pager)
+    SHELL_FEED_CANCEL,          // end it and drop the text (q, the session ended)
+} shell_feed_t;
+
+// What came of it.
+typedef enum {
+    SHELL_FED_MORE,             // it still runs: *text and *len are the text so far, still the
+                                // shell's block, which moves as it grows (point the pager at
+                                // *text again after every call)
+    SHELL_FED_DONE,             // it has finished (or was stopped, or the capture is full: the
+                                // note is appended): the complete text, the caller's HEAP_EDIT
+                                // block from here on
+    SHELL_FED_GONE,             // nothing left for the pager, which leaves at once: the text was
+                                // dropped (cancel), or the command asked a question, and the
+                                // shell shows the text and the question when the pager's job ends
+} shell_fed_t;
+
+// For the pager started by shell_page_growing(), once per pass before it draws: one step of the
+// command (or its end, `how`) with the shell's output captured around that call only, so that
+// the pager's own output, before and after, goes to the terminal. A head or a full capture
+// ends the command silently, as on any `| more` line. Implemented by shell_core.c.
+shell_fed_t shell_pipe_feed(shell_t *sh, shell_feed_t how, char **text, size_t *len);
+
 // The command tables Tab completes from, NULL-terminated; NULL when this shell takes no command
 // now (the console is locked). Implemented by the command module (shell.c).
 const shell_cmd_t *const *shell_command_tables(const shell_t *sh);

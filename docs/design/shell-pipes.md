@@ -16,10 +16,13 @@ write (`grep`, `head`, `tail`, `wc`) are functions of a byte stream and need no 
 own; the only consumer that must run *while* the producer runs is the pager, and it is a raw-mode
 job already. So: filters are plain functions, and the pager steps the producer itself.
 
-Status (2026-11-26): phases 1 and 2 are built (PR #192 for #184, PR #189 for #185); phases 3
-(#186) and 4 (#187) are open. Where this note and the code differ in detail (phase 2 extends
-the line count rather than resetting it, and has the F key), the code and its header comments
-are the reference; this note records the decision and why. Issues: #182 (the investigation).
+Status (2026-11-26): phases 1 and 2 are built (PR #192 for #184, PR #189 for #185); phase 3
+(#186) is built on the `pipes-more` branch; phase 4 (#187) is open. Where this note and the code
+differ in detail (phase 2 extends the line count rather than resetting it, and has the F key;
+phase 3 starts the pager on the producer's first output rather than at once, keeps the producer
+in `shell_t.pipe` rather than in `view_t`, and steps it through `shell_pipe_feed()` in
+shell_core.c), the code and its header comments are the reference; this note records the
+decision and why. Issues: #182 (the investigation).
 
 ## 1. What exists today
 
