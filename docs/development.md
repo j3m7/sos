@@ -214,6 +214,49 @@ With the heap held down, other parts of the system fail too (a new SSH session, 
 connection, the log writer's card retry), so run these from the console and release before
 handing the board on. Don't leave such an image on a board in use.
 
+## Test commands: SD card write faults
+
+The same test image has `sd fault`, for testing card repair on a board
+([design §10.4](design/sd-check.md#104-fault-injection), #213). It makes one card write fail,
+or resets the board just before one, the nearest thing to a power cut that can be scripted.
+
+| Command | What it does |
+|---|---|
+| `sd fault fail <N>` | Card write N from now returns an error, and its data isn't written. Later writes go through. |
+| `sd fault reboot <N>` | The board resets before card write N from now reaches the card. |
+| `sd fault` | What's armed, or what fired, and the card writes counted since arming. |
+| `sd fault off` | Disarms it and stops counting. |
+
+N is 1 to 100000000; 1 is the next write. Arming again replaces what was armed and restarts
+the count. These commands work on the console only.
+
+**What counts as a write:** each write request that reaches the card driver, from any user
+of the card: FatFs (files, the log writer, `sd format`, `sd test`), the encrypted card's
+header writes, and repair. On a plain card a multi-sector FatFs write is one write. On an
+encrypted card it is one write per chunk of up to 8 sectors, since the layer encrypts a
+chunk at a time. Repair writes single sectors, so there N counts sectors. A check
+(`sd check`) never writes. While the card is mounted, the log writer's writes land in the
+count too, so the N that hits a given `cp` varies from run to run: read the count with
+`sd fault`.
+
+**fail:** the write returns `SD_BLOCK_DEVICE_ERROR_WRITE` without reaching the driver. If the
+encrypted layer split a FatFs write into chunks, the chunks before it are on the card. The
+fault fires once, as a single bad write would, so that repair's stop-at-first-error can be
+seen and the card can be used afterwards. The log gets a `sd: fault: write N ... failed on
+purpose` line.
+
+**reboot:** first, an open multi-block write is closed and the card finishes programming
+(the driver's sync, as FatFs's `f_sync` does). Then the board resets through the watchdog,
+as `crash` does. Every write before N is on the card; N and the later writes aren't.
+Nothing is logged before the reset, since the log files are on that card. Unwritten log
+lines are lost, as in a power cut. The next boot says
+`last reset: test reset: 'sd fault reboot' fired before card write N` (in `uptime` and the
+log). As after a crash, `/autorun.lua` isn't started on that boot. Nothing stays armed across
+the reset.
+
+What a real power cut can do and this can't: lose the write the card was still programming,
+or tear a sector in half (design §10.4, "Not simulated").
+
 ## Editor
 
 `.vscode/` configures VS Code to use [clangd](https://clangd.llvm.org/) (extension

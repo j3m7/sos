@@ -148,3 +148,14 @@ while the card is unmounted (see `sdcard.c` above).
   with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
   sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
   checks mutated images twice with different windows and requires the same answer.
+
+## `sdfault.c`: injected write faults (test builds only, host tested)
+
+`sd fault fail <N>` and `sd fault reboot <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
+only, for testing repair on a board ([design §10.4](../../docs/design/sd-check.md#104-fault-injection),
+usage in [development.md](../../docs/development.md#test-commands-sd-card-write-faults)).
+`sdfault.c` counts writes and decides. `write_blocks_fed()` in `sdcard.c`, through which every
+card write reaches the driver (FatFs's, the layer's chunks, the header writes), asks it once per
+write. It fails the write, or closes the driver's open multi-block write and resets the board
+(`fault_test_reset()` in `core/fault.c`, so the next boot says why). In other images, neither
+the hook nor the file is built. `tests/test_sdfault.c` covers the counting.
