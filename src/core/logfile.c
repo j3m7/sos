@@ -41,13 +41,28 @@ void logfile_init(const logfile_hooks_t *h) {
 }
 
 static void take(void);
+static bool flush(int f);
 
-// What's waiting is taken under the old level first: a change is logged just before it's made,
-// and `log file err` mustn't filter out its own record.
+// What's waiting is taken first, under whichever of the old and new levels lets more through:
+// a change is logged just before it's made, and neither `log file err` (raising it) nor
+// `log file info` after it (lowering it again, logged while it's still err) may filter out its
+// own record.
 void logfile_set_level(int level) {
-    if (hooks)
+    if (hooks) {
+        if (level > file_level)
+            file_level = level;
         take();
+    }
     file_level = level;
+}
+
+void logfile_flush(void) {
+    if (!hooks || state == LOGFILE_STOPPED || !hooks->card_ready())
+        return;
+    take();
+    for (int f = 0; f < SOS_LOG_FACILITIES; f++)
+        if (bufs[f].len && !flush(f))
+            return;
 }
 
 int logfile_level(void) { return file_level; }

@@ -345,6 +345,27 @@ TEST(boot_marker_has_the_boot_time) {
     CHECK(strstr(file("/var/log/kern.log"), "2025-11-26T14:03:12.000Z --- boot:"));
 }
 
+// Lowering the level again keeps its record too, though it's logged while the level is high.
+TEST(lowering_the_file_level_keeps_its_own_record) {
+    reset();
+    logfile_set_level(SOS_LOG_ERR);
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log file level info (until reboot)");
+    logfile_set_level(SOS_LOG_INFO);
+    settle();
+    CHECK(strstr(file("/var/log/auth.log"), "config: log file level info"));
+}
+
+TEST(flush_writes_everything_now) {
+    reset();
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from console)");
+    logfile_poll();
+    CHECK_EQ(appends, 0);               // would wait for LOGFILE_FLUSH_MS
+    logfile_flush();
+    CHECK(strstr(file("/var/log/kern.log"), "reboot (from console)"));
+    card = false;
+    logfile_flush();                    // no card: nothing, no crash
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -373,6 +394,8 @@ TEST_MAIN(
     RUN(raising_the_file_level_keeps_its_own_record);
     RUN(no_card_retries_every_minute);
     RUN(boot_marker_has_the_boot_time);
+    RUN(lowering_the_file_level_keeps_its_own_record);
+    RUN(flush_writes_everything_now);
     RUN(not_started);
     RUN(paths);
 )

@@ -74,6 +74,9 @@ void logfile_start(void);
 void logfile_poll(void);
 void logfile_status(logfile_status_t *st);
 
+// Write everything waiting now (before a reboot), if a card is mounted and writing works.
+void logfile_flush(void);
+
 // Messages above this level aren't written (default info). The history's level still applies
 // first: a message it doesn't keep never reaches the files.
 void logfile_set_level(int level);
