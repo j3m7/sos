@@ -20,6 +20,9 @@
 #define MAGIC        0x50f70000u
 #define KIND_FAULT   1u
 #define KIND_PANIC   2u
+#ifdef SOS_TEST_COMMANDS
+#define KIND_TEST    3u     // fault_test_reset(): [1] the card write it fired before
+#endif
 
 #define CFSR_STKOF       (1u << 20)     // UsageFault: stack limit (MSPLIM) reached
 #define CFSR_UNDEFINSTR  (1u << 16)
@@ -82,6 +85,12 @@ void __attribute__((noreturn)) sos_panic(const char *fmt, ...) {
                      (uint32_t)(uintptr_t)fmt, (uint32_t)SOS_BUILD_EPOCH);
 }
 
+#ifdef SOS_TEST_COMMANDS
+void fault_test_reset(uint32_t write_no) {
+    record_and_reset(KIND_TEST, write_no, 0, 0);
+}
+#endif
+
 // --- next boot -----------------------------------------------------------------------------------
 
 void fault_boot(void) {
@@ -121,6 +130,11 @@ void fault_boot(void) {
         for (char *p = last; *p; p++)
             if (*p == '\n')
                 *p = ' ';
+#ifdef SOS_TEST_COMMANDS
+    } else if (kind == KIND_TEST) {
+        snprintf(last, sizeof(last), "test reset: 'sd fault reboot' fired before card write %lu",
+                 (unsigned long)a);
+#endif
     } else {
         return;
     }
