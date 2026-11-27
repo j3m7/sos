@@ -40,7 +40,10 @@ lua_out_t lua_out;
 static shell_t *owner;                  // shell that started the script; NULL once it's gone
 static char *owner_code;                // `lua -e` source, freed when the script ends
 static bool background;                 // started with `lua -b` or at boot: output to the log
-static char job_desc[48];               // what's running, for `lua ps` and the log
+static char job_desc[48];               // what's running, for `lua ps` and its start and end
+// What the job's own log lines are tagged with: the script's path, or "lua -e" for code given
+// on the command line (its code would make a long, noisy prefix on every line).
+static char job_tag[48];
 
 // What a script puts in the log (sos.log, and a background script's output) goes in at most
 // SCRIPT_LOG_PER_SEC lines a second; beyond that lines are counted and dropped, so a script
@@ -53,7 +56,7 @@ static void script_log_dropped(void) {
     unsigned n = log_quota_dropped(&script_quota);
     if (n)
         log_msg(SOS_LOG_USER | SOS_LOG_INFO, "%s: ... %u lines dropped (more than %d a second)",
-                job_desc, n, SCRIPT_LOG_PER_SEC);
+                job_tag, n, SCRIPT_LOG_PER_SEC);
 }
 
 // One line from the script, if the rate limit lets it through.
@@ -61,7 +64,7 @@ static void script_log(int level, const char *text) {
     if (!log_quota_take(&script_quota, SCRIPT_LOG_PER_SEC))
         return;
     script_log_dropped();
-    log_msg(SOS_LOG_USER | level, "%s: %s", job_desc, text);
+    log_msg(SOS_LOG_USER | level, "%s: %s", job_tag, text);
 }
 static uint64_t job_start_us;
 
@@ -373,7 +376,7 @@ static size_t bg_len;
 
 // Room for a line's text in one log message, after the "<script>: " prefix.
 static size_t bg_room(void) {
-    size_t prefix = strlen(job_desc) + 2;
+    size_t prefix = strlen(job_tag) + 2;
     return prefix + 40 < LOG_LINE_MAX ? LOG_LINE_MAX - prefix : 40;
 }
 
@@ -417,7 +420,7 @@ static void bg_log_error(unsigned secs) {
         while (len && (*e == '\t' || *e == ' '))
             e++, len--;
         if (len)
-            log_msg(SOS_LOG_USER | SOS_LOG_INFO, "%s:   %.*s", job_desc, len, e);
+            log_msg(SOS_LOG_USER | SOS_LOG_INFO, "%s:   %.*s", job_tag, len, e);
     }
 }
 
@@ -650,12 +653,15 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
         lua_job.code = owner_code;
         lua_job.code_len = strlen(owner_code);
         snprintf(job_desc, sizeof(job_desc), "lua -e %s", code);
+        snprintf(job_tag, sizeof(job_tag), "lua -e");
     } else if (path) {
         snprintf(lua_job.path, sizeof(lua_job.path), "%s", path);
         snprintf(job_desc, sizeof(job_desc), "%s", path);
+        snprintf(job_tag, sizeof(job_tag), "%s", path);
     } else {
         lua_job.repl = true;
         snprintf(job_desc, sizeof(job_desc), "the prompt");
+        snprintf(job_tag, sizeof(job_tag), "lua prompt");
     }
     snprintf(lua_job.cwd, sizeof(lua_job.cwd), "%s", cwd);
     lua_job.mem_limit = LUA_MEM_LIMIT;

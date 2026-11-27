@@ -767,7 +767,7 @@ coroutine libraries, `require` (see below), and `sos`:
 | `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
-| `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script, at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
+| `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=}` (see below) |
