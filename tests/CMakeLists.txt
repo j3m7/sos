@@ -382,6 +382,8 @@ if (EXISTS ${FATFS_DIR}/ff.c)
         ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
         ${SOS_ROOT}/src/files/fsck_repair.c)
     target_include_directories(test_fsck_repair PRIVATE ${SOS_ROOT}/src)
+    target_compile_definitions(test_fsck_repair PRIVATE
+        FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
     # Thousands of full checks of a 130000-cluster image: optimized, the sanitizers still on.
     target_compile_options(test_fsck_repair PRIVATE -O2)
     target_link_libraries(test_fsck_repair PRIVATE fatfs_host)
