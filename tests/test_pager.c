@@ -240,6 +240,45 @@ TEST(the_window_is_loaded_only_at_its_edge) {
     free(text);
 }
 
+TEST(a_match_across_the_window_edge) {
+    static char text[200];
+    memset(text, '0', 60);
+    strcpy(text + 60, "needle\nmore\nlast\n");           // "needle" at 60..65 crosses 64
+    open_text(text, 6, 80, 64);
+    keys("/needle\r");                     // none after line 1: around, through the edge
+    draw();
+    CHECK_EQ(pg.top, 0);
+    CHECK(strstr(status(), "search wrapped around") != NULL);
+    pager_free(&pg);
+
+    memset(text, '0', 62);
+    strcpy(text + 62, "\nmore\nlast\n");                 // a match starting with the '\n' at 62
+    open_text(text, 6, 80, 64);
+    key('j');                               // top: "more", at 63
+    strcpy(pg.last_find, "\nmore");          // (a '\n' can't be typed at the prompt)
+    key('n');
+    draw();
+    CHECK_EQ(pg.top, 0);                    // the line holding the match's start
+    CHECK_EQ(pg.top_line, 0);
+    CHECK(strstr(status(), "search wrapped around") != NULL);
+    pager_free(&pg);
+}
+
+TEST(a_taller_terminal_pulls_the_view_back_to_the_end) {
+    char *text = numbered(30, "");
+    open_text(text, 6, 40, 0);
+    key('G');
+    CHECK_EQ(pg.top_line, 25);
+    pager_resize(&pg, 20, 40);              // 19 text rows: the last screenful starts at line 12
+    t_reset(20, 40);
+    draw();
+    CHECK_LINE(0, "line 12");
+    CHECK_LINE(18, "line 30");
+    CHECK(strstr(status(), "lines 12-30/30 END") != NULL);
+    pager_free(&pg);
+    free(text);
+}
+
 TEST(search_forward_wraps_and_fails) {
     char *text = numbered(60, "");
     open_text(text, 6, 40, 0);                 // 5 text rows
@@ -418,6 +457,8 @@ TEST_MAIN(
     RUN(pages_lines_and_ends);
     RUN(a_small_window_reads_the_text_in_pieces);
     RUN(the_window_is_loaded_only_at_its_edge);
+    RUN(a_match_across_the_window_edge);
+    RUN(a_taller_terminal_pulls_the_view_back_to_the_end);
     RUN(search_forward_wraps_and_fails);
     RUN(long_lines_scroll_sideways);
     RUN(controls_and_wide_characters);

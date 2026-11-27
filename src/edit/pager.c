@@ -187,6 +187,7 @@ void pager_set_log_waiting(pager_t *p, int n) {
 static void begin_frame(void *ctx);
 static size_t render_row(void *ctx, int r, char *out);
 static void cursor_at(void *ctx, int *row, int *col, bool *shown);
+static void go_end(pager_t *p);
 
 bool pager_init(pager_t *p, const char *name, pager_source_t src, size_t window) {
     memset(p, 0, sizeof(*p));
@@ -218,6 +219,8 @@ void pager_free(pager_t *p) {
 void pager_resize(pager_t *p, int rows, int cols) {
     screen_resize(&p->scr, rows, cols);
     p->end_top = NO_POS;
+    if (p->top > end_top(p))                // a taller terminal: rows past the end would show '~'
+        go_end(p);
 }
 
 size_t pager_read_mem(void *ctx, size_t off, char *buf, size_t n) {

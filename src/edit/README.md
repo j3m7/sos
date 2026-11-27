@@ -82,6 +82,12 @@ once a second, for the status bar; and giving the screen back at the end.
 - `more <file>` keeps the file open for as long as the pager runs (`files_hold()`, so the card
   can't be unmounted under it) and reads it through `f_lseek()`/`f_read()` as the window moves.
   Reads happen inside the job's step, so a search through a large file holds the main loop for
-  as long as the card takes (about a second per megabyte).
+  as long as the card takes (about a second per megabyte, measured 0.4 s for 414 KB on dev-1).
+- **Memory:** about 25 KB while it runs, whatever the file's size (the 16 KB window, the
+  screen's row scratch, the terminal buffer, the file handle); small enough that it doesn't apply
+  the editor's heap reserve check. `edit_view()` holds the copy of the text besides.
+- **Long lines:** a line longer than the window is read again from the card for every row it
+  is on in every frame (the next line is found by scanning it). A file without newlines, such as
+  a binary opened by mistake, reads itself again on each keystroke: slow, but correct.
 - `edit_view(sh, name, text, len)` copies the text to the heap and pages it: for any command with
   more to show than a screen (the manual pages, once there are some; nothing calls it yet).
