@@ -22,6 +22,7 @@
 #include "chat/chat.h"
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
+#include "core/chiptemp.h"
 #include "core/config.h"
 #include "core/failflash.h"
 #include "core/fault.h"
@@ -222,6 +223,7 @@ static void cmd_bootkey(shell_t *sh) {
 static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
+    shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
@@ -292,6 +294,27 @@ static void cmd_uptime(shell_t *sh) {
                                     : wdog_caused_reset() ? " (last reset: watchdog)" : "");
     if (fault_last())
         shell_printf(sh, "last reset: %s\n", fault_last());
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/chiptemp.h).
+static void cmd_temp(shell_t *sh) {
+    int now = chiptemp_read();
+    const chiptemp_stats_t *st = chiptemp_stats();
+    char t[CHIPTEMP_TEXT_MAX], lo[CHIPTEMP_TEXT_MAX], hi[CHIPTEMP_TEXT_MAX];
+    char lo_age[24], hi_age[24];
+    chiptemp_format(t, sizeof(t), now);
+    shell_printf(sh, "chip temperature: %s\n", t);
+    if (st->count) {
+        chiptemp_format(lo, sizeof(lo), st->min);
+        chiptemp_format(hi, sizeof(hi), st->max);
+        chiptemp_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
+        chiptemp_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
+        shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
+                     lo, lo_age, hi, hi_age, CHIPTEMP_SAMPLE_S);
+    }
+    shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
+                     "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
+                     "time on this board.\n");
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -807,12 +830,14 @@ static void glitch_status(shell_t *sh) {
     else if (setting >= 5) {
         shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
                          "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
-        if (glitchdet_watch_triggers())
-            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up. Armed, "
-                             "it would have reset the board\n",
+        if (glitchdet_watch_triggers()) {
+            char t[CHIPTEMP_TEXT_MAX];
+            chiptemp_format(t, sizeof(t), glitchdet_watch_first_temp());
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up, chip at "
+                             "%s. Armed, it would have reset the board\n",
                          (unsigned)glitchdet_watch_triggers(),
-                         (unsigned long)glitchdet_watch_first_s());
-        else
+                         (unsigned long)glitchdet_watch_first_s(), t);
+        } else
             shell_printf(sh, "no trigger since boot\n");
     } else
         shell_printf(sh, "glitch detector: set to sensitivity %u (0 lowest, 3 highest)%s, %s\n",
@@ -824,10 +849,18 @@ static void glitch_status(shell_t *sh) {
     shell_printf(sh, "set up by software after boot: it shows whether the detector resets a "
                      "healthy board; it is not protection\n");
     shell_printf(sh, "detector resets since power-on: %lu\n", (unsigned long)glitchdet_resets());
-    if (glitchdet_caused_reset())
+    if (glitchdet_caused_reset()) {
         shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
                      (unsigned)glitchdet_last_triggers(),
                      (unsigned long)glitchdet_last_uptime_s());
+        char t[CHIPTEMP_TEXT_MAX];
+        chiptemp_format(t, sizeof(t), glitchdet_last_temp());
+        if (glitchdet_last_temp() != CHIPTEMP_NONE)
+            shell_printf(sh, "chip at %s before that reset (last reading, taken every %u s)\n",
+                         t, CHIPTEMP_SAMPLE_S);
+        else
+            shell_printf(sh, "no chip temperature was kept from before that reset\n");
+    }
 }
 
 // `glitch`: the detector's setting, state and resets. Console only: `glitch on <0-3>` arms it now
@@ -1258,13 +1291,13 @@ void shell_console_start(shell_t *console) {
     if (!console_no_keys() && !settings_console_has_password())
         log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
                 "console: no console password is set: the console is open to "
-                                 "anyone at the port (`passwd` sets one)");
+                "anyone at the port (`passwd` sets one)");
     // Wrong answers from before this boot still count: say so, since the first check will wait.
     unsigned kept = failflash_count();
     if (kept && settings_console_has_password())
         log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
                 "console: %u wrong password%s since the last right one, "
-                                 "counted across reboots; the next check waits for it",
+                "counted across reboots; the next check waits for it",
                 kept, kept == 1 ? "" : "s");
     login_start(console, &console_login);
 }
@@ -1681,6 +1714,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_help(sh);
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
+    else if (!strcmp(cmd, "temp"))
+        cmd_temp(sh);
     else if (!strcmp(cmd, "version"))
         cmd_version(sh);
     else if (!strcmp(cmd, "time"))

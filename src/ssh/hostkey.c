@@ -100,7 +100,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         if (!said_no_owner)
             log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                     "hostkey: no host key yet: this board isn't set up, and its "
-                                    "host key belongs to its owner (it is made at setup)");
+                    "host key belongs to its owner (it is made at setup)");
         said_no_owner = true;
         return false;
     }
@@ -124,8 +124,8 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         if (!ok && owner_seal.have_key) {
             log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                     "hostkey: the stored host key doesn't open (it belongs to an "
-                                    "earlier owner or root secret, or is damaged); making a NEW "
-                                    "host key: SSH clients will see a changed fingerprint");
+                    "earlier owner or root secret, or is damaged); making a NEW "
+                    "host key: SSH clients will see a changed fingerprint");
             ok = make_new(&sealer, &n);
         }
         break;
@@ -137,16 +137,16 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
             if (store_sealed(&sealer, n))
                 log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                         "hostkey: the stored host key is now sealed for this "
-                                        "owner (same key, same fingerprint)");
+                        "owner (same key, same fingerprint)");
             else
                 log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                         "hostkey: sealing the stored host key for this owner "
-                                     "failed; it stays as it was");
+                        "failed; it stays as it was");
         } else if (owner_seal.have_key) {
             log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                     "hostkey: the stored host key doesn't open (sealed under "
-                                    "another root secret, or damaged); making a NEW host key: "
-                                    "SSH clients will see a changed fingerprint");
+                    "another root secret, or damaged); making a NEW host key: "
+                    "SSH clients will see a changed fingerprint");
             ok = make_new(&sealer, &n);
         }
         break;
@@ -156,11 +156,11 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
             if (store_sealed(&sealer, n))
                 log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                         "hostkey: sealed the stored host key (same key, same "
-                                        "fingerprint)");
+                        "fingerprint)");
             else
                 log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                         "hostkey: sealing the stored host key failed; it stays "
-                                     "unsealed");
+                        "unsealed");
         }
         break;
     case HOSTKEY_MAKE_NEW:
@@ -179,7 +179,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         ok = hostrec_open(stored, NULL, false, key_der, &n);
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "hostkey: the host key is stored unsealed and there's no key to "
-                             "seal it with (see `rootsecret`); using it as it is");
+                "seal it with (see `rootsecret`); using it as it is");
         break;
     case HOSTKEY_NONE_NO_KEYS:
         // Without the root secret a sealed key can't be opened and a new one couldn't be

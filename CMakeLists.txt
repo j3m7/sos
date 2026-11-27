@@ -112,6 +112,10 @@ target_sources(sos-ssh INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
 )
 target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+# The server's log formats go to the log module's vsnprintf as they are (#105): have the
+# compiler check each LOG_MSG() against its arguments. (The copied code isn't built with -Wall.)
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
+    PROPERTIES COMPILE_OPTIONS "-Wformat")
 
 # --- SOS firmware ------------------------------------------------------------
 # One directory per subsystem; see src/README.md.
@@ -138,6 +142,8 @@ set(SOS_SOURCES
     src/core/heaptag.c
     src/core/glitchdet.c
     src/core/chipinfo.c
+    src/core/chiptemp.c
+    src/core/chiptemp_board.c
     src/core/bootkey.c
     src/core/otpread.c
     src/core/consoleonly.c
@@ -256,6 +262,7 @@ target_link_libraries(sos
     hardware_flash
     hardware_i2c
     hardware_watchdog
+    hardware_adc            # the chip's temperature sensor (core/chiptemp.h)
     sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)

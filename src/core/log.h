@@ -61,7 +61,11 @@ void log_init(const log_hooks_t *hooks);
 // `priority`: a facility OR-ed with a level. Levels below SOS_LOG_ERR (syslog's emerg, alert,
 // crit) count as errors.
 void log_msg(int priority, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void log_vmsg(int priority, const char *fmt, va_list ap);
+void log_vmsg(int priority, const char *fmt, va_list ap) __attribute__((format(printf, 2, 0)));
+// The same with `prefix` (plain text, not a format) put before the message, so a caller that
+// tags someone else's messages needs no buffer or formatting pass of its own.
+void log_vmsg_prefixed(int priority, const char *prefix, const char *fmt, va_list ap)
+    __attribute__((format(printf, 3, 0)));
 
 // Print stored messages the console hasn't shown yet. Thread context; call from the main loop.
 // Does nothing while hooks->hold() is true.

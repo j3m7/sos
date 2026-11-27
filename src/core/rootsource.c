@@ -62,7 +62,7 @@ static void otp_lock(void *ctx) {
     if (otpread_raw(ROOTOTP_ROW(otp_index, 0)) != 0xffffffffu)
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
                 "rootsecret: LOCKING OTP PAGE %u DID NOT TAKE: the root secret is "
-                             "still readable by this firmware", page);
+                "still readable by this firmware", page);
     else
         log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
                 "rootsecret: OTP page %u is locked until the next reset", page);
@@ -107,16 +107,16 @@ void rootsource_init(void) {
         if (!locks_ok)
             log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
                     "rootsecret: OTP page %u is not locked against writes from "
-                                 "the USB bootloader. Someone with a cable could turn a spent "
-                                 "page into a root secret they know. This open board uses the "
-                                 "secret all the same; a console-only board would not",
+                    "the USB bootloader. Someone with a cable could turn a spent "
+                    "page into a root secret they know. This open board uses the "
+                    "secret all the same; a console-only board would not",
                     open_page);
         return;
     case ROOTSRC_FLASH: {
         if (found == ROOTOTP_EXHAUSTED)
             log_msg(SOS_LOG_KERN | SOS_LOG_WARNING,
                     "rootsecret: every OTP page for the root secret is spent; "
-                                     "this open board uses its flash record");
+                    "this open board uses its flash record");
         // An open board: the flash record, made now if there is none. It starts the provider.
         int state = rootflash_init();
         snprintf(why, sizeof(why), "%s",

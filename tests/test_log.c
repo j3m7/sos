@@ -348,6 +348,45 @@ TEST(quota_limits_each_second) {
     CHECK_EQ(log_quota_dropped(&q), 1);
 }
 
+static void vlog_prefixed(int level, const char *prefix, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_vmsg_prefixed(level, prefix, fmt, ap);
+    va_end(ap);
+}
+
+// A prefix goes after the level's tag, where a caller's own "prefix: %s" used to put it.
+TEST(prefix_goes_before_the_message) {
+    reset();
+    vlog_prefixed(SOS_LOG_NOTICE, "sshd: ", "accepted %s:%u", "10.0.0.2", 22u);
+    vlog_prefixed(SOS_LOG_ERR, "sshd: ", "reset");
+    CHECK_OUT("<hide>[    1.234] sshd: accepted 10.0.0.2:22\n<show>"
+              "<hide>[    1.234] error: sshd: reset\n<show>");
+}
+
+// A message above the history level is dropped before anything is formatted: its arguments
+// are never read (a %s with a bad pointer would crash here if they were).
+TEST(prefixed_message_above_the_level_is_not_formatted) {
+    reset();
+    vlog_prefixed(SOS_LOG_DEBUG, "sshd: ", "%s", (const char *)(uintptr_t)1);
+    CHECK_EQ(history_count(), 0);
+    CHECK_OUT("");
+}
+
+// Prefix and message share the one line: together they are cut at LOG_LINE_MAX.
+TEST(prefixed_long_message_truncated) {
+    reset();
+    char big[2 * LOG_LINE_MAX];
+    memset(big, 'x', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    vlog_prefixed(SOS_LOG_NOTICE, "sshd: ", "%s", big);
+    char buf[2 * LOG_LINE_MAX];
+    uint32_t cur = 0;
+    CHECK(log_history_next(&cur, buf, sizeof(buf), NULL));
+    CHECK_EQ(strlen(buf), LOG_LINE_MAX);
+    CHECK(!strncmp(buf, "[    1.234] sshd: xxx", 21));
+}
+
 TEST(nothing_before_init) {
     log_init(NULL);
     log_msg(SOS_LOG_ERR, "ignored");            // must not crash
@@ -373,6 +412,9 @@ TEST_MAIN(
     RUN(held_console_keeps_messages_for_later);
     RUN(held_console_overflow_is_reported);
     RUN(logging_while_printing_does_not_recurse);
+    RUN(prefix_goes_before_the_message);
+    RUN(prefixed_message_above_the_level_is_not_formatted);
+    RUN(prefixed_long_message_truncated);
     RUN(level_names);
     RUN(facility_kept_with_each_message);
     RUN(facility_survives_wrap_around);

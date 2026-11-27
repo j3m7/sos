@@ -23,7 +23,7 @@ void cardkey_init(void) {
     if (!have_base)
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
                 "sd: no key for encrypted cards (see `rootsecret`): they can't be "
-                             "opened or made");
+                "opened or made");
 }
 
 bool cardkey_possible(void) {

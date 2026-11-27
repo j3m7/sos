@@ -103,17 +103,17 @@ static void compute_host_fingerprint(const uint8_t *der, uint32_t der_len) {
 
 // --- pico-sshd callbacks -----------------------------------------------------
 
-// Server messages go to the system log (may be called in interrupt context; the log defers
-// printing). pico-sshd's levels are syslog's, like the log module's. It marks the messages about
-// logins and connections with syslog's LOG_AUTH: those go to the auth log, the rest to daemon.
-static void log_cb(int priority, const char *format, ...) {
-    char msg[LOG_LINE_MAX];
+// Server messages go to the system log. pico-sshd's levels are syslog's, like the log module's.
+// Called in interrupt context too (the server's lwIP callbacks), so nothing is formatted here:
+// the log drops a message above its level before formatting, formats the others once, and
+// defers printing (#105). pico-sshd marks the messages about logins and connections with
+// syslog's LOG_AUTH: those go to the auth log, the rest to daemon.
+static __attribute__((format(printf, 2, 3))) void log_cb(int priority, const char *format, ...) {
     int facility = (priority & ~LOG_PRIMASK) == LOG_AUTH ? SOS_LOG_AUTH : SOS_LOG_DAEMON;
     va_list ap;
     va_start(ap, format);
-    vsnprintf(msg, sizeof(msg), format, ap);
+    log_vmsg_prefixed(facility | (priority & LOG_PRIMASK), "sshd: ", format, ap);
     va_end(ap);
-    log_msg(facility | (priority & LOG_PRIMASK), "sshd: %s", msg);
 }
 
 // Public key only: the key must be in the configured trusted list (checked at each login, so

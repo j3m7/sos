@@ -115,6 +115,12 @@ static void append(int facility, int level, const char *text, size_t n) {
 }
 
 void log_vmsg(int priority, const char *fmt, va_list ap) {
+    log_vmsg_prefixed(priority, "", fmt, ap);
+}
+
+// May run in interrupt context: a message that won't be kept costs only the level check, and
+// one that will is formatted once, into the one buffer here.
+void log_vmsg_prefixed(int priority, const char *prefix, const char *fmt, va_list ap) {
     char line[LOG_LINE_MAX + 1];
     int level = level_of(priority);
     if (!hooks || level > history_level)
@@ -122,8 +128,9 @@ void log_vmsg(int priority, const char *fmt, va_list ap) {
 
     uint64_t us = hooks->now_us();
     const char *tag = level <= SOS_LOG_ERR ? "error: " : level == SOS_LOG_WARNING ? "warning: " : "";
-    int n = snprintf(line, sizeof(line), "[%5lu.%03lu] %s",
-                     (unsigned long)(us / 1000000), (unsigned long)(us / 1000 % 1000), tag);
+    int n = snprintf(line, sizeof(line), "[%5lu.%03lu] %s%s",
+                     (unsigned long)(us / 1000000), (unsigned long)(us / 1000 % 1000), tag,
+                     prefix);
     if (n < 0)
         return;
     if ((size_t)n < sizeof(line))

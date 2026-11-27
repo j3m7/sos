@@ -38,7 +38,10 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
   and are printed once it ends; if they overflowed the history meanwhile, the console says some
   were dropped. `log_pending()` counts the messages waiting, so the program can say so.
 - **Interrupt context:** a message logged from an interrupt (lwIP, CYW43) is only stored;
-  `log_flush()` in the main loop prints it.
+  `log_flush()` in the main loop prints it. What is done in the interrupt is kept small: a
+  message above the history level returns before it is formatted, and the others are formatted
+  once. `log_vmsg_prefixed()` is for a caller that tags messages it passes on (the SSH
+  server's go in as "sshd: ..."), so it needs no buffer or formatting pass of its own.
 - **Deferred mode**, turned on once the main loop runs: every message waits for
   `log_flush()`, so log lines never land in the middle of a command's output.
 - **Pure C:** all platform access goes through `log_hooks_t`, so it's unit tested on the host.
@@ -327,13 +330,42 @@ whether they ever reset a healthy board (`docs/securing-a-board.md`).
   resets the board on a trigger, as the OTP flag would.
 - **Not protection:** it is armed after the configuration loads, software can disarm it, and
   the guard below disarms it after repeated resets, which is what deliberate glitching causes.
-- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 2 (that reset
+- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 3 (that reset
   clears the watchdog's scratch registers, and so the fault record): the number of detector
-  resets since power-on, how many came in a row soon after boot, and the uptime.
+  resets since power-on, how many came in a row soon after boot, the uptime, and the chip's
+  latest temperature (below). The uptime is rewritten about once a second, the temperature
+  at every pass of the main loop.
 - **Reported at boot** (log, `uptime`, `glitch`): that the last reset was the detector's, which
-  detectors fired, after how long.
+  detectors fired, after how long, and how warm the chip was (the last reading before it).
+  Watching, each trigger's log line carries the temperature.
 - **The guard:** three detector resets in a row, each within three minutes of starting, and
   the next boot doesn't arm it, so the board stays reachable to turn the setting off.
+
+## Chip temperature (`chiptemp.c`, `chiptemp_board.c`)
+
+The RP2350's own temperature sensor, read through the ADC (datasheet section 12.4.6), for the
+week-long glitch detector test (issue #92) and for `temp`. Nothing else uses the ADC.
+
+- **A reading every 10 s** from the main loop: 64 conversions averaged (about 130 us), in tenths
+  of a degree. The lowest and highest since boot are kept with their uptimes, for `temp`.
+- **The first reading waits 10 ms** after the sensor is switched on. Read at once it is about
+  4 degrees high, settling within 2 ms (measured on dev-1). That first reading, taken before
+  Wi-Fi starts, is kept for the glitch detector until the main loop's first, but isn't counted
+  in the lowest and highest: on dev-1 it reads 0.6 to 0.8 degree above every reading after
+  the Wi-Fi chip starts (most likely its load on the 3.3 V supply, the ADC's reference).
+- **The log** gets a line at boot, then whenever the reading has moved a degree from the last
+  line (at most one a minute), and at least one an hour: `chip temperature 31.2 C (since boot:
+  lowest 29.8 C, highest 33.1 C)`. At notice level, so a serial logger on the console records
+  the curve for a long test; the 4 KB history would not hold a week of it.
+- **For the glitch detector**, `glitchdet.c` copies the latest reading into a POWMAN scratch
+  register, and reads a fresh one when a detector triggers while watching.
+- **Limits**, stated by `temp`: it's the chip's temperature, not the room's (warmer than the
+  air, more so under Wi-Fi load); and it's uncalibrated. The conversion assumes the ADC
+  reference is exactly 3.3 V, and 1% off moves the reading by about 4 degrees; the sensor also
+  varies from chip to chip. Good for change over time on one board, not for an absolute
+  figure or for comparing boards.
+- `chiptemp.c` (the conversion, text, lowest and highest, when to log, the scratch register
+  form) has no hardware in it and is unit tested on the host.
 
 ## Watchdog (`wdog.c`)
 

@@ -176,7 +176,7 @@ static void ensure_owner_secret(void) {
     if (random_bytes(NULL, live.owner_secret, sizeof(live.owner_secret)))
         log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                 "config: this configuration is a new owner for encrypted SD "
-                                "cards (cards encrypted under an earlier one stay locked)");
+                "cards (cards encrypted under an earlier one stay locked)");
     else
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "config: making the owner secret failed (no random numbers)");
@@ -200,7 +200,7 @@ void settings_init(void) {
     if (!seal.have_key)
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "config: no key to seal the configuration with (see `rootsecret`): "
-                             "a sealed configuration can't be read, and nothing can be saved");
+                "a sealed configuration can't be read, and nothing can be saved");
 
     uint32_t seq;
     if (config_load(&store, &live, &seq)) {
@@ -214,16 +214,16 @@ void settings_init(void) {
             if (config_save(&store, &live))
                 log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                         "config: the saved configuration was unsealed (older "
-                                        "firmware, or provisioning); it's now stored sealed");
+                        "firmware, or provisioning); it's now stored sealed");
             else
                 log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                         "config: sealing the saved configuration failed; it stays "
-                                     "unsealed in flash");
+                        "unsealed in flash");
         }
         if (!config_scrub_plain(&store))
             log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                     "config: an unsealed configuration record is still in flash "
-                                 "(erasing it failed)");
+                    "(erasing it failed)");
         // A sealed configuration from before the owner secret: give it one now, so "no owner
         // secret" only ever means that nothing is saved.
         if (!settings_has_owner_secret() && seal.have_key &&
@@ -234,8 +234,8 @@ void settings_init(void) {
     if (config_sealed_unopened(&store))
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "config: a sealed configuration is present and doesn't open "
-                             "(sealed under another root secret, or changed); it's left as it "
-                             "is and the board starts unconfigured");
+                "(sealed under another root secret, or changed); it's left as it "
+                "is and the board starts unconfigured");
     // Nothing saved (a new board, after `config reset`, or records this firmware can't read):
     // no network and no trusted keys until someone sets it up. The firmware carries no
     // configuration of its own.
@@ -248,10 +248,10 @@ void settings_init(void) {
         if (config_stored(&open_board) == CONFIG_STORED_PLAIN)
             log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
                     "config: an unsealed configuration record is in flash and "
-                                     "was REFUSED: this is a console-only board");
+                    "was REFUSED: this is a console-only board");
         log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,
                 "config: none saved; run 'setup' on the console (a console-only "
-                                "board can't be provisioned from a file)");
+                "board can't be provisioned from a file)");
         return;
     }
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE,

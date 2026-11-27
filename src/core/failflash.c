@@ -64,7 +64,7 @@ unsigned failflash_init(void) {
     if (!usable)
         log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
                 "console: the firmware image overlaps the wrong-password count's "
-                             "sector; the count is kept only until the next reboot");
+                "sector; the count is kept only until the next reboot");
     return failcount_get();
 }
 
@@ -79,7 +79,7 @@ static void write_failed(const char *what) {
     write_failed_logged = true;
     log_msg(SOS_LOG_AUTH | SOS_LOG_ERR,
             "console: %s the wrong-password count in flash failed; it is counted in "
-                         "memory until the next reboot", what);
+            "memory until the next reboot", what);
 }
 
 void failflash_attempt(void) {

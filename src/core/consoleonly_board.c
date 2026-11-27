@@ -37,12 +37,12 @@ void consoleonly_init(void) {
     case CONSOLEONLY_YES:
         log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
                 "console-only board: unsealed configuration and host key records "
-                                "are refused; set up on the console only");
+                "are refused; set up on the console only");
         break;
     case CONSOLEONLY_YES_UNREADABLE:
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
                 "console-only setup: the marker's OTP rows can't be read; "
-                             "treated as set, so unsealed records are refused");
+                "treated as set, so unsealed records are refused");
         break;
     case CONSOLEONLY_YES_DAMAGED:
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "console-only setup: the marker's OTP rows hold "
