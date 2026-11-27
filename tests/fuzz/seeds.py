@@ -296,6 +296,9 @@ def fsck():
         70000, 0, nfats=2, layout="sfd", damage=longer, copy1={400: 0x0FFFFFFF})))
     write("fsck", "exfat", b"\x13" + sparse(131072, exfat_image(131072, 0)))
     write("fsck", "exfat-mbr", b"\x61" + sparse(131072, exfat_image(131072, 2048)))
+    write("fsck", "repair-exfat", b"\x93" + sparse(131072, exfat_image(131072, 0, damage=True)))
+    write("fsck", "repair-exfat-mbr", b"\xe1" + sparse(131072, exfat_image(131072, 2048,
+                                                                          damage=True)))
 
 
 # --- words: a typed command line --------------------------------------------------------------
@@ -424,10 +427,13 @@ def upcase_table():
     return struct.pack("<%dH" % len(units), *units)
 
 
-def exfat_image(sectors, part_lba):
+def exfat_image(sectors, part_lba, damage=False):
     """An exFAT volume of 2 KB clusters laid out as f_mkfs lays one out (boot regions, FAT,
     then bitmap, up-case table and root at the heap's start), with a FAT-chained file, a
-    NoFatChain file across window boundaries and a subdirectory. {lba: bytearray(512)}."""
+    NoFatChain file across window boundaries and a subdirectory. {lba: bytearray(512)}.
+    With `damage`, what repair fixes: the FAT-chained file's chain runs on into two clusters,
+    9000-9002 are set in the bitmap for nothing, README.txt's bit is clear, and two bits are
+    set past big.bin's run."""
     sec = {}
 
     def put(lba, off, data):
@@ -455,6 +461,10 @@ def exfat_image(sectors, part_lba):
               longf[0]: longf}
     used = set(range(2, root + 1)) | {readme, dirc} | set(range(inner, inner + 3)) | set(longf)
     used |= set(range(big_first, big_first + big_n))
+    if damage:
+        longf += [root + 20, root + 21]
+        used |= {root + 20, root + 21, 9000, 9001, 9002, big_first + big_n, big_first + big_n + 1}
+        used -= {readme}
 
     s0 = bytearray(512)
     s0[0:11] = b"\xEB\x76\x90EXFAT   "

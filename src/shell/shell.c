@@ -2374,7 +2374,7 @@ static const shell_word_t sd_words[] = {
     {"test", NULL, SHELL_ADMIN},
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
-    {"check", NULL, SHELL_ADMIN},
+    {"check", (const shell_word_t[]){W("fix"), END}, SHELL_ADMIN},
 #ifdef SOS_TEST_COMMANDS
     {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("off"), END}, SHELL_ADMIN},
 #endif
