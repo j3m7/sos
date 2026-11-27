@@ -74,6 +74,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.reboot([why])` | restart the board, logging `why` and the script's name. Refused (`nil` and a message) until the board has been up 10 minutes: a normal restart runs `/autorun.lua` again, so a script that reboots at once would loop |
 | `sos.hash(alg, data [, raw])`, `sos.hmac(alg, key, data [, raw])` | SHA digests and HMACs, in hex (see [Hashes and base64](#hashes-and-base64)) |
 | `sos.base64.encode(s [, "url"])`, `sos.base64.decode(s [, "url"])` | base64, standard or URL-safe |
+| `sos.json.decode(s)`, `sos.json.encode(v)`, `sos.json.null` | JSON to Lua values and back (see [JSON](#json)) |
 | `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
@@ -307,6 +308,39 @@ sos.http.post("https://hooks.example/sos", body,
               {content_type = "application/json", headers = {["X-Hub-Signature-256"] = sig}})
 
 print(sos.base64.encode(sos.hash("sha256", "abc", true)))   -- ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=
+```
+
+## JSON
+
+`sos.json.decode(s)` turns JSON text into Lua values: objects into tables with string keys,
+arrays into tables indexed from 1, strings (escapes decoded, `\u` escapes as UTF-8), numbers
+(integers when written without a fraction or exponent and within range, floats otherwise),
+`true`, `false`, and `null` into `sos.json.null`, so that an array keeps its positions (`[1, null,
+3]` has three entries). Text that isn't JSON returns `nil` and a message with the byte where it
+went wrong (`"expected ',' or ']' at byte 9"`).
+
+`sos.json.encode(v)` does the opposite. A table whose keys are exactly 1 to n is an array; any
+other is an object, its keys (strings, or integers written as text) in sorted order, so the same
+table always gives the same text, which matters when the text is signed (`sos.hmac`). An empty
+table is `{}`; there's no way to write an empty array, and a table with holes (`{1, 2, nil, 4}`)
+is an object (`{"1":1,"2":2,"4":4}`). A table with both the key `1` and the key `"1"` is an error,
+since both would be the member `"1"`. Strings are written as their bytes: one that isn't UTF-8
+gives text that isn't valid JSON (decoding doesn't check UTF-8 either). Floats are written as Lua prints them (14
+significant digits). Functions, NaN, infinities, keys that are neither strings nor integers, and
+tables nested more than 32 deep (which includes a table that contains itself) raise an error.
+`nil` and `sos.json.null` encode as `null`. Decoding is limited to 32 levels too.
+
+```lua
+local r = sos.http.get("https://api.example/status")
+if r and r.status == 200 then
+  local s, err = sos.json.decode(r.body)
+  if not s then print("bad JSON: " .. err) return end
+  print(s.version, #s.items)
+end
+
+local body = sos.json.encode{text = "disk almost full", level = 2, tags = {"sos", "disk"}}
+-- {"level":2,"tags":["sos","disk"],"text":"disk almost full"}
+sos.http.post("https://hooks.example/sos", body, {content_type = "application/json"})
 ```
 
 ## The log

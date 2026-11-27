@@ -30,6 +30,7 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_date.h"
 #include "lua/lua_hash.h"
+#include "lua/lua_json.h"
 #include "lua/lua_health.h"
 #include "lua/lua_info.h"
 #include "net/http.h"
@@ -814,6 +815,26 @@ static const luaL_Reg base64_lib[] = {
     {"encode", l_b64_encode}, {"decode", l_b64_decode}, {NULL, NULL},
 };
 
+// --- sos.json (lua_json.c) ------------------------------------------------------------------------
+
+// sos.json.decode(s): the value, or nil and where the text stops being JSON.
+static int l_json_decode(lua_State *L) {
+    size_t n;
+    const char *s = luaL_checklstring(L, 1, &n);
+    return lua_json_decode(L, s, n);
+}
+
+// sos.json.encode(v): the text.
+static int l_json_encode(lua_State *L) {
+    luaL_checkany(L, 1);
+    lua_json_encode(L, 1);
+    return 1;
+}
+
+static const luaL_Reg json_lib[] = {
+    {"decode", l_json_decode}, {"encode", l_json_encode}, {NULL, NULL},
+};
+
 // --- read-only tables: sos.sensors, sos.mem, ... (lua_health.c on core 0) ---------------------
 
 // Ask core 0 for table `which` (with argument `arg`) and push it, or push nil and the error.
@@ -1065,6 +1086,10 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "wifi");
     luaL_newlib(L, base64_lib);
     lua_setfield(L, -2, "base64");
+    luaL_newlib(L, json_lib);
+    lua_json_push_null(L);
+    lua_setfield(L, -2, "null");
+    lua_setfield(L, -2, "json");
     luaL_newmetatable(L, HTTP_CLOSER);
     lua_pushcfunction(L, http_closer);
     lua_setfield(L, -2, "__close");
