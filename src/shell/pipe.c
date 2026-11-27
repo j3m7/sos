@@ -368,9 +368,10 @@ __attribute__((weak)) bool pipe_file_check(shell_t *sh, const char *name, char *
     return false;
 }
 
-__attribute__((weak)) pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append) {
+__attribute__((weak)) pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    (void)path;
     (void)append;
-    shell_printf(sh, "tee: %s: no SD card\n", path);
+    *why = "no SD card";
     return NULL;
 }
 
@@ -423,9 +424,10 @@ static const char *tee_put(tee_t *t, const char *buf, size_t len) {
     if (t->done)
         return NULL;
     if (!t->file) {
-        t->file = pipe_file_open(t->st.pipe->sh, t->abs, t->append);
-        if (!t->file)                       // why was printed
-            return "not written";
+        const char *why;
+        t->file = pipe_file_open(t->abs, t->append, &why);
+        if (!t->file)
+            return why;
     }
     return len ? pipe_file_write(t->file, buf, len) : NULL;
 }
@@ -443,9 +445,12 @@ static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
 
 static void tee_end(pipe_stage_t *st) {
     tee_t *t = (tee_t *)st;
+    const char *err = NULL;
     if (!t->done && !t->file)               // no output at all: the file still gets made, empty
-        tee_put(t, "", 0);
+        err = tee_put(t, "", 0);
     tee_finish(t, true);
+    if (err)
+        tee_say(t, err);
 }
 
 static void tee_close(pipe_stage_t *st) {

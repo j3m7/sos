@@ -142,8 +142,8 @@ bool pipe_file_check(shell_t *s, const char *name, char *path, size_t size) {
     return true;
 }
 
-pipe_file_t *pipe_file_open(shell_t *s, const char *path, bool append) {
-    (void)s;
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    (void)why;
     snprintf(tee_path, sizeof(tee_path), "%s", path);
     tee_append = append;
     tee_open_now = true;

@@ -336,18 +336,17 @@ bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
     return true;
 }
 
-pipe_file_t *pipe_file_open(shell_t *sh, const char *name, bool append) {
-    char path[PATH_LEN];
-    if (!resolve(sh, name, path))           // checked at parse time; mounts the card again
-        return NULL;
+// `path` was resolved and checked by pipe_file_check(); a card that has gone since fails in
+// f_open(), and the text says so.
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
     pipe_file_t *pf = heap_zalloc(HEAP_FILES, sizeof(*pf));
     if (!pf) {
-        shell_printf(sh, "tee: out of memory\n");
+        *why = "out of memory";
         return NULL;
     }
     FRESULT fr = f_open(&pf->f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
     if (fr != FR_OK) {
-        shell_printf(sh, "tee: %s: %s\n", name, files_error(fr));
+        *why = files_error(fr);
         heap_release(HEAP_FILES, pf);
         return NULL;
     }

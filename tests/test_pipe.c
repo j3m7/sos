@@ -59,9 +59,11 @@ bool pipe_file_check(shell_t *s, const char *name, char *path, size_t size) {
     return true;
 }
 
-pipe_file_t *pipe_file_open(shell_t *s, const char *path, bool append) {
-    if (card_refuse) {
-        shell_printf(s, "tee: %s: not allowed to change this path\n", path);
+static const char *card_open_fails;         // the open fails with this text (NULL: it works)
+
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    if (card_open_fails) {
+        *why = card_open_fails;
         return NULL;
     }
     CHECK(!card_open);
@@ -93,6 +95,7 @@ const char *pipe_file_close(pipe_file_t *f) {
 static void card_reset(void) {
     card_len = 0;
     card_open = card_refuse = false;
+    card_open_fails = NULL;
     card_fail_at = 0;
     card_opens = card_closes = 0;
 }
@@ -289,6 +292,23 @@ TEST(tee_parses_its_arguments) {
     CHECK(open_stages("tee /empty"));
     pipe_end(&p);
     CHECK(card_opens == 1 && card_closes == 1 && card_len == 0);
+    // An open that fails on the first output is said at the sink, once, and the line ends; what
+    // the write owed still passes (the grep sees "wifi" and keeps it).
+    card_reset();
+    card_open_fails = "no such directory";
+    CHECK(open_stages("tee /nodir/x | grep wifi"));
+    pipe_write(&p, "wifi up\n", 8);
+    CHECK(p.done && card_opens == 0);
+    CHECK_STR(out, "wifi up\ntee: /nodir/x: no such directory\n");
+    pipe_end(&p);
+    CHECK_STR(out, "wifi up\ntee: /nodir/x: no such directory\n");
+    // ...and for an empty output, at the end.
+    card_reset();
+    card_open_fails = "no such directory";
+    CHECK(open_stages("tee /nodir/y"));
+    pipe_end(&p);
+    CHECK_STR(out, "tee: /nodir/y: no such directory\n");
+    card_open_fails = NULL;
     // An error reaches the sink even when a later filter would drop it.
     card_reset();
     card_fail_at = 2;

@@ -93,8 +93,9 @@ bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size);
 #define PIPE_FILE_PATH 256      // a resolved path (files.c's PATH_LEN)
 
 // Open the checked `path`: replaced, or appended to. Holds the card's files (files_hold()) until
-// pipe_file_close(). NULL after printing why ("tee: ...").
-pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append);
+// pipe_file_close(). NULL with *why set to the error as text: it prints nothing itself, because
+// it runs inside the line (on the first output), where a message would re-enter the stages.
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why);
 
 // Write `len` bytes (all of them or an error). NULL when written, else the error as text.
 const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len);
