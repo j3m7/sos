@@ -501,8 +501,9 @@ static void cmd_mem_test(shell_t *sh, char *args) {
         return;
     }
     if (!strcmp(w1, "release") && w2 && !strcmp(w2, "first") && !w4) {
-        int secs = w3 ? atoi(w3) : 0;
-        if (secs < 0 || secs > 3600 || (w3 && strspn(w3, "0123456789") != strlen(w3))) {
+        bool digits = !w3 || (strlen(w3) <= 4 && strspn(w3, "0123456789") == strlen(w3));
+        int secs = digits && w3 ? atoi(w3) : 0;
+        if (!digits || secs > 3600) {
             shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
             return;
         }

@@ -136,8 +136,10 @@ static size_t free_first(void) {
 size_t memhold_release_first(unsigned delay_ms) {
     if (count == 0)
         return 0;
-    if (delay_ms == 0)
+    if (delay_ms == 0) {
+        first_due_us = 0;                   // a pending delayed release would free the next one
         return free_first();
+    }
     first_due_us = time_us_64() + (uint64_t)delay_ms * 1000;
     if (first_due_us == 0)
         first_due_us = 1;
