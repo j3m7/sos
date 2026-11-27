@@ -211,6 +211,12 @@ void health_boot(void);
 // `health inject gate keys|crypto` (test builds): add a test-only check holding that gate and
 // set it to FAIL. False if the gate's name is unknown or the registry is full.
 bool health_board_inject_gate(const char *gate);
+
+// A measurement for a board run (test builds), printed a line at a time (no newline):
+// `health crypto-times`, every known answer timed (docs/design/health.md §9.2). It holds the
+// main loop while it runs (a few hundred milliseconds).
+typedef void (*health_print_fn)(void *arg, const char *line);
+void health_board_crypto_times(health_print_fn print, void *arg);
 #endif
 
 #endif

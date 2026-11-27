@@ -6,8 +6,9 @@
 //
 // Phase 1's seed checks (docs/design/health.md §9) read state only, take microseconds each, and
 // hold no gate. Phase 2's boot checks (§10) test the hardware and the crypto before anything
-// makes a key: `clocks`, `flash`, `trng` (holds KEYS) and `crypto` (holds KEYS and CRYPTO). Their
-// judging is in hwtest.c and the crypto vectors in selftest.c. There is no full-tier check yet:
+// makes a key: `clocks`, `flash`, `trng` (holds KEYS) and `crypto` (holds KEYS and CRYPTO), with
+// `crypto-ssh` (background) for the known answers too slow for boot. Their judging is in
+// hwtest.c and the crypto vectors in selftest.c. There is no full-tier check yet:
 // `health full` runs the same checks as `health run`, plus the test-only gate checks of a test
 // build.
 
@@ -27,7 +28,9 @@
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
+#include "core/heaptag.h"
 #include "core/hwtest.h"
+#include "core/log.h"
 #include "core/selftest.h"
 #include "core/sensors.h"
 #include "core/stackmon.h"
@@ -218,27 +221,99 @@ static health_step_t check_trng(void **state, bool cancel, health_result_t *out)
     return HEALTH_DONE;
 }
 
-// crypto: known answers for the algorithms SOS relies on (selftest.c), about 1.7 KB of heap
-// while it runs. The time is in the text: the boot tier's budget is 100 ms, and Ed25519 and
-// X25519 take most of it.
-static health_step_t check_crypto(void **state, bool cancel, health_result_t *out) {
-    (void)state;
-    if (cancel)
-        return HEALTH_DONE;
-    uint64_t t0 = time_us_64();
+// crypto and crypto-ssh: selftest.c's known answers, about 2 KB of heap while they run.
+// `crypto` (boot tier) is the boot subset: what making keys and sealing at boot rely on.
+// `crypto-ssh` (background, first 30 s after boot, then daily) is the rest: Ed25519 signing and
+// verifying and X25519, tens of milliseconds each, too slow for the boot tier's 100 ms. Both
+// hold KEYS and CRYPTO. At boot `crypto` runs in one call (a boot check must); anywhere else
+// each runs one test per step, so no step holds the main loop for more than one test. The
+// text gives the time per group; a passing run is also logged at info, so dmesg keeps the
+// figures.
+typedef struct {
+    selftest_t *st;
+    unsigned next;                      // the next test to look at
     unsigned ran;
-    const char *why = selftest_crypto(&ran);
-    unsigned ms = (unsigned)((time_us_64() - t0 + 500) / 1000);
-    if (why) {
-        out->status = HEALTH_FAIL;
-        snprintf(out->text, sizeof(out->text), "%s", why);
-    } else {
-        out->status = HEALTH_PASS;
-        snprintf(out->text, sizeof(out->text), "%u known answers (sha2 hmac gcm xts 25519) in %u ms",
-                 ran, ms);
+    uint32_t total_us;
+    uint32_t group_us[SELFTEST_GROUPS];
+    unsigned group_runs[SELFTEST_GROUPS];
+} kat_state_t;
+
+static bool booting;                    // health_boot() is running the boot tier
+
+static void kat_free(void **state) {
+    kat_state_t *k = *state;
+    if (k) {
+        selftest_close(k->st);
+        heap_release(HEAP_NET, k);
     }
+    *state = NULL;
+}
+
+// The next test of the subset from index i on, or selftest_count().
+static unsigned kat_next(bool boot_subset, unsigned i) {
+    while (i < selftest_count() && selftest_info(i)->boot != boot_subset)
+        i++;
+    return i;
+}
+
+static health_step_t kat_step(const char *name, bool boot_subset, void **state, bool cancel,
+                              health_result_t *out) {
+    if (cancel) {
+        kat_free(state);
+        return HEALTH_DONE;
+    }
+    kat_state_t *k = *state;
+    if (!k) {
+        k = heap_zalloc(HEAP_NET, sizeof(*k));
+        if (k)
+            k->st = selftest_open();
+        *state = k;
+        if (!k || !k->st) {
+            kat_free(state);
+            out->status = HEALTH_FAIL;
+            snprintf(out->text, sizeof(out->text), "no memory to run the tests");
+            return HEALTH_DONE;
+        }
+    }
+    do {
+        unsigned i = kat_next(boot_subset, k->next);
+        if (i >= selftest_count())
+            break;
+        k->next = i + 1;
+        uint64_t t0 = time_us_64();
+        const char *why = selftest_run(k->st, i);
+        uint32_t us = (uint32_t)(time_us_64() - t0);
+        selftest_group_t g = selftest_info(i)->group;
+        k->ran++;
+        k->total_us += us;
+        k->group_us[g] += us;
+        k->group_runs[g]++;
+        if (why) {
+            out->status = HEALTH_FAIL;
+            snprintf(out->text, sizeof(out->text), "%s", why);
+            kat_free(state);
+            return HEALTH_DONE;
+        }
+    } while (booting);
+    if (kat_next(boot_subset, k->next) < selftest_count())
+        return HEALTH_MORE;
+    out->status = HEALTH_PASS;
+    selftest_text(out->text, sizeof(out->text), k->ran, k->total_us, k->group_us, k->group_runs);
+    log_msg(SOS_LOG_KERN | SOS_LOG_INFO, "health: %s: %s", name, out->text);
+    kat_free(state);
     return HEALTH_DONE;
 }
+
+static health_step_t check_crypto(void **state, bool cancel, health_result_t *out) {
+    return kat_step("crypto", true, state, cancel, out);
+}
+
+static health_step_t check_crypto_ssh(void **state, bool cancel, health_result_t *out) {
+    return kat_step("crypto-ssh", false, state, cancel, out);
+}
+
+#define CRYPTO_SSH_FIRST_S  30          // after boot: Wi-Fi is coming up, nobody logged in yet
+#define CRYPTO_SSH_PERIOD_S 86400       // then daily
 
 static const health_check_t checks[] = {
     {"resets", HEALTH_BOOT, 0, 0, 0, check_resets},
@@ -246,6 +321,8 @@ static const health_check_t checks[] = {
     {"flash", HEALTH_BOOT, 0, 0, 0, check_flash},
     {"trng", HEALTH_BOOT, 0, 0, HEALTH_GATE_KEYS, check_trng},
     {"crypto", HEALTH_BOOT, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, check_crypto},
+    {"crypto-ssh", HEALTH_BACKGROUND, CRYPTO_SSH_PERIOD_S, CRYPTO_SSH_FIRST_S,
+     HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, check_crypto_ssh},
     {"glitch", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_glitch},
     {"stack", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_stack},
     {"heap", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_heap},
@@ -255,7 +332,9 @@ static const health_check_t checks[] = {
 
 void health_boot(void) {
     health_init(checks, sizeof(checks) / sizeof(checks[0]), time_us_64);
+    booting = true;
     health_run_boot();
+    booting = false;
 }
 
 #ifdef SOS_TEST_COMMANDS
@@ -283,5 +362,32 @@ bool health_board_inject_gate(const char *gate) {
     if (!c || (health_find(c->name) < 0 && !health_add(c)))
         return false;
     return health_inject(c->name, HEALTH_FAIL, "set by hand (health inject gate)");
+}
+
+// `health crypto-times`: every known answer once, each timed, for the board run that measures
+// the boot tier's budget (docs/design/health.md §9.2). Holds the main loop for all of them.
+void health_board_crypto_times(health_print_fn print, void *arg) {
+    char line[96];
+    selftest_t *st = selftest_open();
+    if (!st) {
+        print(arg, "no memory to run the tests");
+        return;
+    }
+    uint32_t boot_us = 0, rest_us = 0;
+    for (unsigned i = 0; i < selftest_count(); i++) {
+        const selftest_info_t *t = selftest_info(i);
+        uint64_t t0 = time_us_64();
+        const char *why = selftest_run(st, i);
+        uint32_t us = (uint32_t)(time_us_64() - t0);
+        *(t->boot ? &boot_us : &rest_us) += us;
+        snprintf(line, sizeof(line), "%-12s %-10s %-4s %8u us  %s", t->name,
+                 selftest_group_name(t->group), t->boot ? "boot" : "ssh", (unsigned)us,
+                 why ? why : "pass");
+        print(arg, line);
+    }
+    selftest_close(st);
+    snprintf(line, sizeof(line), "boot subset (crypto) %u us, the rest (crypto-ssh) %u us",
+             (unsigned)boot_us, (unsigned)rest_us);
+    print(arg, line);
 }
 #endif

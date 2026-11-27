@@ -247,7 +247,8 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
         ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/sha.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha512.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/ed25519.c ${WOLFSSL_ROOT}/wolfcrypt/src/curve25519.c
-        ${WOLFSSL_ROOT}/wolfcrypt/src/ge_operations.c ${WOLFSSL_ROOT}/wolfcrypt/src/fe_operations.c)
+        ${WOLFSSL_ROOT}/wolfcrypt/src/ge_operations.c ${WOLFSSL_ROOT}/wolfcrypt/src/fe_operations.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/random.c)
     target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
     target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
         ${WOLFSSL_ROOT})

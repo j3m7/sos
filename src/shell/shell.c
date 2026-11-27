@@ -2186,6 +2186,10 @@ static void health_inject_cmd(shell_t *sh, const char *what, const char *how) {
                                                                        : "inj-crypto")
                                                : what));
 }
+
+static void health_print_line(void *arg, const char *line) {
+    shell_printf(arg, "%s\n", line);
+}
 #endif
 
 static void cmd_health(shell_t *sh, char *args) {
@@ -2203,11 +2207,12 @@ static void cmd_health(shell_t *sh, char *args) {
     bool run = w1 && !strcmp(w1, "run") && !w3, full = w1 && !strcmp(w1, "full") && !w2;
 #ifdef SOS_TEST_COMMANDS
     bool inject = w1 && !strcmp(w1, "inject") && !w4;
+    bool times = w1 && !strcmp(w1, "crypto-times") && !w2;
 #else
-    bool inject = false;
+    bool inject = false, times = false;
     (void)w4;
 #endif
-    if (!run && !full && !inject) {
+    if (!run && !full && !inject && !times) {
         shell_printf(sh, "usage: health [run [<name>] | full]\n");
         return;
     }
@@ -2219,6 +2224,15 @@ static void cmd_health(shell_t *sh, char *args) {
 #ifdef SOS_TEST_COMMANDS
     if (inject) {
         health_inject_cmd(sh, w2, w3);
+        return;
+    }
+    // A measurement for a board run (docs/design/health.md §9.2): it holds the loop a moment.
+    if (times) {
+        if (health_job_running()) {
+            shell_printf(sh, "checks are already running\n");
+            return;
+        }
+        health_board_crypto_times(health_print_line, sh);
         return;
     }
 #endif
