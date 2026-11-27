@@ -133,6 +133,11 @@ void shell_execute(shell_t *sh, char *cmd) {
     n_executed++;
     if (!strcmp(cmd, "quiet"))
         return;
+    if (!strcmp(cmd, "bye")) {              // ends the session, as logout does on SSH
+        shell_printf(sh, "bye\n");
+        shell_end(sh);
+        return;
+    }
     if (!strcmp(cmd, "big")) {              // more than the pager takes
         for (int i = 0; i < 400; i++)
             shell_printf(sh, "line %3d: %-90s|\n", i, "the quick brown fox");
@@ -869,6 +874,15 @@ TEST(pipe_to_more_holds_the_screen_for_messages) {
     type("");
     type("");
     CHECK(!shell_screen_held(&sh));
+}
+
+TEST(pipe_to_more_on_a_command_that_ends_the_session) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("bye | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK(sh.pipe_buf == NULL);
+    CHECK(strstr(fake.out, "no output") == NULL);   // nothing said into a closed session
 }
 
 TEST(pipe_to_more_ends_with_the_session) {
@@ -1894,6 +1908,7 @@ TEST_MAIN(
     RUN(pipe_to_more_lets_a_jobs_question_through);
     RUN(pipe_to_more_on_a_locked_console_runs_plain);
     RUN(pipe_to_more_holds_the_screen_for_messages);
+    RUN(pipe_to_more_on_a_command_that_ends_the_session);
     RUN(pipe_to_more_ends_with_the_session);
     RUN(job_runs_in_steps_then_prompts);
     RUN(job_ends_output_with_newline_before_prompt);

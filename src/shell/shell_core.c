@@ -374,10 +374,12 @@ static void run_line(shell_t *sh, char *cmd) {
     sh->pipe_len = 0;
     sh->pipe_cut = sh->pipe_oom = false;
     shell_execute(sh, cmd);
+    if (!sh->pipe_buf)                      // the command ended the session (logout): done
+        return;
     if (sh->answer)                         // it asks a question: not a thing to page
         pipe_release(sh);
-    else if (sh->job && sh->key)            // a full-screen program: it has its own screen
-        pipe_drop(sh);
+    else if (sh->job && sh->key)            // a full-screen program: its own screen; what it
+        pipe_release(sh);                   // printed before (a warning) shows under it
     else if (sh->job)                       // a job: paged when it ends
         sh->pipe_pending = true;
     else
