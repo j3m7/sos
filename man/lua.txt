@@ -42,10 +42,10 @@ DESCRIPTION
     sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
     sos.clock_sync, sos.who, sos.ssh.status, sos.tls.roots, sos.wall,
     sos.random, sos.sleep, sos.log; timers sos.every/after/cancel (a
-    background script keeps going while timers are left);
-    sos.http.get/post/head/request and sos.http.download (into a file) for
-    HTTPS (the response includes how long the request took); tables about
-    the board: sos.sensors, sos.mem,
+    background script keeps going while timers are left); sos.wifi.scan,
+    sos.net.resolve and sos.ping; sos.http.get/post/head/request and
+    sos.http.download (into a file) for HTTPS (the response includes how
+    long the request took); tables about the board: sos.sensors, sos.mem,
     sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
     sos.health (the self-checks' latest results);
     sos.dmesg for the system log (with a cursor, for only the newer lines);

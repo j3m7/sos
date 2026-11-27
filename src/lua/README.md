@@ -180,6 +180,15 @@ levels, for core 1's C stack. Object keys are sorted (`qsort` over the keys, kep
 table). Tested on the host (`tests/test_lua_json.c`) and fuzzed (`tests/fuzz/fuzz_json.c`: any
 input decodes or is refused, and encoding what decodes is stable).
 
+## Network: `lua_net.c`
+
+`sos.wifi.scan`, `sos.net.resolve` and `sos.ping` take a while, so like `sos.http` they stay
+pending (`LR_SCAN`, `LR_RESOLVE`, `LR_PING`) and are served from the main loop only, a step per
+pass; Ctrl-C answers "interrupted", and `finish()` drops whatever is left. The scan uses the Wi-Fi
+name collection Tab uses (`wifi_names_*`) and stops it only if it started it. A lookup's late answer
+is told apart by an id. A ping is a run of `net/ping.c` without a shell (`ping_begin()`,
+`ping_advance()`): the same requests and statistics as the command, nothing printed.
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).

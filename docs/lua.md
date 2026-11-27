@@ -76,6 +76,9 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
+| `sos.wifi.scan()` | the Wi-Fi networks around, strongest first: `{ {ssid=, rssi=}, ... }` (a scan takes about half a second; the names a question's Tab offers come from the same scan) |
+| `sos.net.resolve(host)` | the host's IPv4 address as text (a DNS lookup, up to 20 s), or `nil` and why |
+| `sos.ping(host [, count])` | `count` echo requests (4 by default, at most 100), one a second, as `ping` sends them; then `{address=, sent=, received=, errors=, not_sent=, min_ms=, avg_ms=, max_ms=}` (the times only if something answered), or `nil` and why (Wi-Fi down, the lookup failed). The script waits meanwhile; Ctrl-C stops it |
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
 | `sos.http.head(url [, opts])` | HTTPS HEAD: the status and headers |

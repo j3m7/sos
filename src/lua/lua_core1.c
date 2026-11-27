@@ -1189,8 +1189,55 @@ static const luaL_Reg tls_lib[] = {
     {"roots", l_tls_roots}, {NULL, NULL},
 };
 
+// --- sos.wifi.scan, sos.net.resolve, sos.ping (on core 0: lua_net.c) -------------------------
+
+// One of the slow network requests; its answer (lua_info.h records) pushed as a table.
+static int net_request(lua_State *L, lua_req_type_t type, const char *host, uint32_t count) {
+    if (host) {
+        size_t n = strlen(host);
+        if (n >= LUA_PATH_MAX)
+            return luaL_error(L, "host name too long");
+        memcpy(lua_req.path, host, n + 1);
+    }
+    lua_req.type = type;
+    lua_req.offset = count;
+    request();
+    check_cancel(L);
+    if (lua_req.result < 0)
+        return fail(L);
+    if (!lua_info_push(L, lua_req.data, lua_req.len))
+        return luaL_error(L, "malformed answer from core 0");
+    return 1;
+}
+
+// sos.wifi.scan(): the networks around, strongest first: { {ssid=, rssi=}, ... }.
+static int l_wifi_scan(lua_State *L) {
+    return net_request(L, LR_SCAN, NULL, 0);
+}
+
+// sos.net.resolve(host): its IPv4 address as text, or nil and why.
+static int l_net_resolve(lua_State *L) {
+    if (net_request(L, LR_RESOLVE, luaL_checkstring(L, 1), 0) != 1)
+        return 2;
+    lua_getfield(L, -1, "address");
+    return 1;
+}
+
+// sos.ping(host [, count]): count requests (4 by default, at most 100), one a second; then
+// {address=, sent=, received=, errors=, not_sent=, min_ms=, avg_ms=, max_ms=}, or nil and why.
+static int l_ping(lua_State *L) {
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer count = luaL_optinteger(L, 2, 4);
+    luaL_argcheck(L, count >= 1 && count <= 100, 2, "from 1 to 100");
+    return net_request(L, LR_PING, host, (uint32_t)count);
+}
+
+static const luaL_Reg net_lib[] = {
+    {"resolve", l_net_resolve}, {NULL, NULL},
+};
+
 static const luaL_Reg wifi_lib[] = {
-    {"status", l_wifi_status}, {NULL, NULL},
+    {"status", l_wifi_status}, {"scan", l_wifi_scan}, {NULL, NULL},
 };
 
 static const luaL_Reg sos_lib[] = {
@@ -1202,7 +1249,8 @@ static const luaL_Reg sos_lib[] = {
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
     {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
-    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {NULL, NULL},
+    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},
+    {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -1363,6 +1411,8 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "ssh");
     luaL_newlib(L, tls_lib);
     lua_setfield(L, -2, "tls");
+    luaL_newlib(L, net_lib);
+    lua_setfield(L, -2, "net");
     luaL_newlib(L, base64_lib);
     lua_setfield(L, -2, "base64");
     luaL_newlib(L, json_lib);

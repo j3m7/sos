@@ -255,6 +255,7 @@ set(SOS_SOURCES
     src/lua/lua_hash.c
     src/lua/lua_health.c
     src/lua/lua_info.c
+    src/lua/lua_net.c
     src/lua/lua_json.c
 )
 # The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
