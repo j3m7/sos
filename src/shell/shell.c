@@ -760,10 +760,15 @@ static void wifi_stats(shell_t *sh, bool chip) {
     // 0 frames sent, 2 resent, 15 received, 45 beacon times, 49 RTS sent, 75 CTS received,
     // 85 our access point's beacons received, 87 other networks' beacons, 88 response timeouts,
     // 67/68 received with a bad checksum / header, 70 receptions started.
-    static uint32_t c[128];
-    unsigned n = wifi_chip_counters(c, 128);
+    // The buffer the chip answers into (1 KB), for this command only. The first 128 words are
+    // shown, as before.
+    uint32_t *c = heap_alloc(HEAP_NET, WIFI_CHIP_COUNTER_WORDS * sizeof(uint32_t));
+    unsigned n = c ? wifi_chip_counters(c) : 0;
+    if (n > 128)
+        n = 128;
     if (!n) {
-        shell_printf(sh, "chip counters: not available\n");
+        shell_printf(sh, "chip counters: %s\n", c ? "not available" : "out of memory");
+        heap_release(HEAP_NET, c);
         return;
     }
     shell_printf(sh, "chip counters (version %u, %u bytes), index: value, zeros omitted:\n",
@@ -772,6 +777,7 @@ static void wifi_stats(shell_t *sh, bool chip) {
         if (c[i])
             shell_printf(sh, "%3u: %-10u%s", i - 1, (unsigned)c[i], ++col % 5 ? " " : "\n");
     shell_printf(sh, "\n");
+    heap_release(HEAP_NET, c);
 }
 
 // `wifi set` (arg NULL) replaces the first network; `wifi add` (arg non-NULL) adds one after

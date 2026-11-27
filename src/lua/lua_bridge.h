@@ -6,6 +6,10 @@
 // asks core 0 through a single request mailbox and writes script output into a ring buffer that
 // core 0 drains into the shell that started the script.
 //
+// The request payload and the output ring (6 KB together) are allocated by core 0 when a script
+// starts and freed when it has ended: core 0 sets the two pointers before it sets LJ_START and
+// clears them only after core 1 has set LJ_DONE, so core 1 never sees them change.
+//
 // Hand-over is with flags plus memory barriers (__dmb) and events (__sev/__wfe): one side fills
 // the data, then sets the flag; the other side sees the flag, then reads the data.
 
@@ -80,7 +84,7 @@ typedef struct {
                                     // points at, which core 0 reads while core 1 waits
     int64_t result;                 // < 0: failed (error has why); LUA_REQ_NOT_FOUND: no such file
     char error[64];
-    uint8_t data[LUA_REQ_DATA];
+    uint8_t *data;                  // LUA_REQ_DATA bytes; there only while a script runs
 } lua_req_t;
 
 extern lua_req_t lua_req;
@@ -100,7 +104,7 @@ extern lua_req_t lua_req;
 typedef struct {
     volatile uint32_t head;         // written by core 1 (bytes produced)
     volatile uint32_t tail;         // written by core 0 (bytes consumed)
-    char buf[LUA_OUT_SIZE];
+    char *buf;                      // LUA_OUT_SIZE bytes; there only while a script runs
 } lua_out_t;
 
 extern lua_out_t lua_out;

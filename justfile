@@ -14,11 +14,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list --unsorted
 
-# Configure (if needed) and build the firmware; preset: debug or release
+# Configure (if needed) and build the firmware; preset: debug, release or minsize
 build preset="debug":
     #!/usr/bin/env bash
     set -euo pipefail
-    dir={{ if preset == "release" { "build-release" } else { "build" } }}
+    dir={{ if preset == "release" { "build-release" } else if preset == "minsize" { "build-minsize" } else { "build" } }}
     [[ -f $dir/build.ninja ]] || cmake --preset {{ quote(preset) }}
     cmake --build --preset {{ quote(preset) }}
 
