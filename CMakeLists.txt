@@ -195,6 +195,7 @@ set(SOS_SOURCES
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
+    src/shell/pipe.c
     src/shell/complete.c
     src/shell/login.c
     src/shell/termtext.c
