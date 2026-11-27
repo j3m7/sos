@@ -318,6 +318,57 @@ static void cmd_echo(shell_t *sh, char *args) {
         shell_printf(sh, "echo: %s: %s\n", name, files_error(fr));
 }
 
+// --- tee (a pipeline stage, shell/pipe.h) -----------------------------------------------------
+
+struct pipe_file {
+    FIL f;
+};
+
+bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
+    char abs[PATH_LEN];
+    if (!resolve(sh, name, abs) || !may_write(sh, "tee", abs))
+        return false;
+    if (strlen(abs) >= size) {
+        shell_printf(sh, "path too long\n");
+        return false;
+    }
+    strcpy(path, abs);
+    return true;
+}
+
+// `path` was resolved and checked by pipe_file_check(); a card that has gone since fails in
+// f_open(), and the text says so.
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    pipe_file_t *pf = heap_zalloc(HEAP_FILES, sizeof(*pf));
+    if (!pf) {
+        *why = "out of memory";
+        return NULL;
+    }
+    FRESULT fr = f_open(&pf->f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
+    if (fr != FR_OK) {
+        *why = files_error(fr);
+        heap_release(HEAP_FILES, pf);
+        return NULL;
+    }
+    files_hold();
+    return pf;
+}
+
+const char *pipe_file_write(pipe_file_t *pf, const char *buf, size_t len) {
+    UINT bw;
+    FRESULT fr = f_write(&pf->f, buf, (UINT)len, &bw);
+    if (fr == FR_OK && bw != len)
+        fr = FR_DENIED;                 // card full
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
+const char *pipe_file_close(pipe_file_t *pf) {
+    FRESULT fr = f_close(&pf->f);
+    heap_release(HEAP_FILES, pf);
+    files_release();
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
 // --- cat ---------------------------------------------------------------------------------------
 
 typedef struct {

@@ -149,6 +149,7 @@ more' says how.
 | `<command> \| grep [-v] [-i] [-n] <text>` | any | only the lines of a command's output that hold a text ([page](../man/grep.txt)) |
 | `<command> \| head [<n>]` | any | the first lines of a command's output, then stop it ([page](../man/head.txt)) |
 | `<command> \| tail [<n>]` | any | the last lines of a command's output ([page](../man/tail.txt)) |
+| `<command> \| tee [-a] <path>` | any | write a command's output to a file and pass it on ([page](../man/tee.txt)) |
 | `<command> \| wc` | any | count the lines, words and bytes of a command's output ([page](../man/wc.txt)) |
 
 ## Manual pages
