@@ -355,7 +355,7 @@ debug off) and the hashes of the keys its firmware must be signed with.
   the block loop is the one the boot ROM uses) and compares its SHA-256 with the boot key
   slots. A slot counts when it is marked valid and not marked invalid.
 - **Shown by** `version` (secure boot, debug port) and `bootkey` (the verdict). The runbooks
-  in `docs/security/` run `bootkey` before the bit that turns secure boot on.
+  (`docs/security/README.md`) run `bootkey` before the bit that turns secure boot on.
 - **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
   that can't be read. Reading the root secret from OTP will need the guarded ones.
 

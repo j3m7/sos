@@ -12,8 +12,8 @@ a production board until dev-1 is tested and working" (2026-11-25).
 
 | # | Decision | dev-1 | Production board (to be revisited) |
 |---|---|---|---|
-| 1 | Debug port | Stays on | Off for good |
-| 2 | USB bootloader | Kept | Kept for now |
+| 1 | Debug port | Stays on | **To decide:** off for good, or a debug key |
+| 2 | USB bootloader | Kept | **To decide;** kept for now |
 | 3 | Reboot into bootloader on command | Kept | Removed (`DISABLE_WATCHDOG_SCRATCH`) |
 | 4 | Signing keys | The two public dev keys in `keys/`; slots 2 and 3 left blank | Two keys made off the development machine; slots 2 and 3 marked invalid |
 | 5 | Glitch detector | Armed by the firmware at boot (sensitivity 3); not set in OTP | Armed by the firmware the same way. **Deferred:** the OTP bit waits for the week-long test |
@@ -31,12 +31,15 @@ a production board until dev-1 is tested and working" (2026-11-25).
 
 With debug on, anyone with a probe reads the root secret out of the running chip. On dev-1 it
 stays on: the board is for development, and what is tested is that the mechanisms work, not
-that the board keeps a secret. On a production board it is turned off for good
-(`CRIT1.DEBUG_DISABLE`), with no debug key.
+that the board keeps a secret. On a production board debug must not stay open; whether it is
+turned off for good (`CRIT1.DEBUG_DISABLE`) or kept behind a debug key is **still to decide**
+(#100). The runbook draft assumes off for good.
 
 ### 2. USB bootloader
 
-Kept on both, because more fixes are expected and they have to be flashable. The cost: the two
+Kept on dev-1, and kept for now on a production board, because more fixes are expected and
+they have to be flashable; whether a production board keeps it for good is **still to decide**
+(#100). The cost: the two
 glitch attacks that go through the bootloader (E20, E21) stay open, and anyone with a cable can
 erase or roll back the flash, though not read what is sealed. Disabling it later is one more
 OTP write, after which the board can never be reflashed over USB. It would also remove the way
@@ -95,12 +98,8 @@ run.
 **The week-long test** comes later, with a more complete feature set, a spare board and battery
 hardware. It records the chip's temperature and supply voltage throughout and with each
 detector event (2026-11-25; the firmware is in place, #92), so a reset can be set against how
-warm the chip was or a sagging battery. The chip's own temperature sensor and the board's
-supply voltage (VSYS) are each read every 10 s, with whether USB power is present; readings are
-logged with every detector trigger and kept across a detector reset; a line goes to the log at
-boot, on each degree or 0.2 V of change, when USB power comes or goes, and at least hourly,
-which a serial logger on the console records for the length of the test; `temp` and `power`
-show the lowest and highest since boot. Limits when reading those numbers:
+warm the chip was or a sagging battery (what is recorded and how often:
+[design.md](design.md#the-glitch-detector)). Limits when reading those numbers:
 
 - The temperature is the chip's, not the room's, and moves with what the chip is doing.
 - Uncalibrated, it is good for change over time on one board, not for an absolute figure or for
@@ -111,13 +110,15 @@ show the lowest and highest since boot. Limits when reading those numbers:
 Its other conditions (load, power, how the temperature is varied, what counts as a pass) are
 still to be defined.
 
-**Proposed rule for the OTP bit** (not yet decided): one board, on one supply, justifies at
-most "the highest setting that stayed clean, minus one". Arm it at that setting; if even the
+**Proposed rule for the OTP bit** (not yet decided): soak at all four sensitivities, for days,
+not hours. One board, at room temperature, on one supply, justifies at most "the highest
+setting that stayed clean, minus one". Arm it at that setting; if even the
 lowest setting resets a healthy board, leave it off. Given how the OTP field can change, the
 starting value matters more than "we can raise it later" suggests.
 
 **What this decision needs:** after the week-long test, whether to arm the detector in OTP and
-at which sensitivity. Until then production step 4.5 is skipped.
+at which sensitivity. Nothing is burned on a production board until it is settled; if it
+settles on "not in OTP", production step 4.5 is skipped.
 
 ### 6. Rehearsal burn
 
@@ -205,10 +206,10 @@ more flashes, once per board. It does not protect against someone with a cable, 
 OTP with `picotool` anyway; it is about the firmware's own mistakes. The alternative, one
 firmware with the command always present, was considered and not chosen.
 
-## Open questions
+## To confirm
 
-Nothing is burned on a production board while any of these is open. The numbers are the ones
-used on #64.
+Nothing is burned on a production board while any of these is open. The numbers are those of
+the old "To confirm" list, as cited on #100; #64's own "Open questions" are a different list.
 
 - **1.** **The exact `picotool` commands and file contents for each production write.** dev-1's are
   in [`docs/otp/dev-1/`](../otp/dev-1/README.md) and all ran on 2026-11-26: `picotool otp load`
@@ -233,6 +234,7 @@ used on #64.
   attempted.
 - **4.** Raw row writes from Secure code, for the chaff: host tested (#87), then ran on dev-1 on
   2026-11-26 in the rehearsal (page 4) and the burn (page 5).
-- **7.** Which OTP pages the root secret uses: pages 4 to 6. Page 3 is reserved for SOS's own flags
+- **7.** Which OTP pages the root secret uses: pages 4 to 6, and that a failed write leaves the next
+  page usable. Page 3 is reserved for SOS's own flags
   (the console-only marker has its first three rows).
 - **8.** The SSH host key after a wipe: decision 10, built in #88.

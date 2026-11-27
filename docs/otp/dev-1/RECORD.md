@@ -51,11 +51,11 @@ real root secret, the rehearsal and the real burn became the same run (agreed 20
 
 1. The first burn on dev-1 was **stopped on purpose**, by a stop point in the burn command
    (`rootsecret burn rehearse`), after the data rows and their chaff were written and read back,
-   before the marker and the locks. Not by pulling the cable: a power cut lands wherever it
+   before the check and the marker. The page was then locked like any other spent page. Not by pulling the cable: a power cut lands wherever it
    lands and tests a different state each time; the stop point gives the one state the skip
-   logic is written for, and can be repeated. It exists only in a burn image built with the
-   rehearsal option. A real power cut partway through a row is a different case and was not
-   tested.
+   logic is written for, and can be repeated. (The plan was a rehearsal option that the
+   production burn image would be built without; as built, every burn image accepts
+   `rehearse`.) A real power cut partway through a row is a different case and was not tested.
 2. **Any ending but "rehearsal: stopped on purpose", with the page locked, stopped the run.** It
    was the first time `program()`, the boot ROM's write call and the read-back through the
    memory-mapped alias ran on a chip at all: a failed row would have meant one of them was
@@ -65,9 +65,11 @@ real root secret, the rehearsal and the real burn became the same run (agreed 20
 
 **What the spent page holds:** 32 random bytes with their chaff and no marker. They were never a
 root secret: nothing was derived from or sealed under them, and the second run took fresh bytes
-from the TRNG. Between the two runs the page had no locks, and a cable-holder could have
-completed it into a root secret of their choosing, so the second run (which locks it) followed
-in the same sitting.
+from the TRNG. The plan before #87 expected the spent page to stay unlocked until the second
+run, which is why the two runs were done in one sitting; as built, the rehearsal locks it
+itself (runbook step 4: `OTP page 4: locked against the bootloader`). The plan also listed a
+check that the second page's secret differs from the first page's contents; the runbook as run
+has no such step.
 
 This exercised the skip logic on the real page list, at the cost of one of dev-1's three list
 pages. The alternative, a rehearsal build with its own list of spare pages, would have kept all
@@ -89,7 +91,6 @@ unknown key was not tried, only an unsigned one. The production board should try
 | `bootkey` saying `MATCH`, for each of the two keys | 8, 9 | yes |
 | `picotool load -f` of a signed image on a board with valid boot keys | 9 | yes |
 | BOOTSEL by the button, then `picotool load --ser` by hand (the recovery path) | 2 | yes, on the open board |
-| The `version` warning between an OTP write and the reset | 10 | no |
 | The boot ROM starting a signed image with secure boot on | 10 | **no** |
 | The boot ROM refusing an unsigned image, and the board coming back to BOOTSEL so a good image can be loaded | 11 | **no, and it can't be:** an open board runs anything |
 | `picotool load -f` and `ninja flash` on a secured board with the bootloader kept | after 10 | **no** |
@@ -98,16 +99,25 @@ The "no" rows were the accepted risk of doing this on the only board. What could
 them beforehand was everything above them: the key compared four ways, the signature verified
 by `picotool`, and both keys shown to match.
 
-The rehearsal's duration was recorded on #64; it is the time the chip needs per OTP row, and
-says how much margin the burn's watchdog feeding has.
+**Not recorded:** the rehearsal's duration (`It took ... ms.`, runbook step 4), which #64 notes.
+It is the time the chip needs per OTP row, and says how much margin the burn's watchdog feeding
+has: record it on the next burn (#100).
+
+**Not seen:** the `version` warning (`WARNING: the OTP rows say otherwise`) between an OTP write
+and the next reset. The writes were made with `picotool` from BOOTSEL, after which the board
+restarts, so there was no window to see it.
+
+**Attack trials:** only the USB side was tried on dev-1 (reads of the locked pages refused, an
+unsigned image refused). The rest of the production list is for the production board (#100).
 
 ## Page 3 lock
 
 Decision 11 on dev-1: only page 3 and the root secret's list pages are locked against
-bootloader writes. The list pages were locked by the burn, page 3 by runbook step 12. Its test
-writes the value 0 to row 0x0ff, which changes no bit even if the lock didn't take and is
-nowhere near the console-only marker's rows; a read of page 1 or 2 is still answered, showing
-those pages were left open as intended.
+bootloader writes. The list pages were locked by the burn, page 3 by runbook step 12 (lock
+word 0x101010: bootloader read-only). Its test writes the value 0 to row 0x0ff, which changes no
+bit even if the lock didn't take and is nowhere near the console-only marker's rows. The write
+is refused (`permission failure`), while its `OLD_VALUE=0x000000` shows the bootloader can still
+read page 3, as intended. No other value or row is used to test a lock.
 
 ## Living with it
 

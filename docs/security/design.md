@@ -13,8 +13,8 @@ Sources: the RP2350 datasheet in `docs/rp2350/` (sections 10.5, 10.9, 13.4, 13.5
 appendix D), `picotool otp list` from picotool 2.3.1 for the field names, and Raspberry Pi's
 post ["Security through transparency: RP2350 Hacking Challenge results are
 in"](https://www.raspberrypi.com/news/security-through-transparency-rp2350-hacking-challenge-results-are-in/).
-Points not confirmed from those are listed under "Open questions" in
-[decisions.md](decisions.md#open-questions).
+Points not confirmed from those are listed under "To confirm" in
+[decisions.md](decisions.md#to-confirm).
 
 ## What a secured board protects against
 
@@ -68,44 +68,50 @@ what the burn command writes.
 - **Finding the page.** The firmware tries the pages of the list in order. A page holds a
   complete secret only if a marker row, written last, is there and a check over the secret
   matches; the secret alone has no magic number. A page that is neither blank nor complete is
-  spent and is skipped. A blank page ends the search: no secret yet.
-- **Spent pages are checked at every boot.** If a list page before the secret's page isn't
-  locked against bootloader writes, an open board warns and a console-only board refuses the
-  secret (see the last step of the burn, below).
+  spent and is skipped (so is a blank page the firmware can't write, which the burn never
+  makes: a lock alone can't block the list). Otherwise a blank page ends the search: no secret
+  yet.
+- **Locks are checked at every boot.** If any list page up to and including the secret's page
+  isn't locked against bootloader writes, an open board warns and a console-only board refuses
+  the secret (see why under the burn, below).
 
 ### Writing it: the burn image (#87)
 
 A console command, `rootsecret burn` (with `plan` and `rehearse`), takes 32 bytes from the
 TRNG and writes them to the first blank page of the list. The secret never leaves the board and
-is never shown. In order, it writes:
+is never shown. The order is the one in `src/core/rootburn.h`:
 
-1. the data rows, with error correction;
-2. the chaff the datasheet recommends against imaging (section 13.8.2): for each data row
-   *i*, it reads back the row's **raw** 24 bits, error-correction bits included, and writes
-   their bitwise complement as a **raw** row at 32 + *i*. Chaff rows are never read as
-   error-corrected rows;
-3. reads everything back and compares;
-4. the marker row and check, last;
-5. the page's locks: bootloader inaccessible, Non-secure inaccessible, Secure read-only (which
-   also stops a later bug from rewriting the page). On an A2 the bootloader lock is the one
-   erratum E21 defeats by glitching; its workaround is disabling the USB bootloader, which
-   decision 2 leaves for later;
-6. **the locks of every list page before it,** which are spent pages: at least "bootloader
-   read-only", and Secure read-only. A spent page holds 32 bytes and no marker. Left writable
+1. **It locks every list page before that one,** which are spent pages: bootloader read-only
+   at least, and Secure read-only. A spent page holds 32 bytes and no marker. Left writable
    from the bootloader, someone with a cable could read those bytes, write the check rows and
    the marker, and so make it the board's root secret, one they know; on a console-only board
    they could then load a configuration sealed under it.
+2. It writes the data rows, with error correction, reading each back.
+3. It writes the chaff the datasheet recommends against imaging (section 13.8.2): for each data
+   row *i*, it reads back the row's **raw** 24 bits, error-correction bits included, and writes
+   their bitwise complement as a **raw** row at 32 + *i*. Chaff rows are never read as
+   error-corrected rows. (`rehearse` stops here on purpose: the page is spent, and locked like
+   any other spent page.)
+4. It writes the check over the secret.
+5. It reads the secret and the check back the careful way and verifies them.
+6. It writes the marker. Only now does the page hold a root secret.
+7. It locks the page: bootloader inaccessible, Non-secure inaccessible, Secure read-only (which
+   also stops a later bug from rewriting the page). On an A2 the bootloader lock is the one
+   erratum E21 defeats by glitching; its workaround is disabling the USB bootloader, which
+   decision 2 leaves for later.
 
-A burn that ends in an error prints `STOP HERE`, and the image refuses further runs until the
-board restarts: a fault in how OTP is written would spend the next page exactly as it spent
-this one.
+If anything fails after something was written, the page is spent: the run locks it and reports
+where it stopped. A page that still reads blank is never locked: if the very first write fails
+and nothing landed, the page is left blank and unlocked, and the next run uses it. A burn that
+ends in an error other than "nobody held the button" prints `STOP HERE`, and the image refuses
+further runs until the board restarts: a fault in how OTP is written would spend the next page
+exactly as it spent this one.
 
 **It is not part of everyday firmware** (decision 12). It is built only into a separate burn
 image (`-DSOS_BURN_IMAGE=ON`, off by default), flashed for the burn and replaced afterwards, so
 boards in use carry no code that writes OTP. It needs someone present: the console password,
-the board's serial typed in, and the BOOTSEL button held while it runs. The rehearsal stop
-point (`rootsecret burn rehearse`, which stops after the data rows and chaff, before the marker
-and locks) exists only in a burn image built with the rehearsal option.
+the board's serial and the word `BURN` (or `REHEARSE`) typed in, and the BOOTSEL button held
+while it runs. Every burn image accepts `rehearse`; there is no build without it.
 
 ## Knowing a board is secured: the console-only marker (#84)
 
@@ -136,8 +142,8 @@ Why OTP and not something else:
 ## Secure boot and the boot keys
 
 With `CRIT1.SECURE_BOOT_ENABLE` set, the boot ROM runs only images signed with a key whose
-hash is in a valid boot key slot (`BOOTKEY0` to `BOOTKEY3`, marked valid in
-`BOOT_FLAGS1.KEY_VALID`). The boot key is a secp256k1 key pair. The private half signs
+hash is in a boot key slot (`BOOTKEY0` to `BOOTKEY3`) marked valid in
+`BOOT_FLAGS1.KEY_VALID` and not marked invalid in `BOOT_FLAGS1.KEY_INVALID`. The boot key is a secp256k1 key pair. The private half signs
 firmware (`SOS_SIGN_KEY`, #70); the SHA-256 of the public key's 64 raw bytes (X then Y) goes
 into the slot. Whoever holds a private key can make firmware a secured board will run, and if
 every private key is lost the board keeps its last firmware for ever.
@@ -162,9 +168,11 @@ every private key is lost the board keeps its last firmware for ever.
 `ninja flash` and `tools/flash.sh` refuse an image that isn't signed with an accepted key, so
 that a checkout with a missing build setting can't leave a secured board in the bootloader by
 accident. The accepted keys are a list of public key hashes kept per machine
-(`~/.config/sos/flash-keys`): a list, because a board may accept two keys; hashes, so the guard
-works where no private key is present. It guards our own tools only: `picotool load` typed by
-hand goes around it. `SOS_FLASH_UNGUARDED=1` turns it off for one flash.
+(`$SOS_FLASH_KEYS`, or `sos/flash-keys` under `$XDG_CONFIG_HOME`, by default
+`~/.config/sos/flash-keys`): a list, because a board may accept two keys; hashes, so the guard
+works where no private key is present. With no list on the machine there is no guard. It guards
+our own tools only: `picotool load` typed by hand goes around it. `SOS_FLASH_UNGUARDED=1` turns
+it off for one flash.
 
 ## The glitch detector
 
@@ -189,8 +197,13 @@ section 10.9.)
 **Arming it by software (#78).** The detector can also be armed with its `ARM` register, at a
 sensitivity set in its `SENSITIVITY` register. SOS does this at every boot, at sensitivity 3 by
 default (`glitch off` on the console turns it off), and reports detector resets in the log,
-`uptime` and `glitch`, with the chip temperature and supply voltage at the time (#92; `temp`
-and `power` show them). Armed by software it starts a second or two into boot, and software can
+`uptime` and `glitch`, with the chip temperature and supply voltage at the time (#92).
+
+The chip's own temperature sensor and the board's supply voltage (VSYS) are each read every
+10 s, with whether USB power is present. The readings are logged with every detector trigger
+and kept across a detector reset, and a line goes to the log at boot, on each degree or 0.2 V of
+change, when USB power comes or goes, and at least hourly, so a serial logger on the console
+can record them for a long test. `temp` and `power` show the lowest and highest since boot. Armed by software it starts a second or two into boot, and software can
 turn it off again: it shows whether the detector troubles a healthy board, but it is not the
 protection the OTP bit would be.
 
@@ -217,7 +230,7 @@ more attempts.
 
 **Software can disarm it.** The detector block has a `DISARM` register. A secured board's
 firmware should lock the detector's registers at boot (its `LOCK` register), so a bug can't be
-used to switch it off (open question 5).
+used to switch it off (to-confirm item 5).
 
 Whether and at which sensitivity to arm it in OTP is decision 5.
 
