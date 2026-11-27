@@ -16,8 +16,10 @@ reference.
 Status (2026-11-27): all phases are built and merged: 1 (the FAT32 checker, #223), 2 (exFAT,
 #232), 3 (`sd check` on the device, #226), 4 (the fault harness and FAT32 repair, #238; exFAT
 repair, #249) and 5 (the test-build fault commands, #231; `sd check fix`, #239). The phase 5
-board run was done on dev-1 on 2026-11-27 with an exFAT card. Still owed: the same run on a
-FAT32 card, blocked because `sd format fat32` fails on dev-1's card (#247). Tracking issue: #213.
+board run was done on dev-1 on 2026-11-27 on an exFAT card and, once `sd format fat32` worked
+again (#247, fixed by #251), on a FAT32 card: real damage from `sd fault reboot`, repairs
+stopped by failed writes and resets, full repairs, reference files unchanged. Tracking issue:
+#213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
