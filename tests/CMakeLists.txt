@@ -426,6 +426,9 @@ add_test(NAME man_topic COMMAND test_man_topic)
 # man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
 add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)
 
+# tz/: tz/zones.bundle names the release in tz/VERSION and every line fits (tools/tz-bundle.sh).
+add_test(NAME tz-bundle COMMAND bash ${SOS_ROOT}/tools/tz-bundle.sh --check)
+
 # Fuzz targets (tests/fuzz/): parsers of what the network, the card, the flash and terminals
 # send. Each runs here over its corpus (tests/fuzz/corpus/<name>/: seeds, and any input that
 # once crashed it) with the sanitizers of this build. With clang and -DSOS_FUZZ=ON each is

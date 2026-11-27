@@ -268,10 +268,10 @@ compile database exists.
 
 ## Git hooks
 
-`.githooks/pre-commit` refuses a commit whose generated files are stale. Today that is the
-manual pages: `man/pages.bundle` and `docs/commands.md` are built from `man/*.txt` by
-`tools/man-bundle.sh`, and `man install` downloads the bundle from GitHub as committed. Turn it
-on once per clone (every worktree of the clone shares the setting):
+`.githooks/pre-commit` refuses a commit whose generated files are stale: the manual pages
+(`man/pages.bundle` and `docs/commands.md`, built from `man/*.txt` by `tools/man-bundle.sh`; `man
+install` downloads the bundle from GitHub as committed) and the time zone bundle (see "Time zone
+bundle" below). Turn it on once per clone (every worktree of the clone shares the setting):
 
 ```sh
 git config core.hooksPath .githooks
@@ -290,6 +290,27 @@ the script, or, for a finding that is wrong in that place, add a
 `# shellcheck disable=SCnnnn` line above it saying why. Without shellcheck installed the hook
 skips this with a note. `just lint` (or `tools/lint-shell.sh`) checks every script in the working
 tree; `.shellcheckrc` holds the settings.
+
+## Time zone bundle
+
+`tz/zones.bundle` gives each IANA time zone's current rule, one line per zone, for example
+`Europe/Madrid CET-1CEST,M3.5.0,M10.5.0/3`. It's the file `time zone` reads on the card (#240).
+It's committed, so nobody needs to build it except whoever updates the release.
+
+- **To update:** write the new release (for example `2026g`) in `tz/VERSION` and run
+  `tools/tz-bundle.sh`, then commit both files. The diff shows which zones changed.
+- **What the script does:** it downloads `tzdata` and `tzcode` for that release from
+  `data.iana.org` and checks both detached signatures against `tz/maintainers.asc`. That is the
+  TZ Coordinator's key, and its fingerprint is pinned in the script. It then builds `zic` from the
+  release's own code, compiles the zones (`-b slim`), and keeps each zone's footer rule. The same
+  release always gives the same bytes.
+- **What it needs:** `gpg`, `curl`, `make`, a C compiler, and network access.
+- **If the signature check fails, stop.** A release signed by a different key means finding out
+  why before changing the pinned fingerprint.
+
+The pre-commit hook and the host test `tz-bundle` run `tools/tz-bundle.sh --check`, which needs
+no network. It checks that the header names `tz/VERSION` and that every name and rule fits the
+board's config fields (39 and 63 characters).
 
 ## Static analysis
 
