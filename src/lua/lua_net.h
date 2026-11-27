@@ -4,6 +4,12 @@
 // Core 0's side of sos.wifi.scan, sos.net.resolve and sos.ping: requests that take a while
 // (a scan, a DNS lookup, a ping a second), so they stay pending across main-loop passes as
 // sos.http's do, and are served from the main loop only. One at a time (one script runs).
+//
+// The scan shares the Wi-Fi name collection with a shell's SSID question (Tab), and the two can
+// cut each other short, harmlessly: a question that ends while a script's scan joined its
+// collection stops it, and the script gets the list as it stands (possibly empty); a script's
+// own scan that a question's Tab joined is stopped when the script has its answer, and the next
+// Tab starts a new scan. A script never stops a collection it didn't start.
 
 #ifndef SOS_LUA_NET_H
 #define SOS_LUA_NET_H
