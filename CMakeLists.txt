@@ -226,6 +226,7 @@ set(SOS_SOURCES
     src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/fsck.c
+    src/files/fsck_exfat.c
     src/files/files.c
     src/files/path.c
     src/files/sdcrypt.c
@@ -426,10 +427,11 @@ endif()
 
 # Test commands (issue #188): -DSOS_TEST_COMMANDS=ON adds `mem hold` and `mem release` on the
 # console, which take heap memory and keep it so the out-of-memory paths can be made to happen
-# on a board. Off by default; not for a board in use.
-option(SOS_TEST_COMMANDS "Add console commands for testing (mem hold, mem release)" OFF)
+# on a board, and `sd fault` (#213), which fails a card write or resets the board before one.
+# Off by default; not for a board in use.
+option(SOS_TEST_COMMANDS "Add console commands for testing (mem hold, mem release, sd fault)" OFF)
 if (SOS_TEST_COMMANDS)
-    target_sources(sos PRIVATE src/core/memhold.c)
+    target_sources(sos PRIVATE src/core/memhold.c src/files/sdfault.c)
     target_compile_definitions(sos PRIVATE SOS_TEST_COMMANDS=1)
     message(STATUS "SOS: this image has the test commands (SOS_TEST_COMMANDS)")
 endif()

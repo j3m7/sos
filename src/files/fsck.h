@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// fsck: a consistency checker for the card's FAT32 volume (exFAT follows), run on an unmounted
-// card. Pure C: it knows nothing of SPI, FatFs or the shell. It reads sectors through a
-// callback and reports problems as text lines, so the same code runs on the board and on image
-// files in tests/test_fsck.c. docs/design/sd-check.md has the design; the rules it leaves open
-// are settled in "Rules" below.
+// fsck: a consistency checker for the card's FAT32 or exFAT volume, run on an unmounted card.
+// Pure C: it knows nothing of SPI, FatFs or the shell. It reads sectors through a callback and
+// reports problems as text lines, so the same code runs on the board and on image files in
+// tests/test_fsck.c. docs/design/sd-check.md has the design; the rules it leaves open are
+// settled in "Rules" below, and for exFAT's own structures in fsck_exfat.h, whose pieces this
+// file strings together.
 //
 // All memory comes from the caller's buffer, and the work is done a bounded number of sector
 // reads at a time (fsck_step()), so the board's main loop keeps running during a check.
@@ -20,10 +21,11 @@
 // - FSInfo: read only when BPB_FSInfo32 is 1, as FatFs reads it. Wrong signatures are a
 //   problem; a free count that isn't 0xFFFFFFFF and differs from the clusters counted free is
 //   a note.
-// - FAT entries: the upper 4 bits are ignored, as FatFs ignores them. A chain ends at
-//   0x0FFFFFF8 or above. 0 (free) and 0x0FFFFFF7 (bad) break it, as does a value below 2 or
-//   above the cluster count + 1. A cluster whose entry is free or bad is not counted in the
-//   chain, so it is reported once, as the break, and never as "reached but free".
+// - FAT entries: on FAT32 the upper 4 bits are ignored, as FatFs ignores them. A chain ends at
+//   0x0FFFFFF8 or above (exFAT: 0xFFFFFFF8 or above, all 32 bits read). 0 (free) and the bad
+//   mark (0x0FFFFFF7, exFAT 0xFFFFFFF7) break it, as does a value below 2 or above the cluster
+//   count + 1. A cluster whose entry is free or bad is not counted in the chain, so it is
+//   reported once, as the break, and never as "reached but free".
 // - Sizes are compared only for chains that end properly; a broken chain is reported as
 //   broken, not also as too short.
 // - Directories: a directory whose chain loops is not entered. One whose chain breaks is read
@@ -37,6 +39,10 @@
 // - "." and "..": in a subdirectory entries 0 and 1 must be "." (the directory's own cluster)
 //   and ".." (the parent's, 0 for the root; the root's own cluster number is accepted too, as
 //   FatFs accepts it). Anywhere else, and anywhere in the root, they are reported.
+// - Case on exFAT: name hashes are computed, and names compared, with io->upcase, which the
+//   board sets to FatFs's ff_wtoupper(). NULL means fsck_upcase() below, a subset: then names
+//   with letters outside it get a hash FatFs computes differently (reported as wrong), and the
+//   volume's up-case table is noted as differing from it. FAT32 always uses fsck_upcase().
 // - Names: a long name with a character FatFs refuses (controls, 0x7F, "*/:<>?\|) is reported;
 //   so is a short name with a control (other than 0x05 first), 0x7F, a space first, or one of
 //   "*+,./:;<=>?[\]|, which FatFs never writes into a short name.
@@ -44,28 +50,49 @@
 //   name (a short name stands in for a missing long one) compared case-insensitively. Case is
 //   folded for ASCII, Latin-1, Latin Extended-A, Greek and Cyrillic exactly as FatFs folds it
 //   (fsck_upcase()); other letters compare as they are, so a repeat that differs only in case
-//   in another script isn't seen. That keeps FatFs's 1 KB case table out of this file. In pass
-//   1 each directory is read once more before its entries are followed: a Bloom filter of the
-//   names seen so far picks candidates, and a rescan of the directory up to the entry confirms
-//   each one. Rescans stop, with a note, once they have read four times the directory's size.
+//   in another script isn't seen. That keeps FatFs's 1 KB case table out of this file. exFAT:
+//   two File entry sets with the same name, compared unit by unit after io->upcase, as FatFs's
+//   dir_find() compares them. In pass 1 each directory is read once more before its entries are
+//   followed: a Bloom filter of the names seen so far picks candidates, and a rescan of the
+//   directory up to the entry confirms each one. Rescans stop, with a note, once they have read
+//   four times the directory's size.
 // - Cross-links: reported once for each entry that reaches a cluster an earlier entry (in walk
 //   order) already uses, naming that entry only. With one successor per FAT entry, chains that
 //   share any cluster share their last one, so the line is printed in the pass whose window holds
 //   that last cluster: the same lines whatever the window size. Cross-linked clusters are
 //   counted one by one. A chain that loops is reported as looping and not as cross-linked.
-// - Lost clusters (used in the FAT, reached by nothing, not marked bad) are reported as runs of
-//   consecutive cluster numbers; a run that crosses a window boundary is still one line.
+// - exFAT cross-links: a NoFatChain run can share any part of another entry's clusters, so
+//   the FAT32 reasoning doesn't hold. An entry is named when its last cluster (of its run, or
+//   the last its chain reaches) was already used by an earlier entry, in the pass whose window
+//   holds that cluster. Every re-used cluster is counted in cross_linked; if some are and no
+//   entry was named, one line gives their number. The lines stay the same whatever the window.
+// - Lost clusters (FAT32: used in the FAT, reached by nothing, not marked bad; exFAT: set in the
+//   allocation bitmap and reached by nothing) are reported as runs of consecutive cluster
+//   numbers; a run that crosses a window boundary is still one line. On exFAT, clusters reached
+//   and clear in the bitmap are reported the same way, as "reached but free"; the FAT isn't
+//   used for accounting, and bad clusters aren't counted.
+// - exFAT walk: the root is read along its FAT chain; a subdirectory for DataLength / 32
+//   entries, contiguously when NoFatChain is set, else along its chain, and at most FatFs's
+//   MAX_DIR_EX entries. A set with problems is still followed when its stream entry was read
+//   and its first cluster is in range (FatFs refuses it, but the bitmap holds its clusters).
+//   The chains of directories, the bitmap and the up-case table are checked against their
+//   DataLength like files'. The allocation bitmap is read as FatFs reads it, contiguously from
+//   its first cluster, so its FAT chain must run on cluster by cluster to 0xFFFFFFFF (FatFs
+//   refuses the volume otherwise: a problem); without a usable bitmap entry the clusters are
+//   not compared at all. The up-case table is read once, in pass 1.
 // - Notes are report lines too, starting "note: ". They share the FSCK_REPORT_MAX limit with the
 //   problems but are counted apart, and they don't make "no problems" false. They are: a stale
-//   FSInfo free count, a chain longer than its file, the dirty and disk-error bits of FAT
-//   entry 1, and rescans for repeated names cut short.
-// - Work: in each pass, after following 4 * clusters + 64 chain steps the walk stops with a
+//   FSInfo free count, a chain longer than its file (also counted in long_chains, the clusters
+//   repair trims), FAT entry 0 not matching the media byte, the dirty and disk-error bits of
+//   FAT entry 1 or of exFAT's VolumeFlags, an up-case table that maps characters unlike
+//   io->upcase, and rescans for repeated names cut short.
+// - Work: in each pass, after following 4 * clusters + 64 chain steps (a NoFatChain run counts
+//   its clusters) the walk stops with a
 //   problem saying the result is incomplete. A volume whose chains don't overlap can't get
 //   there; this bounds the work on a hostile or badly damaged card.
 // - Summary: "no problems" or "N problems; <size> lost, <n> cross-linked", then "; <n> bad
-//   clusters" when there are any and "; volume flagged dirty" when FAT entry 1 says so.
-// - exFAT is found but not checked yet: fsck_step() returns FSCK_FAILED with why = "exFAT is not
-//   checked yet".
+//   clusters" when there are any and "; volume flagged dirty" when FAT entry 1 or VolumeFlags
+//   says so.
 
 #ifndef SOS_FSCK_H
 #define SOS_FSCK_H
@@ -90,6 +117,9 @@ typedef struct {
     bool (*write)(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
     void *ctx;
     uint64_t sectors;           // size of the device as the layer shows it
+    // FatFs's up-case conversion, ff_wtoupper(), for exFAT names (see "Case on exFAT"
+    // above); NULL: the subset in fsck_upcase().
+    uint32_t (*upcase)(uint32_t c);
 } fsck_io_t;
 
 typedef enum { FSCK_KIND_NONE, FSCK_KIND_FAT32, FSCK_KIND_EXFAT } fsck_kind_t;
@@ -105,13 +135,15 @@ typedef struct {
     uint32_t pass;              // the pass running, from 1
     uint32_t problems;          // problems found, reported or not
     uint32_t notes;
+    uint32_t long_chains;       // notes for chains longer than their file (repair trims them)
     uint32_t reported;          // lines given to report()
     uint32_t files, dirs;       // entries walked (the root counts as a directory)
-    uint32_t free_clusters;     // FAT entries 0
-    uint32_t bad_clusters;      // FAT entries 0x0FFFFFF7
-    uint32_t lost_clusters;     // used in the FAT, reached by nothing
+    uint32_t free_clusters;     // FAT entries 0; exFAT: clear in the allocation bitmap
+    uint32_t bad_clusters;      // FAT32's entries 0x0FFFFFF7
+    uint32_t lost_clusters;     // used in the FAT (exFAT: the bitmap), reached by nothing
+    uint32_t reached_free;      // exFAT: reached, but clear in the allocation bitmap
     uint32_t cross_linked;      // clusters reached by a second entry
-    bool dirty;                 // FAT entry 1's clean-shutdown bit is clear
+    bool dirty;                 // FAT entry 1's clean-shutdown bit clear, or exFAT's dirty flag
     char summary[FSCK_SUMMARY_MAX];  // once FSCK_DONE: "no problems" or "N problems; ..."
 } fsck_result_t;
 
@@ -119,10 +151,10 @@ typedef struct fsck fsck_t;     // the checker's state, placed in the caller's m
 
 enum { FSCK_MORE, FSCK_DONE, FSCK_FAILED };
 
-// The fixed part of the checker's memory: about 5.9 KB (three sector buffers, two long names,
-// the directory stack of 64 x 24 bytes, a 512-byte Bloom filter, the path and the report
-// line). fsck_new() uses the rest of `mem` as the cluster window: a bitmap of W bytes covers
-// 8W clusters per pass.
+// The fixed part of the checker's memory: about 7 KB (three sector buffers, two long names,
+// the directory stack of 64 x 28 bytes, a 512-byte Bloom filter, exFAT's entry set reader,
+// the path and the report line). fsck_new() uses the rest of `mem` as the cluster window: a
+// bitmap of W bytes covers 8W clusters per pass.
 size_t fsck_state_size(void);
 
 // Set up a check of the device `io` describes (`io` is copied; a check never calls
