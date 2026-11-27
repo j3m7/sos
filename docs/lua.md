@@ -69,6 +69,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 | `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
 | `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
+| `sos.reboot([why])` | restart the board, logging `why` and the script's name. Refused (`nil` and a message) until the board has been up 10 minutes: a normal restart runs `/autorun.lua` again, so a script that reboots at once would loop |
 | `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
@@ -216,6 +217,22 @@ sos.every(60, function()
   local s = sos.sensors()
   if (s.temp or 0) > 60 or (s.vsys or 5) < 4.2 then
     sos.log(string.format("health: %.1f C, %.2f V", s.temp or 0, s.vsys or 0), "warning")
+  end
+end)
+```
+
+A watchdog for the network, using the board health tables below and `sos.reboot`:
+
+```lua
+-- /autorun.lua: restart the board after an hour without Wi-Fi
+local down_since
+sos.every(60, function()
+  if sos.wifi.status().up then
+    down_since = nil
+  elseif not down_since then
+    down_since = sos.uptime()
+  elseif sos.uptime() - down_since > 3600 then
+    sos.reboot("no Wi-Fi for an hour")
   end
 end)
 ```

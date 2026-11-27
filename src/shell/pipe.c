@@ -595,7 +595,10 @@ bool pipe_open(shell_t *sh, pipeline_t *p, words_t *w, int start) {
             shell_printf(sh, "%s: %d filters in a line at most\n", argv[0], PIPE_STAGES_MAX);
             goto fail;
         }
-        st = find_filter(argv[0])->open(sh, argc, argv);    // check_stages() found it
+        const pipe_filter_t *flt = find_filter(argv[0]);
+        if (!flt)                           // can't happen: check_stages() found it
+            goto fail;
+        st = flt->open(sh, argc, argv);
         if (!st)                            // why was printed
             goto fail;
         st->pipe = p;
