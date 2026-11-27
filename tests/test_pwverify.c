@@ -36,6 +36,8 @@ static bool all_zero(const uint8_t *p, size_t n) {
 }
 
 // The derivation is PBKDF2: the value before the keyed step, for a published-style input.
+static pwv_job_t work;       // pwv_compute()'s working space
+
 TEST(pbkdf2_known_answer) {
     pwv_job_t job;
     uint8_t want[32];
@@ -50,10 +52,10 @@ TEST(verifier_known_answers) {
     setup();
     uint8_t out[PWV_LEN], want[PWV_LEN];
     unhex("dfa872565c33d94f47768a8712737140f6750f4c9b42dd2ede6d416a5a925833", want, 32);
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1000, key, out));
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1000, key, out));
     CHECK_MEM(out, want, 32);
     unhex("aca7783ebb857e070b649d8b9ea1e6f2ac35ed63024a2ee621f6b2bbecd793cf", want, 32);
-    CHECK(pwv_compute("x", 1, salt, 2500, key, out));
+    CHECK(pwv_compute(&work, "x", 1, salt, 2500, key, out));
     CHECK_MEM(out, want, 32);
 }
 
@@ -61,7 +63,7 @@ TEST(verifier_known_answers) {
 TEST(slices_give_the_same_result) {
     setup();
     uint8_t whole[PWV_LEN], sliced[PWV_LEN];
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1500, key, whole));
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1500, key, whole));
     static const uint32_t sizes[] = { 1, 7, 100, 1498, 1499, 5000 };
     for (unsigned k = 0; k < sizeof(sizes) / sizeof(sizes[0]); k++) {
         pwv_job_t job;
@@ -78,22 +80,22 @@ TEST(slices_give_the_same_result) {
 TEST(anything_different_gives_another_verifier) {
     setup();
     uint8_t a[PWV_LEN], b[PWV_LEN];
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1000, key, a));
-    CHECK(pwv_compute("correct horse batterz", 21, salt, 1000, key, b));    // the password
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1000, key, a));
+    CHECK(pwv_compute(&work, "correct horse batterz", 21, salt, 1000, key, b));    // the password
     CHECK(!pwv_equal(a, b));
-    CHECK(pwv_compute("correct horse batter", 20, salt, 1000, key, b));     // its length
+    CHECK(pwv_compute(&work, "correct horse batter", 20, salt, 1000, key, b));     // its length
     CHECK(!pwv_equal(a, b));
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1001, key, b));    // the count
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1001, key, b));    // the count
     CHECK(!pwv_equal(a, b));
     salt[15] ^= 1;
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1000, key, b));    // the salt
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1000, key, b));    // the salt
     CHECK(!pwv_equal(a, b));
     salt[15] ^= 1;
     key[0] ^= 1;                                                            // another board
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1000, key, b));
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1000, key, b));
     CHECK(!pwv_equal(a, b));
     key[0] ^= 1;
-    CHECK(pwv_compute("correct horse battery", 21, salt, 1000, key, b));
+    CHECK(pwv_compute(&work, "correct horse battery", 21, salt, 1000, key, b));
     CHECK(pwv_equal(a, b));
 }
 
@@ -117,7 +119,7 @@ TEST(iteration_count_limits) {
     CHECK(!pwv_start(&job, "password", 8, salt, PWV_ITERATIONS_MIN - 1));
     CHECK(!pwv_start(&job, "password", 8, salt, PWV_ITERATIONS_MAX + 1));
     memset(out, 0xaa, sizeof(out));
-    CHECK(!pwv_compute("password", 8, salt, 1, key, out));      // a stored count of 1 is refused
+    CHECK(!pwv_compute(&work, "password", 8, salt, 1, key, out));  // a stored count of 1 is refused
     CHECK(all_zero(out, sizeof(out)));
     CHECK(pwv_start(&job, "password", 8, salt, PWV_ITERATIONS_MIN));
     pwv_abort(&job);

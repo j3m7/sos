@@ -32,6 +32,54 @@ typedef struct {
 
 typedef struct shell shell_t;
 
+// --- commands --------------------------------------------------------------------------------
+// The command module keeps its commands in tables: shell_execute() looks a command up by name
+// there, and Tab completes the name and the subcommand words from them (shell/complete.h).
+
+#define SHELL_ADMIN  0x01      // offered by Tab only on an admin channel (the command checks too)
+#define SHELL_HIDDEN 0x02      // never offered by Tab (an alias, a testing command)
+#define SHELL_PATH   0x04      // the words after it are paths on the SD card: Tab completes them
+#define SHELL_DIR    0x08      // with SHELL_PATH: paths of directories (Tab offers only those)
+#define SHELL_REDIRECT 0x10    // a command: the text after the line's last '>' is a path (echo)
+#define SHELL_NOSPACE  0x20    // a word Tab ends with nothing, not a space ("https://")
+#define SHELL_VALUES   0x40    // marks a shell_values_t (below); not for other entries
+
+// A word that may follow a command or another word, e.g. "sync" after "time". `words` are the
+// words that may follow this one (NULL: none, or free text Tab can't guess). Arrays of them end
+// with an entry whose name is NULL.
+typedef struct shell_word {
+    const char *name;
+    const struct shell_word *words;
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR, SHELL_NOSPACE
+} shell_word_t;
+
+// Values a word takes that only the running board knows (key numbers, saved networks, hosts).
+// `fn` is called with each value and a note to show beside it in Tab's list (NULL for none);
+// both are copied before `fn` returns, so they may live in a buffer of the caller's.
+typedef void (*shell_value_fn)(const char *value, const char *note, void *arg);
+typedef void (*shell_values_fn)(shell_t *sh, shell_value_fn fn, void *arg);
+
+// Point a `words` field at a shell_values_t's `mark` (SHELL_VALUES_OF) to have Tab ask `list`
+// for those words. `mark` is an empty word list flagged SHELL_VALUES, so code that only knows
+// word lists sees no words.
+typedef struct {
+    shell_word_t mark;          // {NULL, NULL, SHELL_VALUES}
+    shell_values_fn list;
+} shell_values_t;
+
+_Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast back to the struct");
+#define SHELL_VALUES_INIT(fn) {{NULL, NULL, SHELL_VALUES}, (fn)}
+#define SHELL_VALUES_OF(v) (&(v).mark)
+
+// A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
+// end with an entry whose name is NULL.
+typedef struct {
+    const char *name;
+    void (*run)(shell_t *sh, char *args);
+    const shell_word_t *words; // words that may follow the name, for Tab
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR, SHELL_REDIRECT
+} shell_cmd_t;
+
 // Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the
 // question was cancelled with Ctrl-C.
 typedef void (*shell_answer_fn)(shell_t *sh, char *answer, void *arg);
@@ -79,6 +127,7 @@ struct shell {
     char draft[SHELL_LINE_MAX + 1];     // the line being typed before Up, for Down to give back
     size_t draft_len;
     log_quota_t logger_quota;   // `logger`'s rate limit for this shell
+    bool tab_pressed;           // the last key was a Tab that couldn't complete: the next lists
 };
 
 // Bind a shell to a channel and print the greeting and first prompt.
@@ -105,6 +154,10 @@ void shell_logout(shell_t *sh);
 // Run one command line (spaces trimmed, never empty). Implemented by the command module
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
+
+// The command tables Tab completes from, NULL-terminated; NULL when this shell takes no command
+// now (the console is locked). Implemented by the command module (shell.c).
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh);
 
 // Start the console (the admin channel) on a shell that was bound with shell_bind(): ask for
 // the console password, or open it if none is set (shell/login.h). Implemented by shell.c.

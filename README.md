@@ -104,9 +104,23 @@ To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over S
 ## Building
 
 ```sh
-cmake --preset debug          # or: release
+cmake --preset debug          # or: release, minsize
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
+
+The three presets differ in how the compiler optimises (`build/`, `build-release/` and
+`build-minsize/`). Measured on 2026-11-26, on dev-1 where a board was involved:
+
+| Preset | Compiler | Image | SSH login handshake | TLS handshake |
+|---|---|---|---|---|
+| `debug` (the default) | `-Og` | 1,168 KB | 260 to 285 ms | 284 ms |
+| `minsize` | `-Os` | 1,050 KB | 158 to 215 ms | 278 to 281 ms |
+| `release` | `-O3` | 1,386 KB | not run on a board | not run on a board |
+
+`minsize` is 118 KB smaller than `debug` and no slower on the handshakes measured; the SSH and
+SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s against 8.6 s, a
+single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
+about 3,550 of 8,192 bytes). `debug` remains the default.
 
 The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
@@ -306,6 +320,26 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   faults, glitch detector, root secret), `auth` (console and SSH logins, passwords, and every
   configuration change), `daemon` (Wi-Fi, SSH server, time, HTTPS, SD card, chat) or `user`
   (Lua scripts and `logger`).
+- **Log files on the SD card:** every message the history keeps is also written to the card,
+  to one file per facility: `/var/log/kern.log`, `auth.log`, `daemon.log`, `user.log`, and
+  `syslog` for messages without a facility (the last resort). Lines read
+  `2026-11-26T14:03:12.345Z notice console: logged in` (UTC; `+12.345`, seconds since boot,
+  while the clock isn't set), and each boot starts a file with a `--- boot: SOS <commit>, last
+  reset: <why> ---` line. Warnings and errors are written at once, the rest within 5 s. The card
+  is mounted for this at boot; without one, messages wait in the 4 KB history, a mount is tried
+  quietly every minute (not after `sd unmount`, until something mounts the card again), and
+  once one is in they're written, with a line saying how many were dropped meanwhile.
+  Encrypted or plain, whichever card is in. A failed write stops the files until the card is
+  mounted again. `log` shows the state; `log file <level>` sets what's written (default `info`).
+- **Rotation:** every 7 days at 00:00 UTC by default, each file becomes `<name>.1` (replacing
+  the previous one) and a new one starts, so the card holds the current period and the one
+  before. `log rotate` rotates now; `log rotate every <N>d` and `log rotate at <HH:MM>` change
+  when (saved in the configuration; console only). The time of the last rotation is kept on
+  the card (`/var/log/.rotated`), so a reboot keeps the count and a rotation missed while the
+  board was off happens at the first chance; without the clock set nothing rotates.
+- **Protected:** like `/certs`, `/var/log` can be read from anywhere (SSH, SFTP, Lua) but
+  changed only on the console, so a session that gets in can't erase its traces. `/var`
+  itself is protected too (renaming it would move `/var/log`); the rest of `/var` isn't.
 - `logger [-p <level>] <message>` adds a line to the log from any shell (facility `user`, at
   `notice` unless `-p` says otherwise), tagged with the shell it came from. At most 10 a second.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`
@@ -371,7 +405,7 @@ slot added (`alice@laptop/2`). A message arrives between keystrokes: the line be
 redrawn after it, and a full-screen `edit` holds messages until it quits. Messages are kept only
 in memory (the last 16), never in the log or on the card. A client that stops reading holds
 a sender up for at most 2 seconds; after that it misses messages, and is told how many. See
-[docs/commands.md](docs/commands.md#messages) and [`src/chat/`](src/chat/README.md).
+[man/wall.txt](man/wall.txt), [man/chat.txt](man/chat.txt) and [`src/chat/`](src/chat/README.md).
 
 ## Watchdog
 
@@ -605,7 +639,7 @@ columns, and CRLF line ends are kept.
   when it quits; `wall` and `chat` messages wait too.
 - `/certs` can be opened from SSH but saved only from the console.
 
-The keys and details are in [docs/commands.md](docs/commands.md#editor) and
+The keys and details are in the manual page [man/edit.txt](man/edit.txt) and
 [`src/edit/`](src/edit/README.md).
 
 ## HTTPS client
@@ -621,15 +655,23 @@ bidi characters); `sos.http` gives a script the bytes as they are.
   until one finishes. One more TLS connection is always kept free for time sync (NTS).
 - A request is refused while the heap is too low for a TLS handshake (about 64 KB free).
 
-See [docs/commands.md](docs/commands.md#https) and [`src/net/`](src/net/README.md).
+See [man/http.txt](man/http.txt) and [`src/net/`](src/net/README.md).
 
 ## Pager
 
 `more <file>` reads a file of any size a screen at a time (a 16 KB window of it is in memory),
 with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches, q
 quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
-it is the viewer for any command with more text to show than a screen (`edit_view()`; the
-manual pages, when they come, will use it). See [docs/commands.md](docs/commands.md#pager).
+it is the viewer for any command with more text to show than a screen, the manual pages first
+of all. The keys are in [man/more.txt](man/more.txt).
+
+## Manual pages
+
+`man` lists the manual pages and `man <topic>` reads one in the pager: one page per command,
+written in [`man/`](man/README.md) and kept on the SD card as `/man/<topic>.txt`. A board without
+them is offered a download: `man install` fetches them from this repository on GitHub over HTTPS,
+matching the firmware's commit; `tools/man-install.sh <host>` copies them over SFTP instead. See
+[man/README.md](man/README.md) and [man/man.txt](man/man.txt).
 
 ## Lua scripts (prototype)
 

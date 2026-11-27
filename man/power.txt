@@ -1,0 +1,18 @@
+NAME
+    power - the supply voltage, and whether USB power is present
+
+SYNOPSIS
+    power
+
+DESCRIPTION
+    The supply voltage (VSYS, the board's input) and whether USB power is
+    present, with the lowest and highest since boot and how long ago each was.
+    On USB power VSYS is the USB voltage less a diode's drop (about 0.35 V); a
+    battery or other supply feeds it directly. Within a few percent. A reading
+    taken during a Wi-Fi transmission catches its dip (about 0.13 V on USB
+    power), so the lowest can be a brief one. Read every 10 s and logged with
+    the temperature (see 'temp'); the glitch detector's report includes the
+    last reading before a detector reset.
+
+SEE ALSO
+    temp, glitch

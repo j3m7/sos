@@ -143,8 +143,10 @@ set(SOS_SOURCES
     src/core/heaptag.c
     src/core/glitchdet.c
     src/core/chipinfo.c
-    src/core/chiptemp.c
-    src/core/chiptemp_board.c
+    src/core/sensors.c
+    src/core/sensors_board.c
+    src/core/logfile.c
+    src/core/logfile_board.c
     src/core/bootkey.c
     src/core/otpread.c
     src/core/consoleonly.c
@@ -152,6 +154,7 @@ set(SOS_SOURCES
     src/shell/shell.c
     src/shell/keys.c
     src/shell/shell_core.c
+    src/shell/complete.c
     src/shell/login.c
     src/shell/termtext.c
     src/shell/charwidth.c
@@ -161,6 +164,7 @@ set(SOS_SOURCES
     src/edit/pager.c
     src/edit/screen.c
     src/edit/view.c
+    src/man/man.c
     src/chat/chat.c
     src/net/wifi.c
     src/net/wifi_pick.c
@@ -269,7 +273,7 @@ target_link_libraries(sos
     hardware_flash
     hardware_i2c
     hardware_watchdog
-    hardware_adc            # the chip's temperature sensor (core/chiptemp.h)
+    hardware_adc            # chip temperature and supply voltage (core/sensors.h)
     sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)

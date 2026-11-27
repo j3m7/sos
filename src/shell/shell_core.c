@@ -8,6 +8,8 @@
 #include "shell/shell.h"
 #include "core/version.h"
 #include "shell/charwidth.h"
+#include "shell/complete.h"
+#include "shell/termtext.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -98,6 +100,7 @@ void shell_discard_input(shell_t *sh) {
     sh->ahead_len = 0;
     sh->last_was_cr = false;
     sh->keys = (keys_t)KEYS_INIT;
+    sh->tab_pressed = false;
 }
 
 void shell_cancel_question(shell_t *sh) {
@@ -260,6 +263,7 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->line_len = 0;
     sh->last_was_cr = false;
     sh->keys = (keys_t)KEYS_INIT;
+    sh->tab_pressed = false;
     sh->logger_quota = (log_quota_t){0};    // a reused SSH slot starts with its own count
     sh->answer = NULL;
     sh->secret = false;
@@ -420,6 +424,177 @@ static void line_backspace(shell_t *sh) {
             shell_printf(sh, "\b \b");
 }
 
+// --- Tab completion ------------------------------------------------------------------------------
+// Tab completes the word at the end of the line: a command, a word that may follow it, or a
+// file name on the SD card (complete.h). One match: the rest of it, then a space, or '/' for a
+// directory. Several: as far as they agree; when they agree no further, the terminal's bell,
+// and a second Tab lists them.
+
+#define TAB_LIST_COLUMNS 80     // the terminal's width isn't known: list for the narrowest
+
+// Columns the `len` bytes at `text` take on the terminal (valid UTF-8: complete.h).
+static size_t text_columns(const char *text, size_t len) {
+    size_t cols = 0;
+    const unsigned char *p = (const unsigned char *)text, *end = p + len;
+    while (p < end) {
+        unsigned n = utf8_len(*p);
+        if (n <= 1) {
+            cols++;
+            p++;
+            continue;
+        }
+        if (p + n > end)                // cut short: the terminal shows nothing of it yet
+            break;
+        uint32_t cp = p[0] & (0x7f >> n);
+        for (unsigned i = 1; i < n; i++)
+            cp = cp << 6 | (p[i] & 0x3f);
+        cols += (size_t)charwidth(cp);
+        p += n;
+    }
+    return cols;
+}
+
+static char ascii_lower(char c) {
+    return c >= 'A' && c <= 'Z' ? (char)(c + 'a' - 'A') : c;
+}
+
+typedef struct {
+    char first[SHELL_LINE_MAX + 1];     // the first match: a copy (a file name's buffer is reused)
+    bool have;
+    char first_end;             // what follows it: ' ', '/' or nothing ('\0')
+    size_t common;              // bytes all matches have in common
+    size_t widest;              // columns of the widest, with its '/'
+    bool notes;                 // some match has a note: list one a line, the note beside it
+} tab_matches_t;
+
+static void tab_collect(const char *word, char end, const char *note, void *arg) {
+    tab_matches_t *m = arg;
+    if (note && *note)
+        m->notes = true;
+    size_t n = strlen(word);
+    if (!m->have) {
+        memcpy(m->first, word, n + 1);  // fits: complete.h offers no longer word
+        m->have = true;
+        m->first_end = end;
+        m->common = n;
+    } else {
+        size_t i = 0;               // file names match in any ASCII case (complete.h)
+        while (i < m->common && ascii_lower(word[i]) == ascii_lower(m->first[i]))
+            i++;
+        m->common = i;
+    }
+    size_t cols = text_columns(word, n) + (end == '/');
+    if (cols > m->widest)
+        m->widest = cols;
+}
+
+typedef struct {
+    shell_t *sh;
+    size_t width, per_row, in_row, last;   // `last`: columns of the match printed before
+} tab_list_t;
+
+// A note from outside (a key comment, an SSID), as termtext shows outside text: nothing in it
+// reaches the terminal as a control or an invisible character. Line breaks and tabs become
+// spaces, so it stays on its line.
+static void tab_note(shell_t *sh, const char *note) {
+    termtext_t t = TERMTEXT_INIT;
+    char out[32 + 3];
+    size_t len = strlen(note);
+    for (size_t i = 0; i < len; i += 32) {
+        size_t n = len - i < 32 ? len - i : 32;
+        size_t got = termtext_filter(&t, (const uint8_t *)note + i, n, out);
+        for (size_t j = 0; j < got; j++)
+            if (out[j] == '\n' || out[j] == '\t')
+                out[j] = ' ';
+        write_out(sh, out, got);
+    }
+    write_out(sh, out, termtext_flush(&t, out));
+}
+
+// One match of the list, in columns `width` wide; no spaces at the end of a row. With notes
+// (per_row 1), the note after the column.
+static void tab_print(const char *word, char end, const char *note, void *arg) {
+    tab_list_t *l = arg;
+    if (l->in_row == l->per_row) {
+        write_out(l->sh, "\n", 1);
+        l->in_row = 0;
+    } else if (l->in_row) {
+        shell_printf(l->sh, "%*s", (int)(l->width - l->last), "");
+    }
+    l->in_row++;
+    write_out(l->sh, word, strlen(word));
+    if (end == '/')
+        write_out(l->sh, "/", 1);
+    l->last = text_columns(word, strlen(word)) + (end == '/');
+    if (note && *note) {
+        shell_printf(l->sh, "%*s", (int)(l->width - l->last), "");
+        tab_note(l->sh, note);
+    }
+}
+
+static void line_tab(shell_t *sh, bool again) {
+    const shell_cmd_t *const *tables = shell_command_tables(sh);
+    if (!tables)
+        return;
+    complete_src_t src = {tables, sh->io->admin, shell_list_dir, sh};
+    size_t start;
+    bool partial;
+    tab_matches_t m = {0};
+    size_t n = complete_words(&src, sh->line, sh->line_len, &start, tab_collect, &m, &partial);
+    size_t typed = sh->line_len - start;
+    if (n == 0) {
+        write_out(sh, "\a", 1);
+        return;
+    }
+    // Two names can share the first bytes of different characters: stop before those.
+    while (m.common > typed && ((unsigned char)m.first[m.common] & 0xc0) == 0x80)
+        m.common--;
+    // A directory cut short may hold more matches, which needn't share what these do (dev-1:
+    // "f29" in 300 files read 256 of them and would have become "f29.txt", with f290.txt to
+    // f299.txt unread): then don't add to the line at all, only list.
+    bool whole = n == 1 && !partial;
+    if ((m.common > typed && !partial) || whole) {
+        bool end = whole && m.first_end;            // a single match ends with ' ' or '/'
+        size_t add = m.common - typed + end;
+        if (sh->line_len + add > SHELL_LINE_MAX) {
+            write_out(sh, "\a", 1);
+            return;
+        }
+        history_edited(sh);
+        // A file name typed in another case: write it again in the name's own. The bytes and
+        // the columns are the same (only ASCII letters differ), so it covers what was there.
+        if (memcmp(sh->line + start, m.first, typed)) {
+            size_t cols = text_columns(sh->line + start, typed);
+            for (size_t i = 0; i < cols; i++)
+                write_out(sh, "\b", 1);
+            memcpy(sh->line + start, m.first, typed);
+            write_out(sh, sh->line + start, typed);
+        }
+        memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
+        if (end)
+            sh->line[sh->line_len + add - 1] = m.first_end;
+        write_out(sh, sh->line + sh->line_len, add);
+        sh->line_len += add;
+        return;
+    }
+    if (!again) {
+        sh->tab_pressed = true;
+        write_out(sh, "\a", 1);
+        return;
+    }
+    tab_list_t l = {.sh = sh, .width = m.widest + 2};
+    l.per_row = m.notes ? 1 : TAB_LIST_COLUMNS / l.width;
+    if (!l.per_row)
+        l.per_row = 1;
+    write_out(sh, "\n", 1);
+    complete_words(&src, sh->line, sh->line_len, &start, tab_print, &l, &partial);
+    if (partial)
+        shell_printf(sh, "\n(more: the directory is too large to list here)");
+    write_out(sh, "\n", 1);
+    prompt(sh);
+    write_out(sh, sh->line, sh->line_len);
+}
+
 // Line editing for `n` input bytes. Stops early (stashing the rest) if a command starts a job.
 static void process_input(shell_t *sh, const char *buf, size_t n) {
     for (size_t i = 0; i < n; i++) {
@@ -431,6 +606,13 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         sh->last_was_cr = (c == '\r');
 
         int k = keys_feed(&sh->keys, (unsigned char)c);
+        bool tab_again = sh->tab_pressed;       // any other key in between starts over
+        sh->tab_pressed = false;
+        if (k == '\t') {
+            if (!sh->answer)                    // questions (passwords) have nothing to complete
+                line_tab(sh, tab_again);
+            continue;
+        }
         if (k == KEY_UP || k == KEY_DOWN) {
             history_key(sh, k);
             continue;

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
@@ -22,7 +23,6 @@
 #include "chat/chat.h"
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
-#include "core/chiptemp.h"
 #include "core/config.h"
 #include "core/failflash.h"
 #include "core/fault.h"
@@ -31,16 +31,19 @@
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/logfile.h"
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
+#include "core/sensors.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
 #include "core/wdog.h"
 #include "edit/edit.h"
+#include "man/man.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "lua/lua_core1.h"
@@ -226,6 +229,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
+    shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
@@ -254,6 +258,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
@@ -263,7 +268,8 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
-        shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log console|history|file <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log rotate [every <N>d|at <HH:MM>]  rotate the log files now / when\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
@@ -308,25 +314,49 @@ static void cmd_uptime(shell_t *sh) {
                      (unsigned long)(f.max_us / 100 % 10));
 }
 
-// `temp`: the chip's temperature now, and the lowest and highest since boot (core/chiptemp.h).
+// "since boot: lowest ... (... ago), highest ... (... ago), read every 10 s", from a reading's
+// stats and its text function (core/sensors.h).
+static void print_since_boot(shell_t *sh, const sensors_stats_t *st,
+                             void (*format)(char *, size_t, int)) {
+    if (!st->count)
+        return;
+    char lo[SENSORS_TEXT_MAX], hi[SENSORS_TEXT_MAX], lo_age[24], hi_age[24];
+    format(lo, sizeof(lo), st->min);
+    format(hi, sizeof(hi), st->max);
+    sensors_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
+    sensors_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
+    shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
+                 lo, lo_age, hi, hi_age, SENSORS_SAMPLE_S);
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
 static void cmd_temp(shell_t *sh) {
-    int now = chiptemp_read();
-    const chiptemp_stats_t *st = chiptemp_stats();
-    char t[CHIPTEMP_TEXT_MAX], lo[CHIPTEMP_TEXT_MAX], hi[CHIPTEMP_TEXT_MAX];
-    char lo_age[24], hi_age[24];
-    chiptemp_format(t, sizeof(t), now);
+    char t[SENSORS_TEXT_MAX];
+    sensors_format_temp(t, sizeof(t), sensors_read_temp());
     shell_printf(sh, "chip temperature: %s\n", t);
-    if (st->count) {
-        chiptemp_format(lo, sizeof(lo), st->min);
-        chiptemp_format(hi, sizeof(hi), st->max);
-        chiptemp_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
-        chiptemp_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
-        shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
-                     lo, lo_age, hi, hi_age, CHIPTEMP_SAMPLE_S);
-    }
+    print_since_boot(sh, sensors_temp_stats(), sensors_format_temp);
     shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
                      "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
                      "time on this board.\n");
+}
+
+// `power`: the supply voltage (VSYS) now, the lowest and highest since boot, and USB power.
+static void cmd_power(shell_t *sh) {
+    int mv = sensors_read_vsys();
+    if (mv == SENSORS_NONE) {
+        shell_printf(sh, "this board has no supply voltage reading\n");
+        return;
+    }
+    char v[SENSORS_TEXT_MAX];
+    sensors_format_mv(v, sizeof(v), mv);
+    int usb = sensors_usb_power();
+    shell_printf(sh, "supply (VSYS): %s, %s\n", v,
+                 usb > 0 ? "USB power present" : usb == 0 ? "no USB power" : "USB power unknown");
+    print_since_boot(sh, sensors_vsys_stats(), sensors_format_mv);
+    shell_printf(sh, "VSYS is the board's input: USB power through a diode (about 0.35 V below it), "
+                     "or what feeds\nthe VSYS pin. Within a few percent; a reading taken during a "
+                     "Wi-Fi transmission shows\nits dip (about 0.13 V on USB), so the lowest can "
+                     "be a brief one.\n");
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -450,19 +480,116 @@ static void cmd_logger(shell_t *sh, char *args) {
         log_msg(SOS_LOG_USER | level, "logger (%s): %s", sh->io->name, msg);
 }
 
+static void utc_text(char *buf, size_t len, int64_t unix_s) {
+    time_t t = (time_t)unix_s;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    snprintf(buf, len, "%04d-%02d-%02d %02d:%02d UTC", tm.tm_year + 1900, tm.tm_mon + 1,
+             tm.tm_mday, tm.tm_hour, tm.tm_min);
+}
+
+static void show_rotation(shell_t *sh, const logfile_status_t *st) {
+    shell_printf(sh, "rotate:  every %u day%s at %02u:%02u UTC (each file to <name>.1)\n",
+                 st->rotate_days, st->rotate_days == 1 ? "" : "s", st->rotate_minute / 60,
+                 st->rotate_minute % 60);
+    if (st->rotated_known) {
+        char last[32], next[32];
+        utc_text(last, sizeof(last), st->rotated);
+        utc_text(next, sizeof(next), st->next_rotation);
+        shell_printf(sh, "         last %s, next %s\n", last, next);
+    } else {
+        shell_printf(sh, "         not counting yet (needs the card mounted and the clock set)\n");
+    }
+}
+
+// `log rotate [every <days>d | at <HH:MM>]`: rotate the log files now, or set when they rotate
+// (saved in the configuration). Console only: a rotation deletes the oldest files.
+static void cmd_log_rotate(shell_t *sh, char *what, char *value) {
+    if (!require_admin(sh))
+        return;
+    sos_config_t *cfg = settings();
+    if (!what) {
+        const char *err = logfile_rotate();
+        if (err)
+            shell_printf(sh, "not rotated: %s\n", err);
+        else
+            shell_printf(sh, "rotated: each file in %s is now <name>.1\n", LOGFILE_DIR);
+        return;
+    }
+    char *end = NULL;
+    if (!strcmp(what, "every") && value) {
+        unsigned long days = strtoul(value, &end, 10);
+        if (end == value || (*end && strcmp(end, "d")) || days < 1 ||
+            days > CONFIG_LOG_ROTATE_DAYS_MAX) {
+            shell_printf(sh, "not changed: give days from 1 to %u, e.g. 'log rotate every 7d'\n",
+                         CONFIG_LOG_ROTATE_DAYS_MAX);
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation every %lu day%s", days,
+                days == 1 ? "" : "s");
+        cfg->log_rotate_days = (uint16_t)days;
+    } else if (!strcmp(what, "at") && value) {
+        unsigned long h = strtoul(value, &end, 10), m = 0;
+        bool ok = end != value && *end == ':' && end - value <= 2;
+        if (ok) {
+            char *mm = end + 1;
+            m = strtoul(mm, &end, 10);
+            ok = end - mm == 2 && !*end && h < 24 && m < 60;
+        }
+        if (!ok) {
+            shell_printf(sh, "not changed: give a UTC time of day as HH:MM, e.g. 'log rotate at "
+                             "03:30'\n");
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation at %02lu:%02lu UTC", h, m);
+        cfg->log_rotate_minute = (uint16_t)(h * 60 + m);
+    } else {
+        shell_printf(sh, "usage: log rotate [every <days>d | at <HH:MM>]\n");
+        return;
+    }
+    save(sh);
+    logfile_apply_settings();
+    logfile_status_t st;
+    logfile_status(&st);
+    show_rotation(sh, &st);
+}
+
 static void cmd_log(shell_t *sh, char *args) {
     char *what = args ? strtok(args, " ") : NULL;
     char *level = what ? strtok(NULL, " ") : NULL;
+    if (what && !strcmp(what, "rotate")) {
+        cmd_log_rotate(sh, level, level ? strtok(NULL, " ") : NULL);
+        return;
+    }
     if (!what) {
         shell_printf(sh, "console: %s (printed on the serial console)\n",
                      log_level_name(log_console_level()));
         shell_printf(sh, "history: %s (kept for dmesg)\n", log_level_name(log_history_level()));
+        shell_printf(sh, "file:    %s (written to %s on the SD card)\n",
+                     log_level_name(logfile_level()), LOGFILE_DIR);
         shell_printf(sh, "levels:  err warning notice info debug\n");
+        logfile_status_t st;
+        logfile_status(&st);
+        if (st.state == LOGFILE_STOPPED)
+            shell_printf(sh, "files:   stopped: writing %s failed (%s); mount the card again "
+                             "(e.g. `sd`) to start them\n", st.error_path, st.error);
+        else
+            shell_printf(sh, "files:   %s\n", st.state == LOGFILE_WRITING ? "writing"
+                                               : st.state == LOGFILE_NO_CARD ? "no card mounted; "
+                                                 "messages wait in the history"
+                                               : "not started");
+        shell_printf(sh, "written: %lu lines, %lu bytes this boot; %u bytes waiting\n",
+                     (unsigned long)st.lines, (unsigned long)st.bytes, (unsigned)st.buffered);
+        if (st.lost)
+            shell_printf(sh, "lost:    %lu messages dropped from the history before they were "
+                             "written\n", (unsigned long)st.lost);
+        show_rotation(sh, &st);
         return;
     }
     int l = level ? log_level_parse(level) : -1;
-    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history"))) {
-        shell_printf(sh, "usage: log [console|history err|warning|notice|info|debug]\n");
+    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history") && strcmp(what, "file"))) {
+        shell_printf(sh, "usage: log [console|history|file err|warning|notice|info|debug | "
+                         "rotate [every <days>d | at <HH:MM>]]\n");
         return;
     }
     // The log is the record of logins and configuration changes: a session can read it
@@ -473,8 +600,10 @@ static void cmd_log(shell_t *sh, char *args) {
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     if (!strcmp(what, "console"))
         log_set_console_level(l);
-    else
+    else if (!strcmp(what, "history"))
         log_set_history_level(l);
+    else
+        logfile_set_level(l);
     shell_printf(sh, "%s level: %s (until reboot)\n", what, level);
 }
 
@@ -631,10 +760,15 @@ static void wifi_stats(shell_t *sh, bool chip) {
     // 0 frames sent, 2 resent, 15 received, 45 beacon times, 49 RTS sent, 75 CTS received,
     // 85 our access point's beacons received, 87 other networks' beacons, 88 response timeouts,
     // 67/68 received with a bad checksum / header, 70 receptions started.
-    static uint32_t c[128];
-    unsigned n = wifi_chip_counters(c, 128);
+    // The buffer the chip answers into (1 KB), for this command only. The first 128 words are
+    // shown, as before.
+    uint32_t *c = heap_alloc(HEAP_NET, WIFI_CHIP_COUNTER_WORDS * sizeof(uint32_t));
+    unsigned n = c ? wifi_chip_counters(c) : 0;
+    if (n > 128)
+        n = 128;
     if (!n) {
-        shell_printf(sh, "chip counters: not available\n");
+        shell_printf(sh, "chip counters: %s\n", c ? "not available" : "out of memory");
+        heap_release(HEAP_NET, c);
         return;
     }
     shell_printf(sh, "chip counters (version %u, %u bytes), index: value, zeros omitted:\n",
@@ -643,6 +777,7 @@ static void wifi_stats(shell_t *sh, bool chip) {
         if (c[i])
             shell_printf(sh, "%3u: %-10u%s", i - 1, (unsigned)c[i], ++col % 5 ? " " : "\n");
     shell_printf(sh, "\n");
+    heap_release(HEAP_NET, c);
 }
 
 // `wifi set` (arg NULL) replaces the first network; `wifi add` (arg non-NULL) adds one after
@@ -844,12 +979,13 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
                          "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
         if (glitchdet_watch_triggers()) {
-            char t[CHIPTEMP_TEXT_MAX];
-            chiptemp_format(t, sizeof(t), glitchdet_watch_first_temp());
-            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up, chip at "
-                             "%s. Armed, it would have reset the board\n",
+            char both[SENSORS_BOTH_MAX];
+            sensors_format_both(both, sizeof(both), glitchdet_watch_first_temp(),
+                                glitchdet_watch_first_vsys());
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up (%s). "
+                             "Armed, it would have reset the board\n",
                          (unsigned)glitchdet_watch_triggers(),
-                         (unsigned long)glitchdet_watch_first_s(), t);
+                         (unsigned long)glitchdet_watch_first_s(), both);
         } else
             shell_printf(sh, "no trigger since boot\n");
     } else
@@ -866,13 +1002,14 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
                      (unsigned)glitchdet_last_triggers(),
                      (unsigned long)glitchdet_last_uptime_s());
-        char t[CHIPTEMP_TEXT_MAX];
-        chiptemp_format(t, sizeof(t), glitchdet_last_temp());
-        if (glitchdet_last_temp() != CHIPTEMP_NONE)
-            shell_printf(sh, "chip at %s before that reset (last reading, taken every %u s)\n",
-                         t, CHIPTEMP_SAMPLE_S);
+        char both[SENSORS_BOTH_MAX];
+        sensors_format_both(both, sizeof(both), glitchdet_last_temp(), glitchdet_last_vsys());
+        if (glitchdet_last_temp() != SENSORS_NONE || glitchdet_last_vsys() != SENSORS_NONE)
+            shell_printf(sh, "before that reset: %s (last readings, taken every %u s)\n", both,
+                         SENSORS_SAMPLE_S);
         else
-            shell_printf(sh, "no chip temperature was kept from before that reset\n");
+            shell_printf(sh, "no chip temperature or supply reading was kept from before that "
+                             "reset\n");
     }
 }
 
@@ -1230,6 +1367,10 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    unsigned days = c->log_rotate_days ? c->log_rotate_days : CONFIG_LOG_ROTATE_DAYS_DEFAULT;
+    shell_printf(sh, "log rotation:  every %u day%s at %02u:%02u UTC%s\n", days,
+                 days == 1 ? "" : "s", c->log_rotate_minute / 60u, c->log_rotate_minute % 60u,
+                 c->log_rotate_days || c->log_rotate_minute ? "" : " (default)");
     if (!settings_persistent())
         shell_printf(sh, "warning:       flash storage unavailable; changes aren't saved\n");
 }
@@ -1709,6 +1850,232 @@ static void cmd_nts(shell_t *sh, char *args) {
 
 // --- dispatch ------------------------------------------------------------------------------------
 
+// Commands that take no arguments, and others whose handler has another signature.
+static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
+static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
+static void run_temp(shell_t *sh, char *args) { (void)args; cmd_temp(sh); }
+static void run_power(shell_t *sh, char *args) { (void)args; cmd_power(sh); }
+static void run_version(shell_t *sh, char *args) { (void)args; cmd_version(sh); }
+static void run_mem(shell_t *sh, char *args) { (void)args; cmd_mem(sh); }
+static void run_net(shell_t *sh, char *args) { (void)args; cmd_net(sh); }
+static void run_ssh(shell_t *sh, char *args) { (void)args; sshd_status(sh); }
+static void run_bootkey(shell_t *sh, char *args) { (void)args; cmd_bootkey(sh); }
+static void run_rootsecret(shell_t *sh, char *args) { cmd_rootsecret(sh, args); }
+static void run_passwd(shell_t *sh, char *args) { (void)args; cmd_passwd(sh); }
+static void run_setup(shell_t *sh, char *args) { (void)args; cmd_setup(sh); }
+static void run_logout(shell_t *sh, char *args) { (void)args; shell_logout(sh); }
+
+static void run_hostname(shell_t *sh, char *args) {
+    set_field(sh, "hostname", args, settings()->hostname, sizeof(settings()->hostname),
+              config_check_hostname);
+}
+
+static void run_crash(shell_t *sh, char *args) {
+    // Testing the fault record (core/fault.h): stops the firmware on purpose.
+    if (!require_admin(sh))
+        return;
+    if (args)
+        fault_test(args);
+    shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
+}
+
+static void run_reboot(shell_t *sh, char *args) {
+    (void)args;
+    shell_printf(sh, "rebooting...\n");
+    const char *who = chat_name(sh);
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
+            who && strcmp(who, sh->io->name) ? " " : "",
+            who && strcmp(who, sh->io->name) ? who : "");
+    logfile_flush();                    // what the log files haven't written yet
+    sleep_ms(100);
+    watchdog_reboot(0, 0, 0);
+}
+
+// --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
+
+// `key del <n>`: the trusted keys' numbers, as `key list` shows them, with their comments.
+static void tab_key_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    const sos_config_t *c = settings();
+    char n[4];
+    for (unsigned i = 0; i < c->key_count; i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, c->keys[i].comment, arg);
+    }
+}
+
+// `wifi remove|prefer <n>`: the saved networks' numbers, as `wifi` shows them, with their SSIDs.
+static void tab_wifi_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    char n[4];
+    config_wifi_net_t net;
+    for (unsigned i = 0; config_wifi_get(settings(), i, &net); i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, net.ssid, arg);
+    }
+}
+
+// NTS servers the board knows: the build's default and the one set with `time server`.
+static void nts_servers(shell_value_fn fn, void *arg) {
+    const char *set = settings()->ntp_server;
+    fn(NTS_DEFAULT_SERVER, "default", arg);
+    if (set[0] && strcmp(set, NTS_DEFAULT_SERVER))
+        fn(set, "set with 'time server'", arg);
+}
+
+// `nts ke <host>` and `time server <name>`: those servers; console only, as another host is.
+static void tab_nts_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (sh->io->admin)
+        nts_servers(fn, arg);
+}
+
+static void tab_time_server(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (!sh->io->admin)
+        return;
+    fn("default", NULL, arg);
+    nts_servers(fn, arg);
+}
+
+// `ping <host>`: the NTS servers and the gateway, while Wi-Fi is up.
+static void tab_ping_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    nts_servers(fn, arg);
+    if (!wifi_up())
+        return;
+    char gw[IP4ADDR_STRLEN_MAX] = "";
+    cyw43_arch_lwip_begin();
+    if (netif_default && !ip4_addr_isany_val(*netif_ip4_gw(netif_default)))
+        ip4addr_ntoa_r(netif_ip4_gw(netif_default), gw, sizeof(gw));
+    cyw43_arch_lwip_end();
+    if (gw[0])
+        fn(gw, "gateway", arg);
+}
+
+static const shell_values_t key_numbers = SHELL_VALUES_INIT(tab_key_numbers);
+static const shell_values_t wifi_numbers = SHELL_VALUES_INIT(tab_wifi_numbers);
+static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
+static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
+static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
+
+// The words Tab offers after each command (shell.h): the subcommands its parser takes.
+#define END {0}
+#define W(name) {name, NULL, 0}
+static const shell_word_t on_off[] = {W("on"), W("off"), END};
+static const shell_word_t on_off_admin[] = {
+    {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN}, END};
+static const shell_word_t levels[] = {
+    W("err"), W("warning"), W("notice"), W("info"), W("debug"), END};
+static const shell_word_t facilities[] = {
+    W("none"), W("kern"), W("auth"), W("daemon"), W("user"), END};
+
+static const shell_word_t time_words[] = {
+    {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, END}, 0},
+    {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    {"server", SHELL_VALUES_OF(time_servers), 0},
+    {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    END};
+static const shell_word_t tls_words[] = {
+    {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},
+                                     END}, 0},
+    END};
+static const shell_word_t nts_words[] = {{"ke", SHELL_VALUES_OF(nts_hosts), 0}, W("query"), END};
+static const shell_word_t dmesg_words[] = {{"-f", facilities, 0}, END};
+static const shell_word_t logger_words[] = {{"-p", levels, 0}, END};
+static const shell_word_t rotate_words[] = {W("every"), W("at"), END};
+static const shell_word_t log_words[] = {
+    {"console", levels, SHELL_ADMIN}, {"history", levels, SHELL_ADMIN},
+    {"file", levels, SHELL_ADMIN}, {"rotate", rotate_words, SHELL_ADMIN}, END};
+static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
+static const shell_word_t sensitivities[] = {W("0"), W("1"), W("2"), W("3"), END};
+static const shell_word_t glitch_words[] = {
+    {"watch", sensitivities, SHELL_ADMIN}, {"on", sensitivities, SHELL_ADMIN},
+    {"off", NULL, SHELL_ADMIN},
+    {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
+static const shell_word_t rootsecret_words[] = {
+    {"forget", NULL, SHELL_ADMIN},
+    {"burn", (const shell_word_t[]){W("plan"), W("rehearse"), END}, SHELL_ADMIN},
+    END};
+static const shell_word_t key_words[] = {
+    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", SHELL_VALUES_OF(key_numbers), SHELL_ADMIN},
+    END};
+static const shell_word_t wifi_words[] = {
+    {"stats", (const shell_word_t[]){W("chip"), END}, 0},
+    {"set", NULL, SHELL_ADMIN},
+    {"add", NULL, SHELL_ADMIN},
+    {"remove", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
+    {"prefer", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
+    {"connect", NULL, SHELL_ADMIN},
+    {"power", on_off_admin, 0},             // shows the setting anywhere; on|off: console
+    {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
+    {"keepalive", on_off, SHELL_ADMIN},
+    {"iovar", NULL, SHELL_ADMIN},
+    END};
+static const shell_word_t sd_words[] = {
+    W("info"),
+    W("speed"),
+    {"test", NULL, SHELL_ADMIN},
+    {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
+    {"unmount", NULL, SHELL_ADMIN},
+    END};
+static const shell_word_t lua_words[] = {
+    W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
+static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
+static const shell_word_t http_words[] = {
+    {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+static const shell_word_t man_words[] = {W("install"), END};
+static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
+
+static const shell_cmd_t commands[] = {
+    {"help", run_help, NULL, 0},
+    {"?", run_help, NULL, SHELL_HIDDEN},
+    {"uptime", run_uptime, NULL, 0},
+    {"temp", run_temp, NULL, 0},
+    {"power", run_power, NULL, 0},
+    {"version", run_version, NULL, 0},
+    {"time", cmd_time, time_words, 0},
+    {"tls", cmd_tls, tls_words, 0},
+    {"nts", cmd_nts, nts_words, 0},
+    {"mem", run_mem, NULL, 0},
+    {"net", run_net, NULL, 0},
+    {"ping", ping_command, SHELL_VALUES_OF(ping_hosts), 0},
+    {"ssh", run_ssh, NULL, 0},
+    {"who", chat_cmd_who, NULL, 0},
+    {"wall", chat_cmd_wall, NULL, 0},
+    {"chat", chat_cmd_chat, NULL, 0},
+    {"dmesg", cmd_dmesg, dmesg_words, 0},
+    {"logger", cmd_logger, logger_words, 0},
+    {"log", cmd_log, log_words, 0},
+    {"config", cmd_config, config_words, 0},
+    {"glitch", cmd_glitch, glitch_words, 0},
+    {"bootkey", run_bootkey, NULL, 0},
+    {"rootsecret", run_rootsecret, rootsecret_words, 0},
+    {"key", cmd_key, key_words, 0},
+    {"wifi", cmd_wifi, wifi_words, 0},
+    {"hostname", run_hostname, NULL, 0},
+    {"sd", sdcard_command, sd_words, 0},
+    {"lua", lua_command, lua_words, SHELL_PATH},
+    {"edit", edit_command, NULL, SHELL_PATH},
+    {"more", view_command, NULL, SHELL_PATH},
+    {"man", man_command, man_words, 0},
+    {"http", http_command, http_words, 0},
+    {"passwd", run_passwd, NULL, SHELL_ADMIN},
+    {"setup", run_setup, NULL, SHELL_ADMIN},
+    {"logout", run_logout, NULL, 0},
+    {"exit", run_logout, NULL, 0},
+    {"crash", run_crash, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
+    {"reboot", run_reboot, NULL, 0},
+    END};
+#undef W
+#undef END
+
+static const shell_cmd_t *const command_tables[] = {commands, files_commands, NULL};
+
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
+    if (sh->io->admin && login_locked())        // nothing to offer before the password
+        return NULL;
+    return command_tables;
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     // The console takes no command while it's locked (shell/login.h).
     if (sh->io->admin && login_gate(sh, cmd))
@@ -1722,83 +2089,11 @@ void shell_execute(shell_t *sh, char *cmd) {
         if (!*args)
             args = NULL;
     }
-
-    if (!strcmp(cmd, "help") || !strcmp(cmd, "?"))
-        cmd_help(sh);
-    else if (!strcmp(cmd, "uptime"))
-        cmd_uptime(sh);
-    else if (!strcmp(cmd, "temp"))
-        cmd_temp(sh);
-    else if (!strcmp(cmd, "version"))
-        cmd_version(sh);
-    else if (!strcmp(cmd, "time"))
-        cmd_time(sh, args);
-    else if (!strcmp(cmd, "tls"))
-        cmd_tls(sh, args);
-    else if (!strcmp(cmd, "nts"))
-        cmd_nts(sh, args);
-    else if (!strcmp(cmd, "mem"))
-        cmd_mem(sh);
-    else if (!strcmp(cmd, "net"))
-        cmd_net(sh);
-    else if (!strcmp(cmd, "ping"))
-        ping_command(sh, args);
-    else if (!strcmp(cmd, "ssh"))
-        sshd_status(sh);
-    else if (!strcmp(cmd, "who"))
-        chat_cmd_who(sh, args);
-    else if (!strcmp(cmd, "wall"))
-        chat_cmd_wall(sh, args);
-    else if (!strcmp(cmd, "chat"))
-        chat_cmd_chat(sh, args);
-    else if (!strcmp(cmd, "dmesg"))
-        cmd_dmesg(sh, args);
-    else if (!strcmp(cmd, "logger"))
-        cmd_logger(sh, args);
-    else if (!strcmp(cmd, "log"))
-        cmd_log(sh, args);
-    else if (!strcmp(cmd, "config"))
-        cmd_config(sh, args);
-    else if (!strcmp(cmd, "glitch"))
-        cmd_glitch(sh, args);
-    else if (!strcmp(cmd, "bootkey"))
-        cmd_bootkey(sh);
-    else if (!strcmp(cmd, "rootsecret"))
-        cmd_rootsecret(sh, args);
-    else if (!strcmp(cmd, "key"))
-        cmd_key(sh, args);
-    else if (!strcmp(cmd, "wifi"))
-        cmd_wifi(sh, args);
-    else if (!strcmp(cmd, "hostname"))
-        set_field(sh, "hostname", args, settings()->hostname, sizeof(settings()->hostname),
-                  config_check_hostname);
-    else if (!strcmp(cmd, "sd"))
-        sdcard_command(sh, args);
-    else if (!strcmp(cmd, "lua"))
-        lua_command(sh, args);
-    else if (!strcmp(cmd, "edit"))
-        edit_command(sh, args);
-    else if (!strcmp(cmd, "more"))
-        view_command(sh, args);
-    else if (!strcmp(cmd, "http"))
-        http_command(sh, args);
-    else if (!strcmp(cmd, "passwd"))
-        cmd_passwd(sh);
-    else if (!strcmp(cmd, "setup"))
-        cmd_setup(sh);
-    else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))
-        shell_logout(sh);
-    else if (!strcmp(cmd, "crash")) {
-        // Testing the fault record (core/fault.h): stops the firmware on purpose.
-        if (!require_admin(sh))
-            return;
-        if (args)
-            fault_test(args);
-        shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
-    } else if (!strcmp(cmd, "reboot")) {
-        shell_printf(sh, "rebooting...\n");
-        sleep_ms(100);
-        watchdog_reboot(0, 0, 0);
-    } else if (!files_command(sh, cmd, args))
-        shell_printf(sh, "%s: unknown command (try 'help')\n", cmd);
+    for (const shell_cmd_t *const *t = command_tables; *t; t++)
+        for (const shell_cmd_t *c = *t; c->name; c++)
+            if (!strcmp(cmd, c->name)) {
+                c->run(sh, args);
+                return;
+            }
+    shell_printf(sh, "%s: unknown command (try 'help')\n", cmd);
 }

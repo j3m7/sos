@@ -58,8 +58,11 @@ void pwv_abort(pwv_job_t *job);
 // Compare two verifiers in constant time.
 bool pwv_equal(const uint8_t a[PWV_LEN], const uint8_t b[PWV_LEN]);
 
-// All in one, for setting a password (blocks for the whole derivation).
-bool pwv_compute(const char *password, size_t len, const uint8_t salt[PWV_SALT_LEN],
-                 uint32_t iterations, const uint8_t key[PWV_LEN], uint8_t out[PWV_LEN]);
+// All in one, for setting a password (blocks for the whole derivation). `job` is working space
+// from the caller (an Hmac is large for the stack); it must not be one that is in use, and
+// holds nothing afterwards.
+bool pwv_compute(pwv_job_t *job, const char *password, size_t len,
+                 const uint8_t salt[PWV_SALT_LEN], uint32_t iterations,
+                 const uint8_t key[PWV_LEN], uint8_t out[PWV_LEN]);
 
 #endif

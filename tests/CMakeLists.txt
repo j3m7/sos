@@ -24,14 +24,17 @@ target_include_directories(test_ringbuffer PRIVATE ${SOS_ROOT}/src/ssh/pico-sshd
 add_test(NAME ringbuffer COMMAND test_ringbuffer)
 
 # src/shell/shell_core.c: shell line editing and output (commands are faked by the test).
-add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c)
+add_executable(test_shell_line test_shell_line.c stub_version.c ${SOS_ROOT}/src/shell/shell_core.c
+    ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c
+    ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_shell_line PRIVATE ${SOS_ROOT}/src)
 add_test(NAME shell_line COMMAND test_shell_line)
 
 # src/shell/login.c: the console's lock (password prompt, delays, the gate), with the real
 # shell_core.c.
 add_executable(test_login test_login.c stub_version.c ${SOS_ROOT}/src/shell/login.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c)
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_login PRIVATE ${SOS_ROOT}/src)
 add_test(NAME login COMMAND test_login)
 
@@ -85,10 +88,11 @@ add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
 target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chipinfo COMMAND test_chipinfo)
 
-# src/core/chiptemp.c: the chip temperature's conversion, text, lowest and highest, and when to log.
-add_executable(test_chiptemp test_chiptemp.c ${SOS_ROOT}/src/core/chiptemp.c)
-target_include_directories(test_chiptemp PRIVATE ${SOS_ROOT}/src)
-add_test(NAME chiptemp COMMAND test_chiptemp)
+# src/core/sensors.c: chip temperature and supply voltage: conversions, text, lowest and highest,
+# when to log, and the scratch register form.
+add_executable(test_sensors test_sensors.c ${SOS_ROOT}/src/core/sensors.c)
+target_include_directories(test_sensors PRIVATE ${SOS_ROOT}/src)
+add_test(NAME sensors COMMAND test_sensors)
 
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
@@ -117,6 +121,12 @@ add_test(NAME heaptag COMMAND test_heaptag)
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
 add_test(NAME log COMMAND test_log)
+
+# src/core/logfile.c (with log.c): log files on the SD card.
+add_executable(test_logfile test_logfile.c ${SOS_ROOT}/src/core/logfile.c
+    ${SOS_ROOT}/src/core/log.c)
+target_include_directories(test_logfile PRIVATE ${SOS_ROOT}/src)
+add_test(NAME logfile COMMAND test_logfile)
 
 # src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
 add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)
@@ -162,7 +172,8 @@ add_test(NAME http_msg COMMAND test_http_msg)
 
 # src/chat/chat.c: wall, chat and who between shells (with the real shell_core.c and termtext.c).
 add_executable(test_chat test_chat.c stub_version.c ${SOS_ROOT}/src/chat/chat.c
-    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/charwidth.c ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
+    ${SOS_ROOT}/src/shell/shell_core.c ${SOS_ROOT}/src/shell/complete.c ${SOS_ROOT}/src/shell/charwidth.c
+    ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
 target_include_directories(test_chat PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chat COMMAND test_chat)
 
@@ -250,3 +261,6 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
 elseif (TARGET wolfcrypt_host)
     message(WARNING "sdcrypt and seal tests skipped: they also need OpenSSL's libcrypto")
 endif()
+
+# man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
+add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)

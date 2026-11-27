@@ -1,0 +1,29 @@
+NAME
+    http - HTTPS requests, for testing the client
+
+SYNOPSIS
+    http get <url>
+    http head <url>
+    http post <url> <text>
+
+DESCRIPTION
+    Makes one HTTPS request and prints the response: 'get' the status line and
+    the body, then its size and timings; 'head' the status line and headers;
+    'post' sends the text as text/plain (UTF-8) and prints the response as
+    'get' does. A job: Ctrl-C stops it.
+
+    URLs must start with https:// and the path must already be
+    percent-encoded (no spaces). The server's certificate must chain to a
+    built-in root or one in the approved /certs/roots.pem; redirects aren't
+    followed. What the server sends is filtered before it reaches the
+    terminal: control characters show as '.', including the C1 range, bidi
+    controls, zero-width and other invisible characters; other UTF-8 text
+    shows as itself.
+
+    Two HTTPS requests ('http' or a Lua script's sos.http, from any shells)
+    can run at once; a third is refused until one finishes, and one more TLS
+    connection is always kept free for time sync. A request is also refused
+    while the heap is too low for a TLS handshake (about 64 KB free).
+
+SEE ALSO
+    tls, lua, mem

@@ -1,0 +1,13 @@
+NAME
+    mv - move or rename a file or directory
+
+SYNOPSIS
+    mv <from> <to>
+
+DESCRIPTION
+    Moves or renames. Moving to a directory keeps the name. A file a running
+    command has open can't be moved. Only the console may move anything into
+    or out of /certs.
+
+SEE ALSO
+    cp, rm, ls

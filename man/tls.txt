@@ -1,0 +1,37 @@
+NAME
+    tls - the root certificates TLS trusts
+
+SYNOPSIS
+    tls roots
+    tls roots approve      (console only)
+    tls roots forget       (console only)
+
+DESCRIPTION
+    TLS (used by NTS and the HTTPS client) trusts the built-in roots (SSL.com
+    Root Certification Authority ECC, for Cloudflare's time server; ISRG Root
+    X1, Let's Encrypt) and, optionally, extra ones from the card in
+    /certs/roots.pem: a PEM bundle (text between the certificates is fine) or
+    DER certificates, up to 64 KB and 32 certificates. The file is used only
+    while it is exactly the file approved on the console:
+
+      1. Upload it anywhere with SFTP, e.g. 'put roots.pem incoming/roots.pem'.
+      2. On the console: 'mkdir /certs' (once), then
+         'mv /incoming/roots.pem /certs/roots.pem'.
+      3. On the console: 'tls roots approve'. It lists each certificate
+         (common name, key type, whether it is a CA, expiry, SHA-256
+         fingerprint), checks TLS can use it, and after 'yes' trusts exactly
+         that file; its SHA-256 is saved with the configuration.
+
+    Only the console can change anything under /certs, under any spelling.
+    A changed file isn't used until approved again: TLS then logs a warning
+    once and uses the built-in roots alone, as it does when the file or the
+    card is missing. A private key, or any PEM block other than a certificate,
+    makes the file invalid. 'tls roots' shows the built-in roots and the
+    file's state; 'tls roots forget' stops trusting it.
+
+    While the clock isn't set, certificate dates can't be checked: the first
+    key exchange accepts certificates whatever their dates (signatures and the
+    host name are still checked) and logs it.
+
+SEE ALSO
+    time, http, config

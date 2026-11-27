@@ -103,7 +103,11 @@ issue #9455) look like the same problem.
 signal, noise floor, channel, access point, transmit rate) and lwIP's counters, which
 `config/lwipopts.h` turns on: packets per protocol, TCP segments resent (`MIB2_STATS`), and
 how full the pools got (`MEMP_STATS`). The pools matter because the driver drops a received
-frame silently when the packet pool (`PBUF_POOL_SIZE`) is empty.
+frame silently when the packet pool (`PBUF_POOL_SIZE`) is empty. The pool holds 12 frames.
+In normal use about 3 are in use at most, since a frame is freed as soon as it is delivered.
+What can fill it is held back: a connection queues at most 6 segments that arrived out of
+order (`TCP_OOSEQ_MAX_PBUFS`), and IP fragments are not accepted at all (`IP_REASSEMBLY 0`),
+since an unfinished fragmented datagram would otherwise sit in the pool for 15 s.
 
 To find the direction of a loss, ping the board and compare: `icmp received` counts the
 requests that arrived and `icmp sent` the replies handed to the chip. `wifi stats chip` adds

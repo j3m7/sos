@@ -104,7 +104,7 @@ _Static_assert(PWV_SALT_LEN == CONFIG_CONSOLE_SALT_LEN && PWV_LEN == CONFIG_CONS
 // or set at any time). Nothing copies it elsewhere.
 static uint8_t pw_key[PWV_LEN];
 static bool have_pw_key;
-static pwv_job_t pw_job;
+static pwv_job_t pw_job;                // a check in progress, or setting a password: one at a time
 static bool pw_checking;
 
 bool settings_console_has_password(void) {
@@ -119,8 +119,13 @@ const char *settings_console_set_password(const char *password) {
         return "this board has no key to protect a password with (see `rootsecret`)";
     uint8_t salt[PWV_SALT_LEN], verifier[PWV_LEN];
     uint64_t t0 = time_us_64();
+    // The derivation uses pw_job, the one job there is. A check still running in it is given
+    // up: it would be against the password this call replaces. (None is, in practice: a
+    // password is set at boot from a provisioned record, or on the console after its login.)
+    settings_console_check_abort();
     if (!random_bytes(NULL, salt, sizeof(salt)) ||
-        !pwv_compute(password, strlen(password), salt, SOS_CONSOLE_PW_ITERATIONS, pw_key, verifier))
+        !pwv_compute(&pw_job, password, strlen(password), salt, SOS_CONSOLE_PW_ITERATIONS, pw_key,
+                     verifier))
         return "making the password's verifier failed";
     // How long one check of this password costs (the same derivation), for tuning the count.
     log_msg(SOS_LOG_AUTH | SOS_LOG_INFO, "config: password verifier made in %lu ms (%u iterations)",

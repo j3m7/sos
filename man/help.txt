@@ -1,0 +1,14 @@
+NAME
+    help - list the commands this channel may use
+
+SYNOPSIS
+    help
+    ?
+
+DESCRIPTION
+    Prints one line per command with a few words on each. Commands that only
+    the console may run are listed only on the console. For the full story on
+    a command, 'man <command>'.
+
+SEE ALSO
+    intro, man

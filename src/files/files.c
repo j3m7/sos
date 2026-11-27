@@ -23,11 +23,13 @@
 #include "core/heaptag.h"
 #include "files/path.h"
 #include "files/sdcard.h"
+#include "shell/complete.h"
 
 #define PATH_LEN     256        // FatFs long names are up to 255 characters
 #define STEP_US      20000      // work per job step before letting the main loop run
 #define COPY_CHUNK   4096
 #define LS_LINE_MAX  (PATH_LEN + 48)
+#define TAB_DIR_MAX  256        // directory entries Tab reads at most (it blocks the main loop)
 
 static int holders;             // jobs and SFTP handles with open files or directories
 
@@ -44,9 +46,11 @@ void files_release(void) {
         holders--;
 }
 
-// /certs holds the TLS trust anchors: only the console (physical access, the same boundary as
-// the configuration) may change it. SSH shells and SFTP (sh NULL) may read it but not change it.
-// TLS also checks the contents against a hash approved on the console, so this is a second line.
+// Protected paths (path_is_protected()): /certs holds the TLS trust anchors, /var/log the log
+// files. Only the console (physical access, the same boundary as the configuration) may change
+// them. SSH shells, SFTP and Lua (sh NULL) may read them but not change them: a session that
+// gets in can't erase its own traces from the log. For /certs, TLS also checks the contents
+// against a hash approved on the console, so this is a second line.
 bool files_write_allowed(const shell_t *sh, const char *path) {
     if (!path_is_protected(path))
         return true;
@@ -454,29 +458,53 @@ fail:
 
 // --- dispatch ----------------------------------------------------------------------------------
 
-bool files_command(shell_t *sh, const char *cmd, char *args) {
-    if (!strcmp(cmd, "ls"))
-        cmd_ls(sh, args);
-    else if (!strcmp(cmd, "cd"))
-        cmd_cd(sh, args);
-    else if (!strcmp(cmd, "pwd"))
-        shell_printf(sh, "%s\n", sh->cwd);
-    else if (!strcmp(cmd, "cat"))
-        cmd_cat(sh, args);
-    else if (!strcmp(cmd, "cp"))
-        cmd_cp(sh, args);
-    else if (!strcmp(cmd, "mv"))
-        cmd_mv(sh, args);
-    else if (!strcmp(cmd, "rm"))
-        cmd_rm(sh, args);
-    else if (!strcmp(cmd, "mkdir"))
-        cmd_mkdir(sh, args);
-    else if (!strcmp(cmd, "echo"))
-        cmd_echo(sh, args);
-    else
-        return false;
-    return true;
+// --- Tab completion ------------------------------------------------------------------------------
+
+// The SD card's lister for Tab (shell/complete.h). Only while the card is mounted: a Tab
+// mustn't wait for a card to start up, nor log a failure each time there's none. At most
+// TAB_DIR_MAX entries, about 20 sectors of a directory read with the main loop waiting.
+complete_dir_t shell_list_dir(shell_t *sh, const char *dir, complete_entry_fn fn, void *arg) {
+    char path[PATH_LEN];
+    if (!sdcard_mounted() || !path_resolve(sh->cwd, dir, path, sizeof(path)))
+        return COMPLETE_DIR_NONE;
+    DIR d;
+    if (f_opendir(&d, path) != FR_OK)
+        return COMPLETE_DIR_NONE;
+    complete_dir_t r = COMPLETE_DIR_ALL;
+    FILINFO fi;
+    for (unsigned n = 0;; n++) {
+        if (f_readdir(&d, &fi) != FR_OK || !fi.fname[0])
+            break;
+        if (n == TAB_DIR_MAX) {
+            r = COMPLETE_DIR_PART;
+            break;
+        }
+        if (strcmp(fi.fname, ".") && strcmp(fi.fname, ".."))
+            fn(fi.fname, fi.fattrib & AM_DIR, arg);
+    }
+    f_closedir(&d);
+    return r;
 }
+
+static void run_ls(shell_t *sh, char *args) { cmd_ls(sh, args); }
+static void run_cd(shell_t *sh, char *args) { cmd_cd(sh, args); }
+static void run_pwd(shell_t *sh, char *args) { (void)args; shell_printf(sh, "%s\n", sh->cwd); }
+static void run_cat(shell_t *sh, char *args) { cmd_cat(sh, args); }
+static void run_rm(shell_t *sh, char *args) { cmd_rm(sh, args); }
+static void run_mkdir(shell_t *sh, char *args) { cmd_mkdir(sh, args); }
+
+const shell_cmd_t files_commands[] = {
+    {"ls", run_ls, NULL, SHELL_PATH},
+    {"cd", run_cd, NULL, SHELL_PATH | SHELL_DIR},
+    {"pwd", run_pwd, NULL, 0},
+    {"cat", run_cat, NULL, SHELL_PATH},
+    {"cp", cmd_cp, NULL, SHELL_PATH},
+    {"mv", cmd_mv, NULL, SHELL_PATH},
+    {"rm", run_rm, NULL, SHELL_PATH},
+    {"mkdir", run_mkdir, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", cmd_echo, NULL, SHELL_REDIRECT},
+    {0},
+};
 
 void files_help(shell_t *sh) {
     shell_printf(sh, "ls [path]         list a directory on the SD card\n");

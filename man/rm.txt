@@ -1,0 +1,13 @@
+NAME
+    rm - delete a file or an empty directory
+
+SYNOPSIS
+    rm <path>
+
+DESCRIPTION
+    Deletes the file, or the directory if it is empty. A file a running
+    command has open can't be deleted. Only the console may delete anything
+    under /certs.
+
+SEE ALSO
+    mkdir, mv, ls

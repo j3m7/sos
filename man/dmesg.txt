@@ -1,0 +1,27 @@
+NAME
+    dmesg - the system log kept in memory
+
+SYNOPSIS
+    dmesg
+    dmesg -f <facility>
+
+DESCRIPTION
+    Prints the last 4 KB of log messages, from any shell. With -f, only one
+    facility's:
+
+        kern     boot, resets, faults, the glitch detector, the root secret
+        auth     console and SSH logins, passwords, every configuration change
+        daemon   Wi-Fi, the SSH server, time, HTTPS, the SD card, the chat
+        user     Lua scripts and 'logger'
+        none     messages not tagged with one (there should be none)
+
+    The console prints messages as they happen (at the 'console' level, see
+    'log'); 'history' decides what is kept for dmesg, and every message kept
+    is also written to the log files on the card, /var/log/<facility>.log
+    (see 'log'). Messages are not printed
+    while the console is locked or runs a full-screen program; they wait and
+    appear afterwards, and are in dmesg meanwhile. Only printable ASCII is
+    logged: other bytes in quoted text become spaces or '?'.
+
+SEE ALSO
+    log, logger, uptime
