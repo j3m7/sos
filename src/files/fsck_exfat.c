@@ -491,7 +491,7 @@ uint32_t fsck_exfat_dir_end(fsck_exfat_dir_t *d) {
     return r | (d->problems ? FSCK_EXFAT_DIR : 0);
 }
 
-static const char *kind_name(fsck_exfat_kind_t k) {
+const char *fsck_exfat_kind_name(fsck_exfat_kind_t k) {
     switch (k) {
     case FSCK_EXFAT_BITMAP:
         return "allocation bitmap";
@@ -510,7 +510,7 @@ void fsck_exfat_set_text(const fsck_exfat_set_t *s, uint32_t bit, char *out, siz
     // which entry it is about.
     int at = 0;
     if (s->kind != FSCK_EXFAT_FILE || !s->name_have)
-        at = snprintf(out, n, "%s entry %" PRIu32 ": ", kind_name(s->kind), s->index);
+        at = snprintf(out, n, "%s entry %" PRIu32 ": ", fsck_exfat_kind_name(s->kind), s->index);
     if (at < 0 || (size_t)at >= n)
         return;
     out += at;
@@ -573,7 +573,7 @@ void fsck_exfat_set_text(const fsck_exfat_set_t *s, uint32_t bit, char *out, siz
                  s->first_cluster + s->run_clusters - 1);
         break;
     case FSCK_EXFAT_S_EXTRA:
-        snprintf(out, n, "a second %s entry (FatFs uses the first)", kind_name(s->kind));
+        snprintf(out, n, "a second %s entry (FatFs uses the first)", fsck_exfat_kind_name(s->kind));
         break;
     case FSCK_EXFAT_S_NOT_FIRST:
         snprintf(out, n, "not in the root directory's first cluster (FatFs won't mount the "

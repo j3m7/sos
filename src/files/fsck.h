@@ -153,8 +153,8 @@ enum { FSCK_MORE, FSCK_DONE, FSCK_FAILED };
 
 // The fixed part of the checker's memory: about 7 KB (three sector buffers, two long names,
 // the directory stack of 64 x 28 bytes, a 512-byte Bloom filter, exFAT's entry set reader,
-// the path and the report line). fsck_new() uses the rest of `mem` as the cluster window: a bitmap of W bytes covers
-// 8W clusters per pass.
+// the path and the report line). fsck_new() uses the rest of `mem` as the cluster window: a
+// bitmap of W bytes covers 8W clusters per pass.
 size_t fsck_state_size(void);
 
 // Set up a check of the device `io` describes (`io` is copied; a check never calls

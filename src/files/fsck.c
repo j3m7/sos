@@ -1496,19 +1496,6 @@ static int wk_filechain(fsck_t *f) {
 // and an entry is fed to the reader only once it is in memory, so a step can stop anywhere: a
 // set handed back stays in the reader until its clusters are followed.
 
-static const char *xkind_name(fsck_exfat_kind_t k) {
-    switch (k) {
-    case FSCK_EXFAT_BITMAP:
-        return "allocation bitmap";
-    case FSCK_EXFAT_UPCASE:
-        return "up-case table";
-    case FSCK_EXFAT_LABEL:
-        return "volume label";
-    case FSCK_EXFAT_FILE:
-        break;
-    }
-    return "file";
-}
 
 // The set's name onto the path ("/<name>"), or for one without a name (a set whose name
 // wasn't read, or one of the root's critical entries) ": <kind> entry <n>", as fsck_exfat.c's
@@ -1532,7 +1519,7 @@ static void xpath_add(fsck_t *f, const fsck_exfat_set_t *s) {
     if (!f->path_len && !path_put(f, '/'))
         return;
     char tag[48];
-    snprintf(tag, sizeof(tag), ": %s entry %" PRIu32, xkind_name(s->kind), s->index);
+    snprintf(tag, sizeof(tag), ": %s entry %" PRIu32, fsck_exfat_kind_name(s->kind), s->index);
     for (const char *p = tag; *p; p++)
         if (!path_put(f, (uint8_t)*p))
             return;

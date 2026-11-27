@@ -224,6 +224,8 @@ uint32_t fsck_exfat_dir_end(fsck_exfat_dir_t *d);
 // walker puts the path first: the directory's, then the set's name when name_have isn't 0 (a
 // name cut short is shown as far as it was read). A line about a set without a name, or about
 // one of the root's critical entries, starts with the entry's index ("file entry 12: ...").
+// The kind of a root critical entry, as a report line names it ("allocation bitmap" ...).
+const char *fsck_exfat_kind_name(fsck_exfat_kind_t k);
 void fsck_exfat_set_text(const fsck_exfat_set_t *s, uint32_t bit, char *out, size_t n);
 void fsck_exfat_dir_text(const fsck_exfat_dir_t *d, uint32_t bit, char *out, size_t n);
 
