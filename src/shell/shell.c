@@ -30,6 +30,7 @@
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/logfile.h"
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
@@ -259,7 +260,7 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
-        shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log console|history|file <level>  set log levels (until reboot)\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
@@ -445,12 +446,29 @@ static void cmd_log(shell_t *sh, char *args) {
         shell_printf(sh, "console: %s (printed on the serial console)\n",
                      log_level_name(log_console_level()));
         shell_printf(sh, "history: %s (kept for dmesg)\n", log_level_name(log_history_level()));
+        shell_printf(sh, "file:    %s (written to %s on the SD card)\n",
+                     log_level_name(logfile_level()), LOGFILE_DIR);
         shell_printf(sh, "levels:  err warning notice info debug\n");
+        logfile_status_t st;
+        logfile_status(&st);
+        if (st.state == LOGFILE_STOPPED)
+            shell_printf(sh, "files:   stopped: writing %s failed (%s); mount the card again "
+                             "(e.g. `sd`) to start them\n", st.error_path, st.error);
+        else
+            shell_printf(sh, "files:   %s\n", st.state == LOGFILE_WRITING ? "writing"
+                                               : st.state == LOGFILE_NO_CARD ? "no card mounted; "
+                                                 "messages wait in the history"
+                                               : "not started");
+        shell_printf(sh, "written: %lu lines, %lu bytes this boot; %u bytes waiting\n",
+                     (unsigned long)st.lines, (unsigned long)st.bytes, (unsigned)st.buffered);
+        if (st.lost)
+            shell_printf(sh, "lost:    %lu messages dropped from the history before they were "
+                             "written\n", (unsigned long)st.lost);
         return;
     }
     int l = level ? log_level_parse(level) : -1;
-    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history"))) {
-        shell_printf(sh, "usage: log [console|history err|warning|notice|info|debug]\n");
+    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history") && strcmp(what, "file"))) {
+        shell_printf(sh, "usage: log [console|history|file err|warning|notice|info|debug]\n");
         return;
     }
     // The log is the record of logins and configuration changes: a session can read it
@@ -461,8 +479,10 @@ static void cmd_log(shell_t *sh, char *args) {
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     if (!strcmp(what, "console"))
         log_set_console_level(l);
-    else
+    else if (!strcmp(what, "history"))
         log_set_history_level(l);
+    else
+        logfile_set_level(l);
     shell_printf(sh, "%s level: %s (until reboot)\n", what, level);
 }
 

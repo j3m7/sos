@@ -305,6 +305,17 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
   faults, glitch detector, root secret), `auth` (console and SSH logins, passwords, and every
   configuration change), `daemon` (Wi-Fi, SSH server, time, HTTPS, SD card, chat) or `user`
   (Lua scripts and `logger`).
+- **Log files on the SD card:** every message the history keeps is also written to the card,
+  to one file per facility: `/var/log/kern.log`, `auth.log`, `daemon.log`, `user.log`, and
+  `syslog` for messages without a facility (the last resort). Lines read
+  `2026-11-26T14:03:12.345Z notice console: logged in` (UTC; `+12.345`, seconds since boot,
+  while the clock isn't set), and each boot starts a file with a `--- boot: SOS <commit>, last
+  reset: <why> ---` line. Warnings and errors are written at once, the rest within 5 s. The card
+  is mounted for this at boot; without one, messages wait in the 4 KB history, and any later
+  mount (a file command, `sd`) writes them, with a line saying how many were dropped meanwhile.
+  Encrypted or plain, whichever card is in. A failed write stops the files until the card is
+  mounted again. `log` shows the state; `log file <level>` sets what's written (default `info`).
+  For now the files grow without limit; rotation is next (#104).
 - `logger [-p <level>] <message>` adds a line to the log from any shell (facility `user`, at
   `notice` unless `-p` says otherwise), tagged with the shell it came from. At most 10 a second.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`

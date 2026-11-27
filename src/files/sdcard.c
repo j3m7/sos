@@ -318,6 +318,8 @@ static const char *fs_type(BYTE t) {
     }
 }
 
+static uint32_t mount_generation;   // counts mounts, for sdcard_generation()
+
 static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
@@ -351,6 +353,7 @@ static bool mount(shell_t *sh) {
         return false;
     }
     card.state.mounted = true;
+    mount_generation++;
     if (card_kind == KIND_ENCRYPTED)
         repair_after_mount();
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
@@ -475,6 +478,14 @@ static bool files_in_use(shell_t *sh) {
         return false;
     shell_printf(sh, "files are open (a cat, cp or ls running, or an SFTP transfer); wait for it to end\n");
     return true;
+}
+
+bool sdcard_mounted(void) {
+    return card.state.mounted;
+}
+
+uint32_t sdcard_generation(void) {
+    return mount_generation;
 }
 
 bool sdcard_mount(shell_t *sh) {
