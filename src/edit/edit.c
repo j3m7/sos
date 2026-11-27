@@ -31,11 +31,15 @@
 
 #define PATH_LEN        256
 #define TMP_SUFFIX      ".~edit"
-// Heap left free when a file is opened (a TLS handshake needs about this much, see the README),
-// so an editor can't take what SSH and HTTPS need to keep working. The text can grow to what was
-// free beyond it, up to EDITOR_MAX_TEXT.
+// Memory: the editor's buffer is allocated whole when the file is opened (editor_open()), for
+// the file plus GROWTH of typing room, so a small file costs little while an editor sits open
+// for an hour. Less when the heap has less to spare: HEAP_RESERVE is left free (a TLS handshake
+// needs about this much, see the README), so an editor can't take what SSH and HTTPS need to
+// keep working; and if a block that size can't be had (the heap is fragmented), the room is
+// halved down to MIN_ROOM before giving up. Save and open again for more room.
 #define HEAP_RESERVE    (64 * 1024)
-#define MIN_LIMIT       1024        // an editor that could hold less than this isn't opened
+#define GROWTH          (32 * 1024)
+#define MIN_ROOM        1024
 #define SIZE_WAIT_US    500000      // first frame: wait this long for the terminal's size
 #define SIZE_ANSWER_US  3000000     // a cursor position report later than this isn't the answer
 #define LOG_CHECK_US    1000000     // how often to count held log messages (console)
@@ -230,24 +234,31 @@ static bool stat_file(shell_t *sh, const char *path, bool quiet_missing, bool *e
 }
 
 // Open the editor on `size` bytes read from `path` (0 bytes and no path: a new file), straight
-// into the editor's buffer. The status bar shows e->path whichever file the text came from.
-// False after saying why; the editor is then free.
+// into the editor's buffer. The status bar shows e->path whichever file the text came from, and
+// so do the messages here. False after saying why; the editor is then free.
 static bool read_file(shell_t *sh, edit_t *e, const char *path, size_t size) {
-    size_t limit = text_limit();
+    size_t most = text_limit();
     char a[24], b[24];
     if (size > EDITOR_MAX_TEXT) {
-        shell_printf(sh, "edit: %s: too big to edit (%s, %u KB at most)\n", path,
+        shell_printf(sh, "edit: %s: too big to edit (%s, %u KB at most)\n", e->path,
                      size_text(a, sizeof(a), size), EDITOR_MAX_TEXT / 1024);
         return false;
     }
-    if (size > limit || limit < MIN_LIMIT) {
+    if (most < size + MIN_ROOM) {
         shell_printf(sh, "edit: %s: not enough free memory to edit it (%s, %s free for the "
-                     "editor)\n", path, size_text(a, sizeof(a), size), size_text(b, sizeof(b), limit));
+                     "editor)\n", e->path, size_text(a, sizeof(a), size), size_text(b, sizeof(b), most));
         return false;
     }
-    char *fill = editor_open(&e->ed, e->path, size, limit);
+    size_t room = GROWTH;
+    if (most - size < room)
+        room = most - size;
+    char *fill;
+    while (!(fill = editor_open(&e->ed, e->path, size, size + room)) && room / 2 >= MIN_ROOM)
+        room /= 2;                          // fragmented: a smaller block may still be had
     if (!fill) {
-        shell_printf(sh, "edit: out of memory\n");
+        shell_printf(sh, "edit: %s: out of memory: no block of %s free (%s in all); closing an SSH "
+                     "session may help\n", e->path, size_text(a, sizeof(a), size + room),
+                     size_text(b, sizeof(b), most));
         return false;
     }
     if (path) {

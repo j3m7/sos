@@ -167,8 +167,8 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 ## Editor
 
 `edit <file>` opens a file of up to 128 KB in a full-screen editor, on the console or over SSH.
-While memory is short (SSH sessions and Lua share it) the limit is lower, and `edit` says how
-much it can take; the text can't grow past that limit either.
+The text can grow by 32 KB while the file is open (save, quit and open it again for more); less
+while memory is short (SSH sessions and Lua share it), and `edit` says how much it can take.
 It needs a VT100/xterm-compatible terminal and uses its alternate screen, so the shell's output
 is back as it was afterwards. The screen size is asked from the terminal when the editor starts
 and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 80×24. It uses
