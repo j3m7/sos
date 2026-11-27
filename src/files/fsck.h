@@ -86,7 +86,8 @@ typedef struct {
     // One problem or note, already formatted, without a newline. Called at most
     // FSCK_REPORT_MAX times; later lines are only counted.
     void (*report)(void *ctx, const char *line);
-    // Write sectors: NULL for a check. Only repair (design note §10) will pass one.
+    // Write sectors: NULL for a check. Only repair (fsck_repair.h) passes one, and only for
+    // single sectors.
     bool (*write)(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
     void *ctx;
     uint64_t sectors;           // size of the device as the layer shows it
@@ -105,6 +106,7 @@ typedef struct {
     uint32_t pass;              // the pass running, from 1
     uint32_t problems;          // problems found, reported or not
     uint32_t notes;
+    uint32_t long_chains;       // notes for chains longer than their file (repair trims them)
     uint32_t reported;          // lines given to report()
     uint32_t files, dirs;       // entries walked (the root counts as a directory)
     uint32_t free_clusters;     // FAT entries 0
