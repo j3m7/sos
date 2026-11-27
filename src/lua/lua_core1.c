@@ -24,6 +24,7 @@
 
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "files/path.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_codec.h"
@@ -337,7 +338,12 @@ static int l_copy(lua_State *L) {
     char from[LUA_PATH_MAX], to[LUA_PATH_MAX], err[LUA_PATH_MAX + sizeof(lua_req.error) + 2] = "";
     resolve_path(L, luaL_checkstring(L, 1), from);
     resolve_path(L, luaL_checkstring(L, 2), to);
-    if (!strcasecmp(from, to))                  // the card's names ignore case
+    // The same file under another spelling ("/a/../x" and "/x", or another case) would be
+    // truncated by the first write: compare them as core 0 will resolve them.
+    char nfrom[LUA_PATH_MAX], nto[LUA_PATH_MAX];
+    if (!path_resolve("/", from, nfrom, sizeof(nfrom)) || !path_resolve("/", to, nto, sizeof(nto)))
+        return luaL_error(L, "path too long");
+    if (!strcasecmp(nfrom, nto))                // the card's names ignore case
         return luaL_error(L, "source and destination are the same");
     uint64_t done = 0;
     for (;;) {

@@ -212,6 +212,11 @@ static void serve_rename(void) {
     }
     if (!req_may_write(to))
         return;
+    // One file under two spellings (another case): with replace, the unlink would delete it.
+    if (!strcasecmp(from, to)) {
+        req_error("source and destination are the same");
+        return;
+    }
     FILINFO fi;
     if (lua_req.offset && f_stat(to, &fi) == FR_OK) {
         if (fi.fattrib & AM_DIR) {
