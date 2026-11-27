@@ -41,6 +41,12 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
   and everything above it don't change. Reads are decrypted in place; writes are encrypted into
   a 4 KB buffer a chunk at a time, since the caller's buffer must stay as it is. The sector
   count FatFs sees is 8192 smaller.
+- **Memory:** the layer's state and its 4 KB write buffer (7.5 KB together) are allocated
+  from the heap (`files` in `mem`) only while needed: for the moment it takes to look at a
+  card's header, and from then on while an encrypted card is in use, until it is unmounted,
+  taken out or reformatted. A board with a plain card or none doesn't hold it. If the memory
+  isn't there the card can't be looked at: the mount fails saying so and the next mount tries
+  again.
 - **Detection** (`detect()`) runs after every card initialization (`init_layer` wraps the
   driver's `init`), so the layer always matches the card that's in, and again at mount if the
   kind was forgotten. The rules are in `sdcrypt_card_open()` (host tested): sector 0 a header
