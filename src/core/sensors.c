@@ -100,6 +100,43 @@ void sensors_stats_add(sensors_stats_t *st, int value, uint32_t now_s) {
         st->count++;
 }
 
+void sensors_stats_shift(sensors_stats_t *st, int delta) {
+    if (!st->count)
+        return;
+    st->last += delta;
+    st->min += delta;
+    st->max += delta;
+}
+
+bool sensors_parse_temp(const char *s, int *tenths) {
+    bool neg = false;
+    if (*s == '-' || *s == '+')
+        neg = *s++ == '-';
+    if (*s < '0' || *s > '9')
+        return false;
+    int v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s++ - '0');
+        if (v > 1000)                   // well past the range: stop before it can overflow
+            return false;
+    }
+    v *= 10;
+    if (*s == '.') {
+        s++;
+        if (*s < '0' || *s > '9')
+            return false;
+        v += *s++ - '0';
+    }
+    if (*s)
+        return false;
+    if (neg)
+        v = -v;
+    if (v < SENSORS_CAL_MIN || v > SENSORS_CAL_MAX)
+        return false;
+    *tenths = v;
+    return true;
+}
+
 static bool moved(int now, int then, int step) {
     if (now == SENSORS_NONE || then == SENSORS_NONE)
         return now != then;             // a reading appeared or went away

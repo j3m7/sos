@@ -88,6 +88,65 @@ TEST(matches_libc) {
     CHECK(1);
 }
 
+// timeconv_from_tm() stands in for mktime() in UTC: the same answer as the C library's timegm(),
+// for fields in range and for ones that carry (FatFs dates can hold month 0 or day 0).
+TEST(from_tm_matches_timegm) {
+    CHECK_EQ(timeconv_from_tm(70, 0, 1, 0, 0, 0), 0);
+    CHECK_EQ(timeconv_from_tm(126, 10, 26, 12, 34, 56), 1795696496);   // 2026-11-26 12:34:56
+    CHECK_EQ(timeconv_from_tm(80, 0, 0, 0, 0, 0), 315446400);          // day 0: 1979-12-31
+    srand(4242);
+    for (int i = 0; i < 200000; i++) {
+        struct tm tm = {0};
+        tm.tm_year = 70 + rand() % 140;
+        tm.tm_mon = rand() % 40 - 14;       // out of range both ways
+        tm.tm_mday = rand() % 80 - 20;
+        tm.tm_hour = rand() % 60 - 10;
+        tm.tm_min = rand() % 150 - 30;
+        tm.tm_sec = rand() % 150 - 30;
+        int64_t got = timeconv_from_tm(tm.tm_year, tm.tm_mon, tm.tm_mday, tm.tm_hour, tm.tm_min,
+                                       tm.tm_sec);
+        if (got != (int64_t)timegm(&tm)) {  // timegm() normalizes tm: compare first
+            CHECK_EQ(i, -1);                // report the failing round once and stop
+            return;
+        }
+    }
+    CHECK(1);
+}
+
+// src/time/utc_libc.c: what the firmware links in place of localtime_r() and mktime().
+struct tm *__wrap_localtime_r(const time_t *t, struct tm *result);
+time_t __wrap_mktime(struct tm *tm);
+
+TEST(utc_replacements_for_localtime_and_mktime) {
+    srand(777);
+    for (int i = 0; i < 100000; i++) {
+        time_t t = (time_t)(((uint64_t)rand() << 16 ^ (uint64_t)rand()) % 4102444800ULL);
+        struct tm want, got;
+        gmtime_r(&t, &want);
+        CHECK(__wrap_localtime_r(&t, &got) == &got);
+        if (got.tm_year != want.tm_year || got.tm_mon != want.tm_mon ||
+            got.tm_mday != want.tm_mday || got.tm_hour != want.tm_hour ||
+            got.tm_min != want.tm_min || got.tm_sec != want.tm_sec ||
+            got.tm_wday != want.tm_wday || got.tm_yday != want.tm_yday) {
+            CHECK_EQ(i, -1);
+            return;
+        }
+        // mktime(): fields out of range are normalized in place, like timegm() does.
+        struct tm a = want;
+        a.tm_mon += rand() % 30 - 15;
+        a.tm_mday += rand() % 90 - 45;
+        a.tm_sec += rand() % 7200 - 3600;
+        struct tm b = a;
+        time_t ta = __wrap_mktime(&a), tb = timegm(&b);
+        if (ta != tb || a.tm_year != b.tm_year || a.tm_mon != b.tm_mon ||
+            a.tm_mday != b.tm_mday || a.tm_hour != b.tm_hour || a.tm_min != b.tm_min ||
+            a.tm_sec != b.tm_sec || a.tm_wday != b.tm_wday || a.tm_yday != b.tm_yday) {
+            CHECK_EQ(i, -2);
+            return;
+        }
+    }
+}
+
 TEST(rtc_registers) {
     uint8_t r[TIMECONV_RTC_REGS];
     CHECK(timeconv_to_rtc(1795476605, r));    // 2026-11-23 23:30:05, Monday
@@ -187,6 +246,8 @@ TEST_MAIN(
     RUN(known_dates);
     RUN(invalid_calendar);
     RUN(matches_libc);
+    RUN(from_tm_matches_timegm);
+    RUN(utc_replacements_for_localtime_and_mktime);
     RUN(rtc_registers);
     RUN(rtc_invalid_registers);
     RUN(rtc_round_trip);

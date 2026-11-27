@@ -183,6 +183,7 @@ set(SOS_SOURCES
     src/files/cardkey.c
     src/time/rtc.c
     src/time/timeconv.c
+    src/time/utc_libc.c
     src/time/timesync.c
     src/time/nts.c
     src/time/nts_ke.c
@@ -261,6 +262,9 @@ target_compile_definitions(sos PRIVATE
                                     # the SDK default: panic, i.e. halt until the watchdog resets
 )
 pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
+# The board keeps UTC: localtime_r() and mktime() go to src/time/utc_libc.c, so the C library's
+# time zone code and the scanf it parses TZ with stay out of the image (about 10 KB).
+target_link_options(sos PRIVATE -Wl,--wrap=localtime_r -Wl,--wrap=mktime)
 pico_add_linker_script_override_path(sos ${CMAKE_CURRENT_SOURCE_DIR}/config/ld
     FILES memory_ram.incl sections_stack.incl section_end.incl)
 
@@ -325,8 +329,8 @@ else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
 endif()
 
-# The burn image (docs/securing-a-board.md, step 3): the one build that can write a board's
-# root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
+# The burn image (docs/security/design.md, "Writing it"): the one build that can write a
+# board's root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
 # job and replaced by the everyday firmware afterwards. Everyday firmware has no code that
 # programs OTP: the two files below are compiled only here.
 option(SOS_BURN_IMAGE "Build the image that writes the root secret into OTP (permanent)" OFF)

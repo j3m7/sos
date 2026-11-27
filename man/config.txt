@@ -8,9 +8,10 @@ SYNOPSIS
 DESCRIPTION
     'config' shows what is saved: hostname, whether a console password is set,
     the Wi-Fi networks, the number of trusted keys, the NTS server, the
-    periodic sync and the RTC calibration. Changes made by 'setup', 'wifi',
-    'key', 'hostname', 'time' and 'passwd' are saved in flash immediately,
-    survive reflashing, and only the console can make them.
+    periodic sync, and the RTC and chip temperature calibrations. Changes made
+    by 'setup', 'wifi', 'key', 'hostname', 'time', 'temp cal' and 'passwd' are
+    saved in flash immediately, survive reflashing, and only the console can
+    make them.
 
     The record is stored sealed under a key derived from the board's root
     secret, in two alternating flash sectors with a sequence number and CRC, so

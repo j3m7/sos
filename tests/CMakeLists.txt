@@ -129,7 +129,8 @@ target_include_directories(test_logfile PRIVATE ${SOS_ROOT}/src)
 add_test(NAME logfile COMMAND test_logfile)
 
 # src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
-add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)
+add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c
+               ${SOS_ROOT}/src/time/utc_libc.c)
 target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)
 add_test(NAME timeconv COMMAND test_timeconv)
 
@@ -150,7 +151,7 @@ add_test(NAME certbundle COMMAND test_certbundle)
 
 # tools/host/mkconfig.c: the provisioning file and the config image written by tools/provision.sh.
 add_executable(test_mkconfig test_mkconfig.c ${SOS_ROOT}/tools/host/mkconfig.c ${SOS_ROOT}/src/core/config.c
-    ${SOS_ROOT}/src/time/timeconv.c)
+    ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/core/sensors.c)
 target_compile_definitions(test_mkconfig PRIVATE MKCONFIG_NO_MAIN)
 target_include_directories(test_mkconfig PRIVATE ${SOS_ROOT}/src ${SOS_ROOT}/tools/host)
 add_test(NAME mkconfig COMMAND test_mkconfig)

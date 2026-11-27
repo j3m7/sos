@@ -6,7 +6,7 @@
 //
 // This is not part of everyday firmware. It is compiled only into the burn image
 // (-DSOS_BURN_IMAGE=ON), which is flashed for this one job and replaced afterwards
-// (docs/securing-a-board.md, step 3). It writes the format core/roototp.h reads.
+// (docs/security/design.md, "Writing it"). It writes the format core/roototp.h reads.
 //
 // What rootburn_run() does, on the first blank page of the root secret's list:
 //
@@ -18,7 +18,7 @@
 //   2. Writes them, error-corrected, a row at a time, reading each row back.
 //   3. Writes the chaff: for each of those rows, the complement of its raw bits.
 //      (With `rehearse`, it stops here on purpose: the page is spent, as a real interruption
-//      would leave it, and is locked. docs/securing-a-board.md, the dev-board variant.)
+//      would leave it, and is locked. docs/otp/dev-1/RECORD.md, "The rehearsal".)
 //   4. Writes the check over the secret.
 //   5. Reads the secret and the check back the careful way and verifies them.
 //   6. Writes the marker. Only now does the page hold a root secret.
