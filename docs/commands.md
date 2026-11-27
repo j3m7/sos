@@ -51,7 +51,7 @@ Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a scre
 |---|---|---|
 | `help`<br>`?` | any | list the commands this channel may use ([page](../man/help.txt)) |
 | `uptime` | any | time since boot, and what the last reset was ([page](../man/uptime.txt)) |
-| `temp` | any | the chip's temperature, and the lowest and highest since boot ([page](../man/temp.txt)) |
+| `temp`<br>`temp cal [<degrees> \| off]` *(console only to change)* | any (marked forms: console only) | the chip's temperature, and the lowest and highest since boot ([page](../man/temp.txt)) |
 | `power` | any | the supply voltage, and whether USB power is present ([page](../man/power.txt)) |
 | `version` | any | firmware commit, board serial, chip revision, how it is secured ([page](../man/version.txt)) |
 | `mem` | any | heap and stack use, by feature ([page](../man/mem.txt)) |

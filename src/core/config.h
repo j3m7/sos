@@ -36,6 +36,8 @@
 #define CONFIG_CERTS_HASH_LEN 32    // SHA-256
 #define CONFIG_RTC_OFFSET_MIN (-64)
 #define CONFIG_RTC_OFFSET_MAX 63
+#define CONFIG_TEMP_OFFSET_MAX 150          // tenths of a degree: the chip temperature's
+                                            // calibration is at most 15.0 degrees either way
 #define CONFIG_OWNER_SECRET_LEN 32
 #define CONFIG_CONSOLE_PW_MIN 8
 #define CONFIG_CONSOLE_PW_MAX 64
@@ -115,9 +117,12 @@ typedef struct {
     // Not protection (see glitchdet.h). This byte was padding (zero) in records saved before it
     // had a use, so those load as the default and the record's length doesn't change.
     uint8_t glitch_detector;
-    // Padding in records saved before wifi_extra existed (they are 1796 bytes, this included),
-    // named so the field after it starts where those records end.
-    uint8_t reserved[2];
+    // The chip temperature's calibration (`temp cal`, core/sensors.h): tenths of a degree added
+    // to every reading, -CONFIG_TEMP_OFFSET_MAX..CONFIG_TEMP_OFFSET_MAX; 0 = uncalibrated. These
+    // two bytes were padding (zero) in every record saved before they had a use, so those load
+    // as uncalibrated and the record's length doesn't change: firmware without the field still
+    // reads a record that has it.
+    int16_t temp_offset;
     // The other saved Wi-Fi networks, in the order they are preferred, after wifi_ssid. Used
     // entries come first; all are unused while wifi_ssid is empty. Edit them with the
     // config_wifi_*() functions, which keep that so.

@@ -190,6 +190,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `hostname <name>` | hostname (applies at the next Wi-Fi connect) |
 | `time auto <hours>` / `time auto off` | periodic NTS sync (default off; see [Timekeeping](#timekeeping)) |
 | `time cal <ppm>` / `time cal off` | RTC calibration: how fast the RTC runs, in ppm (default off; see [Timekeeping](#timekeeping)) |
+| `temp cal <degrees>` / `temp cal off` | chip temperature calibration: what a thermometer beside the board reads (default off; see [Chip temperature calibration](#chip-temperature-calibration)) |
 | `time server <name>` / `time server default` | NTS server: host name or IPv4 address / back to `SOS_NTS_SERVER` |
 | `passwd` | set or change the console password |
 | `logout` | on the console: lock it again |
@@ -222,10 +223,15 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
     close) or the cable is unplugged. A program that closes the port without hanging up leaves
     the console open until the idle lock. Check what yours does: log in, quit the program,
     start it again, and see whether the console asks for the password.
+  - **A drop must last a second** before it locks: around a terminal closing and reopening the
+    port the line can read "disconnected" for a moment, and a single such reading used to lock
+    a login made just then (#153). Unplugging still locks within about a second. Each change
+    is logged at `debug` level (`log history debug` keeps it), to see what a terminal does.
   - On the UART console there is no connection to watch, so only the idle lock applies.
   - Tools that open the port for each command (test scripts) are locked out at every close
-    once a password is set: use a board without a console password for those, or log in each
-    time.
+    that lasts a second or more, once a password is set: use a board without a console
+    password for those, or log in each time. A tool that reopens the port within a second
+    stays logged in.
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
   of the password, then keyed with a key from the board's root secret. A copy of the flash
   isn't enough to try passwords against.
@@ -506,6 +512,42 @@ error. `time cal off` removes it. The calibration is a saved
 setting (`rtc_cal_ppm` when provisioning), written into the RTC at boot if the chip doesn't
 already have it, so it survives a dead coin cell. The RTC applies it as a few short
 corrections every two hours.
+
+### Chip temperature calibration
+
+`temp` reads the RP2350's own temperature sensor. Uncalibrated it is a few degrees off: the
+sensor differs from chip to chip, and the conversion assumes the 3.3 V supply is exactly 3.3 V.
+That's fine for watching a change on one board. For an absolute figure, or to compare boards,
+calibrate it against a thermometer. `temp cal` (console only) stores the difference, at most
+15 degrees either way, and adds it to every reading: `temp`, the log and the glitch
+detector's reports.
+
+1. **Let the board cool.** Leave it unpowered for at least half an hour beside the reference
+   thermometer, out of drafts and sun, so that the chip and the thermometer are at the same
+   temperature.
+2. **Power it up and log in.** Wait until the log shows `wifi: connected` (readings shift a
+   little when Wi-Fi starts, and the stored difference should match the readings after that),
+   but no longer than a minute: the chip warms itself.
+3. **Read the thermometer and set it:** `temp cal 23.5`, with your reading. You should see
+   `the sensor reads 21.7 C and the reference 23.5 C: +1.8 C is now added to every reading`.
+   If it says the reference is more than 15 degrees from the sensor, stop: check the
+   thermometer, and that the board had cooled.
+4. **Check:** `temp` now ends with `Calibrated (`temp cal`): +1.8 C added to the sensor's
+   reading.`
+
+`temp cal` alone shows the calibration; `temp cal off` removes it. A new `temp cal` replaces
+the old one (it measures against the sensor's own reading, not the calibrated one), and
+`config reset` removes it (`temp_cal` in the provisioning file carries a known value back).
+It corrects the offset only, so it's best near the temperature it was set at.
+
+What it stores equates the sensor's reading with the room thermometer at that moment, and by
+then the chip is already a little warmer than the room from running. So that warmth is folded
+into the calibration: a calibrated board reports something closer to the room temperature as
+worked out from the chip than the chip's own temperature, and under load the chip itself is
+warmer than it says. Don't compare a calibrated reading with the chip's rated maximum.
+
+The calibration is stored in two bytes of the configuration that were spare, so firmware
+without `temp cal` still reads the configuration (and ignores it).
 
 ## Files (SD card)
 
