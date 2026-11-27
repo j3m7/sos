@@ -1703,6 +1703,119 @@ TEST(bad_wifi_extra_is_rejected) {
     CHECK(config_load(&store, &b, NULL));
 }
 
+
+// --- config_slot_info: what the `config` health check reads -------------------------------------
+
+static config_slot_kind_t kind_of(const config_store_t *st, unsigned slot) {
+    config_slot_info_t i;
+    config_slot_info(st, slot, &i);
+    return i.kind;
+}
+
+TEST(slot_info_empty_and_blanked) {
+    sealed_start();
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_EMPTY);
+    CHECK(config_erase(&sealed_store));             // zeroed headers
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_EMPTY);
+    CHECK_EQ(kind_of(&sealed_store, 1), CONFIG_SLOT_EMPTY);
+    config_slot_info_t info[2];
+    config_slot_info(&sealed_store, 0, &info[0]);
+    config_slot_info(&sealed_store, 1, &info[1]);
+    CHECK_EQ(config_in_use(info), -1);
+    flash.slot[1][3] = 0x12;                        // neither erased nor blank, no magic
+    CHECK_EQ(kind_of(&sealed_store, 1), CONFIG_SLOT_JUNK);
+}
+
+TEST(slot_info_sealed_pair_and_damage) {
+    sos_config_t a;
+    sealed_start();
+    sample(&a, "Net");
+    CHECK(config_save(&sealed_store, &a));          // slot 0, seq 1
+    CHECK(config_save(&sealed_store, &a));          // slot 1, seq 2
+    config_slot_info_t info[2];
+    config_slot_info(&sealed_store, 0, &info[0]);
+    config_slot_info(&sealed_store, 1, &info[1]);
+    CHECK_EQ(info[0].kind, CONFIG_SLOT_SEALED);
+    CHECK_EQ(info[1].kind, CONFIG_SLOT_SEALED);
+    CHECK_EQ(info[0].seq, 1);
+    CHECK_EQ(info[1].seq, 2);
+    CHECK_EQ(info[1].version, 2);
+    CHECK_EQ(info[1].length, sizeof(sos_config_t));
+    CHECK_EQ(config_in_use(info), 1);
+    // A flipped payload byte in the older slot: its CRC.
+    flash.slot[0][100] ^= 1;
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_BAD_CRC);
+    flash.slot[0][100] ^= 1;
+    // With its CRC made right again, the seal refuses it.
+    flash.slot[0][100] ^= 1;
+    fix_sealed_crc(0);
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_UNOPENED);
+    // An unknown version or length.
+    uint16_t v = 7;
+    memcpy(flash.slot[0] + 4, &v, 2);
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_BAD_HEADER);
+    v = 1234;
+    memcpy(flash.slot[1] + 6, &v, 2);
+    CHECK_EQ(kind_of(&sealed_store, 1), CONFIG_SLOT_BAD_HEADER);
+}
+
+TEST(slot_info_under_another_key_does_not_open) {
+    sos_config_t a;
+    sealed_start();
+    sample(&a, "Net");
+    CHECK(config_save(&sealed_store, &a));
+    fake.key = 0x33;
+    CHECK_EQ(kind_of(&sealed_store, 0), CONFIG_SLOT_UNOPENED);
+    // And a store with no sealer can't open it either.
+    CHECK_EQ(kind_of(&store, 0), CONFIG_SLOT_UNOPENED);
+}
+
+TEST(slot_info_out_of_bounds_contents) {
+    sos_config_t a;
+    blank_flash();
+    sample(&a, "Net");
+    CHECK(config_save(&store, &a));                 // plain, slot 0
+    flash.slot[0][16 + offsetof(sos_config_t, key_count)] = CONFIG_MAX_KEYS + 1;
+    fix_crc(0);
+    CHECK_EQ(kind_of(&store, 0), CONFIG_SLOT_INVALID);
+}
+
+TEST(slot_info_plain_refused_and_in_use_rules) {
+    sos_config_t a;
+    sealed_start();
+    sample(&a, "Net");
+    CHECK(config_save(&sealed_store, &a));          // sealed, slot 0, seq 1
+    CHECK(config_save(&sealed_store, &a));          // sealed, slot 1, seq 2
+    CHECK(config_save(&sealed_store, &a));          // sealed, slot 0, seq 3
+    // Older firmware after a downgrade writes plain to slot 1 with seq 1 (it sees nothing).
+    plain_record("Downgrade");
+    config_slot_info_t info[2];
+    config_slot_info(&sealed_store, 0, &info[0]);
+    config_slot_info(&sealed_store, 1, &info[1]);
+    CHECK_EQ(info[0].kind, CONFIG_SLOT_PLAIN);
+    // plain_record() writes slot 0; whichever slot, the plain one is in use.
+    CHECK_EQ(config_in_use(info), 0);
+    // The same flash on a store that refuses plain: refused, and the sealed one is in use.
+    config_slot_info(&secured_store, 0, &info[0]);
+    config_slot_info(&secured_store, 1, &info[1]);
+    CHECK_EQ(info[0].kind, CONFIG_SLOT_REFUSED);
+    CHECK_EQ(info[1].kind, CONFIG_SLOT_SEALED);
+    CHECK_EQ(config_in_use(info), 1);
+    // Agrees with what loading takes.
+    CHECK_EQ(config_stored(&sealed_store), CONFIG_STORED_PLAIN);
+    CHECK_EQ(config_stored(&secured_store), CONFIG_STORED_SEALED);
+}
+
+TEST(slot_info_in_use_wraps_around) {
+    config_slot_info_t info[2] = {
+        {CONFIG_SLOT_SEALED, 2, 0, 0xffffffffu}, {CONFIG_SLOT_SEALED, 2, 0, 1},
+    };
+    CHECK_EQ(config_in_use(info), 1);
+    info[1].kind = CONFIG_SLOT_BAD_CRC;
+    CHECK_EQ(config_in_use(info), 0);
+    CHECK(!strcmp(config_slot_kind_name(CONFIG_SLOT_BAD_CRC), "bad CRC"));
+}
+
 TEST_MAIN(
     RUN(blank_flash_loads_defaults);
     RUN(save_and_load_round_trip);
@@ -1784,4 +1897,10 @@ TEST_MAIN(
     RUN(wifi_networks_round_trip_sealed_and_plain);
     RUN(records_from_before_wifi_extra_load_with_one_network);
     RUN(bad_wifi_extra_is_rejected);
+    RUN(slot_info_empty_and_blanked);
+    RUN(slot_info_sealed_pair_and_damage);
+    RUN(slot_info_under_another_key_does_not_open);
+    RUN(slot_info_out_of_bounds_contents);
+    RUN(slot_info_plain_refused_and_in_use_rules);
+    RUN(slot_info_in_use_wraps_around);
 )

@@ -46,6 +46,21 @@ bool sdcard_info(sdcard_info_t *info);
 // Changes every time a card is mounted (the same card again too).
 uint32_t sdcard_generation(void);
 
+// What the `card` health check needs to know before it touches the card (it never mounts one):
+// whether a card is mounted and what it is, and whether anything else owns the card now. Reads
+// state only; touches neither the card nor the driver.
+typedef struct {
+    bool mounted;
+    bool encrypted;             // mounted through the encryption layer
+    bool locked;                // an encrypted card is in and this board's key doesn't open it
+    const char *fs;             // "exFAT", "FAT32", ... (mounted)
+    const char *busy;           // NULL, or why the card belongs to something else now:
+                                // "sd check running", "card being formatted",
+                                // "card unmounted by hand"
+    uint32_t generation;        // sdcard_generation()
+} sdcard_health_t;
+void sdcard_health_state(sdcard_health_t *out);
+
 // After the configuration was erased: an encrypted card is unmounted and its key forgotten (the
 // owner secret it was opened with no longer exists). A running `sd check` on it stops.
 void sdcard_owner_gone(void);

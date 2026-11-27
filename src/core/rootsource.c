@@ -21,6 +21,8 @@ static rootsrc_t source = ROOTSRC_NONE;
 static roototp_find_t found = ROOTOTP_CANT_READ;
 static unsigned otp_index = ROOTOTP_PAGES;
 static bool otp_locked;
+static bool otp_secret_ok, otp_locks_ok;     // FOUND: what rootsource_init() saw
+static unsigned otp_open_page;
 static char why[160] = "not started";
 
 // --- reading OTP -------------------------------------------------------------------------------------
@@ -93,6 +95,9 @@ void rootsource_init(void) {
         keyprov_wipe(probe, sizeof(probe));
         locks_ok = roototp_locks_ok(&reader, otp_index, &open_page);
     }
+    otp_secret_ok = secret_ok;
+    otp_locks_ok = locks_ok;
+    otp_open_page = open_page;
     source = roototp_choose(found, secret_ok, locks_ok, consoleonly());
     unsigned page = ROOTOTP_FIRST_PAGE + otp_index;
 
@@ -165,3 +170,16 @@ const char *rootsource_describe(void) { return why; }
 roototp_find_t rootsource_otp_found(void) { return found; }
 unsigned rootsource_otp_index(void) { return otp_index; }
 bool rootsource_otp_locked(void) { return otp_locked; }
+
+void rootsource_otp_detail(bool *secret_ok, bool *locks_ok, unsigned *open_page) {
+    *secret_ok = otp_secret_ok;
+    *locks_ok = otp_locks_ok;
+    *open_page = otp_open_page;
+}
+
+bool rootsource_otp_soft_locked(void) {
+    if (source != ROOTSRC_OTP)
+        return false;
+    uint32_t want = OTP_SW_LOCK0_SEC_BITS | OTP_SW_LOCK0_NSEC_BITS;
+    return (otp_hw->sw_lock[ROOTOTP_FIRST_PAGE + otp_index] & want) == want;
+}

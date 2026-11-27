@@ -358,6 +358,55 @@ TEST(marker_stays) {
         CHECK_EQ(flash[i], 0xff);       // the rest of the marker's page is untouched
 }
 
+
+// --- failcount_inspect: what the `failcount` health check reads --------------------------------
+
+TEST(inspect_erased_marked_other_none) {
+    failcount_info_t i;
+    fresh();
+    failcount_inspect(flash, &i);
+    CHECK_EQ(i.state, FAILCOUNT_SECTOR_ERASED);
+    failcount_inspect(NULL, &i);
+    CHECK_EQ(i.state, FAILCOUNT_SECTOR_NONE);
+    flash[100] = 0x12;
+    failcount_inspect(flash, &i);
+    CHECK_EQ(i.state, FAILCOUNT_SECTOR_OTHER);
+}
+
+TEST(inspect_counts_like_the_login) {
+    failcount_info_t i;
+    fresh();
+    for (unsigned n = 0; n < 11; n++)
+        CHECK(failcount_attempt());
+    CHECK(failcount_clear());
+    CHECK(failcount_attempt());
+    CHECK(failcount_attempt());
+    failcount_inspect(flash, &i);
+    CHECK_EQ(i.state, FAILCOUNT_SECTOR_MARKED);
+    CHECK_EQ(i.attempts, 13);
+    CHECK_EQ(i.cleared, 11);
+    CHECK_EQ(i.attempts - i.cleared, failcount_get());
+    CHECK(!i.stray);
+    CHECK(!i.cleared_over);
+}
+
+TEST(inspect_finds_stray_bits_and_cleared_over) {
+    failcount_info_t i;
+    fresh();
+    CHECK(failcount_attempt());
+    CHECK(failcount_attempt());                 // attempts 2
+    flash[FAILCOUNT_PAGE + 10] &= 0xfe;         // a cleared bit far past the count
+    failcount_inspect(flash, &i);
+    CHECK(i.stray);
+    CHECK_EQ(i.attempts, 2);
+    fresh();
+    CHECK(failcount_attempt());
+    flash[FAILCOUNT_PAGE + FAILCOUNT_TRACK_BYTES] = 0xf0;   // cleared track 4 > attempts 1
+    failcount_inspect(flash, &i);
+    CHECK(!i.stray);
+    CHECK(i.cleared_over);
+}
+
 TEST_MAIN(
     RUN(blank_sector_is_zero);
     RUN(counts_and_survives_a_reboot);
@@ -375,4 +424,7 @@ TEST_MAIN(
     RUN(a_write_that_did_not_take_is_noticed);
     RUN(a_failed_restart_keeps_the_count);
     RUN(marker_stays);
+    RUN(inspect_erased_marked_other_none);
+    RUN(inspect_counts_like_the_login);
+    RUN(inspect_finds_stray_bits_and_cleared_over);
 )

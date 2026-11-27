@@ -30,4 +30,16 @@ void hostkey_owner_gone(void);
 // Erase the stored host key; a new one is generated on next boot.
 bool hostkey_erase(void);
 
+// For the `hostkey` health check (core/statecheck.h). The record is never opened for this:
+// page_matches compares a SHA-256 of the stored page (the sealed record, as stored) with the one
+// taken when the key in use was opened or stored.
+typedef struct {
+    bool have_key;              // a host key is in use
+    bool gave_up;               // none, for a reason that lasts until a reboot (or a refusal)
+    bool unsealed;              // the key in use is a plain record, used as it is
+    bool page_matches;          // have_key, and the stored page is the one loaded
+    bool erased;                // hostkey_erase() since then: the page is gone on purpose
+} hostkey_health_t;
+void hostkey_health(hostkey_health_t *out);
+
 #endif

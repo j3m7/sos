@@ -190,6 +190,8 @@ set(SOS_SOURCES
     src/core/health.c
     src/core/health_board.c
     src/core/hwtest.c
+    src/core/statecheck.c
+    src/core/statecheck_board.c
     src/core/selftest.c
     src/core/logfile.c
     src/core/logfile_board.c

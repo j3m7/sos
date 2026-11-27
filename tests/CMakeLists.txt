@@ -145,6 +145,15 @@ target_include_directories(test_hwtest PRIVATE ${SOS_ROOT}/src)
 target_link_libraries(test_hwtest PRIVATE m)
 add_test(NAME hwtest COMMAND test_hwtest)
 
+# src/core/statecheck.c: the checks of stored state, the pure half (docs/design/health.md §9.3):
+# the judging of config, rootsecret, otp, failcount, hostkey and card from made-up inputs, the OTP
+# row ECC against picotool's code, and the dev key hashes against keys/*.pem (with openssl).
+add_executable(test_statecheck test_statecheck.c ${SOS_ROOT}/src/core/statecheck.c
+               ${SOS_ROOT}/src/core/config.c ${SOS_ROOT}/src/core/bootkey.c)
+target_include_directories(test_statecheck PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_statecheck PRIVATE SOS_KEYS_DIR="${SOS_ROOT}/keys")
+add_test(NAME statecheck COMMAND test_statecheck)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)

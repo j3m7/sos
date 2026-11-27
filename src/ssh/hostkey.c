@@ -11,6 +11,8 @@
 
 #include <wolfssh/ssh.h>
 #include <wolfssh/keygen.h>
+#include <wolfssl/wolfcrypt/hash.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 
 #include "core/health.h"
 #include "core/keyprov.h"
@@ -45,6 +47,14 @@ static bool have_key;
 static bool gave_up;                        // it failed for a reason that won't change before a reboot
 static bool refused;                        // ...or because a health check refused a new key
 static bool said_no_owner;
+// For the `hostkey` health check: a SHA-256 of the key sector's page as it was when the key in
+// use was opened or stored (the sealed record as stored: ciphertext, not key material), so the
+// check can see whether what is stored is still the key being served without opening it. Every
+// path here that rewrites the page records it again or clears it.
+static uint8_t page_digest[32];
+static bool have_digest;
+static bool erased;                         // hostkey_erase() since the key in use was loaded
+static bool in_use_unsealed;                // the key in use is a plain record, used as it is
 static uint8_t page[HOSTREC_PAGE];          // a record being built
 
 static void wipe(void *p, size_t len) {
@@ -216,6 +226,11 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     if (ok) {
         have_key = true;
         key_len = n;
+        // The page as it is now, after any store above.
+        have_digest = wc_Sha256Hash(keysector_page(KEYSECTOR_HOSTKEY), HOSTREC_PAGE,
+                                    page_digest) == 0;
+        erased = false;
+        in_use_unsealed = action == HOSTKEY_USE_PLAIN_UNSEALED;
     } else {
         wipe(key_der, sizeof(key_der));
         gave_up = true;                 // a reboot tries again
@@ -231,8 +246,25 @@ void hostkey_owner_gone(void) {
     gave_up = false;                    // what failed for the old owner may not for the next
     refused = false;
     said_no_owner = false;
+    have_digest = false;
+    erased = false;
+    in_use_unsealed = false;
 }
 
 bool hostkey_erase(void) {
+    have_digest = false;                // whatever the page holds now isn't what was loaded
+    erased = true;                      // on purpose: the health check says so, not "changed"
     return keysector_write(KEYSECTOR_HOSTKEY, NULL);      // keeps the device key
+}
+
+void hostkey_health(hostkey_health_t *out) {
+    out->have_key = have_key;
+    out->gave_up = gave_up;
+    out->unsealed = in_use_unsealed;
+    out->erased = erased;
+    out->page_matches = false;
+    uint8_t now[sizeof(page_digest)];
+    if (have_key && have_digest &&
+        wc_Sha256Hash(keysector_page(KEYSECTOR_HOSTKEY), HOSTREC_PAGE, now) == 0)
+        out->page_matches = memcmp(now, page_digest, sizeof(now)) == 0;
 }

@@ -170,37 +170,42 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
 // slot back), and wiped after each use: it holds the configuration in the clear.
 static sos_config_t scratch;
 
-// What a slot holds that this store can use: nothing, a plain record or a sealed one. A record
-// counts only if its header and CRC check out, it opens (a sealed one), and its contents are
-// within bounds. A plain record doesn't count in a store that refuses them, nor a sealed one in
-// a store without a sealer. *hdr gets the header; *out (if not NULL) the configuration, with
-// the fields a shorter record lacks as 0.
-static int slot_read(const config_store_t *store, unsigned slot, record_header_t *hdr,
-                     sos_config_t *out) {
+// What a slot holds (config_slot_info): one of config_slot_kind_t, with *hdr the header. A
+// record is PLAIN or SEALED only if its header and CRC check out, it opens (a sealed one), and its
+// contents are within bounds; a plain record in a store that refuses them is REFUSED, a sealed
+// one in a store without a sealer UNOPENED. *out (if not NULL) gets the configuration of a PLAIN
+// or SEALED record, with the fields a shorter record lacks as 0; otherwise nothing of the record
+// leaves this function (the scratch is wiped).
+static config_slot_kind_t slot_inspect(const config_store_t *store, unsigned slot,
+                                       record_header_t *hdr, sos_config_t *out) {
     sos_config_t *tmp = &scratch;
     const uint8_t *record = store->read(store->ctx, slot);
     record_header_t h;
     memcpy(&h, record, sizeof(h));
     if (hdr)
         *hdr = h;
-    if (h.magic != CONFIG_MAGIC || !known_length(h.length))
-        return CONFIG_STORED_NONE;
-    int kind;
-    size_t stored = h.length;
-    if (h.version == CONFIG_VERSION_PLAIN && !store->refuse_plain) {
-        kind = CONFIG_STORED_PLAIN;
-    } else if (h.version == CONFIG_VERSION_SEALED && store->sealer) {
-        kind = CONFIG_STORED_SEALED;
-        stored += SEALER_OVERHEAD;
-    } else {
-        return CONFIG_STORED_NONE;
+    if (h.magic != CONFIG_MAGIC) {
+        bool ones = true, zeros = true;
+        for (size_t i = 0; i < HEADER_LEN; i++) {
+            ones = ones && record[i] == 0xff;
+            zeros = zeros && record[i] == 0;
+        }
+        return ones || zeros ? CONFIG_SLOT_EMPTY : CONFIG_SLOT_JUNK;
     }
+    if (!known_length(h.length) ||
+        (h.version != CONFIG_VERSION_PLAIN && h.version != CONFIG_VERSION_SEALED))
+        return CONFIG_SLOT_BAD_HEADER;
+    bool sealed = h.version == CONFIG_VERSION_SEALED;
+    size_t stored = (size_t)h.length + (sealed ? SEALER_OVERHEAD : 0);
     if (h.crc != record_crc(record, stored))
-        return CONFIG_STORED_NONE;
+        return CONFIG_SLOT_BAD_CRC;
+    if (!sealed && store->refuse_plain)
+        return CONFIG_SLOT_REFUSED;
+    if (sealed && !store->sealer)
+        return CONFIG_SLOT_UNOPENED;
 
-    bool ok = true;
     memset(tmp, 0, sizeof(*tmp));
-    if (kind == CONFIG_STORED_PLAIN) {
+    if (!sealed) {
         memcpy(tmp, record + HEADER_LEN, h.length);
         // A plain record doesn't carry an owner secret or a password verifier, whatever its
         // bytes say.
@@ -208,16 +213,31 @@ static int slot_read(const config_store_t *store, unsigned slot, record_header_t
         tmp->console_iterations = 0;
         memset(tmp->console_salt, 0, sizeof(tmp->console_salt));
         memset(tmp->console_verifier, 0, sizeof(tmp->console_verifier));
-    } else
-        ok = store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
-                                 stored, (uint8_t *)tmp);
-    if (ok && kind == CONFIG_STORED_SEALED)     // and a sealed one no password in the clear
+    } else if (!store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
+                                    stored, (uint8_t *)tmp)) {
+        wipe(tmp, sizeof(*tmp));
+        return CONFIG_SLOT_UNOPENED;
+    } else {
+        // And a sealed one no password in the clear.
         memset(tmp->console_password, 0, sizeof(tmp->console_password));
-    ok = ok && contents_valid(tmp, h.length);
+    }
+    bool ok = contents_valid(tmp, h.length);
     if (ok && out)
         memcpy(out, tmp, sizeof(*out));
     wipe(tmp, sizeof(*tmp));
-    return ok ? kind : CONFIG_STORED_NONE;
+    if (!ok)
+        return CONFIG_SLOT_INVALID;
+    return sealed ? CONFIG_SLOT_SEALED : CONFIG_SLOT_PLAIN;
+}
+
+// What a slot holds that this store can use: nothing, a plain record or a sealed one.
+static int slot_read(const config_store_t *store, unsigned slot, record_header_t *hdr,
+                     sos_config_t *out) {
+    switch (slot_inspect(store, slot, hdr, out)) {
+    case CONFIG_SLOT_PLAIN:  return CONFIG_STORED_PLAIN;
+    case CONFIG_SLOT_SEALED: return CONFIG_STORED_SEALED;
+    default:                 return CONFIG_STORED_NONE;
+    }
 }
 
 static bool seq_newer(uint32_t a, uint32_t b) {
@@ -239,20 +259,54 @@ typedef struct {
 // configuration.) A store that refuses plain records never gets here with one: slot_read()
 // doesn't report them.
 static void scan(const config_store_t *store, slots_t *s) {
-    for (unsigned i = 0; i < 2; i++)
-        s->kind[i] = slot_read(store, i, &s->hdr[i], NULL);
+    config_slot_info_t info[2];
+    for (unsigned i = 0; i < 2; i++) {
+        info[i].kind = slot_inspect(store, i, &s->hdr[i], NULL);
+        info[i].seq = s->hdr[i].seq;
+        s->kind[i] = info[i].kind == CONFIG_SLOT_PLAIN    ? CONFIG_STORED_PLAIN
+                   : info[i].kind == CONFIG_SLOT_SEALED ? CONFIG_STORED_SEALED
+                                                        : CONFIG_STORED_NONE;
+    }
     bool v0 = s->kind[0] != CONFIG_STORED_NONE, v1 = s->kind[1] != CONFIG_STORED_NONE;
     bool one_newer = seq_newer(s->hdr[1].seq, s->hdr[0].seq);
-    if (v0 && v1 && s->kind[0] != s->kind[1])
-        s->newest = s->kind[0] == CONFIG_STORED_PLAIN ? 0 : 1;
-    else if (v0 && v1)
-        s->newest = one_newer ? 1 : 0;
-    else
-        s->newest = v0 ? 0 : v1 ? 1 : -1;
+    s->newest = config_in_use(info);
     if (v0 && v1)
         s->next_seq = s->hdr[one_newer ? 1 : 0].seq + 1;
     else
         s->next_seq = s->newest < 0 ? 1 : s->hdr[s->newest].seq + 1;
+}
+
+int config_in_use(const config_slot_info_t info[2]) {
+    bool v0 = info[0].kind == CONFIG_SLOT_PLAIN || info[0].kind == CONFIG_SLOT_SEALED;
+    bool v1 = info[1].kind == CONFIG_SLOT_PLAIN || info[1].kind == CONFIG_SLOT_SEALED;
+    if (v0 && v1 && info[0].kind != info[1].kind)
+        return info[0].kind == CONFIG_SLOT_PLAIN ? 0 : 1;
+    if (v0 && v1)
+        return seq_newer(info[1].seq, info[0].seq) ? 1 : 0;
+    return v0 ? 0 : v1 ? 1 : -1;
+}
+
+void config_slot_info(const config_store_t *store, unsigned slot, config_slot_info_t *out) {
+    record_header_t h;
+    out->kind = slot_inspect(store, slot & 1u, &h, NULL);
+    out->version = h.version;
+    out->length = h.length;
+    out->seq = h.seq;
+}
+
+const char *config_slot_kind_name(config_slot_kind_t kind) {
+    switch (kind) {
+    case CONFIG_SLOT_EMPTY:      return "empty";
+    case CONFIG_SLOT_JUNK:       return "junk";
+    case CONFIG_SLOT_BAD_HEADER: return "bad header";
+    case CONFIG_SLOT_BAD_CRC:    return "bad CRC";
+    case CONFIG_SLOT_REFUSED:    return "refused plain";
+    case CONFIG_SLOT_UNOPENED:   return "doesn't open";
+    case CONFIG_SLOT_INVALID:    return "out of bounds";
+    case CONFIG_SLOT_PLAIN:      return "plain";
+    case CONFIG_SLOT_SEALED:     return "sealed";
+    }
+    return "?";
 }
 
 void config_defaults(sos_config_t *cfg) {

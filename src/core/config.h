@@ -166,6 +166,37 @@ typedef struct {
 enum { CONFIG_STORED_NONE, CONFIG_STORED_PLAIN, CONFIG_STORED_SEALED };
 int config_stored(const config_store_t *store);
 
+// What one slot holds, for the `config` health check and `health state-dump`. It reports the
+// slot's kind, header fields and sequence number ONLY, never the record's contents: a sealed
+// record is opened (with the store's sealer, to know whether it opens) into the buffer loading
+// uses, and wiped there.
+typedef enum {
+    CONFIG_SLOT_EMPTY,          // header all 0xff (erased) or all zero (blanked by config_erase)
+    CONFIG_SLOT_JUNK,           // no magic, and not empty
+    CONFIG_SLOT_BAD_HEADER,     // the magic, with an unknown version or length
+    CONFIG_SLOT_BAD_CRC,
+    CONFIG_SLOT_REFUSED,        // a plain record, CRC right, in a store that refuses them
+    CONFIG_SLOT_UNOPENED,       // sealed, CRC right, doesn't open (or the store has no sealer)
+    CONFIG_SLOT_INVALID,        // opens, but its contents are out of bounds
+    CONFIG_SLOT_PLAIN,          // a plain record this store loads
+    CONFIG_SLOT_SEALED,         // a sealed record this store loads
+} config_slot_kind_t;
+
+typedef struct {
+    config_slot_kind_t kind;
+    uint16_t version, length;   // from the header (meaningful from BAD_HEADER on)
+    uint32_t seq;               // from the header (meaningful from BAD_CRC on)
+} config_slot_info_t;
+
+void config_slot_info(const config_store_t *store, unsigned slot, config_slot_info_t *out);
+
+// The slot config_load() takes, from the two slots' info: a plain record before a sealed one
+// whatever the sequence numbers (see config_load), else the higher sequence number. -1: none.
+int config_in_use(const config_slot_info_t info[2]);
+
+// "empty", "bad CRC", "sealed", ...
+const char *config_slot_kind_name(config_slot_kind_t kind);
+
 // Defaults: hostname "sos", user "admin", no Wi-Fi, no keys.
 void config_defaults(sos_config_t *cfg);
 
