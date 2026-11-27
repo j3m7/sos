@@ -18,67 +18,86 @@
 
 #include "core/heaptag.h"
 
-// --- `| more`: output captured for the pager -------------------------------------------------------
+// --- pipelines: `<command> | grep x | more` (pipe.h) --------------------------------------------
 
 #define PIPE_STEP 2048                  // the capture grows by this much
 
-static void write_out(shell_t *sh, const char *buf, size_t len);
+static void term_out(shell_t *sh, const char *buf, size_t len);
 
-// Keep the command's output instead of sending it, up to SHELL_PIPE_MAX bytes.
+// Is a line's output going through a pipeline now?
+static bool piped(const shell_t *sh) {
+    return sh->pipe.first || sh->pipe.sink == PIPE_SINK_PAGER;
+}
+
+// The sink `more`: keep the output instead of sending it, up to SHELL_PIPE_MAX bytes. Once full
+// the producer has done its work: it is ended as head ends it.
 static void pipe_append(shell_t *sh, const char *buf, size_t len) {
-    if (sh->pipe_cut)
+    pipeline_t *p = &sh->pipe;
+    if (p->cut)
         return;
-    if (sh->pipe_len + len > SHELL_PIPE_MAX) {
-        len = SHELL_PIPE_MAX - sh->pipe_len;
-        sh->pipe_cut = true;
+    if (p->len + len > SHELL_PIPE_MAX) {
+        len = SHELL_PIPE_MAX - p->len;
+        p->cut = p->done = true;
     }
-    if (sh->pipe_len + len > sh->pipe_cap) {
-        size_t cap = sh->pipe_cap;
-        while (cap < sh->pipe_len + len)
+    if (p->len + len > p->cap) {
+        size_t cap = p->cap;
+        while (cap < p->len + len)
             cap += PIPE_STEP;
-        char *b = heap_realloc(HEAP_EDIT, sh->pipe_buf, cap);
+        char *b = heap_realloc(HEAP_EDIT, p->buf, cap);
         if (!b) {                       // the rest is lost: say so in the text
-            sh->pipe_cut = sh->pipe_oom = true;
+            p->cut = p->oom = p->done = true;
             return;
         }
-        sh->pipe_buf = b;
-        sh->pipe_cap = cap;
+        p->buf = b;
+        p->cap = cap;
     }
-    memcpy(sh->pipe_buf + sh->pipe_len, buf, len);
-    sh->pipe_len += len;
+    memcpy(p->buf + p->len, buf, len);
+    p->len += len;
 }
 
+// Back to idle, the filters already closed; the capture's block is the caller's.
+static void pipe_reset(pipeline_t *p) {
+    p->buf = NULL;
+    p->len = p->cap = 0;
+    p->cut = p->oom = p->pending = p->done = p->aside = false;
+    p->sink = PIPE_SINK_TERMINAL;
+}
+
+// The line is cancelled (Ctrl-C, the session ended): the filters' held text and the capture go.
 static void pipe_drop(shell_t *sh) {
-    heap_release(HEAP_EDIT, sh->pipe_buf);
-    sh->pipe_buf = NULL;
-    sh->pipe_len = sh->pipe_cap = 0;
-    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
+    pipe_close(&sh->pipe);
+    heap_release(HEAP_EDIT, sh->pipe.buf);
+    pipe_reset(&sh->pipe);
 }
 
-// The command turned out not to be one to page (it asks a question): what it printed so far
-// goes to the screen, and the rest will too.
+// The command turned out not to be one to pipe (it asks a question, or draws its own screen):
+// the filters are closed, what was captured so far goes to the screen, and the rest will too.
 static void pipe_release(shell_t *sh) {
-    char *text = sh->pipe_buf;
-    size_t len = sh->pipe_len;
-    sh->pipe_buf = NULL;
+    pipe_close(&sh->pipe);
+    char *text = sh->pipe.buf;
+    size_t len = sh->pipe.len;
+    pipe_reset(&sh->pipe);
     if (len)
-        write_out(sh, text, len);
+        term_out(sh, text, len);
     heap_release(HEAP_EDIT, text);
-    sh->pipe_len = sh->pipe_cap = 0;
-    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
 }
 
-// The command is done: its output goes to the pager (which owns the block from here on).
+// The command is done: the filters flush what they hold, and with `more` the capture goes to the
+// pager (which owns the block from here on).
 static void pipe_finish(shell_t *sh) {
-    char *text = sh->pipe_buf;
-    size_t len = sh->pipe_len;
-    bool cut = sh->pipe_cut, oom = sh->pipe_oom;
-    sh->pipe_buf = NULL;
-    sh->pipe_len = sh->pipe_cap = 0;
-    sh->pipe_cut = sh->pipe_oom = sh->pipe_pending = false;
+    pipeline_t *p = &sh->pipe;
+    pipe_end(p);
+    if (p->sink != PIPE_SINK_PAGER) {
+        pipe_reset(p);
+        return;
+    }
+    char *text = p->buf;
+    size_t len = p->len;
+    bool cut = p->cut, oom = p->oom;
+    pipe_reset(p);
     if (len == 0) {
         heap_release(HEAP_EDIT, text);
-        shell_printf(sh, "%s: no output\n", sh->pipe_name);
+        shell_printf(sh, "%s: no output\n", p->name);
         return;
     }
     if (cut) {
@@ -92,16 +111,24 @@ static void pipe_finish(shell_t *sh) {
             len += nl;
         }
     }
-    shell_page(sh, sh->pipe_name, text, len);
+    shell_page(sh, p->name, text, len);
+}
+
+// A stage closed the stream (head) or the capture is full: end the producing job now, silently
+// (no ^C), as if it had finished.
+static void end_job_quietly(shell_t *sh) {
+    shell_job_fn step = sh->job;
+    void *arg = sh->job_arg;
+    sh->job = NULL;
+    sh->job_arg = NULL;
+    sh->key = NULL;
+    step(sh, arg, true);
 }
 
 // --- output --------------------------------------------------------------------
 
-static void write_out(shell_t *sh, const char *buf, size_t len) {
-    if (sh->pipe_buf) {                     // `| more`: kept for the pager, nothing on screen
-        pipe_append(sh, buf, len);
-        return;
-    }
+// The terminal: the channel, with its newline translation.
+static void term_out(shell_t *sh, const char *buf, size_t len) {
     if (len)
         sh->at_line_start = buf[len - 1] == '\n';
     if (!sh->io->crlf) {
@@ -123,6 +150,15 @@ static void write_out(shell_t *sh, const char *buf, size_t len) {
     }
     if (n)
         sh->io->write(sh->ctx, out, (int)n);
+}
+
+// Everything the shell and its commands print: through the line's pipeline when there is one
+// (nothing on screen with `| more`), else to the terminal.
+static void write_out(shell_t *sh, const char *buf, size_t len) {
+    if (piped(sh) && !sh->pipe.aside)
+        pipe_write(&sh->pipe, buf, len);
+    else
+        term_out(sh, buf, len);
 }
 
 void shell_write(shell_t *sh, const char *buf, size_t len) {
@@ -237,6 +273,7 @@ static bool answer_question(shell_t *sh, char *answer) {
 void shell_hide_input(shell_t *sh) {
     if (!sh->io || shell_screen_held(sh))       // full-screen program, or `| more`: nothing shown
         return;
+    sh->pipe.aside = piped(sh);                 // what follows isn't the command's: no filters
     if (sh->job) {                              // job output on screen: don't erase it
         if (!sh->at_line_start)
             write_out(sh, "\n", 1);
@@ -246,6 +283,8 @@ void shell_hide_input(shell_t *sh) {
 }
 
 void shell_show_input(shell_t *sh) {
+    if (sh->io)
+        sh->pipe.aside = false;                 // the command's output is filtered again
     if (!sh->io || sh->job)                     // no prompt while a job runs
         return;
     prompt(sh);
@@ -350,19 +389,9 @@ static void history_key(shell_t *sh, int key) {
     }
 }
 
-// Where a trailing "| more" starts (the '|'), or NULL. `cmd` is trimmed.
-static char *pipe_suffix(char *cmd) {
-    size_t n = strlen(cmd);
-    if (n < 5 || strcmp(cmd + n - 4, "more"))
-        return NULL;
-    char *p = cmd + n - 4;
-    while (p > cmd && p[-1] == ' ')
-        p--;
-    return p > cmd && p[-1] == '|' ? p - 1 : NULL;
-}
-
-// Trim spaces and hand non-empty commands to the command module. A line ending in "| more" runs
-// the command with its output captured, then pages it.
+// Trim spaces and hand non-empty commands to the command module. A line with stages
+// (`<command> | grep x | more`, pipe_split()) runs the command with its output going through
+// them: to the terminal, or captured and then paged with `more` last.
 static void run_line(shell_t *sh, char *cmd) {
     while (*cmd == ' ')
         cmd++;
@@ -372,43 +401,48 @@ static void run_line(shell_t *sh, char *cmd) {
     if (!*cmd)
         return;
     history_add(sh, cmd);
-    char *pipe = pipe_suffix(cmd);
-    if (!pipe) {
+    pipeline_t *p = &sh->pipe;
+    snprintf(p->name, sizeof(p->name), "%s", cmd);
+    char *stages = pipe_split(cmd);
+    if (!stages) {
         shell_execute(sh, cmd);
         return;
     }
-    snprintf(sh->pipe_name, sizeof(sh->pipe_name), "%s", cmd);
-    while (pipe > cmd && pipe[-1] == ' ')
-        pipe--;
-    *pipe = '\0';
     if (!*cmd) {
-        shell_printf(sh, "usage: <command> | more\n");
+        shell_printf(sh, "usage: <command> | more, or <command> | grep|head|tail|wc ...\n");
         return;
     }
-    if (!shell_command_tables(sh)) {        // a locked console: the refusal, not a pager
+    if (!shell_command_tables(sh)) {        // a locked console: the refusal, not a pipeline
         shell_execute(sh, cmd);
         return;
     }
-    sh->pipe_buf = heap_alloc(HEAP_EDIT, PIPE_STEP);
-    if (!sh->pipe_buf) {
-        shell_printf(sh, "%s: out of memory, running without the pager\n", sh->pipe_name);
-        shell_execute(sh, cmd);
+    if (!pipe_open(sh, p, stages))          // a stage doesn't parse: its usage, nothing runs
         return;
+    p->out = term_out;
+    if (p->sink == PIPE_SINK_PAGER) {
+        p->buf = heap_alloc(HEAP_EDIT, PIPE_STEP);
+        if (p->buf) {
+            p->cap = PIPE_STEP;
+            p->out = pipe_append;
+        } else {
+            p->sink = PIPE_SINK_TERMINAL;
+            shell_printf(sh, "%s: out of memory, running without the pager\n", p->name);
+        }
     }
-    sh->pipe_cap = PIPE_STEP;
-    sh->pipe_len = 0;
-    sh->pipe_cut = sh->pipe_oom = false;
     shell_execute(sh, cmd);
-    if (!sh->pipe_buf)                      // the command ended the session (logout): done
-        return;
-    if (sh->answer)                         // it asks a question: not a thing to page
+    if (!piped(sh))                         // nothing to pipe through (the pager was out of
+        return;                             // memory), or the command ended the session
+    if (sh->answer)                         // it asks a question: not a thing to pipe
         pipe_release(sh);
     else if (sh->job && sh->key)            // a full-screen program: its own screen; what it
         pipe_release(sh);                   // printed before (a warning) shows under it
-    else if (sh->job)                       // a job: paged when it ends
-        sh->pipe_pending = true;
-    else
+    else if (sh->job && !p->done)           // a job: the line ends when it does
+        p->pending = true;
+    else {
+        if (sh->job)                        // it has given all that is wanted (head)
+            end_job_quietly(sh);
         pipe_finish(sh);
+    }
 }
 
 // --- input ---------------------------------------------------------------------
@@ -464,7 +498,7 @@ bool shell_raw_mode(const shell_t *sh) {
 }
 
 bool shell_screen_held(const shell_t *sh) {
-    return shell_raw_mode(sh) || sh->pipe_buf != NULL;
+    return shell_raw_mode(sh) || sh->pipe.sink == PIPE_SINK_PAGER;
 }
 
 bool shell_busy(const shell_t *sh) {
@@ -472,7 +506,8 @@ bool shell_busy(const shell_t *sh) {
 }
 
 int shell_write_space(shell_t *sh) {
-    if (sh->pipe_buf || !sh->io->write_space)   // captured output waits for no channel
+    if (sh->pipe.sink == PIPE_SINK_PAGER || !sh->io->write_space)  // a capture waits for no
+                                                                    // channel
         return 1024;
     int n = sh->io->write_space(sh->ctx);
     return n > 0 ? n : 0;
@@ -907,18 +942,24 @@ static void poll_job(shell_t *sh) {
     }
     if (cancel) {
         sh->ahead_len = 0;
-        if (sh->pipe_pending)               // `| more`: the output so far goes, ^C shows
-            pipe_drop(sh);
+        if (sh->pipe.pending)               // a pipeline: held and captured output goes, ^C
+            pipe_drop(sh);                  // shows
         shell_printf(sh, "%s^C\n", sh->at_line_start ? "" : "\n");
     }
-    if (!sh->job(sh, sh->job_arg, cancel) || cancel) {
+    bool more = sh->job(sh, sh->job_arg, cancel);
+    if (more && !cancel && sh->pipe.pending && sh->pipe.done) {
+        end_job_quietly(sh);                // head has its lines, or the capture is full
+        more = false;
+    }
+    if (!more || cancel) {
         sh->job = NULL;
         sh->job_arg = NULL;
-        if (sh->pipe_pending) {             // `| more`: the pager takes over (a job itself)
-            if (sh->answer) {               // unless the job left a question: it's not paged
+        if (sh->pipe.pending) {             // the line ends: with `more` the pager takes over
+            if (sh->answer) {               // unless the job left a question: not piped
                 pipe_release(sh);
             } else {
-                sh->ahead_len = 0;          // typed meanwhile: not keys for the pager
+                if (sh->pipe.sink == PIPE_SINK_PAGER)
+                    sh->ahead_len = 0;      // typed meanwhile: not keys for the pager
                 pipe_finish(sh);
                 if (sh->job)
                     return;

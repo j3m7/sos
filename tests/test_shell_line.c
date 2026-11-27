@@ -140,7 +140,7 @@ void shell_execute(shell_t *sh, char *cmd) {
     }
     if (!strcmp(cmd, "big")) {              // more than the pager takes
         for (int i = 0; i < 400; i++)
-            shell_printf(sh, "line %3d: %-90s|\n", i, "the quick brown fox");
+            shell_printf(sh, "line %3d: %-90s|\n", i, i % 10 ? "the lazy dog" : "the quick brown fox");
         return;
     }
     if (!strcmp(cmd, "ask")) {
@@ -301,6 +301,11 @@ static const shell_io_t io_space = {
     .name = "ssh", .read = fake_read, .write = fake_write, .logout = fake_logout, .crlf = false,
     .write_space = fake_write_space,
 };
+
+// A pipeline is set up: filters, or a capture for the pager.
+static bool piped_now(void) {
+    return sh.pipe.first != NULL || sh.pipe.sink != PIPE_SINK_TERMINAL || sh.pipe.buf != NULL;
+}
 
 #define CHECK_OUT(expected) do {                                                            \
         test_checks++;                                                                      \
@@ -712,7 +717,7 @@ TEST(pipe_to_more_pages_a_commands_output) {
     CHECK_EQ(paged_calls, 1);
     CHECK(!strcmp(paged_name, "help | more"));
     CHECK(!strcmp(paged_text, "<help>\n"));
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     clear_out();
     type("hostname |more\r");                   // no space before more is fine
     CHECK(!strcmp(executed[1], "hostname"));
@@ -735,7 +740,7 @@ TEST(pipe_to_more_waits_for_a_job) {
     job_partial = false;
     type("job | more\r");
     CHECK(shell_job_running(&sh));
-    CHECK(sh.pipe_pending);
+    CHECK(sh.pipe.pending);
     clear_out();
     type("");
     type("");
@@ -747,7 +752,7 @@ TEST(pipe_to_more_waits_for_a_job) {
     CHECK(!strcmp(paged_text, "step 1\nstep 2\nstep 3\n"));
     CHECK(!strcmp(paged_name, "job | more"));
     CHECK_OUT("sos> ");                         // (the pager stub didn't start a job)
-    CHECK(sh.pipe_buf == NULL && !sh.pipe_pending);
+    CHECK(sh.pipe.buf == NULL && !sh.pipe.pending);
 }
 
 TEST(pipe_to_more_is_dropped_by_ctrl_c) {
@@ -760,7 +765,7 @@ TEST(pipe_to_more_is_dropped_by_ctrl_c) {
     type("\x03");
     CHECK_EQ(job_cancels, 1);
     CHECK_EQ(paged_calls, 0);
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     CHECK(strstr(fake.out, "^C\nsos> ") != NULL);
 }
 
@@ -789,7 +794,7 @@ TEST(pipe_to_more_lets_a_question_through) {
     paged_calls = 0;
     type("ask | more\r");
     CHECK_EQ(paged_calls, 0);
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     CHECK_OUT("ask | more\nbefore the question\nReally? ");    // output so far, then the prompt
     type("yes\r");
     CHECK(strstr(fake.out, "answered <yes>") != NULL);
@@ -801,7 +806,7 @@ TEST(pipe_to_more_leaves_a_full_screen_program_alone) {
     paged_calls = 0;
     type("raw | more\r");
     CHECK(shell_raw_mode(&sh));
-    CHECK(sh.pipe_buf == NULL);                 // not capturing: it draws its own screen
+    CHECK(sh.pipe.buf == NULL);                 // not capturing: it draws its own screen
     type("x\x11");
     type("");
     CHECK(!shell_job_running(&sh));
@@ -829,7 +834,7 @@ TEST(pipe_to_more_lets_a_jobs_question_through) {
     job_steps = 1;
     job_partial = false;
     type("askjob | more\r");                    // a job that asked at once: released now
-    CHECK(!sh.pipe_pending && sh.pipe_buf == NULL);
+    CHECK(!sh.pipe.pending && sh.pipe.buf == NULL);
     CHECK_OUT("askjob | more\nhold on\n");
     clear_out();
     type("");
@@ -842,13 +847,13 @@ TEST(pipe_to_more_lets_a_jobs_question_through) {
     job_steps = 2;
     job_ask_step = 2;
     type("job | more\r");
-    CHECK(sh.pipe_pending);
+    CHECK(sh.pipe.pending);
     clear_out();
     type("");
     CHECK_OUT("");                              // step 1, captured
     type("");                                   // step 2 asks and ends the job
     CHECK_EQ(paged_calls, 0);
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     CHECK_OUT("step 1\nstep 2\nReally? ");
     job_ask_step = 0;
 }
@@ -881,7 +886,7 @@ TEST(pipe_to_more_on_a_command_that_ends_the_session) {
     paged_calls = 0;
     type("bye | more\r");
     CHECK_EQ(paged_calls, 0);
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     CHECK(strstr(fake.out, "no output") == NULL);   // nothing said into a closed session
 }
 
@@ -891,8 +896,214 @@ TEST(pipe_to_more_ends_with_the_session) {
     job_steps = 5;
     type("job | more\r");
     shell_end(&sh);
-    CHECK(sh.pipe_buf == NULL);
+    CHECK(sh.pipe.buf == NULL);
     CHECK_EQ(paged_calls, 0);
+}
+
+// --- filters: `| grep`, `| head`, `| tail`, `| wc` --------------------------------------------
+
+TEST(pipe_to_grep_streams_to_the_terminal) {
+    start(&io_crlf);
+    type("cmd | grep cm\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "cmd"));
+    CHECK_OUT("cmd | grep cm\r\n<cmd>\r\nsos> ");     // through the terminal's translation
+    clear_out();
+    type("cmd | grep -v cm\r");
+    CHECK_OUT("cmd | grep -v cm\r\nsos> ");
+    CHECK(!piped_now());
+
+    start(&io_plain);                           // a job's lines as they come
+    job_steps = 4;
+    job_partial = false;
+    type("job | grep 2\r");
+    CHECK(sh.pipe.pending && !shell_screen_held(&sh));
+    clear_out();
+    type("");
+    CHECK_OUT("");
+    type("");
+    CHECK_OUT("step 2\n");
+    type("");
+    type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_OUT("step 2\nsos> ");
+    CHECK_EQ(job_cancels, 0);
+    CHECK(!piped_now());
+}
+
+TEST(pipe_to_head_ends_the_job_quietly) {
+    start(&io_plain);
+    job_steps = 100;
+    job_partial = false;
+    type("job | head 2\r");
+    type("");
+    type("");                                   // the second line: enough
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(job_cancels, 1);
+    CHECK(strstr(fake.out, "^C") == NULL);
+    CHECK_OUT("job | head 2\nstep 1\nstep 2\nsos> ");
+    CHECK(!piped_now());
+
+    start(&io_plain);                           // head then wc: the count after the cut
+    job_steps = 100;
+    type("job | head 3 | wc\r");
+    type("");
+    type("");
+    type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(job_cancels, 1);
+    CHECK_OUT("job | head 3 | wc\n3 6 21\nsos> ");
+
+    start(&io_plain);                           // a command that isn't a job: output dropped
+    type("big | head 1\r");
+    CHECK_OUT("big | head 1\nline   0: the quick brown fox"
+              "                                                                       |\nsos> ");
+}
+
+TEST(pipe_to_more_ends_a_job_at_the_limit) {
+    start(&io_plain);
+    paged_calls = 0;
+    job_steps = 100000;
+    job_partial = false;
+    type("job | more\r");
+    for (int i = 0; i < 5000 && shell_job_running(&sh); i++)
+        type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(job_cancels, 1);                   // ended, not run to its end
+    CHECK(job_calls < 5000);
+    CHECK_EQ(paged_calls, 1);
+    CHECK(strstr(paged_text, "[output cut here") != NULL);
+    CHECK(strstr(fake.out, "^C") == NULL);
+}
+
+TEST(pipe_grep_then_more_keeps_every_match) {
+    start(&io_plain);
+    paged_calls = 0;
+    type("big | grep fox | more\r");
+    CHECK(!strcmp(executed[0], "big"));
+    CHECK_EQ(paged_calls, 1);
+    CHECK(!strcmp(paged_name, "big | grep fox | more"));
+    CHECK_EQ(paged_len, 40 * 102);              // every tenth line of 400, and no note
+    CHECK(strstr(paged_text, "[output cut") == NULL);
+    CHECK(!strncmp(paged_text + 39 * 102, "line 390:", 9));
+    CHECK_OUT("big | grep fox | more\nsos> ");
+    CHECK(!piped_now());
+}
+
+TEST(pipe_not_a_stage_runs_as_typed) {
+    start(&io_plain);
+    type("ls | morex\r");
+    CHECK(!strcmp(executed[0], "ls | morex"));
+    type("ls | grepx y\r");
+    CHECK(!strcmp(executed[1], "ls | grepx y"));
+    CHECK(strstr(fake.out, "<ls | grepx y>") != NULL);
+    type("x | wc\r");                           // ...but this is one
+    CHECK(!strcmp(executed[2], "x"));
+    CHECK(strstr(fake.out, "1 1 4\n") != NULL);
+}
+
+TEST(pipe_stage_that_does_not_parse_runs_nothing) {
+    start(&io_plain);
+    type("x | grep\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("x | grep\nusage: <command> | grep [-v] [-i] [-n] <text>\nsos> ");
+    clear_out();
+    type("job | head x | more\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK(!shell_job_running(&sh));
+    CHECK(strstr(fake.out, "usage: <command> | head") != NULL);
+    type("| wc\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK(strstr(fake.out, "usage: <command> | more") != NULL);
+    CHECK(!piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_ctrl_c_drops_what_tail_holds) {
+    start(&io_plain);
+    job_steps = 10;
+    job_partial = false;
+    type("job | tail 2\r");
+    type("");
+    type("");
+    clear_out();
+    type("\x03");
+    CHECK_EQ(job_cancels, 1);
+    CHECK_OUT("^C\nsos> ");                     // no step lines
+    CHECK(!piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+
+    start(&io_plain);                           // run to its end, it gives them
+    job_steps = 3;
+    type("job | tail 2\r");
+    type("");
+    type("");
+    clear_out();
+    type("");
+    CHECK_OUT("step 2\nstep 3\nsos> ");
+}
+
+TEST(pipe_with_a_filter_lets_a_question_and_raw_mode_through) {
+    start(&io_plain);
+    type("ask | grep nothing\r");              // released: the question and its prompt show
+    CHECK(!piped_now());
+    CHECK_OUT("ask | grep nothing\nReally? ");  // grep had dropped the line before it
+    type("y\r");
+    clear_out();
+    type("ask | grep before\r");               // and passed this one
+    CHECK_OUT("ask | grep before\nbefore the question\nReally? ");
+    type("yes\r");
+    CHECK(strstr(fake.out, "answered <yes>") != NULL);
+
+    start(&io_plain);                           // a job that asks on its way
+    job_steps = 2;
+    job_ask_step = 2;
+    type("job | wc\r");
+    CHECK(sh.pipe.pending);
+    clear_out();
+    type("");
+    type("");
+    CHECK(!piped_now());
+    CHECK_OUT("Really? ");                      // what wc counted is dropped, no count shown
+    type("y\r");
+    job_ask_step = 0;
+
+    start(&io_plain);
+    type("raw | tail 1 | more\r");
+    CHECK(shell_raw_mode(&sh));
+    CHECK(!piped_now());                        // released: it draws its own screen
+    type("x\x11");
+    type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_EQ(raw_keys_got[0], 'x');
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_messages_from_outside_skip_the_filters) {
+    start(&io_plain);
+    job_steps = 3;
+    type("job | grep nothing\r");
+    type("");
+    clear_out();
+    shell_hide_input(&sh);                      // as chat_deliver() does
+    shell_write(&sh, "a message\n", 10);
+    shell_show_input(&sh);
+    CHECK_OUT("a message\n");
+    type("");                                   // the job's output is filtered again
+    CHECK_OUT("a message\n");
+    shell_end(&sh);
+    CHECK(!piped_now());
+}
+
+TEST(pipe_with_a_filter_ends_with_the_session) {
+    start(&io_plain);
+    job_steps = 5;
+    type("job | tail 3\r");
+    type("");
+    shell_end(&sh);
+    CHECK_EQ(job_cancels, 1);
+    CHECK(!piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(job_runs_in_steps_then_prompts) {
@@ -1526,6 +1737,31 @@ TEST(tab_completes_subcommands) {
     CHECK(line_is("log console warning "));
 }
 
+TEST(tab_completes_pipeline_stages_and_their_options) {
+    start(&io_plain);
+    type("ls | \t\t");                             // the stage names, not the commands
+    CHECK(strstr(fake.out, "grep  head  more  tail  wc") != NULL);
+    CHECK(line_is("ls | "));
+    start(&io_plain);
+    type("cat docs/x | gr\t");                       // after a path command too
+    CHECK(line_is("cat docs/x | grep "));
+    type("-\t\t");
+    CHECK(strstr(fake.out, "-i  -n  -v") != NULL);
+    type("v\t");
+    CHECK(line_is("cat docs/x | grep -v "));
+    type("fox | w\t");
+    CHECK(line_is("cat docs/x | grep -v fox | wc "));
+    start(&io_plain);
+    type("time sync|m\t");                          // no space needed after the '|'
+    CHECK(line_is("time sync|more "));
+    start(&io_plain);
+    type("ls | head \t");                           // a count: nothing to offer
+    CHECK(line_is("ls | head "));
+    start(&io_plain);
+    type("ls | x \t");                              // not a stage: as without the '|'
+    CHECK(line_is("ls | x "));
+}
+
 TEST(tab_lists_subcommands_without_hidden_ones) {
     start(&io_plain);
     type("time \t");                                 // all four start with s
@@ -2054,6 +2290,16 @@ TEST_MAIN(
     RUN(pipe_to_more_holds_the_screen_for_messages);
     RUN(pipe_to_more_on_a_command_that_ends_the_session);
     RUN(pipe_to_more_ends_with_the_session);
+    RUN(pipe_to_grep_streams_to_the_terminal);
+    RUN(pipe_to_head_ends_the_job_quietly);
+    RUN(pipe_to_more_ends_a_job_at_the_limit);
+    RUN(pipe_grep_then_more_keeps_every_match);
+    RUN(pipe_not_a_stage_runs_as_typed);
+    RUN(pipe_stage_that_does_not_parse_runs_nothing);
+    RUN(pipe_ctrl_c_drops_what_tail_holds);
+    RUN(pipe_with_a_filter_lets_a_question_and_raw_mode_through);
+    RUN(pipe_messages_from_outside_skip_the_filters);
+    RUN(pipe_with_a_filter_ends_with_the_session);
     RUN(job_runs_in_steps_then_prompts);
     RUN(job_ends_output_with_newline_before_prompt);
     RUN(input_during_job_runs_afterwards);
@@ -2096,6 +2342,7 @@ TEST_MAIN(
     RUN(tab_on_an_empty_line_lists_the_commands);
     RUN(tab_list_wraps_rows_on_a_crlf_channel);
     RUN(tab_completes_subcommands);
+    RUN(tab_completes_pipeline_stages_and_their_options);
     RUN(tab_lists_subcommands_without_hidden_ones);
     RUN(tab_admin_words_only_on_an_admin_channel);
     RUN(tab_nothing_after_unknown_words_or_free_text);

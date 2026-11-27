@@ -261,6 +261,9 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
     shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
+    shell_printf(sh, "<command> | grep [-v] [-i] [-n] <text>  only the lines with the text\n");
+    shell_printf(sh, "<command> | head|tail [<n>]  the first / last n lines (10); | wc counts\n");
+    shell_printf(sh, "                  stages chain: dmesg | grep wifi | tail 5 | more\n");
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
@@ -1961,6 +1964,15 @@ static void cmd_nts(shell_t *sh, char *args) {
 
 // --- dispatch ------------------------------------------------------------------------------------
 
+// The pipeline stages (shell/pipe.h) aren't commands: typed first on a line, they say so.
+static void run_stage(shell_t *sh, const char *name, const char *form) {
+    shell_printf(sh, "%s: only after a pipe (<command> | %s)\n", name, form);
+}
+static void run_grep(shell_t *sh, char *args) { (void)args; run_stage(sh, "grep", "grep <text>"); }
+static void run_head(shell_t *sh, char *args) { (void)args; run_stage(sh, "head", "head [<n>]"); }
+static void run_tail(shell_t *sh, char *args) { (void)args; run_stage(sh, "tail", "tail [<n>]"); }
+static void run_wc(shell_t *sh, char *args) { (void)args; run_stage(sh, "wc", "wc"); }
+
 // Commands that take no arguments, and others whose handler has another signature.
 static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
 static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
@@ -2176,6 +2188,10 @@ static const shell_cmd_t commands[] = {
     {"logout", run_logout, NULL, 0},
     {"exit", run_logout, NULL, 0},
     {"crash", run_crash, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
+    {"grep", run_grep, NULL, SHELL_HIDDEN},     // pipeline stages: Tab offers them after "| "
+    {"head", run_head, NULL, SHELL_HIDDEN},
+    {"tail", run_tail, NULL, SHELL_HIDDEN},
+    {"wc", run_wc, NULL, SHELL_HIDDEN},
     {"reboot", run_reboot, NULL, 0},
     END};
 #undef W
