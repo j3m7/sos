@@ -1600,8 +1600,9 @@ static const char *console_no_keys(void) {
         return NULL;
     // A fresh open board whose root secret a failed health check refused (core/health.h): the
     // root-secret advice would send whoever is here the wrong way. Once the check passes, a
-    // reboot makes the secret as usual.
-    const char *held = health_refusal();
+    // reboot makes the secret as usual. Only that refusal: a host key refused on a board whose
+    // OTP secret is unusable is no reason to blame the check for the secret.
+    const char *held = rootsource() == ROOTSRC_FLASH ? rootflash_refused_by() : NULL;
     if (held) {
         static char why[160];
         snprintf(why, sizeof(why), "key making refused: health check %s failed.\n"

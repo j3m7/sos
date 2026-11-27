@@ -34,4 +34,7 @@ bool rootflash_usable(void);
 // Erase the sector (after the user confirmed); the next boot makes a new secret.
 bool rootflash_forget(void);
 
+// The health check that refused making the secret this boot (HEALTH_GATE_KEYS), or NULL.
+const char *rootflash_refused_by(void);
+
 #endif
