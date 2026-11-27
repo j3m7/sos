@@ -43,7 +43,7 @@ DESCRIPTION
     keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
     request took); tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status; and
+    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;
     sos.dmesg for the system log (with a cursor, for only the newer lines);
     and sos.reboot([why]), refused until the board has been up 10 minutes.
     There is no io, os or debug. Failures return nil and a message. Each
