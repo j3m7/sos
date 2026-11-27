@@ -36,6 +36,8 @@ header="# tzdata $version: each zone's rule from zic -b slim, built by tools/tz-
 
 # Check a bundle (file $1): the header, then lines "<name> <rule>" sorted by name, each name and
 # rule made of the characters they use and within the config's sizes. Prints the zone count.
+# These classes and limits are the contract the board's reader relies on: keep them in step with
+# src/time/tzrule.c (the rule grammar) and the config's tz_name/tz_rule sizes.
 check_bundle() {
     LC_ALL=C awk -v header="$header" -v nmax="$NAME_MAX" -v rmax="$RULE_MAX" -v f="$1" '
         function bad(why) { print f ": line " NR ": " why > "/dev/stderr"; failed = 1 }
