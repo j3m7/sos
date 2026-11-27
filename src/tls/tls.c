@@ -140,7 +140,7 @@ static void wolf_error(tls_conn_t *c, const char *what, int err) {
                 reset ? "reset" : "closed", (unsigned long)((closed - connected) / 1000));
 }
 
-// --- lwIP side (interrupt context: no heap, no logging) ------------------------------------------
+// --- lwIP side (interrupt context: no heap, no logging; the main loop reads what they set) -------
 
 static tls_conn_t *find_conn(uint32_t id) {
     for (unsigned i = 0; i < TLS_MAX_CONNS; i++)
@@ -173,8 +173,7 @@ static err_t tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
 static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
     (void)pcb;
     tls_conn_t *c = arg;
-    if (!p || err != ERR_OK) {
-        log_msg(SOS_LOG_DEBUG, "tls: tcp recv %s, err %d", p ? "data" : "FIN", (int)err);
+    if (!p || err != ERR_OK) {              // the main loop logs it (io_recv)
         if (p)
             pbuf_free(p);
         if (!c->tcp_closed_us)
@@ -194,7 +193,6 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
 
 static void tcp_err_cb(void *arg, err_t err) {
     tls_conn_t *c = arg;
-    log_msg(SOS_LOG_DEBUG, "tls: tcp error %d", (int)err);
     c->pcb = NULL;                              // lwIP has freed it
     c->tcp_err = err;
     if (!c->tcp_closed_us)
@@ -210,11 +208,15 @@ static int io_recv(WOLFSSL *ssl, char *buf, int sz, void *ctx) {
     cyw43_arch_lwip_begin();
     size_t n = ssh_ringbuffer_used(&c->rx);
     if (n == 0) {
-        bool closed = c->peer_closed || c->tcp_failed;
+        bool fin = c->peer_closed, failed = c->tcp_failed;
+        err_t tcp_err = c->tcp_err;
         cyw43_arch_lwip_end();
+        bool closed = fin || failed;
+        // What the callbacks saw, said here: they run in interrupt context and don't log.
         if (closed)
-            log_msg(SOS_LOG_DEBUG, "tls: recv: closed (peer_closed %d, tcp_failed %d)",
-                    c->peer_closed, c->tcp_failed);
+            log_msg(SOS_LOG_DEBUG,
+                    "tls: recv: closed (peer_closed %d, tcp_failed %d, tcp error %d)", fin, failed,
+                    (int)tcp_err);
         return closed ? WOLFSSL_CBIO_ERR_CONN_CLOSE : WOLFSSL_CBIO_ERR_WANT_READ;
     }
     if (n > (size_t)sz)
