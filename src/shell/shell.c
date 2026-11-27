@@ -29,6 +29,7 @@
 #include "core/flashop.h"
 #include "core/glitchdet.h"
 #include "core/health.h"
+#include "core/statecheck.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -2209,6 +2210,12 @@ static void cmd_health(shell_t *sh, char *args) {
     bool inject = w1 && !strcmp(w1, "inject") && !w4;
     bool times = w1 && !strcmp(w1, "crypto-times") && !w2;
     bool diag = w1 && !strcmp(w1, "trng-diag") && !w2;
+    // What the checks of stored state read (docs/design/health.md §9.3). It only reads and
+    // prints no secret, so any shell may: the console may be locked at its password prompt.
+    if (w1 && !strcmp(w1, "state-dump") && !w2) {
+        statecheck_board_dump(health_print_line, sh);
+        return;
+    }
 #else
     bool inject = false, times = false, diag = false;
     (void)w4;
@@ -2413,6 +2420,7 @@ static const shell_word_t health_words[] = {
     {"full", NULL, SHELL_ADMIN},
 #ifdef SOS_TEST_COMMANDS
     {"inject", NULL, SHELL_ADMIN | SHELL_HIDDEN},
+    {"state-dump", NULL, SHELL_HIDDEN},
 #endif
     END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};

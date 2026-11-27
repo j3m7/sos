@@ -8,7 +8,9 @@
 // hold no gate. Phase 2's boot checks (§10) test the hardware and the crypto before anything
 // makes a key: `clocks`, `flash`, `trng` (holds KEYS) and `crypto` (holds KEYS and CRYPTO), with
 // `crypto-ssh` (background) for the known answers too slow for boot. Their judging is in
-// hwtest.c and the crypto vectors in selftest.c. There is no full-tier check yet:
+// hwtest.c and the crypto vectors in selftest.c. Phase 3's checks of stored state (§9.3:
+// `config`, `rootsecret`, `otp`, `failcount`, `hostkey`, `card`) are background checks in
+// statecheck_board.c, judged in statecheck.c; none holds a gate. There is no full-tier check yet:
 // `health full` runs the same checks as `health run`, plus the test-only gate checks of a test
 // build.
 
@@ -34,6 +36,7 @@
 #include "core/selftest.h"
 #include "core/sensors.h"
 #include "core/stackmon.h"
+#include "core/statecheck.h"
 #include "core/wdog.h"
 #include "lua/lua_core1.h"
 
@@ -339,6 +342,10 @@ static health_step_t check_crypto_ssh(void **state, bool cancel, health_result_t
 
 #define CRYPTO_SSH_FIRST_S  30          // after boot: Wi-Fi is coming up, nobody logged in yet
 #define CRYPTO_SSH_PERIOD_S 86400       // then daily
+// Phase 3 (docs/design/health.md §9.3): after the configuration, the host key and the card are
+// up, staggered so the first minute isn't one burst; then hourly, the card every 6 hours.
+#define STATE_PERIOD_S      3600
+#define CARD_PERIOD_S       (6 * 3600)
 
 static const health_check_t checks[] = {
     {"resets", HEALTH_BOOT, 0, 0, 0, check_resets},
@@ -353,6 +360,12 @@ static const health_check_t checks[] = {
     {"heap", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_heap},
     {"chip-temp", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_temp},
     {"supply", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_supply},
+    {"config", HEALTH_BACKGROUND, STATE_PERIOD_S, 40, 0, statecheck_config_step},
+    {"rootsecret", HEALTH_BACKGROUND, STATE_PERIOD_S, 45, 0, statecheck_root_step},
+    {"otp", HEALTH_BACKGROUND, STATE_PERIOD_S, 50, 0, statecheck_otp_step},
+    {"failcount", HEALTH_BACKGROUND, STATE_PERIOD_S, 55, 0, statecheck_failcount_step},
+    {"hostkey", HEALTH_BACKGROUND, STATE_PERIOD_S, 60, 0, statecheck_hostkey_step},
+    {"card", HEALTH_BACKGROUND, CARD_PERIOD_S, 90, 0, statecheck_card_step},
 };
 
 void health_boot(void) {
