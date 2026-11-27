@@ -50,7 +50,7 @@ this page is the reference.
 | `log rotate every <N>d` | console only | Rotate every N days (1 to 365; default 7), counted from the day of the last rotation. Saved in the configuration and logged (facility `auth`) |
 | `log rotate at <HH:MM>` | console only | The time of day (UTC) rotations happen (default 00:00). Saved in the configuration and logged (facility `auth`) |
 | `log console\|history\|file <level>` | console only | Set a log level until reboot: `err`, `warning`, `notice`, `info` or `debug`. The change is logged (facility `auth`), before it applies |
-| `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set). The console also locks itself when the USB terminal disconnects and after 10 minutes with nothing typed; a running command is ended |
+| `logout` (or `exit`, Ctrl-D) | any | End this session. On the console: lock it, so it asks for the console password again (not possible while no password is set). The console also locks itself when the USB terminal disconnects (for at least a second; a shorter drop, as around a port being reopened, doesn't lock) and after 10 minutes with nothing typed; a running command is ended |
 | `reboot` | any | Restart the device |
 | `crash fault\|stack\|panic\|hang` | console only | Testing only: stop the firmware with a hard fault, a stack overflow, a panic or a hang, to check that the next boot reports it |
 

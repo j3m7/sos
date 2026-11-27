@@ -202,6 +202,7 @@ int main(void) {
     logfile_start();                    // and written to /var/log on the SD card, when there's one
 
     bool sshd_failed = false;
+    bool usb_was = stdio_usb_connected();
     absolute_time_t next_blink = get_absolute_time();
     bool led = false;
     for (;;) {
@@ -223,10 +224,18 @@ int main(void) {
         timesync_poll();
         nts_poll();
         shell_poll(&console_shell);
-        // The console locks itself when the USB terminal goes away, and when nothing was typed
-        // for SOS_CONSOLE_IDLE_LOCK_MIN minutes. (The UART has no connection signal: for it
-        // there is only the idle lock.)
-        login_poll(&console_shell, stdio_usb_connected(), SOS_CONSOLE_IDLE_LOCK_MIN * 60000u);
+        // The console locks itself when the USB terminal goes away (for a second: shorter drops
+        // happen around a port being reopened, #153), and when nothing was typed for
+        // SOS_CONSOLE_IDLE_LOCK_MIN minutes. (The UART has no connection signal: for it there is
+        // only the idle lock.) Each change of the line state is logged at debug level, which
+        // `log history debug` keeps, to see what a host does.
+        bool usb = stdio_usb_connected();
+        if (usb != usb_was) {
+            usb_was = usb;
+            log_msg(SOS_LOG_AUTH | SOS_LOG_DEBUG, "console: terminal %s",
+                    usb ? "connected" : "disconnected");
+        }
+        login_poll(&console_shell, usb, SOS_CONSOLE_IDLE_LOCK_MIN * 60000u);
         console_gate_set(login_locked());   // follows a login, a logout or a lock in this pass
         if (!login_locked())            // a locked console shows nothing
             chat_deliver(&console_shell);   // wall and chat messages from SSH sessions

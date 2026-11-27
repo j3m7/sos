@@ -15,6 +15,8 @@ static char pending[LOGIN_PASSWORD_MAX + 1];    // the answer, from typed until 
 static bool have_pending, checking;
 static uint64_t last_activity;          // when something was last typed (ms)
 static bool was_connected;
+static bool dropping;                   // the terminal went away and hasn't come back yet ...
+static uint64_t drop_since;             // ... since this time (ms)
 
 static void wipe(void *p, size_t len) {
     volatile char *v = p;
@@ -195,15 +197,30 @@ static void auto_lock(shell_t *console, const char *why) {
     shell_show_input(console);
 }
 
+// A drop locks the console only once it has lasted LOGIN_DISCONNECT_MS: the USB line state can
+// read "disconnected" for a moment around a host closing and reopening the port, and a single
+// reading used to lock a login made just then (#153), so the next line typed was taken as a
+// password. Drops while locked don't count.
 void login_poll(shell_t *console, bool connected, uint32_t idle_limit_ms) {
     bool dropped = was_connected && !connected;
     was_connected = connected;
-    if (!hooks || locked || !hooks->has_password() || hooks->no_keys())
+    if (!hooks || locked || !hooks->has_password() || hooks->no_keys()) {
+        dropping = false;
         return;
-    if (dropped)
+    }
+    uint64_t now = hooks->now_ms();
+    if (connected) {
+        dropping = false;
+    } else if (dropped) {
+        dropping = true;
+        drop_since = now;
+    }
+    if (dropping && now - drop_since >= LOGIN_DISCONNECT_MS) {
+        dropping = false;
         auto_lock(console, "the terminal was disconnected");
-    else if (idle_limit_ms && hooks->now_ms() - last_activity >= idle_limit_ms)
+    } else if (idle_limit_ms && now - last_activity >= idle_limit_ms) {
         auto_lock(console, "idle");
+    }
 }
 
 bool login_gate(shell_t *console, const char *cmd) {
