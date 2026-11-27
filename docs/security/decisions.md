@@ -52,7 +52,7 @@ works).
 `ninja flash` and `tools/provision.sh` rely on it (`picotool load -f`), and on dev-1 the
 sessions flash with nobody at the button, so dev-1 keeps it. On a production board
 `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` removes it, as the other workaround for E20; flashing
-then needs someone to hold BOOTSEL while plugging the board in. Open questions 2 and 6 must be
+then needs someone to hold BOOTSEL while plugging the board in. To-confirm items 2 and 6 must be
 closed first.
 
 ### 4. Signing keys
@@ -63,8 +63,12 @@ Being public is also their backup: a lost disk can't leave dev-1 unflashable. It
 stay blank, which leaves room to add a key and equally lets anyone with a cable add theirs.
 
 A production board gets two keys made away from the development machine, never on a machine
-where AI sessions run, each with an offline backup, and its unused slots marked invalid. How to
-make them is in the [production runbook](production-runbook.md#make-the-signing-keys).
+where AI sessions run, each with an offline backup, and its unused slots marked invalid. The
+spare key stays offline, so the runbook checks its slot only by computing its hash twice, never
+by booting an image signed with it on the board: a wrong spare hash would show only when the
+spare is needed. That cost is accepted in the draft; signing a test image with the spare on the
+key-holding machine would remove it. How to make them is in the [production
+runbook](production-runbook.md#make-the-signing-keys).
 
 ### 5. Glitch detector (OTP bit deferred)
 
@@ -148,11 +152,12 @@ the sealed configuration sectors is accepted too (#64).
 A board normally accepts a settings file written to its flash over USB, which is how `ninja
 provision` sets up dev-1. On a secured board that is a way in: anyone with a cable could load
 settings that name their own SSH key. So a board can be switched, once and permanently, to
-refuse such files and take its settings only from `setup` on its console: **console-only
-setup** (#84; called "sealed-only" before #91). It is one OTP setting of its own, separate from
-secure boot, which is why dev-1 can have secure boot without it. Decided 2026-11-25: the switch
-is an OTP marker, not secure boot (why OTP: [design.md](design.md#knowing-a-board-is-secured-the-console-only-marker-84)).
-dev-1 is not switched. A production board is.
+refuse such files and take its settings only from `setup` on its console: **console-only setup**
+(#84; called "sealed-only" before #91). It is one OTP setting of its own, separate from secure
+boot, which is why dev-1 can have secure boot without it. Decided 2026-11-25: the switch is an
+OTP marker, not secure boot (why OTP:
+[design.md](design.md#knowing-a-board-is-secured-the-console-only-marker-84)). dev-1 is not
+switched. A production board is.
 
 ### 10. The board's SSH host key after its settings are wiped
 
@@ -216,22 +221,23 @@ the old "To confirm" list, as cited on #100; #64's own "Open questions" are a di
   accepted the boot key file, each `otp set` (KEY_VALID, SECURE_BOOT_ENABLE, the page 3 lock
   word 0x101010) wrote what its read-back expected, and the OTP dumps before and after differ
   in exactly those rows. A production board's are written when there is one: other keys, and
-  the rows dev-1 leaves out. Also which rows and values step 4.8 locks, and whether Secure code
-  should also be denied writes to pages 0 to 2 (decision 11).
+  the rows dev-1 leaves out. Also which rows and values step 4.8 locks, in which order (the
+  other pages' lock words are in pages 62 and 63, which are presumably locked last), and whether
+  Secure code should also be denied writes to pages 0 to 2 (decision 11).
 - **2.** That `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` leaves SOS's fault record and watchdog reset
   detection working. They use watchdog scratch registers 0 to 3 and the watchdog's reason
   register; the datasheet says the flag makes the boot ROM ignore the scratch registers at
   boot.
-- **5.** Glitch detector: the week-long test's results, and that the detector's `LOCK` register stops
-  software from disarming it.
+- **5.** Glitch detector: the week-long test's results, and that the detector's `LOCK` register
+  stops software from disarming it (the firmware doesn't set it today).
 - **6.** Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
 
 **Closed:**
 
-- **3.** How Secure code reads and soft-locks an OTP page, and that the bootloader lock (`LOCK_BL`) keeps
-  `picotool` out on A2 other than through the E21 glitch: #86, and on dev-1 reads of rows
-  0x100 and 0x140 from BOOTSEL were refused with `permission failure`. The E21 glitch was not
-  attempted.
+- **3.** How Secure code reads and soft-locks an OTP page, and that the bootloader lock
+  (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch: #86, and on dev-1
+  reads of rows 0x100 and 0x140 from BOOTSEL were refused with `permission failure`. The E21
+  glitch was not attempted.
 - **4.** Raw row writes from Secure code, for the chaff: host tested (#87), then ran on dev-1 on
   2026-11-26 in the rehearsal (page 4) and the burn (page 5).
 - **7.** Which OTP pages the root secret uses: pages 4 to 6, and that a failed write leaves the next

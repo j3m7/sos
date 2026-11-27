@@ -168,7 +168,8 @@ the hash of the key the refused image is signed with.
 SOS arms the RP2350's glitch detector by software at boot, at the highest sensitivity, on every
 board (`glitch` shows it; `glitch off` turns it off). It is there to learn whether the detector
 ever resets a healthy board, before it is enabled for good in OTP on a secured board, where it
-can't be turned off again ([decision 5](security/decisions.md#5-glitch-detector-otp-bit-deferred)). So far it has had one
+can't be turned off again
+([decision 5](security/decisions.md#5-glitch-detector-otp-bit-deferred)). So far it has had one
 3-hour run under SFTP load without a reset; a week-long test waits for a spare board.
 
 **Whoever works with a board, person or agent, watches for it:**

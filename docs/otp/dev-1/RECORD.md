@@ -9,7 +9,7 @@ shaped as it was and what it showed. The general design is in
 **Its OTP now:** page 4 spent (the rehearsal) and page 5 holding the root secret, both locked;
 the two public dev keys' hashes in boot key slots 0 and 1, both valid; secure boot on; page 3
 locked against the bootloader. Left open on purpose: debug, reboot into the bootloader on
-command, key slots 2 and 3, and writes to pages 1 and 2 over USB.
+command, key slots 2 and 3, writes to pages 1 and 2 over USB, and page 6 (blank, unlocked).
 
 ## What the run was for
 
@@ -51,11 +51,12 @@ real root secret, the rehearsal and the real burn became the same run (agreed 20
 
 1. The first burn on dev-1 was **stopped on purpose**, by a stop point in the burn command
    (`rootsecret burn rehearse`), after the data rows and their chaff were written and read back,
-   before the check and the marker. The page was then locked like any other spent page. Not by pulling the cable: a power cut lands wherever it
-   lands and tests a different state each time; the stop point gives the one state the skip
-   logic is written for, and can be repeated. (The plan was a rehearsal option that the
-   production burn image would be built without; as built, every burn image accepts
-   `rehearse`.) A real power cut partway through a row is a different case and was not tested.
+   before the check and the marker, and the page was locked like any other spent page. A stop point
+   rather than pulling the cable, because a power cut lands wherever it lands and tests a different state
+   each time; the stop point gives the one state the skip logic is written for, and can be
+   repeated. (The plan was a rehearsal option that the production burn image would be built
+   without; as built, every burn image accepts `rehearse`.) A real power cut partway through a
+   row is a different case and was not tested.
 2. **Any ending but "rehearsal: stopped on purpose", with the page locked, stopped the run.** It
    was the first time `program()`, the boot ROM's write call and the read-back through the
    memory-mapped alias ran on a chip at all: a failed row would have meant one of them was

@@ -42,8 +42,8 @@ signing keys are public. See [the dev-1 record](../otp/dev-1/RECORD.md).
 ## The root secret
 
 Every key a board seals with (its configuration, its SSH host key, its SD card keys) is derived
-from a 32-byte root secret. On an open board the root secret is kept in flash. On a secured
-board it is in OTP, where it can't be read over USB once its page is locked.
+from a 32-byte root secret. Until a root secret has been written to OTP it is kept in flash. On a
+secured board (and on dev-1) it is in OTP, where it can't be read over USB once its page is locked.
 
 **Moving the root secret from flash to OTP changes every derived key.** The board's sealed
 configuration and SSH host key become unreadable and its encrypted cards locked. So a board is
@@ -67,10 +67,11 @@ what the burn command writes.
   console-only board with no usable secret in OTP has no keys and keeps its console locked.
 - **Finding the page.** The firmware tries the pages of the list in order. A page holds a
   complete secret only if a marker row, written last, is there and a check over the secret
-  matches; the secret alone has no magic number. A page that is neither blank nor complete is
-  spent and is skipped (so is a blank page the firmware can't write, which the burn never
-  makes: a lock alone can't block the list). Otherwise a blank page ends the search: no secret
-  yet.
+  matches; the secret alone has no magic number. A spent page (something written, marker row
+  still blank) is skipped, and so is a blank page the firmware can't write, which the burn never
+  makes: a lock alone can't block the list. A blank page ends the search: no secret yet. A
+  damaged marker or an unreadable page also ends it, with no usable secret: the pages after it
+  are never used.
 - **Locks are checked at every boot.** If any list page up to and including the secret's page
   isn't locked against bootloader writes, an open board warns and a console-only board refuses
   the secret (see why under the burn, below).
@@ -101,11 +102,14 @@ is never shown. The order is the one in `src/core/rootburn.h`:
    decision 2 leaves for later.
 
 If anything fails after something was written, the page is spent: the run locks it and reports
-where it stopped. A page that still reads blank is never locked: if the very first write fails
-and nothing landed, the page is left blank and unlocked, and the next run uses it. A burn that
-ends in an error other than "nobody held the button" prints `STOP HERE`, and the image refuses
-further runs until the board restarts: a fault in how OTP is written would spend the next page
-exactly as it spent this one.
+where it stopped (unless the lock itself fails: `LOCKING A PAGE FAILED`). A restart in the
+middle of a run never reaches the locks, so it leaves a spent page unlocked until the next run
+locks it first; a restart during the marker write can leave the marker damaged, which ends the
+search. A page that still reads blank is never locked: if the very first write fails and nothing
+landed, the page is left blank and unlocked, and the next run uses it. A burn that ends in an
+error other than "nobody held the button" prints `STOP HERE`, and the image refuses further runs
+until the board restarts: a fault in how OTP is written would spend the next page exactly as it
+spent this one.
 
 **It is not part of everyday firmware** (decision 12). It is built only into a separate burn
 image (`-DSOS_BURN_IMAGE=ON`, off by default), flashed for the burn and replaced afterwards, so
@@ -141,12 +145,12 @@ Why OTP and not something else:
 
 ## Secure boot and the boot keys
 
-With `CRIT1.SECURE_BOOT_ENABLE` set, the boot ROM runs only images signed with a key whose
-hash is in a boot key slot (`BOOTKEY0` to `BOOTKEY3`) marked valid in
-`BOOT_FLAGS1.KEY_VALID` and not marked invalid in `BOOT_FLAGS1.KEY_INVALID`. The boot key is a secp256k1 key pair. The private half signs
-firmware (`SOS_SIGN_KEY`, #70); the SHA-256 of the public key's 64 raw bytes (X then Y) goes
-into the slot. Whoever holds a private key can make firmware a secured board will run, and if
-every private key is lost the board keeps its last firmware for ever.
+With `CRIT1.SECURE_BOOT_ENABLE` set, the boot ROM runs only images signed with a key whose hash
+is in a boot key slot (`BOOTKEY0` to `BOOTKEY3`) marked valid in `BOOT_FLAGS1.KEY_VALID` and not
+marked invalid in `BOOT_FLAGS1.KEY_INVALID`. The boot key is a secp256k1 key pair. The private
+half signs firmware (`SOS_SIGN_KEY`, #70); the SHA-256 of the public key's 64 raw bytes (X then
+Y) goes into the slot. Whoever holds a private key can make firmware a secured board will run,
+and if every private key is lost the board keeps its last firmware for ever.
 
 - **The boot key hashes are a file written by hand** (dev-1's is
   `docs/otp/dev-1/boot-keys.json`), in the form `picotool otp load` takes, checked into the
@@ -170,7 +174,8 @@ that a checkout with a missing build setting can't leave a secured board in the 
 accident. The accepted keys are a list of public key hashes kept per machine
 (`$SOS_FLASH_KEYS`, or `sos/flash-keys` under `$XDG_CONFIG_HOME`, by default
 `~/.config/sos/flash-keys`): a list, because a board may accept two keys; hashes, so the guard
-works where no private key is present. With no list on the machine there is no guard. It guards
+works where no private key is present. The list can have a `[<serial>]` section per board.
+With no list on the machine there is no guard. It guards
 our own tools only: `picotool load` typed by hand goes around it. `SOS_FLASH_UNGUARDED=1` turns
 it off for one flash.
 
@@ -199,13 +204,14 @@ sensitivity set in its `SENSITIVITY` register. SOS does this at every boot, at s
 default (`glitch off` on the console turns it off), and reports detector resets in the log,
 `uptime` and `glitch`, with the chip temperature and supply voltage at the time (#92).
 
-The chip's own temperature sensor and the board's supply voltage (VSYS) are each read every
-10 s, with whether USB power is present. The readings are logged with every detector trigger
-and kept across a detector reset, and a line goes to the log at boot, on each degree or 0.2 V of
-change, when USB power comes or goes, and at least hourly, so a serial logger on the console
-can record them for a long test. `temp` and `power` show the lowest and highest since boot. Armed by software it starts a second or two into boot, and software can
-turn it off again: it shows whether the detector troubles a healthy board, but it is not the
-protection the OTP bit would be.
+The chip's own temperature sensor and the board's supply voltage (VSYS) are each read every 10
+s, with whether USB power is present. The readings are logged with every detector trigger and
+kept across a detector reset, and a line goes to the log at boot, on each degree or 0.2 V of
+change, when USB power comes or goes, and at least hourly, so a serial logger on the console can
+record them for a long test. `temp` and `power` show the lowest and highest since boot. Armed by
+software it starts a second or two into boot, and software can turn it off again: it shows
+whether the detector troubles a healthy board, but it is not the protection the OTP bit would
+be.
 
 **What it costs.** A detector too sensitive for the board resets a healthy board: spurious
 restarts under load, when the Wi-Fi radio transmits, or on a marginal USB supply. A detector
@@ -228,9 +234,9 @@ It does nothing against the flash swap or against reading the chip in a lab. So 
 detector removes none of the published attacks; it makes the voltage-glitch ones (E20) take
 more attempts.
 
-**Software can disarm it.** The detector block has a `DISARM` register. A secured board's
-firmware should lock the detector's registers at boot (its `LOCK` register), so a bug can't be
-used to switch it off (to-confirm item 5).
+**Software can disarm it.** The detector block has a `DISARM` register, and the firmware
+doesn't lock the detector's registers (its `LOCK` register) today, so a bug could be used to
+switch it off. Locking them on a secured board is to-confirm item 5.
 
 Whether and at which sensitivity to arm it in OTP is decision 5.
 
