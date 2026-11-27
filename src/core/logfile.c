@@ -122,8 +122,13 @@ static void stamp(char *out, size_t len, uint64_t uptime_ms) {
         time_t secs = (time_t)(t_ms / 1000);
         struct tm tm;
         gmtime_r(&secs, &tm);
-        snprintf(out, len, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", tm.tm_year + 1900, tm.tm_mon + 1,
-                 tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(t_ms % 1000));
+        // Each field bounded to its digits, so the compiler sees the text fits (it can't know
+        // a struct tm's ranges); for any real date the result is the same.
+        snprintf(out, len, "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+                 (unsigned)(tm.tm_year + 1900) % 10000u, (unsigned)(tm.tm_mon + 1) % 100u,
+                 (unsigned)tm.tm_mday % 100u, (unsigned)tm.tm_hour % 100u,
+                 (unsigned)tm.tm_min % 100u, (unsigned)tm.tm_sec % 100u,
+                 (unsigned)(((t_ms % 1000) + 1000) % 1000));
     } else {
         snprintf(out, len, "+%llu.%03llu", (unsigned long long)(uptime_ms / 1000),
                  (unsigned long long)(uptime_ms % 1000));

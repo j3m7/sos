@@ -515,7 +515,8 @@ static void sync_finish(bool ok, const char *why) {
     sy.active = false;
     sy.outcome = ok ? NTS_SYNC_OK : NTS_SYNC_FAILED;
     if (!ok)
-        snprintf(sy.error, sizeof(sy.error), "%s", why);
+        // Cut to fit on purpose (a query's error can be longer); the bounded format says so.
+        snprintf(sy.error, sizeof(sy.error), "%.*s", (int)sizeof(sy.error) - 1, why);
 }
 
 static void sync_query(void) {

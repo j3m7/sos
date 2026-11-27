@@ -556,8 +556,10 @@ static void utc_text(char *buf, size_t len, int64_t unix_s) {
     time_t t = (time_t)unix_s;
     struct tm tm;
     gmtime_r(&t, &tm);
-    snprintf(buf, len, "%04d-%02d-%02d %02d:%02d UTC", tm.tm_year + 1900, tm.tm_mon + 1,
-             tm.tm_mday, tm.tm_hour, tm.tm_min);
+    // Fields bounded to their digits, so the compiler sees the text fits; same result.
+    snprintf(buf, len, "%04u-%02u-%02u %02u:%02u UTC", (unsigned)(tm.tm_year + 1900) % 10000u,
+             (unsigned)(tm.tm_mon + 1) % 100u, (unsigned)tm.tm_mday % 100u,
+             (unsigned)tm.tm_hour % 100u, (unsigned)tm.tm_min % 100u);
 }
 
 static void show_rotation(shell_t *sh, const logfile_status_t *st) {
