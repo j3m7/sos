@@ -498,7 +498,9 @@ Then:
 
 ### dev-1: what runs on hardware for the first time
 
-None of these has run on a real chip. dev-1 is where each runs first.
+All of these ran on dev-1 on 2026-11-26 and behaved as the table expects (results on
+[#64](https://github.com/j3m7/sos/issues/64)), with one exception: an image signed with an
+unknown key was not tried, only an unsigned one. The production board should try both.
 
 | First run | When | Before the last bit? |
 |---|---|---|
@@ -776,26 +778,28 @@ Not possible to try here: the glitch attacks, the flash swap and chip imaging.
 
 ## To confirm before this is final
 
-This list is a gate: the document is not final, and nothing is burned, while any item is open.
+This list is a gate: the production part is not final, and nothing is burned on a production
+board, while any item is open. The dev-1 items were settled by its run on 2026-11-26.
 
-1. *(dev-1: done; production: to write.)* The exact `picotool` commands and file contents for each write. **For dev-1 they are in
-   [`docs/otp/dev-1/`](otp/dev-1/README.md), for review:** one file per write, the read-back
-   command after each, and what the blank board answers to each read today. The read commands
-   have been run on dev-1; no file has been loaded, and that page lists what can only be
-   confirmed by loading (that `picotool` accepts each file as written, the lock word's form in
-   particular). Files for a production board are written when there is one: other keys, and
-   the rows dev-1 leaves out.
+1. *(dev-1: done; production: to write.)* The exact `picotool` commands and file contents for
+   each write. **dev-1's are in [`docs/otp/dev-1/`](otp/dev-1/README.md) and its runbook, and
+   all ran on 2026-11-26:** `picotool otp load` accepted the boot key file, each `otp set`
+   (KEY_VALID, SECURE_BOOT_ENABLE, the page 3 lock word 0x101010) wrote what its read-back
+   expected, and the OTP dumps before and after differ in exactly those rows. A production
+   board's are written when there is one: other keys, and the rows dev-1 leaves out.
 2. *(Production only.)* That `BOOT_FLAGS0.DISABLE_WATCHDOG_SCRATCH` leaves SOS's fault record and watchdog reset
    detection working. They use the watchdog scratch registers 0 to 3 and the watchdog's reason
    register; the datasheet says the flag makes the bootrom ignore the scratch registers at boot.
-3. *(Both; first seen on a chip in the dev-1 run.)* How Secure code reads and soft-locks an OTP page in the SDK version we use, and that the
-   bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the E21 glitch.
-   *The first half is done: #86, with the soft lock and the guarded read tried on dev-1 on a
-   blank page. The second half is first seen on a chip in the dev-1 run, when a read of the
-   locked pages from BOOTSEL is refused.*
-4. *(Both; first run on a chip in the dev-1 rehearsal.)* Writing raw rows from Secure code: the bootrom or SDK call for a raw (not error-corrected)
-   row write and read, used for the chaff rows. *Written and host tested (#87) against the
-   SDK's description of the call; first run on a chip in the dev-1 rehearsal.*
+3. *(Both; done.)* How Secure code reads and soft-locks an OTP page in the SDK version we use,
+   and that the bootloader lock (`LOCK_BL`) keeps `picotool` out on A2 other than through the
+   E21 glitch. *The first half: #86, with the soft lock and the guarded read tried on dev-1. The
+   second half: in the dev-1 run, reads of rows 0x100 (page 4) and 0x140 (page 5) from BOOTSEL
+   were refused with `permission failure`, and the dump shows both pages unreadable. The E21
+   glitch was not attempted.*
+4. *(Both; done.)* Writing raw rows from Secure code: the bootrom or SDK call for a raw (not
+   error-corrected) row write and read, used for the chaff rows. *Written and host tested
+   (#87); ran on dev-1 on 2026-11-26 in the rehearsal (page 4) and the burn (page 5), which
+   verified and locked its page, and the everyday firmware reads the secret back.*
 5. *(Production only.)* Glitch detector: the week-long test's results; and that the detector's `LOCK` register
    stops software from disarming it.
 6. *(Production only.)* Whether anything in SOS relies on rebooting into BOOTSEL by command, beyond flashing.
