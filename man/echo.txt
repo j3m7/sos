@@ -11,5 +11,7 @@ DESCRIPTION
     it), or with '>>' appends it as a line. Only the console may write under
     /certs.
 
+    To write a command's output to a file, use 'tee': 'dmesg | tee /d.txt'.
+
 SEE ALSO
-    cat, edit
+    cat, edit, tee

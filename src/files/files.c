@@ -318,6 +318,57 @@ static void cmd_echo(shell_t *sh, char *args) {
         shell_printf(sh, "echo: %s: %s\n", name, files_error(fr));
 }
 
+// --- tee (a pipeline stage, shell/pipe.h) -----------------------------------------------------
+
+struct pipe_file {
+    FIL f;
+};
+
+bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
+    char abs[PATH_LEN];
+    if (!resolve(sh, name, abs) || !may_write(sh, "tee", abs))
+        return false;
+    if (strlen(abs) >= size) {
+        shell_printf(sh, "path too long\n");
+        return false;
+    }
+    strcpy(path, abs);
+    return true;
+}
+
+// `path` was resolved and checked by pipe_file_check(); a card that has gone since fails in
+// f_open(), and the text says so.
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    pipe_file_t *pf = heap_zalloc(HEAP_FILES, sizeof(*pf));
+    if (!pf) {
+        *why = "out of memory";
+        return NULL;
+    }
+    FRESULT fr = f_open(&pf->f, path, FA_WRITE | (append ? FA_OPEN_APPEND : FA_CREATE_ALWAYS));
+    if (fr != FR_OK) {
+        *why = files_error(fr);
+        heap_release(HEAP_FILES, pf);
+        return NULL;
+    }
+    files_hold();
+    return pf;
+}
+
+const char *pipe_file_write(pipe_file_t *pf, const char *buf, size_t len) {
+    UINT bw;
+    FRESULT fr = f_write(&pf->f, buf, (UINT)len, &bw);
+    if (fr == FR_OK && bw != len)
+        fr = FR_DENIED;                 // card full
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
+const char *pipe_file_close(pipe_file_t *pf) {
+    FRESULT fr = f_close(&pf->f);
+    heap_release(HEAP_FILES, pf);
+    files_release();
+    return fr == FR_OK ? NULL : files_error(fr);
+}
+
 // --- cat ---------------------------------------------------------------------------------------
 
 typedef struct {
@@ -349,26 +400,30 @@ static bool cat_step(shell_t *sh, void *arg, bool cancel) {
     return job_done(j);
 }
 
-static void cmd_cat(shell_t *sh, const char *arg) {
+void files_cat(shell_t *sh, const char *who, const char *arg) {
     char path[PATH_LEN];
-    if (!arg) {
-        shell_printf(sh, "usage: cat <file>\n");
-        return;
-    }
     if (!resolve(sh, arg, path))
         return;
     cat_job_t *j = heap_alloc(HEAP_FILES, sizeof(*j));
     if (!j) {
-        shell_printf(sh, "cat: out of memory\n");
+        shell_printf(sh, "%s: out of memory\n", who);
         return;
     }
     FRESULT fr = f_open(&j->f, path, FA_READ);
     if (fr != FR_OK) {
-        shell_printf(sh, "cat: %s: %s\n", arg, files_error(fr));
+        shell_printf(sh, "%s: %s: %s\n", who, arg, files_error(fr));
         heap_release(HEAP_FILES, j);
         return;
     }
     job_start(sh, cat_step, j);
+}
+
+static void cmd_cat(shell_t *sh, const char *arg) {
+    if (!arg) {
+        shell_printf(sh, "usage: cat <file>\n");
+        return;
+    }
+    files_cat(sh, "cat", arg);
 }
 
 // --- cp ----------------------------------------------------------------------------------------

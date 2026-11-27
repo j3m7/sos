@@ -12,6 +12,11 @@ DESCRIPTION
     command name ('man wifi'); 'man intro' is a place to start. Tab after
     'man' completes the topics of the pages on the card.
 
+    Piped, 'man <topic>' prints the page as plain text instead of opening the
+    pager, like 'cat': 'man wifi | head 12', 'man wifi | grep -n channel'.
+    ('man wifi | more' pages the text as any command's output.) 'man' alone
+    and 'man install' are not affected.
+
     The pages live on the SD card as /man/<topic>.txt; the firmware holds
     none. When there are none, 'man' offers to download them. 'man install'
     downloads them from the SOS repository on GitHub over HTTPS (the board

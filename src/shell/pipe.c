@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Pipelines: the stage parser and the filters grep, head, tail and wc (see pipe.h and
+// Pipelines: the stage parser and the filters grep, head, tail, wc and tee (see pipe.h and
 // docs/design/shell-pipes.md). shell_core.c supplies the sink and routes the producer's output
 // here.
 
@@ -358,10 +358,137 @@ static pipe_stage_t *wc_open(shell_t *sh, const char *args) {
 
 static const pipe_filter_t wc_filter = {"wc", wc_open, wc_write, wc_end, stage_free};
 
+// --- tee [-a] <path> ------------------------------------------------------------------------
+
+// The card side, unless files.c (or a test) supplies it: no card, nothing opens.
+__attribute__((weak)) bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
+    (void)path;
+    (void)size;
+    shell_printf(sh, "tee: %s: no SD card\n", name);
+    return false;
+}
+
+__attribute__((weak)) pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    (void)path;
+    (void)append;
+    *why = "no SD card";
+    return NULL;
+}
+
+__attribute__((weak)) const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len) {
+    (void)f;
+    (void)buf;
+    (void)len;
+    return "no SD card";
+}
+
+__attribute__((weak)) const char *pipe_file_close(pipe_file_t *f) {
+    (void)f;
+    return NULL;
+}
+
+typedef struct {
+    pipe_stage_t st;
+    pipe_file_t *file;          // the file, from the first output on; NULL before, and once closed
+    bool append;
+    bool done;                  // closed (the output ended, or a write failed): don't open again
+    char path[SHELL_PATH_MAX + 1];  // as typed, for the messages
+    char abs[PIPE_FILE_PATH];   // resolved and checked when the line was parsed
+} tee_t;
+
+static const pipe_filter_t tee_filter;
+
+// Say why, straight to the sink (the terminal, or the pager's text under `| more`): not down
+// the line, where a later filter could drop it, and not into the file, which is closed by now.
+static void tee_say(tee_t *t, const char *what) {
+    char msg[SHELL_PATH_MAX + 80];
+    int n = snprintf(msg, sizeof(msg), "tee: %s: %s\n", t->path, what);
+    if (n > 0)
+        t->st.pipe->out(t->st.pipe->sh, msg, (size_t)n < sizeof(msg) ? (size_t)n : sizeof(msg) - 1);
+}
+
+// Close the file (once); a failure to write it out is reported unless one was already.
+static void tee_finish(tee_t *t, bool report) {
+    t->done = true;
+    if (!t->file)
+        return;
+    const char *err = pipe_file_close(t->file);
+    t->file = NULL;
+    if (err && report)
+        tee_say(t, err);
+}
+
+// The file is opened on the first output (or at the end, for an empty output): a line that
+// doesn't parse, or a command that refuses to run, leaves it as it was.
+static const char *tee_put(tee_t *t, const char *buf, size_t len) {
+    if (t->done)
+        return NULL;
+    if (!t->file) {
+        const char *why;
+        t->file = pipe_file_open(t->abs, t->append, &why);
+        if (!t->file)
+            return why;
+    }
+    return len ? pipe_file_write(t->file, buf, len) : NULL;
+}
+
+static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
+    tee_t *t = (tee_t *)st;
+    const char *err = tee_put(t, buf, len);
+    pipe_emit(st, buf, len);                // what the sink was owed from this write
+    if (err) {                              // once: the file is closed, the line ends
+        tee_finish(t, false);
+        tee_say(t, err);
+        pipe_shut(st);
+    }
+}
+
+static void tee_end(pipe_stage_t *st) {
+    tee_t *t = (tee_t *)st;
+    const char *err = NULL;
+    if (!t->done && !t->file)               // no output at all: the file still gets made, empty
+        err = tee_put(t, "", 0);
+    tee_finish(t, true);
+    if (err)
+        tee_say(t, err);
+}
+
+static void tee_close(pipe_stage_t *st) {
+    tee_finish((tee_t *)st, false);         // cancelled: a partial file stays, as in Unix
+    stage_free(st);
+}
+
+static pipe_stage_t *tee_open(shell_t *sh, const char *args) {
+    bool append = false;
+    const char *a = args ? args : "";
+    if (a[0] == '-' && a[1] == 'a' && (a[2] == ' ' || !a[2])) {
+        append = true;
+        a += 2;
+        while (*a == ' ')
+            a++;
+    }
+    if (!*a || strchr(a, ' ') || strlen(a) > SHELL_PATH_MAX) {
+        shell_printf(sh, "usage: <command> | tee [-a] <path>\n");
+        return NULL;
+    }
+    tee_t *t = stage_new(sh, &tee_filter, sizeof(tee_t));
+    if (!t)
+        return NULL;
+    if (!pipe_file_check(sh, a, t->abs, sizeof(t->abs))) {    // why was printed
+        stage_free(&t->st);
+        return NULL;
+    }
+    t->append = append;
+    strcpy(t->path, a);
+    return &t->st;
+}
+
+static const pipe_filter_t tee_filter = {"tee", tee_open, tee_write, tee_end, tee_close};
+
 // --- parsing ---------------------------------------------------------------------------------
 
 static const pipe_filter_t *const filters[] = {&grep_filter, &head_filter, &tail_filter,
-                                               &wc_filter, NULL};
+                                               &wc_filter, &tee_filter, NULL};
 
 // The sink `more` is a stage name too, though not a filter.
 static const char *const sink_more = "more";
@@ -478,10 +605,12 @@ fail:
 static const shell_word_t grep_options[4];
 static const shell_word_t grep_options[4] = {
     {"-i", grep_options, 0}, {"-n", grep_options, 0}, {"-v", grep_options, 0}, {0}};
+static const shell_word_t tee_options[2] = {{"-a", NULL, SHELL_PATH}, {0}};
 const shell_cmd_t pipe_stage_table[] = {
     {"grep", NULL, grep_options, 0},
     {"head", NULL, NULL, 0},
     {"more", NULL, NULL, 0},
     {"tail", NULL, NULL, 0},
+    {"tee", NULL, tee_options, SHELL_PATH},
     {"wc", NULL, NULL, 0},
     {0}};

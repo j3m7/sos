@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/shell/pipe.c: the stage parser and the filters grep, head, tail and wc.
+// Unit tests for src/shell/pipe.c: the stage parser and the filters grep, head, tail, wc and tee.
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -38,6 +38,66 @@ static void sink(shell_t *s, const char *buf, size_t len) {
     memcpy(out + out_len, buf, len);
     out_len += len;
     out[out_len] = '\0';
+}
+
+// The card behind tee: one file, in memory. `card_fail_at` makes the write that would pass that
+// many bytes fail; `card_refuse` makes the open fail (as a protected path does).
+static char card[1024];
+static size_t card_len;
+static char card_path[64];
+static bool card_open, card_refuse;
+static size_t card_fail_at;
+static int card_opens, card_closes;
+static int card_dummy;
+
+bool pipe_file_check(shell_t *s, const char *name, char *path, size_t size) {
+    if (card_refuse) {
+        shell_printf(s, "tee: %s: not allowed to change this path\n", name);
+        return false;
+    }
+    snprintf(path, size, "%s", name);
+    return true;
+}
+
+static const char *card_open_fails;         // the open fails with this text (NULL: it works)
+
+pipe_file_t *pipe_file_open(const char *path, bool append, const char **why) {
+    if (card_open_fails) {
+        *why = card_open_fails;
+        return NULL;
+    }
+    CHECK(!card_open);
+    card_open = true;
+    card_opens++;
+    snprintf(card_path, sizeof(card_path), "%s", path);
+    if (!append)
+        card_len = 0;
+    return (pipe_file_t *)&card_dummy;
+}
+
+const char *pipe_file_write(pipe_file_t *f, const char *buf, size_t len) {
+    CHECK(f == (pipe_file_t *)&card_dummy && card_open);
+    if (card_fail_at && card_len + len > card_fail_at)
+        return "card full";
+    CHECK(card_len + len <= sizeof(card));
+    memcpy(card + card_len, buf, len);
+    card_len += len;
+    return NULL;
+}
+
+const char *pipe_file_close(pipe_file_t *f) {
+    CHECK(f == (pipe_file_t *)&card_dummy && card_open);
+    card_open = false;
+    card_closes++;
+    return NULL;
+}
+
+static void card_reset(void) {
+    card_len = 0;
+    card_open = card_refuse = false;
+    card_open_fails = NULL;
+    card_fail_at = 0;
+    card_opens = card_closes = 0;
 }
 
 // --- helpers ---------------------------------------------------------------------------------
@@ -185,6 +245,113 @@ TEST(head_passes_the_first_lines_then_shuts) {
     CHECK_STR(out, "1 2 4\n");
 }
 
+TEST(tee_writes_the_file_and_passes_the_bytes_on) {
+    card_reset();
+    CHECK_STR(run("tee /f", "a\nb\nc"), "a\nb\nc");
+    CHECK(card_len == 5 && !memcmp(card, "a\nb\nc", 5));
+    CHECK_STR(card_path, "/f");
+    CHECK(!card_open);
+    // After a filter, it saves what that let through; before one, everything.
+    CHECK_STR(run("grep a | tee /g | wc", "a\nb\na2\n"), "2 2 5\n");
+    CHECK(card_len == 5 && !memcmp(card, "a\na2\n", 5));
+    CHECK_STR(run("tee /g | grep a", "a\nb\na2\n"), "a\na2\n");
+    CHECK(card_len == 7);
+    CHECK(card_opens == card_closes);
+}
+
+TEST(tee_a_appends) {
+    card_reset();
+    CHECK_STR(run("tee /f", "one\n"), "one\n");
+    run_cut("tee -a /f", "two\n", 4, 0, NULL);
+    CHECK(card_len == 8 && !memcmp(card, "one\ntwo\n", 8));
+    run_cut("tee -a  /f", "3\n", 2, 0, NULL);
+    CHECK(card_len == 10);
+    run_cut("tee /f", "new\n", 4, 0, NULL);          // without -a it is replaced
+    CHECK(card_len == 4 && !memcmp(card, "new\n", 4));
+}
+
+TEST(tee_parses_its_arguments) {
+    card_reset();
+    CHECK(!open_stages("tee"));
+    CHECK(strstr(said, "usage: <command> | tee [-a] <path>") != NULL);
+    CHECK(!open_stages("tee -a"));
+    CHECK(!open_stages("tee a b"));
+    CHECK(!open_stages("tee -a a b"));
+    CHECK(card_opens == 0);
+    CHECK(open_stages("tee -ax"));                  // a path that starts with a dash
+    CHECK(card_opens == 0);                         // nothing opened until output arrives
+    pipe_write(&p, "x", 1);
+    CHECK_STR(card_path, "-ax");
+    pipe_close(&p);
+    // A later stage that doesn't parse leaves the file alone: it was never opened.
+    card_reset();
+    CHECK(!open_stages("tee /notes | head x"));
+    CHECK(card_opens == 0 && !card_open);
+    // No output at all still makes the file, empty, at the end.
+    card_reset();
+    CHECK(open_stages("tee /empty"));
+    pipe_end(&p);
+    CHECK(card_opens == 1 && card_closes == 1 && card_len == 0);
+    // An open that fails on the first output is said at the sink, once, and the line ends; what
+    // the write owed still passes (the grep sees "wifi" and keeps it).
+    card_reset();
+    card_open_fails = "no such directory";
+    CHECK(open_stages("tee /nodir/x | grep wifi"));
+    pipe_write(&p, "wifi up\n", 8);
+    CHECK(p.done && card_opens == 0);
+    CHECK_STR(out, "wifi up\ntee: /nodir/x: no such directory\n");
+    pipe_end(&p);
+    CHECK_STR(out, "wifi up\ntee: /nodir/x: no such directory\n");
+    // ...and for an empty output, at the end.
+    card_reset();
+    card_open_fails = "no such directory";
+    CHECK(open_stages("tee /nodir/y"));
+    pipe_end(&p);
+    CHECK_STR(out, "tee: /nodir/y: no such directory\n");
+    card_open_fails = NULL;
+    // An error reaches the sink even when a later filter would drop it.
+    card_reset();
+    card_fail_at = 2;
+    CHECK(open_stages("tee /f | grep zzz"));
+    pipe_write(&p, "abc\n", 4);
+    CHECK(p.done);
+    CHECK_STR(out, "tee: /f: card full\n");
+    pipe_end(&p);
+    CHECK(pipe_is_stage("tee /f") && pipe_is_stage("tee"));
+    CHECK(!pipe_is_stage("teepee"));
+    // A refused path stops the line before the command runs, with the permission's message.
+    card_refuse = true;
+    CHECK(!open_stages("grep a | tee /certs/x"));
+    CHECK_STR(said, "tee: /certs/x: not allowed to change this path\n");
+    CHECK(p.first == NULL);
+}
+
+TEST(tee_cancelled_leaves_a_partial_file_and_closes_it) {
+    card_reset();
+    CHECK(open_stages("tee /f | wc"));
+    pipe_write(&p, "abc\n", 4);
+    pipe_close(&p);                                 // Ctrl-C: no end()
+    CHECK(card_len == 4 && !card_open && card_closes == 1);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(tee_write_error_says_so_once_and_shuts) {
+    card_reset();
+    card_fail_at = 6;
+    CHECK(open_stages("tee /f"));
+    pipe_write(&p, "abc\n", 4);
+    CHECK(!p.done && card_len == 4);
+    pipe_write(&p, "defg\n", 5);                   // would pass 6: refused
+    CHECK(p.done && !card_open);
+    CHECK_STR(said, "");                            // the message goes down the line, not aside
+    CHECK_STR(out, "abc\ndefg\ntee: /f: card full\n");    // after what this write owed
+    pipe_write(&p, "more\n", 5);                   // dropped: the line is shut
+    pipe_end(&p);
+    CHECK(card_len == 4 && card_closes == 1);
+    CHECK_STR(out, "abc\ndefg\ntee: /f: card full\n");    // not said again
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
 TEST(tail_keeps_the_last_lines) {
     CHECK_STR(run("tail 2", "a\nb\nc\n"), "b\nc\n");
     CHECK_STR(run("tail 2", "a\nb\nc"), "b\nc");                    // a last line without '\n'
@@ -320,6 +487,11 @@ TEST_MAIN(
     RUN(grep_text_keeps_its_spaces_and_may_start_with_a_dash);
     RUN(grep_cuts_long_lines_into_pieces);
     RUN(head_passes_the_first_lines_then_shuts);
+    RUN(tee_writes_the_file_and_passes_the_bytes_on);
+    RUN(tee_a_appends);
+    RUN(tee_parses_its_arguments);
+    RUN(tee_cancelled_leaves_a_partial_file_and_closes_it);
+    RUN(tee_write_error_says_so_once_and_shuts);
     RUN(tail_keeps_the_last_lines);
     RUN(tail_evicts_whole_lines_at_the_ring_cap);
     RUN(wc_counts_as_unix_wc);

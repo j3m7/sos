@@ -608,6 +608,10 @@ bool shell_raw_mode(const shell_t *sh) {
     return sh->job != NULL && sh->key != NULL;
 }
 
+bool shell_output_piped(const shell_t *sh) {
+    return to_pipe(sh);
+}
+
 bool shell_screen_held(const shell_t *sh) {
     return shell_raw_mode(sh) || sh->pipe.sink == PIPE_SINK_PAGER;
 }

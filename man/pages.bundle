@@ -190,8 +190,10 @@ DESCRIPTION
     it), or with '>>' appends it as a line. Only the console may write under
     /certs.
 
+    To write a command's output to a file, use 'tee': 'dmesg | tee /d.txt'.
+
 SEE ALSO
-    cat, edit
+    cat, edit, tee
 @@ edit
 NAME
     edit - full-screen text editor
@@ -669,6 +671,11 @@ DESCRIPTION
     command name ('man wifi'); 'man intro' is a place to start. Tab after
     'man' completes the topics of the pages on the card.
 
+    Piped, 'man <topic>' prints the page as plain text instead of opening the
+    pager, like 'cat': 'man wifi | head 12', 'man wifi | grep -n channel'.
+    ('man wifi | more' pages the text as any command's output.) 'man' alone
+    and 'man install' are not affected.
+
     The pages live on the SD card as /man/<topic>.txt; the firmware holds
     none. When there are none, 'man' offers to download them. 'man install'
     downloads them from the SOS repository on GitHub over HTTPS (the board
@@ -731,6 +738,9 @@ DESCRIPTION
     controls, invalid UTF-8 and invisible or bidi characters show as '?', and
     long lines scroll sideways.
 
+    Piped, 'more <file>' prints the file as plain text, as 'cat <file>' does,
+    instead of opening the pager: 'more /log/sos.log | tail 5'.
+
     The bottom row shows the file name, the lines on screen ('lines 12-34',
     with the total once it is known: after G, or once the end has been on
     screen) and how far in you are, or END.
@@ -785,22 +795,25 @@ PIPES
 
     The filters are grep (lines with a text), head (the first lines; it
     stops the command once it has them), tail (the last lines) and wc
-    (counts); see their pages. 'more' can only come last, and at most four
-    filters fit in a line. The output streams through: grep shows lines as
-    the command prints them, and with '| more' only what the filters let
-    through is kept, so 'cat big.log | grep error | more' isn't cut at 32 KB
-    unless the matches are. When the 32 KB are full the command is stopped,
+    (counts); see their pages. 'tee [-a] <path>' also writes what passes it
+    to a file ('dmesg | tee /dmesg.txt | more'). 'more' can only come last,
+    and at most four filters fit in a line. The output streams through:
+    grep shows lines as the command prints them, and with '| more' only what
+    the filters let through is kept, so 'cat big.log | grep error | more'
+    isn't cut at 32 KB unless the matches are. When the 32 KB are full the
+    command is stopped,
     as head stops it.
 
     A '|' starts a stage only when a stage name follows it (grep, head,
-    tail, wc, more); any other '|' is part of the command's text ('ls |
+    tail, wc, tee, more); any other '|' is part of the command's text ('ls |
     morex' runs ls with those words). A stage that doesn't parse ('x | grep',
     'x | head y') prints its usage and the command doesn't run. Ctrl-C drops
     what the filters hold (tail's lines, wc's count); a command that asks a
     question or draws its own screen runs as if there were no pipe. Tab
     completes the stage names after '| ', and grep's options.
 
-    'man <topic>' shows a manual page in this viewer. Log messages are held on
+    'man <topic>' shows a manual page in this viewer (piped, it prints the
+    page as text, like 'more <file>'). Log messages are held on
     the console while it runs there, as for the editor.
 
 SEE ALSO
@@ -1136,6 +1149,34 @@ NOTES
 
 SEE ALSO
     head, grep, wc, more
+@@ tee
+NAME
+    tee - write a command's output to a file and pass it on
+
+SYNOPSIS
+    <command> | tee [-a] <path>
+
+DESCRIPTION
+    Writes everything the command prints to the file, and passes it on
+    unchanged, so the screen (or the next stage) still gets it: 'dmesg | tee
+    /dmesg.txt' shows dmesg and saves it, and 'dmesg | tee /d.txt | more'
+    pages it as well. The file is replaced; with -a the output is appended
+    to it. The path is relative to the working directory, as for the file
+    commands, and the same paths are protected as for 'echo': only the
+    console may write under /certs and /var/log.
+
+    The file is written as the output comes, and a command stopped with Ctrl-C
+    leaves what it had written, as on Unix. Stages before tee decide what it
+    sees: 'dmesg | grep wifi | tee /w.txt' saves only the matching lines.
+    If the card refuses a write (it is full, say) tee says so once and stops
+    the command, as head does.
+
+NOTES
+    tee works only after a '|': typed on its own it says so. It takes one
+    path, without spaces. More about pipes in 'man more'.
+
+SEE ALSO
+    echo, cat, more, head, grep
 @@ temp
 NAME
     temp - the chip's temperature, and the lowest and highest since boot

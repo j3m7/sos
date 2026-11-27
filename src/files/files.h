@@ -15,6 +15,11 @@
 extern const shell_cmd_t files_commands[];
 void files_help(shell_t *sh);
 
+// `cat <file>` as a job, for commands that print a file as plain text when their output is piped
+// (`more <file> | tail 5`). `arg` is the file as the user typed it (relative to the shell's
+// directory); messages start with `who` (the calling command's name).
+void files_cat(shell_t *sh, const char *who, const char *arg);
+
 // A file command or an SFTP transfer holds open files (formatting or unmounting would break it).
 bool files_busy(void);
 void files_hold(void);          // one more holder of open files

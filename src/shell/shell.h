@@ -271,6 +271,12 @@ void shell_run_job(shell_t *sh, shell_job_fn step, void *arg);
 bool shell_job_running(const shell_t *sh);
 // A raw-mode job (shell_run_raw) owns the screen: nothing else should write to this shell.
 bool shell_raw_mode(const shell_t *sh);
+// Is what the running command prints going into a pipeline (through filters, or to the `| more`
+// capture)? A command that would draw its own screen (man, more <file>) prints plain text
+// instead when this is true, as Unix's would. False when the line has no stages, once the line
+// has ended, and for the pager's own output while it shows a producer that still runs: that is
+// the screen, not the pipeline. Meant to be asked from the command and from its job's steps.
+bool shell_output_piped(const shell_t *sh);
 // The screen isn't for messages now: a full-screen program owns it (raw mode), or a command's
 // output is being captured for the pager (`| more`). Messages from other shells wait.
 bool shell_screen_held(const shell_t *sh);
