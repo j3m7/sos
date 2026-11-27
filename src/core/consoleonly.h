@@ -55,7 +55,7 @@ consoleonly_t consoleonly_decide(const uint32_t rows[CONSOLEONLY_COPIES]);
 // record; the answer doesn't change while the board runs.
 void consoleonly_init(void);
 consoleonly_t consoleonly_state(void);
-bool consoleonly(void);                  // anything but CONSOLEONLY_NO
+bool consoleonly(void);                 // anything but CONSOLEONLY_NO
 // The three rows as read at boot, for `version`.
 const uint32_t *consoleonly_rows(void);
 // The board's marker is blank and this build treats the board as console-only all the same

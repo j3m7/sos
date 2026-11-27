@@ -322,6 +322,9 @@ endif()
 # For trying the console-only behaviour (src/core/consoleonly.h) on a development board without
 # writing its OTP marker: -DSOS_FORCE_CONSOLE_ONLY=ON makes this image treat every board as
 # console-only. It can only add the restriction; an image without it reads the board's marker.
+if (DEFINED SOS_FORCE_SEALED_ONLY)
+    message(FATAL_ERROR "SOS_FORCE_SEALED_ONLY was renamed to SOS_FORCE_CONSOLE_ONLY (#91)")
+endif()
 option(SOS_FORCE_CONSOLE_ONLY "Treat every board as console-only (testing)" OFF)
 if (SOS_FORCE_CONSOLE_ONLY)
     target_compile_definitions(sos PRIVATE SOS_FORCE_CONSOLE_ONLY=1)

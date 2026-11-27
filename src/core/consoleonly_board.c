@@ -44,8 +44,8 @@ void consoleonly_init(void) {
         break;
     case CONSOLEONLY_YES_DAMAGED:
         log_msg(SOS_LOG_ERR, "console-only setup: the marker's OTP rows hold "
-                             "0x%06lx 0x%06lx 0x%06lx, neither blank nor the marker; treated as set, so unsealed records "
-                             "are refused",
+                             "0x%06lx 0x%06lx 0x%06lx, neither blank nor the marker; "
+                             "treated as set, so unsealed records are refused",
                 (unsigned long)rows[0], (unsigned long)rows[1], (unsigned long)rows[2]);
         break;
     }
