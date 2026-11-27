@@ -14,7 +14,6 @@
 #include <wolfssh/ssh.h>
 
 #include "chat/chat.h"
-#include "core/chiptemp.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/keyprov.h"
@@ -22,6 +21,7 @@
 #include "core/failflash.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
+#include "core/sensors.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
@@ -173,7 +173,7 @@ int main(void) {
     rootsource_init();                  // OTP, the flash record, or nothing: starts the key provider
     failflash_init();                   // wrong console passwords so far, before the console starts
     settings_init();
-    chiptemp_init();                    // the first reading, kept from before the detector is armed
+    sensors_init();                     // a temperature, kept from before the detector is armed
     glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
     const uint8_t *hostkey;
@@ -216,7 +216,7 @@ int main(void) {
         }
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
-        chiptemp_poll();                // before glitchdet_poll, which keeps the latest reading
+        sensors_poll();                 // before glitchdet_poll, which keeps the latest readings
         glitchdet_poll();
         timesync_poll();
         nts_poll();

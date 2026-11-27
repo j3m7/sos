@@ -21,8 +21,9 @@
 // What it keeps across a detector reset is in the POWMAN scratch registers 0 to 3, which that
 // reset doesn't clear (it does clear the watchdog's, and with them the fault record):
 // the count of detector resets since power-on, the count of them in a row soon after boot, the
-// uptime, so the next boot can say how long the board had been up, and the chip's latest
-// temperature (core/chiptemp.h), so it can say how warm the chip was (issue #92).
+// uptime, so the next boot can say how long the board had been up, and the latest chip
+// temperature and supply voltage (core/sensors.h), so it can say how warm the chip was and
+// whether the supply had sagged (issue #92).
 //
 // The loop guard: if the detector resets the board GLITCHDET_GUARD_RESETS times in a row, each
 // before the board had been up GLITCHDET_STABLE_S seconds, the next boot doesn't arm it and
@@ -56,12 +57,14 @@ void glitchdet_poll(void);
 bool glitchdet_apply(unsigned setting);
 
 // Was the last reset the detector's? Which detectors had fired (bits 0-3), how long the
-// board had been up (seconds; 0 if unknown), and the chip's last temperature reading before the
-// reset, taken every CHIPTEMP_SAMPLE_S (tenths of a degree; CHIPTEMP_NONE if none was kept).
+// board had been up (seconds; 0 if unknown), and the last chip temperature and supply readings
+// before the reset, taken every SENSORS_SAMPLE_S (tenths of a degree, millivolts;
+// SENSORS_NONE if none was kept).
 bool glitchdet_caused_reset(void);
 uint32_t glitchdet_last_triggers(void);
 uint32_t glitchdet_last_uptime_s(void);
 int glitchdet_last_temp(void);
+int glitchdet_last_vsys(void);
 
 // Detector resets since power-on.
 uint32_t glitchdet_resets(void);
@@ -73,11 +76,12 @@ int glitchdet_armed_sensitivity(void);
 // logged but resets nothing, so there is no lost fault record and no need for the guard. -1 if
 // not watching, else the sensitivity; which detectors have triggered since boot (bits 0-3; a
 // detector may stay triggered until the next reset, so each is reported once per boot); and the
-// uptime of the first, with the chip's temperature then (tenths; CHIPTEMP_NONE before any).
+// uptime of the first, with the chip temperature and supply then (SENSORS_NONE before any).
 int glitchdet_watching_sensitivity(void);
 uint32_t glitchdet_watch_triggers(void);
 uint32_t glitchdet_watch_first_s(void);
 int glitchdet_watch_first_temp(void);
+int glitchdet_watch_first_vsys(void);
 
 // The guard stopped it being armed at this boot.
 bool glitchdet_guard_tripped(void);
