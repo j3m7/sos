@@ -130,8 +130,8 @@ static bool scan_inner(void *arg, uint16_t type, const uint8_t *ef, size_t ef_le
 
 nts_ntp_status_t nts_ntp_parse_reply(const uint8_t *pkt, size_t len, const uint8_t xmt[8],
                                      const uint8_t uid[NTS_NTP_UID_LEN], const nts_aead_t *s2c,
-                                     nts_ntp_reply_t *out, const char **reason) {
-    static uint8_t plain[NTS_NTP_PACKET_MAX];
+                                     uint8_t *plain, size_t plain_size, nts_ntp_reply_t *out,
+                                     const char **reason) {
     memset(out, 0, sizeof(*out));
     *reason = NULL;
     if (len < NTS_NTP_HEADER_LEN || len > NTS_NTP_PACKET_MAX) {
@@ -177,7 +177,7 @@ nts_ntp_status_t nts_ntp_parse_reply(const uint8_t *pkt, size_t len, const uint8
     }
     size_t nlen = get_u16(a), clen = get_u16(a + 2);
     if (nlen == 0 || clen < NTS_NTP_TAG_LEN || 4 + pad4(nlen) + pad4(clen) > body ||
-        clen - NTS_NTP_TAG_LEN > sizeof(plain)) {
+        clen - NTS_NTP_TAG_LEN > plain_size) {
         *reason = "malformed authenticator";
         return NTS_NTP_INVALID;
     }
