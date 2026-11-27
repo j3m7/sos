@@ -1053,8 +1053,6 @@ TEST(stop_at_plan) {
 }
 
 // fuzz_fsck's exFAT repair seeds (seeds.py) hold every exFAT repair, and repair clears them.
-// (On the board, repair has run on exFAT only: the FAT32 device run waits for #247, since
-// `sd format fat32` fails on dev-1's card.)
 static fsck_image_t seed_im;
 
 static bool seed_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
