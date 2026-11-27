@@ -197,6 +197,8 @@ set(SOS_SOURCES
     src/shell/keys.c
     src/shell/shell_core.c
     src/shell/pipe.c
+    src/shell/words.c
+    src/shell/cmdcheck.c
     src/shell/complete.c
     src/shell/login.c
     src/shell/termtext.c
@@ -242,6 +244,8 @@ set(SOS_SOURCES
     src/lua/lua_host.c
     src/lua/lua_core1.c
     src/lua/lua_complete.c
+    src/lua/lua_health.c
+    src/lua/lua_info.c
 )
 # The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
 # Regenerated at every build rather than at configure time, so it follows checkouts and commits.

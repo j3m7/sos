@@ -78,12 +78,15 @@ static void end_nothing(pipe_stage_t *st) {
     (void)st;
 }
 
-// A count of lines for head and tail: 10 without one, else 1 to 999999.
-static bool parse_lines(const char *args, unsigned long *n) {
-    if (!args) {
+// A count of lines for head and tail: 10 without one, else 1 to 999999. One word at most.
+static bool parse_lines(int argc, char **argv, unsigned long *n) {
+    if (argc > 2)
+        return false;
+    if (argc < 2) {
         *n = 10;
         return true;
     }
+    const char *args = argv[1];
     unsigned long v = 0;
     size_t i = 0;
     for (; args[i] >= '0' && args[i] <= '9'; i++) {
@@ -169,29 +172,27 @@ static void grep_end(pipe_stage_t *st) {
         grep_line(g);
 }
 
-static pipe_stage_t *grep_open(shell_t *sh, const char *args) {
+static pipe_stage_t *grep_open(shell_t *sh, int argc, char **argv) {
     bool invert = false, nocase = false, number = false;
-    const char *a = args ? args : "";
-    // Words of option letters come first; the first other word starts the text, which runs to
-    // the end, spaces kept.
-    while (a[0] == '-' && a[1] && a[1] != ' ') {
+    // Words of option letters come first, then one word, the text, as in sh: 'grep "no route"'
+    // (a word that starts with '-' but isn't all option letters, "-x" or "-", is the text).
+    int i = 1;
+    for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
         size_t n = 1;
-        while (a[n] == 'v' || a[n] == 'i' || a[n] == 'n')
+        while (argv[i][n] == 'v' || argv[i][n] == 'i' || argv[i][n] == 'n')
             n++;
-        if (a[n] && a[n] != ' ')
-            break;                          // not options: the text begins with '-'
-        invert |= memchr(a, 'v', n) != NULL;
-        nocase |= memchr(a, 'i', n) != NULL;
-        number |= memchr(a, 'n', n) != NULL;
-        a += n;
-        while (*a == ' ')
-            a++;
+        if (argv[i][n])
+            break;
+        invert |= strchr(argv[i], 'v') != NULL;
+        nocase |= strchr(argv[i], 'i') != NULL;
+        number |= strchr(argv[i], 'n') != NULL;
     }
-    size_t plen = strlen(a);
-    if (!plen) {
+    if (i != argc - 1 || !*argv[i]) {
         shell_printf(sh, "usage: <command> | grep [-v] [-i] [-n] <text>\n");
         return NULL;
     }
+    const char *text = argv[i];
+    size_t plen = strlen(text);
     if (plen > PIPE_PATTERN_MAX) {
         shell_printf(sh, "grep: the text is longer than %d bytes\n", PIPE_PATTERN_MAX);
         return NULL;
@@ -203,8 +204,8 @@ static pipe_stage_t *grep_open(shell_t *sh, const char *args) {
     g->nocase = nocase;
     g->number = number;
     g->plen = plen;
-    for (size_t i = 0; i < plen; i++)
-        g->pattern[i] = nocase ? fold(a[i]) : a[i];
+    for (size_t j = 0; j < plen; j++)
+        g->pattern[j] = nocase ? fold(text[j]) : text[j];
     return &g->st;
 }
 
@@ -232,9 +233,9 @@ static void head_write(pipe_stage_t *st, const char *buf, size_t len) {
         pipe_shut(st);
 }
 
-static pipe_stage_t *head_open(shell_t *sh, const char *args) {
+static pipe_stage_t *head_open(shell_t *sh, int argc, char **argv) {
     unsigned long n;
-    if (!parse_lines(args, &n)) {
+    if (!parse_lines(argc, argv, &n)) {
         shell_printf(sh, "usage: <command> | head [<lines>]  (1 to 999999, default 10)\n");
         return NULL;
     }
@@ -302,9 +303,9 @@ static void tail_end(pipe_stage_t *st) {
     t->len = 0;
 }
 
-static pipe_stage_t *tail_open(shell_t *sh, const char *args) {
+static pipe_stage_t *tail_open(shell_t *sh, int argc, char **argv) {
     unsigned long n;
-    if (!parse_lines(args, &n)) {
+    if (!parse_lines(argc, argv, &n)) {
         shell_printf(sh, "usage: <command> | tail [<lines>]  (1 to 999999, default 10)\n");
         return NULL;
     }
@@ -347,8 +348,9 @@ static void wc_end(pipe_stage_t *st) {
     pipe_emit(st, out, (size_t)n);
 }
 
-static pipe_stage_t *wc_open(shell_t *sh, const char *args) {
-    if (args) {
+static pipe_stage_t *wc_open(shell_t *sh, int argc, char **argv) {
+    (void)argv;
+    if (argc > 1) {
         shell_printf(sh, "usage: <command> | wc\n");
         return NULL;
     }
@@ -391,6 +393,7 @@ typedef struct {
     pipe_stage_t st;
     pipe_file_t *file;          // the file, from the first output on; NULL before, and once closed
     bool append;
+    bool quiet;                 // passes nothing on: the shell's `> path` (the line's last stage)
     bool done;                  // closed (the output ended, or a write failed): don't open again
     char path[SHELL_PATH_MAX + 1];  // as typed, for the messages
     char abs[PIPE_FILE_PATH];   // resolved and checked when the line was parsed
@@ -435,7 +438,8 @@ static const char *tee_put(tee_t *t, const char *buf, size_t len) {
 static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
     tee_t *t = (tee_t *)st;
     const char *err = tee_put(t, buf, len);
-    pipe_emit(st, buf, len);                // what the sink was owed from this write
+    if (!t->quiet)
+        pipe_emit(st, buf, len);            // what the sink was owed from this write
     if (err) {                              // once: the file is closed, the line ends
         tee_finish(t, false);
         tee_say(t, err);
@@ -458,29 +462,30 @@ static void tee_close(pipe_stage_t *st) {
     stage_free(st);
 }
 
-static pipe_stage_t *tee_open(shell_t *sh, const char *args) {
-    bool append = false;
-    const char *a = args ? args : "";
-    if (a[0] == '-' && a[1] == 'a' && (a[2] == ' ' || !a[2])) {
-        append = true;
-        a += 2;
-        while (*a == ' ')
-            a++;
-    }
-    if (!*a || strchr(a, ' ') || strlen(a) > SHELL_PATH_MAX) {
-        shell_printf(sh, "usage: <command> | tee [-a] <path>\n");
-        return NULL;
-    }
+// A tee stage for `path`, checked now (a refusal is said before the command runs); NULL after
+// printing why.
+static pipe_stage_t *tee_new(shell_t *sh, const char *path, bool append, bool quiet) {
     tee_t *t = stage_new(sh, &tee_filter, sizeof(tee_t));
     if (!t)
         return NULL;
-    if (!pipe_file_check(sh, a, t->abs, sizeof(t->abs))) {    // why was printed
+    if (!pipe_file_check(sh, path, t->abs, sizeof(t->abs))) {     // why was printed
         stage_free(&t->st);
         return NULL;
     }
     t->append = append;
-    strcpy(t->path, a);
+    t->quiet = quiet;
+    strcpy(t->path, path);
     return &t->st;
+}
+
+static pipe_stage_t *tee_open(shell_t *sh, int argc, char **argv) {
+    bool append = argc > 1 && !strcmp(argv[1], "-a");
+    int i = append ? 2 : 1;
+    if (argc != i + 1 || !*argv[i] || strlen(argv[i]) > SHELL_PATH_MAX) {
+        shell_printf(sh, "usage: <command> | tee [-a] <path>\n");
+        return NULL;
+    }
+    return tee_new(sh, argv[i], append, false);
 }
 
 static const pipe_filter_t tee_filter = {"tee", tee_open, tee_write, tee_end, tee_close};
@@ -493,98 +498,104 @@ static const pipe_filter_t *const filters[] = {&grep_filter, &head_filter, &tail
 // The sink `more` is a stage name too, though not a filter.
 static const char *const sink_more = "more";
 
-// Does `name` start `word`, the word ending there (at a space, a '|' or the end)?
-static bool word_is(const char *word, const char *name) {
-    size_t n = strlen(name);
-    return !strncmp(word, name, n) && (word[n] == '\0' || word[n] == ' ' || word[n] == '|');
-}
-
-bool pipe_is_stage(const char *word) {
-    if (word_is(word, sink_more))
-        return true;
+static const pipe_filter_t *find_filter(const char *name) {
     for (const pipe_filter_t *const *f = filters; *f; f++)
-        if (word_is(word, (*f)->name))
-            return true;
-    return false;
-}
-
-// The first '|' in `s` that starts a stage, or NULL.
-static char *next_stage(char *s) {
-    for (char *bar = strchr(s, '|'); bar; bar = strchr(bar + 1, '|')) {
-        const char *w = bar + 1;
-        while (*w == ' ')
-            w++;
-        if (pipe_is_stage(w))
-            return bar;
-    }
+        if (!strcmp(name, (*f)->name))
+            return *f;
     return NULL;
 }
 
-char *pipe_split(char *line) {
-    char *bar = next_stage(line);
-    if (!bar)
-        return NULL;
-    char *end = bar;
-    while (end > line && end[-1] == ' ')
-        end--;
-    *bar = '\0';
-    *end = '\0';
-    return bar + 1;
+// The plain words from w->v[i] on, up to the next operator or the end.
+static int count_plain(const words_t *w, int i) {
+    int n = 0;
+    while (i + n < w->n && w->v[i + n])
+        n++;
+    return n;
 }
 
-// Trim the spaces around s in place.
-static char *trim(char *s) {
-    while (*s == ' ')
-        s++;
-    char *end = s + strlen(s);
-    while (end > s && end[-1] == ' ')
-        *--end = '\0';
-    return s;
+static const char *redirect_name(const words_t *w, int i) {
+    return w->kind[i] == WORD_APPEND ? ">>" : ">";
 }
 
-bool pipe_open(shell_t *sh, pipeline_t *p, char *stages) {
+// What follows the command, against the grammar (docs/design/shell-quoting.md §3), before any
+// stage opens: false after saying why.
+static bool check_stages(shell_t *sh, const words_t *w, int i) {
+    while (i < w->n) {
+        if (w->kind[i] == WORD_PIPE) {
+            const char *name = w->v[i + 1];     // w->v[w->n] is NULL
+            if (!name) {
+                shell_printf(sh, "|: a filter must follow (grep, head, tail, wc, tee, more)\n");
+                return false;
+            }
+            bool more = !strcmp(name, sink_more);
+            if (!more && !find_filter(name)) {
+                shell_printf(sh, "%s: not a filter (grep, head, tail, wc, tee, more)\n", name);
+                return false;
+            }
+            i += 1 + count_plain(w, i + 1);
+            if (more && i < w->n) {
+                shell_printf(sh, "more: only at the end of the line\n");
+                return false;
+            }
+            continue;
+        }
+        const char *op = redirect_name(w, i);   // > or >>: one path, then the end
+        if (!w->v[i + 1]) {
+            shell_printf(sh, "usage: <command> %s <path>\n", op);
+            return false;
+        }
+        if (i + 2 < w->n) {
+            if (w->v[i + 2])
+                shell_printf(sh, "%s: one path (quote a name that has spaces)\n", op);
+            else if (w->kind[i + 2] == WORD_PIPE)
+                shell_printf(sh, "%s: only at the end of the line\n", op);
+            else
+                shell_printf(sh, "%s: one in a line at most\n", op);
+            return false;
+        }
+        i += 2;
+    }
+    return true;
+}
+
+bool pipe_open(shell_t *sh, pipeline_t *p, words_t *w, int start) {
     p->first = NULL;
     p->done = false;
     p->sink = PIPE_SINK_TERMINAL;
     p->sh = sh;
+    if (!check_stages(sh, w, start))
+        return false;
     // The chain is built apart and attached at the end: until then nothing is piped, so a later
     // stage's usage message goes to the terminal and not through the stages before it.
     pipe_stage_t *first = NULL;
     pipe_stage_t **link = &first;
     int count = 0;
-    for (char *s = stages; s;) {
-        char *bar = next_stage(s);
-        if (bar)
-            *bar = '\0';
-        char *name = trim(s);
-        s = bar ? bar + 1 : NULL;
-        char *args = strchr(name, ' ');
-        if (args) {
-            *args = '\0';
-            args = trim(args + 1);
+    for (int i = start; i < w->n;) {
+        pipe_stage_t *st;
+        if (w->kind[i] != WORD_PIPE) {      // `> path`: a quiet tee, the last stage
+            st = tee_new(sh, w->v[i + 1], w->kind[i] == WORD_APPEND, true);
+            if (!st)
+                goto fail;
+            st->pipe = p;
+            *link = st;
+            break;
         }
-        if (args && !*args)
-            args = NULL;
-        if (!strcmp(name, sink_more)) {
-            if (s || args) {
-                shell_printf(sh, s ? "more: only at the end of the line\n"
-                                   : "usage: <command> | more\n");
+        char **argv = &w->v[i + 1];         // argv[argc] is NULL: an operator, or the end
+        int argc = count_plain(w, i + 1);
+        i += 1 + argc;
+        if (!strcmp(argv[0], sink_more)) {
+            if (argc > 1) {
+                shell_printf(sh, "usage: <command> | more\n");
                 goto fail;
             }
             p->sink = PIPE_SINK_PAGER;
             break;
         }
-        const pipe_filter_t *f = NULL;
-        for (const pipe_filter_t *const *x = filters; *x && !f; x++)
-            if (!strcmp(name, (*x)->name))
-                f = *x;
-        if (!f)                             // can't happen: next_stage() found a stage name
-            goto fail;
         if (++count > PIPE_STAGES_MAX) {
-            shell_printf(sh, "%s: %d filters in a line at most\n", name, PIPE_STAGES_MAX);
+            shell_printf(sh, "%s: %d filters in a line at most\n", argv[0], PIPE_STAGES_MAX);
             goto fail;
         }
-        pipe_stage_t *st = f->open(sh, args);
+        st = find_filter(argv[0])->open(sh, argc, argv);    // check_stages() found it
         if (!st)                            // why was printed
             goto fail;
         st->pipe = p;
@@ -607,10 +618,10 @@ static const shell_word_t grep_options[4] = {
     {"-i", grep_options, 0}, {"-n", grep_options, 0}, {"-v", grep_options, 0}, {0}};
 static const shell_word_t tee_options[2] = {{"-a", NULL, SHELL_PATH}, {0}};
 const shell_cmd_t pipe_stage_table[] = {
-    {"grep", NULL, grep_options, 0},
-    {"head", NULL, NULL, 0},
-    {"more", NULL, NULL, 0},
-    {"tail", NULL, NULL, 0},
-    {"tee", NULL, tee_options, SHELL_PATH},
-    {"wc", NULL, NULL, 0},
+    {"grep", NULL, NULL, grep_options, 0},
+    {"head", NULL, NULL, NULL, 0},
+    {"more", NULL, NULL, NULL, 0},
+    {"tail", NULL, NULL, NULL, 0},
+    {"tee", NULL, NULL, tee_options, SHELL_PATH},
+    {"wc", NULL, NULL, NULL, 0},
     {0}};

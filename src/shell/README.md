@@ -39,14 +39,23 @@ translation (`crlf`), and `admin` (true for the console only).
   main loop waits) for the directory named up to the last `/`, and offers its entries that start
   with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
   name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
-  `SHELL_DIR` keeps to directories. `SHELL_REDIRECT` (echo) makes only the text after the line's
-  last `>` a path, a `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and
-  a word list that is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers,
-  saved networks, hosts. Those values pass the file-name check; their notes (a key's comment, an
-  SSID) show only in the list, one match a line, through `termtext`. Names that aren't valid
-  UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or hold what
-  `termtext_hidden()` names (bidi controls, invisible characters) are never offered: a file name
-  can't send the terminal an escape sequence, nor look like another.
+  `SHELL_DIR` keeps to directories. The line is read with the shell's quoting rules
+  (`words_at()` in words.c, up to the cursor): the word starts after the last unquoted space or
+  operator, a quote open at the cursor is part of it, and it and the words before it in its
+  segment are matched de-quoted. After an unquoted `|` the word is a stage name
+  (`pipe_stage_table`); after an unquoted `>` or `>>` (the shell's redirect, any command) it is
+  a path. What Tab adds is spelt for the line (`tab_spell()` in shell_core.c): a space, quote,
+  `\`, `|` or `>` backslash-escaped outside quotes, raw inside the open quote (`'` as `'\''`
+  inside `'...'`, `"` and `\` escaped inside `"..."`), which stays open (no space after a whole
+  match there); the case rewrite changes only the typed letters, so the spelling stays valid.
+  A `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and a word list that
+  is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers, saved networks,
+  hosts. Those values pass the file-name check; their notes (a key's comment, an SSID) show only
+  in the list, one match a line, through `termtext`. Names that aren't valid UTF-8 from U+0020
+  up (other spaces, controls, C1 controls), that have a space at either end or two in a row (in
+  a list they would look like another), or hold what `termtext_hidden()` names (bidi controls,
+  invisible characters) are never offered: a file name can't send the terminal an escape
+  sequence, nor look like another.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
@@ -65,11 +74,19 @@ translation (`crlf`), and `admin` (true for the console only).
   messages back (`log_hooks_t.hold`) until the program ends.
 - **Output:** `shell_printf()` and `shell_write()` go to the channel. `write_space()` (SSH) lets
   a job slow down for a slow client instead of losing output.
-- **Pipes:** `<command> | grep x | head 5 | more` (`pipe.c`, pure C, host tested; design in
-  `docs/design/shell-pipes.md`). `run_line()` finds the stages with `pipe_split()`: a `|` starts
-  one only before `grep`, `head`, `tail`, `wc` or `more`, so `ls | morex` and `lua -e
-  "print(1|2)"` run as typed. `pipe_open()` parses them all before the command runs (one that
-  doesn't parse prints its usage and nothing runs). The command is the only job; `write_out()`
+- **Words:** `run_line()` splits the line with `words_split()` (`words.c`, pure C, host tested
+  and fuzzed; design in `docs/design/shell-quoting.md`): sh-style quotes and backslashes, and
+  `|`, `>`, `>>` outside quotes are operators. The command's words go to `shell_execute()`.
+  A table entry (`shell_cmd_t`) has one of two handlers: `runv(sh, argc, argv)` gets the words
+  as they are (every command flagged `SHELL_PATH`, so `cat 'my file'` gets one path), `run(sh,
+  args)` gets them joined with single spaces (`words_join()`) as one flat string (free text such
+  as `echo`, `wall`, and the commands not moved yet). `shell_tables_check()` (`cmdcheck.c`)
+  checks the rule: in debug builds at startup, and in `tests/test_files.c`.
+- **Pipes:** `<command> | grep x | head 5 | more` and `<command> > file` (`pipe.c`, pure C, host
+  tested; design in `docs/design/shell-pipes.md`). `|` is always a pipe and the word after it
+  must be a stage name; `> file` / `>> file` at the end is a quiet `tee`. `pipe_open()` checks
+  the line and opens every stage from its words before the command runs (one that doesn't
+  parse prints why and nothing runs). The command is the only job; `write_out()`
   hands what it prints to the filters, on its call stack, and the last one emits to the sink:
   the terminal, or the capture for `more` (a HEAP_EDIT block up to `SHELL_PIPE_MAX` = 32 KB,
   paged through `shell_page()` when the command ends). A command that became a job is paged as
@@ -106,8 +123,9 @@ The console asks for the console password before it takes any command (issue #64
   driver's boot banner includes the MAC address). While the console is locked `main.c` selects
   a stdio driver that is never registered (`stdio_filter_driver()`), so nothing is sent or
   read; the shell's own reads and writes open that gate for as long as they take.
-- **The gate:** `shell_execute()` calls `login_gate()` for every console command line, and it
-  refuses while locked. So the lock doesn't depend on the question staying pending.
+- **The gate:** `run_line()` calls `login_gate()` for every console command line, on the line as
+  typed and before it is split into words, and it refuses while locked. So the lock doesn't
+  depend on the question staying pending.
 - **Checking** a password is slow on purpose (`core/pwverify.c`: PBKDF2, then keyed with a
   root-derived key). It runs as a shell job, a slice per main-loop pass, through
   `login_hooks_t`; `core/settings.c` holds the verifier and the key.
@@ -157,7 +175,8 @@ where 0x9B is CSI on 8-bit terminals, and U+0080–U+009F in UTF-8) and invalid 
 ## `shell.c`: the commands
 
 `shell_execute()` looks the command up in two tables (`shell_cmd_t`, shell.h): `commands[]`
-here and `files_commands[]` (`files/`), and runs it with its arguments. Each entry also lists
+here and `files_commands[]` (`files/`), and runs it with its arguments: its words (`runv`) or
+their join (`run`). Each entry also lists
 the words Tab offers after the name. System commands are implemented here: `help`, `config`,
 `wifi`, `net`, `key`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`, `uptime`, `reboot`,
 `ssh`, `nts`, `tls`, `logout`/`exit`. Others belong to a subsystem: `sdcard_command()` (`sd`),
@@ -171,7 +190,8 @@ channel but the console.
 
 Add it to `commands[]` and to `help` in `shell.c`, and to `docs/commands.md`. Give it the
 subcommand words its parser takes, so Tab offers them (`SHELL_ADMIN` on those only the console
-may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories), and a
+may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories; such a
+command takes its words, `runv`, so that a quoted path reaches it whole), and a
 `shell_values_t` where its values are known only at run time. If it takes
 more than a few milliseconds, make it a job so the watchdog and the other sessions keep running.
 If it changes the configuration or other protected state, call `require_admin()`.

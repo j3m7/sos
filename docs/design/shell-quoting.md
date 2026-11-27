@@ -13,7 +13,9 @@ This note fixes the rules so that three agents can build the phases without re-d
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design only; phases below are to be built.
+Status (2026-11-27): all three phases are built and merged (#205 in PR #211, #206 in #215, #207 in
+#216), board-tested on dev-1. Where this note and the code differ in detail, the code and its
+header comments are the reference; this note records the decisions and why.
 
 ## 1. What exists today
 

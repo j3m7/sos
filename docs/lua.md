@@ -9,6 +9,11 @@ lua /scripts/report.lua          # a file (relative paths start at the working d
 lua                              # an interactive prompt
 ```
 
+Quote the code after `-e` with `'...'`: the shell splits a line into words and takes quotes,
+`|` and `>` for itself (QUOTING in `man intro`), so `lua -e print("hi")` would lose its quotes
+and `lua -e print(2 > 1)` would write a file named `1)`. `lua -e 'print("hi")'` passes the
+code as typed.
+
 At the prompt (`>`), each line runs as you enter it, in one Lua state for the whole session, so
 variables and loaded modules stay. An expression's value is printed (`> 2^10` prints `1024.0`),
 and a statement that isn't finished continues on the next line (`>>`). Ctrl-C interrupts the
@@ -62,6 +67,9 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
+| `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
+| `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
+| `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
 only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them; use a
@@ -132,6 +140,125 @@ local r, err = sos.http.post("https://ntfy.example/alerts", "disk almost full",
                              {headers = {Title = "sos"}})
 if not r then print("failed: " .. err) elseif r.status ~= 200 then print(r.status, r.reason) end
 ```
+
+## Board health
+
+Six functions return a table about the board: what `temp`, `power`, `mem`, `version`, `uptime`,
+`glitch` and `net` show, read as values. Nothing waits for new measurements: the
+temperature and supply are the latest readings, which the main loop takes every 10 seconds. A
+field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
+
+**`sos.sensors()`**
+
+| Field | |
+|---|---|
+| `temp`, `temp_min`, `temp_max` | the chip's temperature in degrees Celsius (a float, 0.1 steps): latest, lowest and highest since boot |
+| `temp_calibrated` | whether `temp cal` has set an offset (uncalibrated readings are a few degrees off) |
+| `vsys`, `vsys_min`, `vsys_max` | the supply voltage (VSYS) in volts: latest, lowest and highest since boot |
+| `usb` | whether USB power is present |
+
+**`sos.mem()`** (bytes)
+
+| Field | |
+|---|---|
+| `heap.used`, `heap.peak`, `heap.total` | the heap, as the first line of `mem` |
+| `tags[name].used`, `tags[name].peak` | what each feature holds: `tags["ssh/tls"]`, `tags.lua`, `tags.http`, ... |
+| `lwip.used`, `lwip.peak`, `lwip.total` | lwIP's own heap |
+| `stack.peak`, `stack.size` | core 0's stack |
+| `core1_stack.peak`, `core1_stack.size` | core 1's stack, which the running script uses |
+| `script.used`, `script.peak`, `script.limit` | what this script has allocated, out of its 128 KB |
+
+**`sos.version()`**
+
+| Field | |
+|---|---|
+| `firmware` | the firmware's commit, as `version` prints it |
+| `serial` | the board's serial number |
+| `chip`, `chip_revision`, `rom_version` | the chip (`"RP2350 A2 (revision 2, ROM 2)"`), and its revision and ROM version as numbers |
+| `secure_boot` | `true` if only firmware signed with a boot key in OTP starts |
+| `debug` | the debug port: `"enabled"`, `"secure disabled"` or `"disabled"` |
+| `root_secret` | where the root secret is: `"otp"`, `"flash"` or `"none"` |
+| `console_only` | `true` if settings files written over USB are refused |
+
+**`sos.reset_reason()`**
+
+| Field | |
+|---|---|
+| `cause` | why the board last started: `"fault"` (a crash), `"glitch"` (the glitch detector), `"watchdog"`, or `"other"` (power on, `reboot`, flashing, the reset button) |
+| `detail` | for a fault, what `uptime` prints after "last reset:"; `nil` otherwise |
+
+**`sos.glitch()`**
+
+| Field | |
+|---|---|
+| `mode` | `"on"` (a trigger resets the board), `"watch"` (a trigger is only logged) or `"off"` |
+| `sensitivity` | 0 (lowest) to 3 (highest); `nil` when off |
+| `armed` | whether it's armed now (`false` if the loop guard kept it off at this boot: `guard_tripped`) |
+| `resets` | detector resets since power on |
+| `caused_reset` | whether the last reset was the detector's; then `last = {detectors=, uptime=, temp=, vsys=}`: which detectors fired (bits 0-3), after how many seconds up, and the last readings before it |
+| `watched` | when watching, after a trigger: `{detectors=, uptime=, temp=, vsys=}` for the first |
+
+**`sos.wifi.status()`**
+
+| Field | |
+|---|---|
+| `state` | `"connected"`, `"connecting"`, `"scanning"`, `"waiting to retry"`, `"stopped"` or `"not configured"` |
+| `up` | `true` when connected |
+| `ssid`, `bssid` | the network and its access point (when connected) |
+| `rssi`, `noise` | signal and the chip's noise floor, in dBm |
+| `channel`, `rate_mbps`, `txpower_dbm` | the channel, the current transmit rate and the power limit |
+| `ip`, `gateway` | the addresses (when connected) |
+| `arp_received`, `arp_sent` | ARP counters, as `net` shows them |
+
+```lua
+-- /autorun.lua: log a warning when the chip is hot or the supply sags
+sos.every(60, function()
+  local s = sos.sensors()
+  if (s.temp or 0) > 60 or (s.vsys or 5) < 4.2 then
+    sos.log(string.format("health: %.1f C, %.2f V", s.temp or 0, s.vsys or 0), "warning")
+  end
+end)
+```
+
+## The log
+
+`sos.dmesg([cursor])` reads the system log kept in memory, the lines `dmesg` shows. It returns
+three values:
+
+- a list of entries, oldest first, each `{time=, level=, facility=, text=}`: seconds since boot
+  (a float, millisecond steps), `"err"`, `"warning"`, `"notice"`, `"info"` or `"debug"`,
+  `"kern"`, `"auth"`, `"daemon"`, `"user"` or `"none"`, and the message without the time and the
+  level's tag;
+- a cursor: pass it to the next call to get only the entries logged since;
+- `lost`: `true` if entries after the cursor you passed are gone: dropped before this call, or
+  the cursor is from before a reboot. Then the list starts at the oldest entry kept.
+
+The log keeps only the last 4 KB of messages (about 50 lines), so a script that watches it should
+read it often enough; `lost` says when it didn't. Without a cursor (or with 0) it returns all that
+is kept. A script's own `sos.log` lines and a background script's output are in it too.
+
+```lua
+-- /autorun.lua: send each warning or error to a phone, once a minute at most
+local _, cursor = sos.dmesg()                   -- start from now: skip what's already there
+sos.every(60, function()
+  local entries, next_cursor, lost = sos.dmesg(cursor)
+  if not entries then return end                -- nil and an error: try again next minute
+  cursor = next_cursor
+  local lines = {}
+  for _, e in ipairs(entries) do
+    if (e.level == "err" or e.level == "warning") and e.facility ~= "user" then
+      lines[#lines + 1] = string.format("[%.0f] %s", e.time, e.text)
+    end
+  end
+  if lost then lines[#lines + 1] = "(some log lines were lost)" end
+  if #lines > 0 then
+    sos.http.post("https://ntfy.example/sos", table.concat(lines, "\n"))
+  end
+end)
+```
+
+Leaving out `user` keeps the script from sending its own `sos.log` lines and output. A post
+that fails is logged as a `daemon` warning, which the next run sends: at most one line a minute.
 
 ## Limits and internals
 

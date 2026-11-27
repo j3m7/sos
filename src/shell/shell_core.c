@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Shell line editing and output. Depends only on shell.h, sos_version and the C library, so it
-// builds on the host for unit tests (which define sos_version); the commands live in shell.c
-// (shell_execute).
+// Shell line editing and output. Depends only on shell.h, sos_version, login_gate() and the C
+// library, so it builds on the host for unit tests (which define sos_version, and login_gate()
+// unless they link login.c); the commands live in shell.c (shell_execute).
 
 #include "shell/shell.h"
 #include "core/version.h"
 #include "shell/charwidth.h"
 #include "shell/complete.h"
+#include "shell/login.h"
 #include "shell/termtext.h"
 
 #include <stdarg.h>
@@ -498,9 +499,10 @@ static void pipe_resume(shell_t *sh) {
         shell_run_job(sh, prod, arg);
 }
 
-// Trim spaces and hand non-empty commands to the command module. A line with stages
-// (`<command> | grep x | more`, pipe_split()) runs the command with its output going through
-// them: to the terminal, or captured and then paged with `more` last.
+// Trim spaces, split the line into words (words.h) and hand the command to the command module.
+// A line with stages (`<command> | grep x | more`) or a redirect (`<command> > file`) runs the
+// command with its output going through them: to the terminal, into the file, or captured and
+// then paged with `more` last.
 static void run_line(shell_t *sh, char *cmd) {
     while (*cmd == ' ')
         cmd++;
@@ -512,20 +514,31 @@ static void run_line(shell_t *sh, char *cmd) {
     history_add(sh, cmd);
     pipeline_t *p = &sh->pipe;
     snprintf(p->name, sizeof(p->name), "%s", cmd);
-    char *stages = pipe_split(cmd);
-    if (!stages) {
-        shell_execute(sh, cmd);
+    // The console takes no command while it's locked (shell/login.h). The gate sees the line
+    // as typed, before it is split: a locked console gets its refusal (or runs a rescue
+    // command, which login.c knows by its whole line), never a message about quotes.
+    if (sh->io->admin && login_gate(sh, cmd))
+        return;
+    words_t w;
+    const char *why = words_split(cmd, &w);
+    int argc = 0;                           // the command: the words before the first operator
+    while (!why && argc < w.n && w.v[argc])
+        argc++;
+    if (why) {                              // nothing runs
+        shell_printf(sh, "%s\n", why);
         return;
     }
-    if (!*cmd) {
-        shell_printf(sh, "usage: <command> | more, or <command> | grep|head|tail|wc ...\n");
+    if (!argc) {
+        shell_printf(sh, "usage: <command> | more, or <command> | grep|head|tail|wc|tee ..., "
+                         "or <command> > <path>\n");
         return;
     }
-    if (!shell_command_tables(sh)) {        // a locked console: the refusal, not a pipeline
-        shell_execute(sh, cmd);
+    if (argc == w.n) {                      // no stages
+        if (!shell_execute(sh, argc, w.v))
+            shell_printf(sh, "%s: unknown command (try 'help')\n", w.v[0]);
         return;
     }
-    if (!pipe_open(sh, p, stages))          // a stage doesn't parse: its usage, nothing runs
+    if (!pipe_open(sh, p, &w, argc))        // a stage doesn't parse: why, and nothing runs
         return;
     p->out = term_out;
     if (p->sink == PIPE_SINK_PAGER) {
@@ -538,7 +551,11 @@ static void run_line(shell_t *sh, char *cmd) {
             shell_printf(sh, "%s: out of memory, running without the pager\n", p->name);
         }
     }
-    shell_execute(sh, cmd);
+    if (!shell_execute(sh, argc, w.v)) {    // no such command: no stage runs (a redirect's file
+        pipe_drop(sh);                      // isn't made), and the message is the terminal's
+        shell_printf(sh, "%s: unknown command (try 'help')\n", w.v[0]);
+        return;
+    }
     if (!piped(sh))                         // nothing to pipe through (the pager was out of
         return;                             // memory), or the command ended the session
     if (sh->answer)                         // it asks a question: not a thing to pipe
@@ -743,7 +760,8 @@ static void line_backspace(shell_t *sh) {
 // Tab completes the word at the end of the line: a command, a word that may follow it, or a
 // file name on the SD card (complete.h). One match: the rest of it, then a space, or '/' for a
 // directory. Several: as far as they agree; when they agree no further, the terminal's bell,
-// and a second Tab lists them.
+// and a second Tab lists them. On a command line what's added is spelt for the shell's quoting
+// (tab_spell()): escaped outside quotes, inside the quote the person opened otherwise.
 
 #define TAB_LIST_COLUMNS 80     // the terminal's width isn't known: list for the narrowest
 
@@ -848,31 +866,70 @@ static void tab_print(const char *word, char end, const char *note, void *arg) {
 }
 
 // The matches for what's typed: the answer to a question that has a completer (never a secret
-// one), or a command line. False if Tab has nothing to complete from here.
-static bool tab_source(shell_t *sh, size_t *start, size_t *n, complete_fn fn, void *arg,
+// one), or a command line. False if Tab has nothing to complete from here. An answer is taken
+// as typed (no quoting: at->quote and at->escape stay clear).
+static bool tab_source(shell_t *sh, complete_at_t *at, size_t *n, complete_fn fn, void *arg,
                        bool *partial) {
     if (sh->answer) {
         if (!sh->ask_complete || sh->secret)
             return false;
         *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, sh->ask_words,
-                             sh->ask_chars, start, fn, arg, partial);
+                             sh->ask_chars, &at->start, fn, arg, partial);
+        at->typed = sh->line_len - at->start;
+        at->quote = '\0';
+        at->escape = false;
         return true;
     }
     const shell_cmd_t *const *tables = shell_command_tables(sh);
     if (!tables)
         return false;
     complete_src_t src = {tables, sh->io->admin, shell_list_dir, sh};
-    *n = complete_words(&src, sh->line, sh->line_len, start, fn, arg, partial);
+    *n = complete_words(&src, sh->line, sh->line_len, at, fn, arg, partial);
     return true;
 }
 
+// Spell text[0..n) for the command line after what `at` says is typed, at out[0..room): outside
+// quotes, a space, quote, backslash, '|' or '>' gets a backslash (not the first byte when the
+// line already ends in one); inside '...' each byte as it is but a "'", which closes the quote,
+// escapes it and opens it again ('\''); inside "..." each as it is but '"' and '\', escaped.
+// The quote stays open. Returns the bytes, or SIZE_MAX when they don't fit.
+static size_t tab_spell(const complete_at_t *at, const char *text, size_t n, char *out,
+                        size_t room) {
+    size_t len = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = text[i];
+        const char *pre = "";
+        if (at->quote == '\'') {
+            if (c == '\'')
+                pre = "'\\'";
+        } else if (at->quote == '"') {
+            if (c == '"' || c == '\\')
+                pre = "\\";
+        } else if (!(at->escape && i == 0) && strchr(" '\"\\|>", c)) {
+            pre = "\\";
+        }
+        size_t p = strlen(pre);
+        if (len + p + 1 > room)
+            return SIZE_MAX;
+        memcpy(out + len, pre, p);
+        len += p;
+        out[len++] = c;
+    }
+    return len;
+}
+
+static bool ascii_letter(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
 static void line_tab(shell_t *sh, bool again) {
-    size_t start, n;
+    size_t n;
+    complete_at_t at;
     bool partial;
     tab_matches_t m = {0};
-    if (!tab_source(sh, &start, &n, tab_collect, &m, &partial))
+    if (!tab_source(sh, &at, &n, tab_collect, &m, &partial))
         return;
-    size_t typed = sh->line_len - start;
+    size_t typed = at.typed;
     if (n == 0) {
         write_out(sh, "\a", 1);
         return;
@@ -885,26 +942,48 @@ static void line_tab(shell_t *sh, bool again) {
     // f299.txt unread): then don't add to the line at all, only list.
     bool whole = n == 1 && !partial;
     if ((m.common > typed && !partial) || whole) {
-        bool end = whole && m.first_end;            // a single match ends with ' ' or '/'
-        size_t add = m.common - typed + end;
-        if (sh->line_len + add > SHELL_LINE_MAX) {
+        // A single match ends with ' ' or '/'; not with ' ' inside an open quote (it would be
+        // part of the name: the person closes the quote) nor right after a backslash.
+        char end = whole ? m.first_end : '\0';
+        if (end == ' ' && (at.quote || (at.escape && m.common == typed)))
+            end = '\0';
+        char *out = sh->line + sh->line_len;
+        size_t room = SHELL_LINE_MAX - sh->line_len;
+        size_t add = sh->answer ? m.common - typed
+                                : tab_spell(&at, m.first + typed, m.common - typed, out, room);
+        if (add == SIZE_MAX || add + (end != '\0') > room) {
             write_out(sh, "\a", 1);
             return;
         }
-        history_edited(sh);
-        // A file name typed in another case: write it again in the name's own. The bytes and
-        // the columns are the same (only ASCII letters differ), so it covers what was there.
-        if (memcmp(sh->line + start, m.first, typed)) {
-            size_t cols = text_columns(sh->line + start, typed);
-            for (size_t i = 0; i < cols; i++)
-                write_out(sh, "\b", 1);
-            memcpy(sh->line + start, m.first, typed);
-            write_out(sh, sh->line + start, typed);
-        }
-        memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
+        if (sh->answer)
+            memcpy(out, m.first + typed, add);
         if (end)
-            sh->line[sh->line_len + add - 1] = m.first_end;
-        write_out(sh, sh->line + sh->line_len, add);
+            out[add++] = end;
+        history_edited(sh);
+        // A file name typed in another case: write its letters again in the name's own. Only
+        // ASCII letters differ, and on the line each letter is a character of the word as it is
+        // (no quoting involves a letter), so the last letters typed are, in order, the letters
+        // of m.first[0..typed). The bytes and the columns stay the same.
+        size_t i = sh->line_len, from = sh->line_len;
+        bool changed = false;
+        for (size_t j = typed; j > 0; j--) {
+            if (!ascii_letter(m.first[j - 1]))
+                continue;
+            while (i > at.start && !ascii_letter(sh->line[i - 1]))
+                i--;
+            if (i == at.start)
+                break;
+            from = --i;
+            changed |= sh->line[i] != m.first[j - 1];
+            sh->line[i] = m.first[j - 1];
+        }
+        if (changed) {
+            size_t cols = text_columns(sh->line + from, sh->line_len - from);
+            for (size_t k = 0; k < cols; k++)
+                write_out(sh, "\b", 1);
+            write_out(sh, sh->line + from, sh->line_len - from);
+        }
+        write_out(sh, out, add);
         sh->line_len += add;
         return;
     }
@@ -918,7 +997,7 @@ static void line_tab(shell_t *sh, bool again) {
     if (!l.per_row)
         l.per_row = 1;
     write_out(sh, "\n", 1);
-    tab_source(sh, &start, &n, tab_print, &l, &partial);
+    tab_source(sh, &at, &n, tab_print, &l, &partial);
     if (partial)
         shell_printf(sh, sh->answer ? "\n(more may come: Tab again in a moment)"
                                     : "\n(more: the directory is too large to list here)");

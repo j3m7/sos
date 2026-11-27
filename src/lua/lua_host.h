@@ -11,8 +11,9 @@
 
 // `lua <file>` or `lua -e <code>`: run a script on core 1 as a job of this shell. `lua` alone:
 // an interactive prompt. `lua -b <file>`: in the background (output to the log). `lua ps`,
-// `lua stop`: show / stop the running script.
-void lua_command(shell_t *sh, char *args);
+// `lua stop`: show / stop the running script. A table's `runv` handler (shell.h): the file is
+// one word; the code is the words after -e, joined with single spaces (words_join()).
+void lua_command(shell_t *sh, int argc, char **argv);
 
 // Answer the running script's requests, log a background script's output, and start
 // /autorun.lua a few seconds after boot. main_loop: called from the main loop itself, where HTTPS

@@ -289,5 +289,14 @@ def fsck():
     write("fsck", "exfat", b"\0" + sparse(70000, {0: exfat}))
 
 
-for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, fsck):
+# --- words: a typed command line --------------------------------------------------------------
+
+def words():
+    write("words", "quotes", b"echo \"a   b\" 'x|y' a\\ b \"\\\"q\\\\\" a\"b c\"d '' \"\"")
+    write("words", "pipes", b"dmesg|grep -i 'no route'|head 3 >> /log/d.txt")
+    write("words", "lua", b"lua -e 'print(\"hi\" .. 1 > 0)' > /out")
+    write("words", "errors", b"wall don't \\")
+
+
+for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck):
     f()

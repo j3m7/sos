@@ -73,6 +73,8 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_INFO,                        // offset: a lua_health_table_t, arg: its argument (sos.dmesg's
+                                    // cursor) -> data/len: lua_info.h records
     // HTTPS (net/http.h), one request at a time, answered from the main loop once there's
     // something to say, so these can take a while. Ctrl-C answers them at once with an error.
     LR_HTTP_REQUEST,                // opts: an http_opts_t -> once the headers are in:
@@ -87,6 +89,7 @@ typedef struct {
     lua_req_type_t type;
     char path[LUA_PATH_MAX];
     uint32_t offset;
+    uint32_t arg;                   // LR_INFO: the table's argument
     uint32_t len;
     const void *opts;               // LR_HTTP_REQUEST: core 1's http_opts_t, and the strings it
                                     // points at, which core 0 reads while core 1 waits

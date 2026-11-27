@@ -8,7 +8,9 @@
 #include "core/heaptag.h"
 #include "files/path.h"
 #include "shell/complete.h"
+#include "shell/login.h"
 #include "shell/shell.h"
+#include "shell/words.h"
 #include "test.h"
 
 // --- fake channel ----------------------------------------------------------------------------
@@ -54,6 +56,11 @@ static const shell_io_t io_crlf = {         // like an SSH session
 };
 static const shell_io_t io_console = {      // can't be logged out of
     .name = "console", .read = fake_read, .write = fake_write, .logout = NULL, .crlf = false,
+};
+static const shell_io_t io_admin = {        // the console: its lock (login_gate below), and
+                                            // Tab offers admin commands too
+    .name = "console", .read = fake_read, .write = fake_write, .logout = NULL, .crlf = false,
+    .admin = true,
 };
 
 // --- fake command module ---------------------------------------------------------------------
@@ -268,61 +275,70 @@ static void fake_answer(shell_t *sh, char *answer, void *arg) {
     shell_printf(sh, "answered <%s>\n", answer ? answer : "(cancelled)");
 }
 
-void shell_execute(shell_t *sh, char *cmd) {
+// The command as the fake sees it: its name, then words_join()'s text (as shell.c's handlers
+// get it), e.g. "echo a   b" for `echo "a   b"`.
+bool shell_execute(shell_t *sh, int argc, char **argv) {
+    char cmd[SHELL_LINE_MAX + 2];
+    const char *args = words_join(argc, argv);
+    snprintf(cmd, sizeof(cmd), args ? "%s %s" : "%s", argv[0], args);
+    if (!strcmp(argv[0], "nosuch"))        // no such command: shell.c's returns false
+        return false;
     if (n_executed < 16)
         strcpy(executed[n_executed], cmd);
     n_executed++;
     if (!strcmp(cmd, "quiet"))
-        return;
+        return true;
     if (!strcmp(cmd, "probe")) {            // records whether its output is piped
         piped_seen = shell_output_piped(sh);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "bye")) {              // ends the session, as logout does on SSH
         shell_printf(sh, "bye\n");
         shell_end(sh);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "big")) {              // more than the pager takes
         for (int i = 0; i < 400; i++)
             shell_printf(sh, "line %3d: %-90s|\n", i, i % 10 ? "the lazy dog" : "the quick brown fox");
-        return;
+        return true;
     }
     if (!strcmp(cmd, "ask")) {
         shell_printf(sh, "before the question\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "askjob")) {           // a job with a question pending (as chat's can be)
         shell_printf(sh, "hold on\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "jobnow")) {           // a job that prints before its first step
         shell_printf(sh, "now\n");
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "job")) {
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
-        return;
+        return true;
     }
     if (!strcmp(cmd, "raw")) {
         n_raw_keys = raw_steps = raw_cancels = 0;
         raw_quit = false;
         shell_run_raw(sh, fake_raw_step, fake_raw_key, &job_arg_token);
-        return;
+        return true;
     }
     shell_printf(sh, "<%s>\n", cmd);
+    return true;
 }
 
 // Command tables for Tab: two, as shell.c has (its own and the file commands').
+// Tab reads them only (the fake shell_execute() above dispatches by name), so no handlers.
 #define W(name) {name, NULL, 0}
-#define C(name) {name, NULL, NULL, 0}
+#define C(name) {name, NULL, NULL, NULL, 0}
 static const shell_word_t t_levels[] = {W("err"), W("warning"), {0}};
 static const shell_word_t t_time[] = {
     {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, {0}}, 0},
@@ -334,7 +350,7 @@ static const shell_word_t t_time[] = {
 static const shell_word_t t_url[] = {{"https://", NULL, SHELL_NOSPACE}, {0}};
 static const shell_word_t t_http[] = {{"get", t_url, 0}, {0}};
 // Values from a function, as shell.c's key numbers: notes from outside, one with an escape
-// sequence and a line break; a value with a space, which can't be offered.
+// sequence and a line break; a value with a space, offered escaped.
 static void t_key_numbers(shell_t *s, shell_value_fn fn, void *arg) {
     (void)s;
     char buf[8];
@@ -349,16 +365,25 @@ static const shell_values_t t_keys = SHELL_VALUES_INIT(t_key_numbers);
 static const shell_word_t t_key[] = {{"del", SHELL_VALUES_OF(t_keys), 0}, {0}};
 static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
 static const shell_cmd_t t_commands[] = {
-    C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
-    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0},
-    {"key", NULL, t_key, 0}, {0}};
+    C("help"), C("hostname"), {"time", NULL, NULL, t_time, 0},
+    {"setup", NULL, NULL, NULL, SHELL_ADMIN}, {"?", NULL, NULL, NULL, SHELL_HIDDEN},
+    {"web", NULL, NULL, t_http, 0},
+    {"key", NULL, NULL, t_key, 0}, {0}};
 static const shell_word_t t_lua[] = {{"-b", NULL, SHELL_PATH}, W("ps"), {0}};
 static const shell_cmd_t t_files[] = {
-    C("ls"), {"lua", NULL, t_lua, SHELL_PATH}, {"log", NULL, t_log, 0},
-    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR},
-    {"echo", NULL, NULL, SHELL_REDIRECT}, {0}};
+    C("ls"), {"lua", NULL, NULL, t_lua, SHELL_PATH}, {"log", NULL, NULL, t_log, 0},
+    {"cat", NULL, NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", NULL, NULL, NULL, 0}, {0}};
 static const shell_cmd_t *const t_tables[] = {t_commands, t_files, NULL};
 static bool no_tables;          // as on a locked console
+
+// The console's lock (login.c's, not linked here): refuses while no_tables, saying what it got.
+bool login_gate(shell_t *s, const char *cmd) {
+    if (!no_tables)
+        return false;
+    shell_printf(s, "locked: %s\n", cmd);
+    return true;
+}
 
 const shell_cmd_t *const *shell_command_tables(const shell_t *s) {
     (void)s;
@@ -376,6 +401,7 @@ static const struct {
     {"/data", {"x.csv"}},
     {"/u", {"\xc3\xa9" "1", "\xc3\xa8" "2", "Mj\xc3\xb6lnir.txt", "bad\xc2\x9b" "c", "\xff"}},
     {"/big", {"zz", "aa"}},     // listed as cut short
+    {"/sp", {"my file.txt", "my notes/", "it's", "a|b>c"}},     // to be quoted on the line
     {"/case", {"README.TXT", "ReadMe.md", "x.Bin", "\xc3\x96l.txt", "Docs/"}},
     // Look like something they aren't: U+202E (right-to-left override), U+200B (zero-width
     // space), U+00A0 and U+3000 (spaces that don't separate words), U+FEFF; then a plain one.
@@ -881,7 +907,7 @@ TEST(pipe_to_more_pages_a_commands_output) {
     CHECK_EQ(paged_calls, 2);
     CHECK(!strcmp(paged_text, "<hostname>\n"));
     CHECK_OUT("hostname |more\nsos> ");
-    type("ls | morex\r");                       // not the suffix: runs as typed
+    type("ls '| morex'\r");                     // quoted: text (the stage-name rule is retired)
     CHECK(!strcmp(executed[2], "ls | morex"));
     CHECK_EQ(paged_calls, 2);
     type("| more\r");                           // nothing to run
@@ -1150,14 +1176,27 @@ TEST(pipe_to_more_lets_a_jobs_question_through) {
     job_ask_step = 0;
 }
 
+// The lock is checked on the raw line before it is split (login_gate(), faked above): the
+// refusal, not a pipeline, nor a message about the line's quotes or grammar.
 TEST(pipe_to_more_on_a_locked_console_runs_plain) {
-    start(&io_console);
+    start(&io_admin);
     no_tables = true;                           // as shell.c's tables are while locked
     paged_calls = 0;
     type("help | more\r");
     CHECK_EQ(paged_calls, 0);
-    CHECK(strstr(fake.out, "<help>") != NULL);  // the refusal (here: the fake's output) shows
+    CHECK_EQ(n_executed, 0);
+    CHECK(strstr(fake.out, "locked: help | more\n") != NULL);
+    CHECK(!piped_now());
+    type("say don't\r");
+    type("x | nosuch\r");
+    type("> f\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK(strstr(fake.out, "locked: say don't\n") != NULL);
+    CHECK(strstr(fake.out, "quote") == NULL && strstr(fake.out, "filter") == NULL &&
+          strstr(fake.out, "usage") == NULL);
     no_tables = false;
+    type("help\r");                             // open again: it runs
+    CHECK_EQ(n_executed, 1);
 }
 
 TEST(pipe_to_more_holds_the_screen_for_messages) {
@@ -1381,7 +1420,7 @@ TEST(output_piped_is_true_only_while_a_line_has_stages) {
     type("probe | grep x | more\r");
     CHECK_EQ(piped_seen, 1);
     CHECK(!shell_output_piped(&sh));            // the line ended
-    type("ls | morex\r");                      // not a stage: nothing piped
+    type("ls | morex\r");                      // not a stage: an error, nothing piped
     piped_seen = -1;
     type("probe\r");
     CHECK_EQ(piped_seen, 0);
@@ -1488,16 +1527,163 @@ TEST(pipe_grep_then_more_keeps_every_match) {
     CHECK(!piped_now());
 }
 
-TEST(pipe_not_a_stage_runs_as_typed) {
+// '|' is always a pipe now (the stage-name rule of shell-pipes.md §2 is retired): a word after
+// it that isn't a stage name is an error, and quoting makes a '|' text.
+TEST(pipe_not_a_stage_is_an_error) {
     start(&io_plain);
     type("ls | morex\r");
-    CHECK(!strcmp(executed[0], "ls | morex"));
-    type("ls | grepx y\r");
-    CHECK(!strcmp(executed[1], "ls | grepx y"));
-    CHECK(strstr(fake.out, "<ls | grepx y>") != NULL);
-    type("x | wc\r");                           // ...but this is one
-    CHECK(!strcmp(executed[2], "x"));
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("ls | morex\nmorex: not a filter (grep, head, tail, wc, tee, more)\nsos> ");
+    clear_out();
+    type("echo a | nosuch\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("echo a | nosuch\nnosuch: not a filter (grep, head, tail, wc, tee, more)\nsos> ");
+    type("echo 'x|y'\r");                       // quoted: text
+    CHECK(!strcmp(executed[0], "echo x|y"));
+    CHECK(strstr(fake.out, "<echo x|y>\n") != NULL);
+    type("x | wc\r");                           // a stage
+    CHECK(!strcmp(executed[1], "x"));
     CHECK(strstr(fake.out, "1 1 4\n") != NULL);
+    type("echo a|grep a\r");                    // no spaces needed
+    CHECK(!strcmp(executed[2], "echo a"));
+    CHECK(strstr(fake.out, "<echo a>\n") != NULL);
+    CHECK(!piped_now());
+}
+
+// --- quoting (docs/design/shell-quoting.md) ------------------------------------------------------
+
+TEST(quotes_keep_spaces_and_unquoted_words_are_single_spaced) {
+    start(&io_plain);
+    type("echo \"a   b\"\r");
+    CHECK_OUT("echo \"a   b\"\n<echo a   b>\nsos> ");
+    clear_out();
+    type("echo a   b\r");
+    CHECK_OUT("echo a   b\n<echo a b>\nsos> ");
+    type("echo 'x|y' a\\>b \"it's\"\r");
+    CHECK(!strcmp(executed[2], "echo x|y a>b it's"));
+    type("echo \"\"\r");                         // an empty word: no arguments for the handler
+    CHECK(!strcmp(executed[3], "echo"));
+    type("echo \"\" \"\"\r");                    // two: the space between them
+    CHECK(!strcmp(executed[4], "echo  "));
+    type("\"\"\r");                              // an empty command name
+    CHECK_EQ(n_executed, 6);
+    CHECK(!strcmp(executed[5], ""));
+    CHECK(strstr(sh.history, "echo \"a   b\"") != NULL);     // the history has it as typed
+}
+
+TEST(a_line_that_does_not_split_runs_nothing) {
+    start(&io_plain);
+    type("wall don't\r");
+    CHECK_OUT("wall don't\nunmatched quote\nsos> ");
+    clear_out();
+    type("echo \"abc\r");
+    CHECK_OUT("echo \"abc\nunmatched quote\nsos> ");
+    clear_out();
+    type("echo a\\\r");
+    CHECK_OUT("echo a\\\nline ends in \\\nsos> ");
+    clear_out();
+    type("a b c d e f g h i j k l m n o p q r s t u v w x y z 1 2 3 4 5 6 7\r");
+    CHECK(strstr(fake.out, "too many words\n") != NULL);
+    CHECK_EQ(n_executed, 0);
+    CHECK(strstr(sh.history, "wall don't") != NULL);   // kept, to be fixed with Up
+}
+
+TEST(redirect_writes_the_output_to_a_file_and_nothing_to_the_terminal) {
+    start(&io_plain);
+    type("echo a > /f\r");
+    CHECK_OUT("echo a > /f\nsos> ");
+    CHECK(!strcmp(executed[0], "echo a"));
+    CHECK(!strcmp(tee_card, "<echo a>\n") && !tee_append && !tee_open_now);
+    CHECK(!strcmp(tee_path, "/f"));
+    clear_out();
+    type("echo b >> /f\r");
+    CHECK_OUT("echo b >> /f\nsos> ");
+    CHECK(!strcmp(tee_card, "<echo a>\n<echo b>\n") && tee_append);
+    type("echo c>/f\r");                        // no spaces needed
+    CHECK(!strcmp(tee_card, "<echo c>\n"));
+    type("echo 'a > b' > \"/my file\"\r");     // a quoted '>' is text; a quoted path
+    CHECK(!strcmp(tee_card, "<echo a > b>\n") && !strcmp(tee_path, "/my file"));
+    type("cmd | grep -v x > /g\r");             // after filters
+    CHECK(!strcmp(tee_card, "<cmd>\n") && !strcmp(tee_path, "/g"));
+    tee_len = 0;
+    strcpy(tee_card, "old");
+    type("quiet > /e\r");                       // no output: the file is still made, empty
+    CHECK(tee_len == 0 && !strcmp(tee_path, "/e") && !tee_open_now);
+    piped_seen = -1;
+    type("probe > /p\r");                       // a stage: the command's output is piped
+    CHECK_EQ(piped_seen, 1);
+    CHECK(!shell_output_piped(&sh) && !piped_now());
+    job_steps = 3;                               // a job: the file grows as it runs
+    type("job > /j\r");
+    type("");
+    type("");
+    type("");
+    CHECK(!strcmp(tee_card, "step 1\nstep 2\nstep 3\n"));
+    CHECK(strstr(fake.out, "step") == NULL);
+    CHECK(!tee_open_now && !piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+// An unknown command feeds no stage: the message is on the terminal, unfiltered, and a
+// redirect's file isn't made (the line is dropped, never ended).
+TEST(unknown_command_is_said_on_the_terminal_and_runs_no_stage) {
+    start(&io_plain);
+    type("nosuch\r");
+    CHECK_OUT("nosuch\nnosuch: unknown command (try 'help')\nsos> ");
+    clear_out();
+    tee_path[0] = '\0';
+    type("nosuch a b > /x\r");
+    CHECK_OUT("nosuch a b > /x\nnosuch: unknown command (try 'help')\nsos> ");
+    CHECK(tee_path[0] == '\0' && !tee_open_now);   // the tee stub saw no open
+    clear_out();
+    type("nosuch | grep zzz\r");
+    CHECK_OUT("nosuch | grep zzz\nnosuch: unknown command (try 'help')\nsos> ");
+    clear_out();
+    paged_calls = 0;
+    type("nosuch | more\r");
+    CHECK_EQ(paged_calls, 0);
+    CHECK_OUT("nosuch | more\nnosuch: unknown command (try 'help')\nsos> ");
+    CHECK(!piped_now());
+    CHECK_EQ(n_executed, 0);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(redirect_refused_runs_nothing) {
+    start(&io_plain);
+    tee_refuse = true;
+    type("echo a > /certs/x\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("echo a > /certs/x\ntee: /certs/x: not allowed to change this path\nsos> ");
+}
+
+TEST(lines_against_the_grammar_run_nothing) {
+    static const struct {
+        const char *line, *says;
+    } bad[] = {
+        {"a > f | grep x\r", ">: only at the end of the line\n"},
+        {"a >\r", "usage: <command> > <path>\n"},
+        {"a >>\r", "usage: <command> >> <path>\n"},
+        {"a > f > g\r", ">: one in a line at most\n"},
+        {"a > f g\r", ">: one path (quote a name that has spaces)\n"},
+        {"> f\r", "usage: <command> | more, or <command> | grep|head|tail|wc|tee ..., "
+                  "or <command> > <path>\n"},
+        {"| grep x\r", "usage: <command> | more"},
+        {"a |\r", "|: a filter must follow (grep, head, tail, wc, tee, more)\n"},
+        {"a | more > f\r", "more: only at the end of the line\n"},
+        {"echo a | nosuch\r", "nosuch: not a filter (grep, head, tail, wc, tee, more)\n"},
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        start(&io_plain);
+        type_n(bad[i].line, strlen(bad[i].line));
+        CHECK_EQ(n_executed, 0);
+        if (!strstr(fake.out, bad[i].says)) {
+            fprintf(stderr, "  %s: got \"%s\"\n", bad[i].line, fake.out);
+            CHECK(false);
+        }
+        CHECK(tee_path[0] == '\0' || !tee_open_now);
+        CHECK(!piped_now());
+        CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+    }
 }
 
 TEST(pipe_stage_that_does_not_parse_runs_nothing) {
@@ -2166,10 +2352,6 @@ TEST(history_on_a_crlf_channel) {
 
 // --- Tab completion ----------------------------------------------------------------------------
 
-static const shell_io_t io_admin = {        // the console: offered admin commands too
-    .name = "console", .read = fake_read, .write = fake_write, .crlf = false, .admin = true,
-};
-
 TEST(tab_completes_a_unique_command_and_adds_a_space) {
     start(&io_plain);
     type("ti\t");
@@ -2437,8 +2619,8 @@ TEST(tab_paths_relative_to_the_working_directory_and_absolute) {
 
 TEST(tab_skips_names_it_cannot_type_or_show) {
     start(&io_plain);
-    type("cat my\t");                                // "my file": a space
-    CHECK_OUT("cat my\a");
+    type("cat my\t");                                // "my file": offered since #207, escaped
+    CHECK_OUT("cat my\\ file ");
     start(&io_plain);
     type("cat es\t");                                // an escape sequence
     CHECK_OUT("cat es\a");
@@ -2506,7 +2688,7 @@ TEST(tab_completes_the_file_after_echo_redirect) {
     type("echo hi>r\t");                             // no spaces: echo still writes to it
     CHECK(line_is("echo hi>readme.txt "));
     start(&io_plain);
-    type("echo a > b >r\t");                         // the last '>' is the one echo uses
+    type("echo a > b >r\t");                         // an error once run, but a path
     CHECK(line_is("echo a > b >readme.txt "));
     start(&io_plain);
     type("echo hi > case/read\t");                   // any case, as for other paths
@@ -2527,7 +2709,7 @@ TEST(tab_echo_text_is_free) {
     type("echo r\t");                                // no '>': text, not a path
     CHECK_OUT("echo r\a");
     start(&io_plain);
-    type("echo hi > my f\t");                        // a name with a space: never offered
+    type("echo hi > my f\t");                        // a word after the redirect's path
     CHECK_OUT("echo hi > my f\a");
     start(&io_plain);
     type("echo hi > readme.txt and\t");
@@ -2558,10 +2740,11 @@ TEST(tab_values_from_a_function) {
     clear_out();
     type("\t");
     // One a line with notes; the note's escape and line break can't reach the terminal.
-    CHECK_OUT("\n1   laptop\n2   evil.[2J x\n12\nsos> key del ");
+    // "a b" too since #207: a value with a space is offered, and escaped on the line.
+    CHECK_OUT("\n1    laptop\n2    evil.[2J x\n12\na b\nsos> key del ");
     start(&io_plain);
-    type("key del a\t");                             // "a b": not one word
-    CHECK_OUT("key del a\a");
+    type("key del a\t");
+    CHECK_OUT("key del a\\ b ");
     start(&io_plain);
     type("key del 2 \t");                            // nothing after a value
     CHECK_OUT("key del 2 \a");
@@ -2758,6 +2941,135 @@ TEST(tab_words_and_file_names_together) {
     CHECK_OUT("lua ps \a");
 }
 
+// --- Tab with the shell's quoting (#207) -----------------------------------------------------
+
+TEST(tab_completes_inside_an_open_quote_and_leaves_it_open) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'my f\t");
+    CHECK(line_is("cat 'my file.txt"));             // no space: it would be in the name
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"my f\t");
+    CHECK(line_is("cat \"my file.txt"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'my n\t");                            // a directory still ends in '/'
+    CHECK(line_is("cat 'my notes/"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'it\t");                              // a quote in '...': closed, escaped, reopened
+    CHECK(line_is("cat 'it'\\''s"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"it\t");                             // in "...": as it is
+    CHECK(line_is("cat \"it's"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"a\t");                              // in "...": '|' and '>' as they are
+    CHECK(line_is("cat \"a|b>c"));
+}
+
+TEST(tab_escapes_what_the_shell_would_split) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat my\\ f\t");
+    CHECK(line_is("cat my\\ file.txt "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat i\t");
+    CHECK(line_is("cat it\\'s "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat a\t");
+    CHECK(line_is("cat a\\|b\\>c "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat my\\\t");                             // the line ends in '\': it escapes the space
+    CHECK(line_is("cat my\\ "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat it\\'s\\\t");                         // whole, after a '\': no space added to it
+    CHECK(line_is("cat it\\'s\\"));
+    start(&io_plain);
+    type("cat 'docs'/g\t");                         // a quoted directory part: listed de-quoted
+    CHECK(line_is("cat 'docs'/gui"));
+    CHECK(!strcmp(listed, "docs/"));
+}
+
+TEST(tab_lists_names_with_spaces) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat m\t");                                // "my file.txt", "my notes": "my " shared
+    CHECK(line_is("cat my\\ "));
+    clear_out();
+    type("\t\t");
+    CHECK_OUT("\a\nmy file.txt  my notes/\nsos> cat my\\ ");
+    type("n\t");
+    CHECK(line_is("cat my\\ notes/"));
+}
+
+TEST(tab_redirect_and_pipe_only_when_unquoted) {
+    start(&io_plain);
+    type("echo \"a>b\" > do\t");                     // a path after the real '>'
+    CHECK(line_is("echo \"a>b\" > docs/"));
+    start(&io_plain);
+    type("echo 'a|b' | gr\t");                       // a stage after the real '|'
+    CHECK(line_is("echo 'a|b' | grep "));
+    start(&io_plain);
+    type("echo \"a>b\" r\t");                        // echo's text, not a path
+    CHECK_OUT("echo \"a>b\" r\a");
+    start(&io_plain);
+    type("echo a\\>r\t");
+    CHECK_OUT("echo a\\>r\a");
+    start(&io_plain);
+    type("echo 'a|b' gr\t");                         // not a stage
+    CHECK_OUT("echo 'a|b' gr\a");
+    start(&io_plain);
+    type("cat 'a > r\t");                            // one quoted word: no such file
+    CHECK_OUT("cat 'a > r\a");
+    start(&io_plain);
+    type("echo \"x | gr\t");
+    CHECK_OUT("echo \"x | gr\a");
+    start(&io_plain);
+    type("echo hi > 'do\t");                         // a quoted path after a '>'
+    CHECK(line_is("echo hi > 'docs/"));
+    start(&io_plain);
+    type("ls | 'gr\t");                              // a quoted stage name
+    CHECK(line_is("ls | 'grep"));
+}
+
+TEST(tab_matches_earlier_words_de_quoted) {
+    start(&io_plain);
+    type("\"time\" sy\t");
+    CHECK(line_is("\"time\" sync "));
+    start(&io_plain);
+    type("'time' st\t");
+    CHECK(line_is("'time' stat"));
+    start(&io_plain);
+    type("ti\\me s\"y\"\t");                         // the word at the cursor too
+    CHECK(line_is("ti\\me s\"y\"nc "));
+    start(&io_plain);
+    type("ls | \"grep\" -\t\t");
+    CHECK(strstr(fake.out, "-i  -n  -v") != NULL);
+    start(&io_plain);
+    type("\"ti me\" \t");                            // not a command
+    CHECK_OUT("\"ti me\" \a");
+}
+
+TEST(tab_case_fix_keeps_the_quoting) {
+    start(&io_plain);
+    type("cat 'case/read\t");
+    CHECK(line_is("cat 'case/README."));
+    CHECK_OUT("cat 'case/read\b\b\b\bREADME.");   // the letters retyped, the quote kept
+    start(&io_plain);
+    type("cat case/rea\\d\t");                       // an escaped letter: still that letter
+    CHECK(line_is("cat case/REA\\DME."));
+    start(&io_plain);
+    type("cat \"case/x.\"b\t");
+    CHECK(line_is("cat \"case/x.\"Bin "));
+}
+
 TEST_MAIN(
     RUN(utf8_characters_are_taken);
     RUN(utf8_byte_at_a_time);
@@ -2829,7 +3141,13 @@ TEST_MAIN(
     RUN(pipe_to_head_ends_the_job_quietly);
     RUN(pipe_to_more_ends_a_job_at_the_limit);
     RUN(pipe_grep_then_more_keeps_every_match);
-    RUN(pipe_not_a_stage_runs_as_typed);
+    RUN(pipe_not_a_stage_is_an_error);
+    RUN(quotes_keep_spaces_and_unquoted_words_are_single_spaced);
+    RUN(a_line_that_does_not_split_runs_nothing);
+    RUN(redirect_writes_the_output_to_a_file_and_nothing_to_the_terminal);
+    RUN(unknown_command_is_said_on_the_terminal_and_runs_no_stage);
+    RUN(redirect_refused_runs_nothing);
+    RUN(lines_against_the_grammar_run_nothing);
     RUN(pipe_stage_that_does_not_parse_runs_nothing);
     RUN(pipe_ctrl_c_drops_what_tail_holds);
     RUN(pipe_with_a_filter_lets_a_question_and_raw_mode_through);
@@ -2914,4 +3232,10 @@ TEST_MAIN(
     RUN(tab_completes_tee_and_its_paths);
     RUN(tab_no_card_or_no_such_directory);
     RUN(tab_words_and_file_names_together);
+    RUN(tab_completes_inside_an_open_quote_and_leaves_it_open);
+    RUN(tab_escapes_what_the_shell_would_split);
+    RUN(tab_lists_names_with_spaces);
+    RUN(tab_redirect_and_pipe_only_when_unquoted);
+    RUN(tab_matches_earlier_words_de_quoted);
+    RUN(tab_case_fix_keeps_the_quoting);
 )

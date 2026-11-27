@@ -5,6 +5,7 @@
 
 #include "shell/complete.h"
 #include "shell/termtext.h"
+#include "shell/words.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -24,14 +25,15 @@ static bool unicode_space(uint32_t cp) {
            cp == 0x205f || cp == 0x3000;
 }
 
-// Can a file name go on the line as one word, and be shown on the terminal as it is? Valid
+// Can a name (a file's, a value's) go on the line and be shown on the terminal as it is? Valid
 // UTF-8 (no overlong forms, surrogates or code points past U+10FFFF) from U+0021 up, without
 // DEL and the C1 controls (U+0080-U+009F): a name can't send the terminal escape sequences.
 // Nor what termtext_hidden() names (bidi controls, zero-width and other invisible characters,
 // tag characters, variation selectors) or other spaces: Tab puts the name on the line about to
 // be run, so what it shows must be what it is, and two names must never look the same.
-// With `spaces`, U+0020 may be in it too (an answer: an SSID can hold spaces), but only between
-// other characters and one at a time: "abc " would look like "abc", and "a  b" like "a b".
+// With `spaces`, U+0020 may be in it too (Tab escapes or quotes it on the line, and an SSID can
+// hold spaces), but only between other characters and one at a time: in a list "abc " would
+// look like "abc", and "a  b" like "a b".
 static bool text_ok(const char *name, bool spaces) {
     const unsigned char *p = (const unsigned char *)name;
     if (!*p)
@@ -100,51 +102,30 @@ typedef struct {
 static void take_entry(const char *name, bool is_dir, void *arg) {
     entries_t *e = arg;
     if ((e->dirs_only && !is_dir) || !starts_with_any_case(name, e->prefix, e->plen) ||
-        !text_ok(name, false) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
+        !text_ok(name, true) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
         return;
     e->fn(name, is_dir ? '/' : ' ', NULL, e->arg);
     e->count++;
 }
 
-// Complete the path line[p..len): the entries of the directory it names up to its last '/' that
-// start with what follows. *start goes just after that '/'.
-static size_t complete_path(const complete_src_t *src, const char *line, size_t p, size_t len,
-                            bool dirs_only, size_t *start, complete_fn fn, void *arg,
+// Complete the path text[0..len) (de-quoted): the entries of the directory it names up to its
+// last '/' that start with what follows, which at->typed counts.
+static size_t complete_path(const complete_src_t *src, const char *text, size_t len,
+                            bool dirs_only, complete_at_t *at, complete_fn fn, void *arg,
                             bool *partial) {
     if (!src->list_dir)
         return 0;
-    const char *prefix = line + p;
-    size_t plen = len - p;
-    size_t slash = plen;
-    while (slash > 0 && prefix[slash - 1] != '/')
+    size_t slash = len;
+    while (slash > 0 && text[slash - 1] != '/')
         slash--;
     char dir[SHELL_LINE_MAX + 1];
-    memcpy(dir, prefix, slash);
+    memcpy(dir, text, slash);
     dir[slash] = '\0';
-    entries_t e = {prefix + slash, plen - slash, dirs_only, fn, arg, 0};
+    entries_t e = {text + slash, len - slash, dirs_only, fn, arg, 0};
     complete_dir_t r = src->list_dir(src->sh, dir, take_entry, &e);
-    *start = p + slash;
+    at->typed = len - slash;
     *partial = r == COMPLETE_DIR_PART;
     return e.count;
-}
-
-// A command marked SHELL_REDIRECT (echo) writes to the text after the line's last '>' (or ">>"),
-// spaces before it skipped: that's a path when the cursor is in it. Complete it then; nothing
-// otherwise (the words before are free text).
-static size_t complete_redirect(const complete_src_t *src, const char *line, size_t from,
-                                size_t len, size_t *start, complete_fn fn, void *arg,
-                                bool *partial) {
-    size_t gt = len;
-    while (gt > from && line[gt - 1] != '>')
-        gt--;
-    if (gt == from)
-        return 0;
-    size_t p = gt;
-    while (p < len && line[p] == ' ')
-        p++;
-    if (memchr(line + p, ' ', len - p))  // a name with a space: never offered (complete.h)
-        return 0;
-    return complete_path(src, line, p, len, false, start, fn, arg, partial);
 }
 
 typedef struct {
@@ -155,11 +136,10 @@ typedef struct {
     size_t count;
 } values_t;
 
-// A word from a values function: offered like a file name, only if it can go on the line as
-// one word and be shown as it is.
+// A word from a values function: offered like a file name, only if it can be shown as it is.
 static void take_value(const char *value, const char *note, void *arg) {
     values_t *v = arg;
-    if (strncmp(value, v->prefix, v->plen) || !text_ok(value, false) ||
+    if (strncmp(value, v->prefix, v->plen) || !text_ok(value, true) ||
         strlen(value) > SHELL_LINE_MAX)
         return;
     v->fn(value, ' ', note, v->arg);
@@ -174,68 +154,55 @@ static char word_end(unsigned flags) {
     return flags & SHELL_NOSPACE ? '\0' : ' ';
 }
 
-// After a '|': the words there are a stage's (pipe.c), when the first of them is a stage name or
-// is the word being typed. Then complete them as a line of their own, from pipe_stage_table (it
-// has no '|' in it, so this doesn't come back here).
-static bool complete_stage(const complete_src_t *src, const char *line, size_t len,
-                           size_t *start, complete_fn fn, void *arg, bool *partial,
-                           size_t *count) {
-    size_t bar = len;
-    while (bar > 0 && line[bar - 1] != '|')
-        bar--;
-    if (bar == 0)
-        return false;
-    size_t w = bar;
-    while (w < len && line[w] == ' ')
-        w++;
-    size_t e = w;
-    while (e < len && line[e] != ' ')
-        e++;
-    if (e < len) {                      // a word before the one being typed: a stage's name?
-        bool stage = false;
-        for (const shell_cmd_t *c = pipe_stage_table; c->name && !stage; c++)
-            stage = is(c->name, line + w, e - w);
-        if (!stage)
-            return false;
-    }
-    static const shell_cmd_t *const tables[] = {pipe_stage_table, NULL};
-    complete_src_t sub = *src;
-    sub.tables = tables;
-    *count = complete_words(&sub, line + bar, len - bar, start, fn, arg, partial);
-    *start += bar;
-    return true;
-}
+// The pipe's stages: what may follow a '|' (as a command table).
+static const shell_cmd_t *const stage_tables[] = {pipe_stage_table, NULL};
 
-size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
+size_t complete_words(const complete_src_t *src, const char *line, size_t len, complete_at_t *at,
                       complete_fn fn, void *arg, bool *partial) {
     *partial = false;
-    size_t stage_count;
-    if (complete_stage(src, line, len, start, fn, arg, partial, &stage_count))
-        return stage_count;
-    size_t s = len;
-    while (s > 0 && line[s - 1] != ' ')
-        s--;
-    *start = s;
+    at->start = len;
+    at->typed = 0;
+    at->quote = '\0';
+    at->escape = false;
+    if (len > SHELL_LINE_MAX)
+        return 0;
+    // The word at the cursor, de-quoted, and how it is quoted (words.h).
+    char text[SHELL_LINE_MAX + 1];
+    word_at_t cur;
+    words_at(line, len, text, &cur);
+    at->start = cur.start;
+    at->typed = cur.len;
+    at->quote = cur.quote;
+    at->escape = cur.escape;
+    if (cur.after == WORD_AFTER_REDIRECT)       // the shell's redirect, on any command: a path
+        return complete_path(src, text, cur.len, false, at, fn, arg, partial);
 
-    // Walk the words before the last one down the tables. `words` are those that may come next;
-    // with `paths`, anything else is a path too.
+    // The words before it, de-quoted too: those of its segment (after the last '|') pick what it
+    // can be. After a '|' they are a stage's, from pipe_stage_table.
+    char before[SHELL_LINE_MAX + 1];
+    memcpy(before, line, cur.start);
+    before[cur.start] = '\0';
+    words_t ws;
+    if (words_split(before, &ws))               // too many words: nothing to offer
+        return 0;
+    int first = ws.n;
+    while (first > 0 && ws.kind[first - 1] == WORD_PLAIN)
+        first--;
+    if (first > 0 && ws.kind[first - 1] != WORD_PIPE)   // past a redirect's path: the line ends
+        return 0;
+    const shell_cmd_t *const *tables = first > 0 ? stage_tables : src->tables;
+
+    // Walk them down the tables. `words` are those that may come next; with `paths`, anything
+    // else is a path too.
     const shell_word_t *words = NULL;
     bool at_command = true, paths = false, dirs_only = false;
-    size_t i = 0;
-    for (;;) {
-        while (i < s && line[i] == ' ')
-            i++;
-        if (i >= s)
-            break;
-        size_t w = i;
-        while (i < s && line[i] != ' ')
-            i++;
-        const char *word = line + w;
-        size_t n = i - w;
+    for (int i = first; i < ws.n; i++) {
+        const char *word = ws.v[i];
+        size_t n = strlen(word);
         unsigned flags;
         if (at_command) {
             const shell_cmd_t *found = NULL;
-            for (const shell_cmd_t *const *t = src->tables; *t && !found; t++)
+            for (const shell_cmd_t *const *t = tables; *t && !found; t++)
                 for (const shell_cmd_t *c = *t; c->name; c++)
                     if (is(c->name, word, n)) {
                         found = c;
@@ -243,8 +210,6 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
                     }
             if (!found || (!src->admin && (found->flags & SHELL_ADMIN)))
                 return 0;
-            if (found->flags & SHELL_REDIRECT)
-                return complete_redirect(src, line, i, len, start, fn, arg, partial);
             words = found->words;
             flags = found->flags;
             at_command = false;
@@ -273,10 +238,10 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
     }
 
     size_t count = 0;
-    const char *prefix = line + s;
-    size_t plen = len - s;
+    const char *prefix = text;
+    size_t plen = cur.len;
     if (at_command) {
-        for (const shell_cmd_t *const *t = src->tables; *t; t++)
+        for (const shell_cmd_t *const *t = tables; *t; t++)
             for (const shell_cmd_t *c = *t; c->name; c++)
                 if (offered(c->flags, src->admin) && !strncmp(c->name, prefix, plen)) {
                     fn(c->name, word_end(c->flags), NULL, arg);
@@ -296,8 +261,9 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
         }
     if (!paths)
         return count;
-    // With a '/' in the path, *start moves past it, but then no word matched (words have none).
-    return count + complete_path(src, line, s, len, dirs_only, start, fn, arg, partial);
+    // With a '/' in the path, at->typed shrinks to what follows it, but then no word matched
+    // (words have none).
+    return count + complete_path(src, text, plen, dirs_only, at, fn, arg, partial);
 }
 
 typedef struct {

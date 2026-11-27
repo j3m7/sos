@@ -68,6 +68,8 @@ DESCRIPTION
 
         [14:03] alice@laptop: hi
 
+    Lines typed in the room are sent as they are: unlike a command line
+    (QUOTING in 'man intro'), quotes, '|' and '>' in them are plain text.
     Joining and leaving are announced. In the room:
 
         /who          who is in the room
@@ -178,19 +180,24 @@ SEE ALSO
     log, logger, uptime
 @@ echo
 NAME
-    echo - print text, or write or append it to a file
+    echo - print text
 
 SYNOPSIS
     echo <text>
-    echo <text> > <file>
-    echo <text> >> <file>
 
 DESCRIPTION
-    Prints the text, or with '>' writes it as a line to the file (replacing
-    it), or with '>>' appends it as a line. Only the console may write under
-    /certs.
+    Prints the text and a newline. The words are printed with single spaces
+    between them; quote the text to keep its spaces or to print a '|', '>' or
+    an apostrophe: echo "a   b", echo "it's" (QUOTING in 'man intro').
 
-    To write a command's output to a file, use 'tee': 'dmesg | tee /d.txt'.
+    '> <file>' after it is the shell's, as after any command: 'echo hi >
+    /x.txt' writes the line to the file (replacing it), and '>> /x.txt'
+    appends it. The same works for every command: 'dmesg > /d.txt'. The file
+    is written even when the command prints nothing (it is then empty; 'echo
+    > /x.txt' gives it one empty line). The command's own messages (its
+    usage, its errors) go into the file too; only an unknown command is said
+    on the screen, and then no file is made. Only the console may write
+    under /certs and /var/log.
 
 SEE ALSO
     cat, edit, tee
@@ -303,8 +310,9 @@ DESCRIPTION
     Passes on the lines of the command's output that hold the text, and drops
     the others ('dmesg | grep wifi', 'cat /log/sos.log | grep error | more').
     The text is a fixed string, not a pattern: no regular expressions and no
-    wildcards. It is everything after the options, spaces inside it kept
-    ('grep no route' looks for "no route"), at most 64 bytes.
+    wildcards. It is one word after the options, at most 64 bytes: quote a
+    text with spaces ('grep "no route"' looks for "no route"; 'grep no route'
+    prints the usage).
 
     -v    the lines without the text instead
     -i    upper and lower case alike (ASCII letters only)
@@ -319,9 +327,8 @@ DESCRIPTION
     the pieces share the line's number.
 
 NOTES
-    grep works only after a '|': typed on its own it says so. A '|' starts a
-    stage only when a stage name follows it (grep, head, tail, wc, more), so
-    the text may hold a '|' that doesn't ('grep a|b'). Error messages of the
+    grep works only after a '|': typed on its own it says so. A text that
+    holds a '|' or '>' is quoted too ('grep "a|b"'). Error messages of the
     command go through grep like its other output. More about pipes in
     'man more'.
 
@@ -392,7 +399,9 @@ DESCRIPTION
     Makes one HTTPS request and prints the response: 'get' the status line and
     the body, then its size and timings; 'head' the status line and headers;
     'post' sends the text as text/plain (UTF-8) and prints the response as
-    'get' does. A job: Ctrl-C stops it.
+    'get' does. A job: Ctrl-C stops it. Quote a text that holds quotes, a
+    '|' or '>' or repeated spaces, such as a JSON body: http post <url>
+    '{"a":1}' (QUOTING in 'man intro').
 
     URLs must start with https:// and the path must already be
     percent-encoded (no spaces). The server's certificate must chain to a
@@ -441,12 +450,19 @@ DESCRIPTION
     card after 'man'.
 
     After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
-    after the '>' or '>>' of echo, Tab completes file names on the SD card
+    after a '>' or '>>' on any line, Tab completes file names on the SD card
     ('cat do' Tab gives 'cat docs/', the next Tab goes on inside it); cd and
-    mkdir offer directories only. Upper and lower case don't matter, as on the
-    card itself (ASCII letters only); names with spaces or control characters
-    aren't offered, and Tab doesn't mount the card. In a directory of more
-    than 256 entries it lists what it read and says there is more.
+    mkdir offer directories only. After a '|' it completes the stage names
+    (grep, head, ...). Tab reads the line as the shell does (QUOTING): a '|'
+    or '>' inside quotes is text, and quoted words count as what they spell.
+    A name with a space (or a quote, '\', '|', '>') is inserted escaped:
+    'cat my' Tab gives 'cat my\ file.txt '; typed inside a quote it goes in as
+    it is and the quote is left open for you to close: "cat 'my f" Tab gives
+    "cat 'my file.txt". Upper and lower case don't matter, as on the card
+    itself (ASCII letters only); names with control characters, with a space
+    at either end or two in a row, aren't offered, and Tab doesn't mount the
+    card. In a directory of more than 256 entries it lists what it read and
+    says there is more.
 
     At the question for a Wi-Fi network's name ('wifi set', 'wifi add',
     setup), Tab completes the names of the networks around, strongest first,
@@ -463,8 +479,9 @@ DESCRIPTION
     and after 10 minutes with nothing typed; whatever it was running is ended.
 
     Paths given to the file commands are relative to the shell's working
-    directory ('cd', 'pwd') unless they start with '/'. File names with spaces
-    aren't supported yet.
+    directory ('cd', 'pwd') unless they start with '/'. A name with spaces
+    is given quoted or escaped ('cat "my file"', 'cp my\ file backup'), to
+    the file commands as to tee and a '>'.
 
     Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
     a screen at a time, and 'man <topic>' shows a page in the same viewer.
@@ -473,7 +490,34 @@ DESCRIPTION
 
     Pipes: a command's output can go through grep, head, tail and wc on its
     way, each after a '|' ('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep
-    error | more'). They work only after a '|'; 'man more' says how.
+    error | more'). They work only after a '|'; 'man more' says how. A '>'
+    and a path at the end of a line write the command's output to that file
+    instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
+
+QUOTING
+    A line is split into words at spaces, as a Unix shell does it, and the
+    words go to the command with single spaces between them: 'echo a   b'
+    prints "a b". Quotes make one word of what they hold, spaces included:
+    in '...' everything is taken as it is; in "..." too, except that \" is a
+    " and \\ is a \. Outside quotes a backslash takes the next character as
+    it is ('a\ b' is one word). The quotes themselves don't reach the
+    command: 'echo "a   b"' prints "a   b". The commands that take paths (ls,
+    cd, cat, cp, mv, rm, mkdir, edit, more, lua) get each word whole, so a
+    quoted path is one argument however many spaces it holds, and 'cat a b'
+    is two (a usage error).
+
+    '|', '>' and '>>' are always the shell's (a pipe, a redirect) unless they
+    are quoted or after a backslash. So quote text that holds them, or an
+    apostrophe, or repeated spaces:
+
+        lua -e 'print("hi")'
+        wall "don't panic"
+        logger 'temp -> 40'
+        echo 'a|b' > /x.txt
+
+    Unquoted, 'wall don't' says "unmatched quote" and runs nothing, and a '>'
+    in Lua code or an '->' in a message would write a file. Nothing else is
+    special: no variables, wildcards, ~, ;, & or #.
 
 SEE ALSO
     help, man, logout, passwd, setup, edit, more, grep
@@ -498,6 +542,11 @@ DESCRIPTION
     paste. 'key del <n>' stops trusting key n. Changes apply at once: a new
     key works for the next login.
 
+    A line given after 'key add' goes through the shell's QUOTING ('man
+    intro'): a quote, backslash, '|' or '>' in the key's comment must be
+    escaped with a backslash. A line pasted at the question is taken as it
+    is.
+
 SEE ALSO
     ssh, setup, who, config
 @@ logger
@@ -513,6 +562,9 @@ DESCRIPTION
     shell it came from: 'logger (console): ...' or 'logger (ssh <name>): ...',
     the name as 'who' shows it. At most 10 a second; beyond that it says the
     message wasn't logged. Lua scripts log the same way with sos.log().
+
+    Quote a message that holds an apostrophe, a '|' or '>' (an '->' too) or
+    repeated spaces: logger "it's 40 -> 41" (QUOTING in 'man intro').
 
 SEE ALSO
     dmesg, log, who
@@ -609,7 +661,7 @@ DESCRIPTION
 
     Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
     used. Paths are relative to the shell's working directory unless they
-    start with '/'. File names with spaces aren't supported yet.
+    start with '/'. A name with spaces is quoted: ls 'my dir'.
 
 SEE ALSO
     cd, cat, sd, intro
@@ -637,6 +689,12 @@ DESCRIPTION
     that started the script, and Ctrl-C stops it, as does ending the session.
     One script runs at a time.
 
+    Quote the code after -e with '...': the shell takes quotes, '|' and '>'
+    for itself (QUOTING in 'man intro'). So: lua -e 'print("hi")', and
+    lua -e 'print(2 > 1)'. Unquoted words after -e are joined with single
+    spaces (lua -e print(1 + 1) works too). A file name is one word, quoted
+    if it holds spaces: lua 'my script.lua'.
+
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the
     rest counted as dropped), and its end is logged. 'lua ps' shows the
@@ -647,13 +705,16 @@ DESCRIPTION
 
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
-    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files,
-    sos.time, sos.uptime, sos.sleep, sos.log, timers sos.every/after/cancel
-    (a background script keeps going while timers are left), and
+    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
+    sos.time, sos.uptime, sos.sleep, sos.log; timers sos.every/after/cancel
+    (a background script keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
-    request took). There is no io, os or debug. Failures return nil and a
-    message. Each script may allocate up to 128 KB. Full details: docs/lua.md
-    in the repository.
+    request took); tables about the board: sos.sensors, sos.mem,
+    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status; and
+    sos.dmesg for the system log (with a cursor, for only the newer lines).
+    There is no io, os or debug. Failures return nil and a message. Each
+    script may allocate up to 128 KB. Full details: docs/lua.md in the
+    repository.
 
 SEE ALSO
     dmesg, logger, http, mem
@@ -805,10 +866,14 @@ PIPES
     command is stopped,
     as head stops it.
 
-    A '|' starts a stage only when a stage name follows it (grep, head,
-    tail, wc, tee, more); any other '|' is part of the command's text ('ls |
-    morex' runs ls with those words). A stage that doesn't parse ('x | grep',
-    'x | head y') prints its usage and the command doesn't run. Ctrl-C drops
+    A '|' is always a pipe, and the word after it must be a stage name
+    (grep, head, tail, wc, tee, more): 'ls | morex' says "morex: not a
+    filter" and runs nothing. A '|' that is text is quoted ('echo "a|b"';
+    QUOTING in 'man intro'). A line may end with '> <path>' (or '>>'), which
+    writes what the stages let through to the file instead of the screen, as
+    a tee that passes nothing on ('man tee'); it can't go with '| more'. A
+    stage that doesn't parse ('x | grep', 'x | head y') prints its usage and
+    the command doesn't run. Ctrl-C drops
     what the filters hold (tail's lines, wc's count); a command that asks a
     question or draws its own screen runs as if there were no pipe. Tab
     completes the stage names after '| ', and grep's options.
@@ -1174,7 +1239,16 @@ DESCRIPTION
 
 NOTES
     tee works only after a '|': typed on its own it says so. It takes one
-    path, without spaces. More about pipes in 'man more'.
+    path; quote one with spaces ('tee "my notes.txt"'). A path spelled
+    exactly '-a' is taken as the option: write './-a'.
+
+    '<command> > <path>' is a quiet tee: the shell adds one as the last
+    stage that writes the file and passes nothing on, so nothing reaches the
+    screen ('dmesg | grep wifi > /w.txt'); '>>' appends. Its messages are
+    tee's. The command's own messages (its usage, its errors) go into the
+    file too; only an unknown command is said on the screen, and then no
+    file is made. A '>' ends the line, and doesn't go with '| more'. More about
+    pipes in 'man more'.
 
 SEE ALSO
     echo, cat, more, head, grep
@@ -1385,6 +1459,9 @@ DESCRIPTION
     Messages are kept only in memory (the last 16), never in the log or on the
     card. A reader whose client has stopped reading doesn't hold the sender up
     for more than 2 seconds; after that it misses messages and is told how many.
+
+    Quote a message that holds an apostrophe, a '|' or '>' or repeated spaces:
+    wall "don't reboot" (QUOTING in 'man intro').
 
 SEE ALSO
     chat, who
