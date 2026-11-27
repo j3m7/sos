@@ -131,6 +131,12 @@ add_executable(test_sensors test_sensors.c ${SOS_ROOT}/src/core/sensors.c)
 target_include_directories(test_sensors PRIVATE ${SOS_ROOT}/src)
 add_test(NAME sensors COMMAND test_sensors)
 
+# src/core/health.c: the health check framework (registry, results, scheduling, gates, text, the
+# Lua record) and the seed checks' judging, with the log, the clock and the Lua writer stood in for.
+add_executable(test_health test_health.c ${SOS_ROOT}/src/core/health.c)
+target_include_directories(test_health PRIVATE ${SOS_ROOT}/src)
+add_test(NAME health COMMAND test_health)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)

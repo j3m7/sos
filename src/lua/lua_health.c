@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // Core 0's answers to LR_INFO: the read-only tables of sos.sensors, sos.mem, sos.version,
-// sos.reset_reason, sos.glitch, sos.wifi.status and sos.dmesg, written with lua_info.h. Each
-// reads what the matching shell command (temp and power, mem, version, uptime, glitch, net and
-// wifi, dmesg) shows, and all of it may be shown over SSH. None of it waits: the sensors' latest readings are used (taken
+// sos.reset_reason, sos.glitch, sos.wifi.status, sos.dmesg and sos.health, written with
+// lua_info.h. Each reads what the matching shell command (temp and power, mem, version, uptime,
+// glitch, net and wifi, dmesg, health) shows, and all of it may be shown over SSH. None of it waits: the sensors' latest readings are used (taken
 // every SENSORS_SAMPLE_S by the main loop), not a new reading.
 //
 // A field the board doesn't know is left out, so the script sees nil: the temp() and volts()
@@ -27,6 +27,7 @@
 #include "core/consoleonly.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
+#include "core/health.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -297,6 +298,7 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_WIFI:    wifi_table(&w); break;
     case LH_CLOCK:   clock_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
+    case LH_HEALTH:  health_lua_table(&w); break;     // results only: no check is run
     default:         return 0;
     }
     return lua_info_end(&w);

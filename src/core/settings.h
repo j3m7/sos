@@ -34,6 +34,13 @@ sos_config_t *settings(void);
 // a new board, when a plain record is sealed, and after `config reset`.
 bool settings_save(void);
 
+// When the last settings_save() failed because a health check refused it (making the owner
+// secret, or sealing: core/health.h), that check's name; else NULL. Every caller that tells a
+// person about a failed save says `the configuration wasn't saved: health check <name> failed`
+// then (SETTINGS_REFUSED_FMT), so a refused change is never dropped silently.
+const char *settings_save_refused(void);
+#define SETTINGS_REFUSED_FMT "the configuration wasn't saved: health check %s failed\n"
+
 // --- the console password (shell/login.h asks for it; core/pwverify.h is how it's checked) ---
 //
 // The configuration holds a verifier, never the password. The key the verifier is made with

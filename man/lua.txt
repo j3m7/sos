@@ -43,7 +43,8 @@ DESCRIPTION
     keeps going while timers are left); sos.http.get/post/head/request and
     sos.http.download (into a file) for HTTPS (the response includes how
     long the request took); tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;
+    sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
+    sos.health (the self-checks' latest results);
     sos.dmesg for the system log (with a cursor, for only the newer lines);
     sos.hash, sos.hmac (SHA-1, SHA-2), sos.base64 and sos.json; and
     sos.reboot([why]), refused until the board has been up 10 minutes.
@@ -52,4 +53,4 @@ DESCRIPTION
     repository.
 
 SEE ALSO
-    dmesg, logger, http, mem
+    dmesg, logger, http, mem, health

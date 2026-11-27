@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "core/config.h"
+#include "core/health.h"
 #include "core/keyprov.h"
 #include "core/keysector.h"
 #include "core/log.h"
@@ -87,6 +88,13 @@ int wolfSSH_MakeEd25519Key(uint8_t *out, uint32_t out_size, uint32_t size) {
     return 82;
 }
 
+// The health gate (core/health.h): a check holding HEALTH_GATE_KEYS failing, or not.
+static const char *keys_held_by;
+const char *health_gate(uint32_t gate) {
+    return (gate & HEALTH_GATE_KEYS) ? keys_held_by : NULL;
+}
+const char *health_gate_refuse(uint32_t gate) { return health_gate(gate); }
+
 static char last_log[512];
 void log_msg(int level, const char *fmt, ...) {
     (void)level;
@@ -121,6 +129,7 @@ static void factory(void) {
     have_root = true;
     is_console_only = write_fails = false;
     page_writes = keys_made = 0;
+    keys_held_by = NULL;
     rng = 99;
     boot();
 }
@@ -290,6 +299,29 @@ TEST(a_version_2_record) {
     CHECK_EQ(hostrec_kind(flash_page), HOSTREC_SEALED);
 }
 
+// A failed health check holding HEALTH_GATE_KEYS: no new host key, nothing written, no sshd.
+// An existing key still opens. Once the check passes, the key is made without a reboot.
+TEST(a_failed_health_check_refuses_a_new_key) {
+    uint8_t k1[82], k2[82];
+    factory();
+    new_owner(1);
+    keys_held_by = "trng";
+    CHECK(!get(k1));
+    CHECK(!get(k1));                            // asked again (the main loop does): still no
+    CHECK_EQ(keys_made, 0);
+    CHECK_EQ(page_writes, 0);
+    CHECK(strstr(last_log, "health check trng failed") != NULL);
+    keys_held_by = NULL;                        // `health run`: it passes
+    CHECK(get(k1));
+    CHECK_EQ(keys_made, 1);
+    // The key stored: reading it isn't gated.
+    boot();
+    keys_held_by = "trng";
+    CHECK(get(k2));
+    CHECK(!memcmp(k1, k2, 82));
+    CHECK_EQ(keys_made, 1);
+}
+
 TEST_MAIN(
     RUN(no_host_key_until_the_board_has_an_owner);
     RUN(config_reset_takes_the_host_key_with_the_owner);
@@ -298,4 +330,5 @@ TEST_MAIN(
     RUN(no_root_secret);
     RUN(a_key_that_cannot_be_stored_is_not_used);
     RUN(a_version_2_record);
+    RUN(a_failed_health_check_refuses_a_new_key);
 )

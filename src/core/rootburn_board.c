@@ -21,6 +21,8 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/health.h"
+#include "core/log.h"
 #include "core/otpread.h"
 #include "core/wdog.h"
 
@@ -81,8 +83,16 @@ static bool wr_lock1(void *ctx, unsigned page, uint32_t bits) {
     return program(LOCK1_ROW(page), false, bits);
 }
 
+// The secret's 32 bytes: refused while a health check holding HEALTH_GATE_KEYS fails, before
+// anything is written (rootburn_run() then reports ROOTBURN_RANDOM; the log names the check).
 static bool get_random(void *ctx, uint8_t *out, size_t len) {
     (void)ctx;
+    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    if (held) {
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "rootburn: no secret made: health check %s failed",
+                held);
+        return false;
+    }
     WC_RNG rng;
     if (wc_InitRng(&rng) != 0)
         return false;

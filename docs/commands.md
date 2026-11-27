@@ -75,6 +75,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | `power` | any | the supply voltage, and whether USB power is present ([page](../man/power.txt)) |
 | `version` | any | firmware commit, board serial, chip revision, how it is secured ([page](../man/version.txt)) |
 | `mem` | any | heap and stack use, by feature ([page](../man/mem.txt)) |
+| `health`<br>`health run [<name>]` *(console only)*<br>`health full` *(console only)* | any (marked forms: console only) | self-checks of the board: the latest result of each ([page](../man/health.txt)) |
 | `net` | any | Wi-Fi link state, address and ARP counters ([page](../man/net.txt)) |
 | `ssh` | any | the SSH server: host key, sessions and refused connections ([page](../man/ssh.txt)) |
 | `dmesg`<br>`dmesg -f <facility>` | any | the system log kept in memory ([page](../man/dmesg.txt)) |
