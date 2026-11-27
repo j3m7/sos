@@ -33,27 +33,41 @@ static const uint8_t *flash_slot_read(void *ctx, unsigned slot) {
 
 typedef struct {
     unsigned slot;
-    const uint8_t *data;
-    size_t len;                 // multiple of FLASH_PAGE_SIZE
+    const uint8_t *data;        // whole pages, programmed from where they are (in RAM)
+    size_t whole;               // their length: a multiple of FLASH_PAGE_SIZE
+    const uint8_t *tail;        // then one more page (the rest, padded), or NULL
 } write_job_t;
 
 static void do_write(void *param) {
     const write_job_t *job = param;
     flash_range_erase(SLOT_OFFSET(job->slot), FLASH_SECTOR_SIZE);
-    if (job->len)
-        flash_range_program(SLOT_OFFSET(job->slot), job->data, job->len);
+    if (job->whole)
+        flash_range_program(SLOT_OFFSET(job->slot), job->data, job->whole);
+    if (job->tail)
+        flash_range_program(SLOT_OFFSET(job->slot) + job->whole, job->tail, FLASH_PAGE_SIZE);
 }
 
+// Programming works in whole pages. The record's whole pages are programmed straight from the
+// caller's buffer and only its last, partial page is copied (and padded with 0xff, which
+// leaves flash as erased), so this needs a page of stack and not a sector-sized buffer.
 static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t len) {
     (void)ctx;
-    static uint8_t page_buf[CONFIG_SLOT_SIZE];      // programming works in whole pages
-    if (!persistent || len > sizeof(page_buf))
+    uint8_t tail[FLASH_PAGE_SIZE];
+    if (!persistent || len > CONFIG_SLOT_SIZE)
         return false;
-    size_t padded = (len + FLASH_PAGE_SIZE - 1) / FLASH_PAGE_SIZE * FLASH_PAGE_SIZE;
-    memset(page_buf, 0xff, padded);
-    memcpy(page_buf, data, len);
+    size_t whole = len / FLASH_PAGE_SIZE * FLASH_PAGE_SIZE, rest = len - whole;
+    // Flash can't be read while it is being programmed: whole pages must come from RAM. (What
+    // is shorter than a page, like the header that blanks a slot, is copied below wherever it
+    // is.)
+    uintptr_t at = (uintptr_t)data;
+    if (whole && at >= XIP_BASE && at < XIP_BASE + PICO_FLASH_SIZE_BYTES)
+        return false;
+    if (rest) {
+        memset(tail, 0xff, sizeof(tail));
+        memcpy(tail, (const uint8_t *)data + whole, rest);
+    }
     // Interrupts (Wi-Fi, USB) pause while the sector is erased and programmed: tens of ms.
-    write_job_t job = { slot, page_buf, padded };
+    write_job_t job = { slot, data, whole, rest ? tail : NULL };
     return flash_safe_execute(do_write, &job, 1000) == PICO_OK;
 }
 
