@@ -1017,6 +1017,20 @@ TEST(pipe_stage_that_does_not_parse_runs_nothing) {
     CHECK(strstr(fake.out, "usage: <command> | more") != NULL);
     CHECK(!piped_now());
     CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+    // A later stage's usage isn't filtered by the stages before it (nor sent to a sink that
+    // isn't set up yet: the first test on a fresh shell has none).
+    start(&io_plain);
+    type("x | grep usage | head y\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("x | grep usage | head y\n"
+              "usage: <command> | head [<lines>]  (1 to 999999, default 10)\nsos> ");
+    clear_out();
+    type("x | grep zzz | tail 0\r");
+    CHECK_EQ(n_executed, 0);
+    CHECK_OUT("x | grep zzz | tail 0\n"
+              "usage: <command> | tail [<lines>]  (1 to 999999, default 10)\nsos> ");
+    CHECK(!piped_now());
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(pipe_ctrl_c_drops_what_tail_holds) {

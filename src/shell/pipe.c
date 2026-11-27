@@ -419,7 +419,10 @@ bool pipe_open(shell_t *sh, pipeline_t *p, char *stages) {
     p->done = false;
     p->sink = PIPE_SINK_TERMINAL;
     p->sh = sh;
-    pipe_stage_t **link = &p->first;
+    // The chain is built apart and attached at the end: until then nothing is piped, so a later
+    // stage's usage message goes to the terminal and not through the stages before it.
+    pipe_stage_t *first = NULL;
+    pipe_stage_t **link = &first;
     int count = 0;
     for (char *s = stages; s;) {
         char *bar = next_stage(s);
@@ -460,8 +463,10 @@ bool pipe_open(shell_t *sh, pipeline_t *p, char *stages) {
         *link = st;
         link = &st->next;
     }
+    p->first = first;
     return true;
 fail:
+    p->first = first;
     pipe_close(p);
     p->sink = PIPE_SINK_TERMINAL;
     return false;
