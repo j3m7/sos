@@ -6,9 +6,9 @@
 #include <string.h>
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/flashop.h"
 #include "core/log.h"
 
 #define KEYSECTOR_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
@@ -40,7 +40,7 @@ bool keysector_write(unsigned page, const uint8_t *data) {
         memcpy(pages + page * FLASH_PAGE_SIZE, data, FLASH_PAGE_SIZE);
     else
         memset(pages + page * FLASH_PAGE_SIZE, 0xff, FLASH_PAGE_SIZE);
-    bool ok = flash_safe_execute(do_write, NULL, 1000) == PICO_OK &&
+    bool ok = flashop_run(do_write, NULL) &&
               !memcmp(keysector_page(0), pages, sizeof(pages));
     memset(pages, 0, sizeof(pages));        // keys don't stay in RAM
     return ok;
