@@ -23,8 +23,9 @@ working directory:
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
   at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **A file being written is synced once a second.** `tee`, `> file`, `cp` and SFTP uploads sync
-  the file they write at most once a second while it grows, so `ls` shows its size and a reset loses at
-  most the last second; until the first sync `ls` shows `being written` in place of the date.
+  the file they write at most once a second while it grows, so `ls` shows its size and a reset
+  loses at most the last second; until the first sync `ls` shows `being written` in place of the
+  date.
 - **Open files are protected:** a file that a running command has open can't be deleted or
   renamed, and the card can't be formatted or unmounted meanwhile.
 - A file name with spaces is quoted or escaped, as in a Unix shell: `cat 'my file'`,
