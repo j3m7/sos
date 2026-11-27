@@ -83,7 +83,8 @@ highest sensitivity, on every board (#78; `glitch off` on the console turns it o
 not done anywhere yet is enabling it in OTP. Once enabled there it can't be turned off, and a
 detector too sensitive for the board would reset a healthy board for ever. So the OTP bit
 waits for a week-long test on a spare board, with battery hardware. That test records the
-chip's temperature throughout and with each detector event (#92; `temp` shows it);
+chip's temperature and supply voltage throughout and with each detector event (#92; `temp`
+and `power` show them);
 its other conditions are still to be defined. Turned on by the firmware
 it starts a second or two into boot and firmware can turn it off again, so it shows whether
 the detector troubles a healthy board; it is not the protection the OTP bit would be. See "The
@@ -210,19 +211,23 @@ complete feature set, a spare board and battery hardware.
 
 **The week-long test records the chip's temperature** (the owner's decision, 2026-11-25),
 throughout the test and with each detector event, so that a detector reset can be set against
-how warm the chip was when it happened. The firmware for that is in place (#92): the chip's
-own temperature sensor, read every 10 s; a reading logged with every detector trigger and kept
-across a detector reset; a reading in the log at boot, on each degree of change and at least
-hourly, which a serial logger on the console records for the length of the test; and the
-lowest and highest since boot (`temp`). Two limits, to keep in mind when reading its numbers:
+how warm the chip was when it happened. **It records the supply voltage the same way**, so a
+reset can be set against a sagging battery too. The firmware for both is in place (#92): the
+chip's own temperature sensor and the board's supply voltage (VSYS), each read every 10 s,
+with whether USB power is present; readings logged with every detector trigger and kept
+across a detector reset; a line in the log at boot, on each degree or 0.2 V of change, when
+USB power comes or goes, and at least hourly, which a serial logger on the console records for
+the length of the test; and the lowest and highest since boot (`temp`, `power`). Limits, to
+keep in mind when reading the numbers:
 
-- It is the chip's temperature, not the room's. It moves with what the chip is doing.
+- The temperature is the chip's, not the room's. It moves with what the chip is doing.
 - Uncalibrated, it is good for change over time on one board, not for an absolute figure or
   for comparing two boards.
+- The supply reading is within a few percent, and one taken during a Wi-Fi transmission
+  catches its dip (about 0.13 V on USB power on dev-1), so the lowest can be a brief one.
 
-Recording the supply voltage the same way is named in #92 as a second step. The test's other
-conditions (load, power, how the temperature is varied, and what counts as a pass) are still
-to be defined.
+The test's other conditions (load, power, how the temperature is varied, and what counts as a
+pass) are still to be defined.
 
 **What that soak does not show.** The OTP setting can't be undone, so its limits belong next to
 the decision:
@@ -326,7 +331,8 @@ and merged before anything is burned.
    after a wrong answer would give free guesses.
 6. **The glitch detector by software** (decision 5): done in #78. A setting arms the detector
    at a chosen sensitivity (by default the highest) or only watches it, and detector resets
-   are reported in the log, `uptime` and `glitch`, with the chip's temperature (#92). No OTP.
+   are reported in the log, `uptime` and `glitch`, with the chip temperature and supply
+   voltage (#92). No OTP.
    Still to build: the week-long test itself (load, power and temperature conditions, and
    what counts as a pass).
 7. **The signing key in the build** is already there (`SOS_SIGN_KEY`, #70). The build

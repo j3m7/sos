@@ -174,11 +174,12 @@ can't be turned off again (`docs/securing-a-board.md`, decision 5). So far it ha
 **Whoever works with a board, person or agent, watches for it:**
 
 - At boot the log says `last reset: glitch detector (detectors 0x.. fired, after N s up; ...)`
-  and, on the next line, the chip's temperature before the reset; `uptime` says
+  and, on the next line, the chip temperature and supply voltage before the reset; `uptime` says
   `(last reset: glitch detector)`, and `glitch` shows the count since power-on.
 - A detector reset that nobody forced with `glitch trig` is a finding. Record it on issue #100:
-  the firmware version, the detectors that fired, the uptime, the chip's temperature, what the
-  board was doing (Wi-Fi traffic, card access, a script, flashing), and how it was powered.
+  the firmware version, the detectors that fired, the uptime, the chip temperature and supply
+  voltage, what the board was doing (Wi-Fi traffic, card access, a script, flashing), and how
+  it was powered (`power` says whether USB power is present).
 - An unexplained reboot is worth a look at `glitch` before anything else: a detector reset
   loses the fault record, so `uptime` shows no fault for it.
 - If it gets in the way of other work, `glitch off` is fine. Say so in the same place, with

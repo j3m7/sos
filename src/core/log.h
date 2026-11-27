@@ -101,6 +101,21 @@ int log_facility_parse(const char *name);
 // since the previous call are skipped.
 bool log_history_next(uint32_t *cursor, char *buf, size_t buflen, int *priority);
 
+// For the log files (core/logfile.c): the entries they haven't taken yet, oldest first. Each call
+// takes the next one into *e: its priority, its time since boot (ms), and its text without the
+// time and the level's tag. False when there are none. Entries are kept in the history for
+// `dmesg` either way.
+typedef struct {
+    int priority;               // facility | level
+    uint64_t uptime_ms;
+    char text[LOG_LINE_MAX + 1];
+} log_entry_t;
+
+bool log_file_next(log_entry_t *e);
+// How many entries were dropped from the history before the log files took them, since the
+// last call (which resets the count).
+unsigned log_file_lost(void);
+
 // A rate limit for messages from outside the firmware (scripts, `logger`), so a loop can't push
 // everything else (failed logins, warnings) out of the history: at most `per_sec` messages in
 // each second. Zero-initialize; one per source.

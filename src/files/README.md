@@ -42,6 +42,12 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
   and everything above it don't change. Reads are decrypted in place; writes are encrypted into
   a 4 KB buffer a chunk at a time, since the caller's buffer must stay as it is. The sector
   count FatFs sees is 8192 smaller.
+- **Memory:** the layer's state and its 4 KB write buffer (7.5 KB together) are allocated
+  from the heap (`files` in `mem`) only while needed: for the moment it takes to look at a
+  card's header, and from then on while an encrypted card is in use, until it is unmounted,
+  taken out or reformatted. A board with a plain card or none doesn't hold it. If the memory
+  isn't there the card can't be looked at: the mount fails saying so and the next mount tries
+  again.
 - **Detection** (`detect()`) runs after every card initialization (`init_layer` wraps the
   driver's `init`), so the layer always matches the card that's in, and again at mount if the
   kind was forgotten. The rules are in `sdcrypt_card_open()` (host tested): sector 0 a header
@@ -77,15 +83,17 @@ its own working directory (`shell_t.cwd`).
   can't be formatted or unmounted.
 - **`files_write_allowed(sh, path)`:** every change to the card passes this one check: the
   file commands, SFTP (`ssh/sftp_fs.c`) and Lua's `sos.write` etc. Everything is allowed except
-  changes under `/certs`, which need the console (`sh->io->admin`). SFTP and Lua pass no shell
-  (`NULL`), so they're refused there.
+  changes under `/certs` (TLS roots) and `/var/log` (the log files, #104), and to `/var`
+  itself (renaming it would take `/var/log` along), which need the console
+  (`sh->io->admin`). SFTP and Lua pass no shell (`NULL`), so they're refused there. The log
+  writer itself writes through FatFs directly.
 
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`
   resolved against the working directory.
-- **`path_is_protected()`** decides whether a path is inside `/certs` the way FatFs would read
-  it. `\` separates like `/`, names match case-insensitively (ASCII only, as FatFs folds
+- **`path_is_protected()`** decides whether a path is protected (`/certs` and what's in it,
+  `/var/log` and what's in it, `/var` itself) the way FatFs would read it. `\` separates like `/`, names match case-insensitively (ASCII only, as FatFs folds
   them), and trailing spaces and dots are ignored. So `/CERTS.`, `\certs\x` and
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as

@@ -1501,7 +1501,7 @@ static void check_net(const sos_config_t *c, unsigned i, const char *ssid, const
 TEST(wifi_extra_is_appended) {
     CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);
     CHECK_EQ(sizeof(config_wifi_net_t), 97);
-    CHECK_EQ(sizeof(sos_config_t), 2184);
+    CHECK_EQ(sizeof(sos_config_t), 2188);
 }
 
 TEST(wifi_list_add_remove_prefer) {
@@ -1607,6 +1607,40 @@ TEST(records_from_before_wifi_extra_load_with_one_network) {
     CHECK_EQ(b.wifi_extra[0].ssid[0], 0);
 }
 
+// Records from before the log rotation settings (2184 bytes) load with the defaults (0).
+TEST(records_from_before_log_rotation_load_with_defaults) {
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, log_rotate_days), 2184);
+    blank_flash();
+    sample(&a, "HomeNet");
+    a.log_rotate_days = 3;
+    a.log_rotate_minute = 90;
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.log_rotate_days, 3);
+    CHECK_EQ(b.log_rotate_minute, 90);
+    memset(flash.slot[0] + 16 + 2184, 0xff, CONFIG_SLOT_SIZE - 16 - 2184);
+    set_length(0, 2184);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    CHECK_EQ(b.log_rotate_days, 0);
+    CHECK_EQ(b.log_rotate_minute, 0);
+}
+
+TEST(bad_log_rotation_is_rejected) {
+    sos_config_t a;
+    blank_flash();
+    sample(&a, "HomeNet");
+    a.log_rotate_days = CONFIG_LOG_ROTATE_DAYS_MAX;
+    a.log_rotate_minute = CONFIG_LOG_ROTATE_MINUTE_MAX;
+    CHECK(config_save(&store, &a));
+    a.log_rotate_days = CONFIG_LOG_ROTATE_DAYS_MAX + 1;
+    CHECK(!config_save(&store, &a));
+    a.log_rotate_days = 1;
+    a.log_rotate_minute = CONFIG_LOG_ROTATE_MINUTE_MAX + 1;
+    CHECK(!config_save(&store, &a));
+}
+
 // Contents a record can't have: an entry after an unused one, entries without a first
 // network, a password without a network, an invalid passphrase, an unterminated string.
 TEST(bad_wifi_extra_is_rejected) {
@@ -1706,6 +1740,8 @@ TEST_MAIN(
     RUN(secured_board_plain_record_cannot_hide_the_sealed_one);
     RUN(secured_board_no_fallback_to_plain_when_sealed_fails);
     RUN(wifi_extra_is_appended);
+    RUN(records_from_before_log_rotation_load_with_defaults);
+    RUN(bad_log_rotation_is_rejected);
     RUN(wifi_list_add_remove_prefer);
     RUN(wifi_list_capacity);
     RUN(wifi_set_first_replaces_and_drops_a_duplicate);
