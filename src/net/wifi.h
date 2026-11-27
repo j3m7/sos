@@ -54,8 +54,11 @@ typedef struct {
 bool wifi_radio(wifi_radio_t *r);
 
 // The chip's own counters ("counters" iovar): a version/length word, then 32-bit counters.
-// Returns how many 32-bit words were copied to out (0 if it couldn't be read).
-unsigned wifi_chip_counters(uint32_t *out, unsigned max);
+// Read straight into `out`, which the caller provides: WIFI_CHIP_COUNTER_WORDS words (the chip
+// answers into a buffer of that size). Returns how many words it holds: that many, or 0 if the
+// counters couldn't be read.
+#define WIFI_CHIP_COUNTER_WORDS 256
+unsigned wifi_chip_counters(uint32_t out[WIFI_CHIP_COUNTER_WORDS]);
 
 // Debugging: read or write a 32-bit chip variable ("iovar") by name, e.g. "2g_rate", "ampdu_tx",
 // "qtxpower". Returns the driver's result (0 = ok). The chip answers an unknown name with

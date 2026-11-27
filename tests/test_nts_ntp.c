@@ -67,6 +67,7 @@ static void init_values(void) {
 // --- a stand-in server reply ---------------------------------------------------------------------
 
 static uint8_t pkt[NTS_NTP_PACKET_MAX];
+static uint8_t scratch[NTS_NTP_PACKET_MAX];  // where a reply's encrypted part is opened
 static size_t pkt_len;
 
 static uint8_t *ef(uint8_t *p, uint16_t type, const uint8_t *body, size_t len) {
@@ -123,7 +124,8 @@ static void make_reply(unsigned ncookies, const nts_aead_t *key) {
 static nts_ntp_reply_t reply;
 
 static nts_ntp_status_t parse(const char **why) {
-    return nts_ntp_parse_reply(pkt, pkt_len, xmt, uid, &s2c, &reply, why);
+    return nts_ntp_parse_reply(pkt, pkt_len, xmt, uid, &s2c, scratch, sizeof(scratch), &reply,
+                               why);
 }
 
 // --- tests ---------------------------------------------------------------------------------------
@@ -188,6 +190,21 @@ TEST(good_reply) {
     CHECK_EQ(reply.transmit, 0xed00000180100000ULL);
 }
 
+// The caller supplies the space the encrypted part is opened into. Too little of it is an
+// invalid reply, never a write past it: the byte after the space given stays as it was.
+TEST(working_space_too_small) {
+    const char *why = NULL;
+    make_reply(3, &s2c);
+    CHECK_EQ(parse(&why), NTS_NTP_OK);              // with all of it, this reply is good
+    static uint8_t small[65];
+    memset(small, 0xa5, sizeof(small));
+    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, xmt, uid, &s2c, small, 64, &reply, &why),
+             NTS_NTP_INVALID);
+    CHECK(!strcmp(why, "malformed authenticator"));
+    CHECK_EQ(small[64], 0xa5);
+    CHECK_EQ(small[0], 0xa5);                       // refused before anything was opened
+}
+
 TEST(any_tampering_is_caught) {
     // Flip one bit in every byte of the reply: header, Unique Identifier, and the
     // authenticator's lengths, nonce and ciphertext. With one 96-byte cookie the ciphertext
@@ -214,12 +231,14 @@ TEST(wrong_key_or_request) {
 
     make_reply(1, &s2c);
     uint8_t other_xmt[8] = {1};
-    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, other_xmt, uid, &s2c, &reply, &why),
+    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, other_xmt, uid, &s2c, scratch, sizeof(scratch),
+                                 &reply, &why),
              NTS_NTP_INVALID);
     CHECK(!strcmp(why, "not a reply to our request (origin timestamp)"));
 
     uint8_t other_uid[NTS_NTP_UID_LEN] = {9};
-    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, xmt, other_uid, &s2c, &reply, &why),
+    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, xmt, other_uid, &s2c, scratch, sizeof(scratch),
+                                 &reply, &why),
              NTS_NTP_INVALID);
     CHECK(!strcmp(why, "Unique Identifier missing or wrong"));
 }
@@ -227,7 +246,9 @@ TEST(wrong_key_or_request) {
 TEST(structure_errors) {
     const char *why;
     make_reply(1, &s2c);
-    CHECK_EQ(nts_ntp_parse_reply(pkt, 40, xmt, uid, &s2c, &reply, &why), NTS_NTP_INVALID);
+    CHECK_EQ(nts_ntp_parse_reply(pkt, 40, xmt, uid, &s2c, scratch, sizeof(scratch), &reply,
+                                 &why),
+             NTS_NTP_INVALID);
 
     make_reply(1, &s2c);
     pkt[0] = (4 << 3) | 3;                      // client mode
@@ -256,7 +277,8 @@ TEST(kiss_of_death) {
     CHECK_EQ(parse(&why), NTS_NTP_NAK);
 
     uint8_t other_uid[NTS_NTP_UID_LEN] = {9};   // a NAK for someone else's request
-    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, xmt, other_uid, &s2c, &reply, &why),
+    CHECK_EQ(nts_ntp_parse_reply(pkt, pkt_len, xmt, other_uid, &s2c, scratch, sizeof(scratch),
+                                 &reply, &why),
              NTS_NTP_INVALID);
 
     make_reply(0, &s2c);
@@ -314,6 +336,7 @@ TEST_MAIN(
     RUN(request_layout);
     RUN(request_limits);
     RUN(good_reply);
+    RUN(working_space_too_small);
     RUN(any_tampering_is_caught);
     RUN(wrong_key_or_request);
     RUN(structure_errors);
