@@ -14,7 +14,7 @@
 #include "core/pwverify.h"
 #include "core/random.h"
 #include "core/seal.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 
 // Slot A and B: the two sectors below the host key (the last sector, see hostkey.c).
 #define SLOT_OFFSET(slot) (PICO_FLASH_SIZE_BYTES - (3 - (slot)) * FLASH_SECTOR_SIZE)
@@ -64,7 +64,7 @@ static seal_ctx_t seal = { .random = random_bytes };
 static const sealer_t sealer = { seal_seal, seal_open, &seal };
 
 // An open board: plain records (from older firmware, or a provisioning image) are loaded, and
-// sealed at once. A sealed-only board refuses them (core/sealedonly.h): refuse_plain is set in
+// sealed at once. A console-only board refuses them (core/consoleonly.h): refuse_plain is set in
 // settings_init(), and starts true so that nothing is loaded plain before the board has been
 // asked.
 static config_store_t store = { flash_slot_read, flash_slot_write, NULL, &sealer, true };
@@ -183,7 +183,7 @@ static void ensure_owner_secret(void) {
 
 void settings_init(void) {
     extern char __flash_binary_end;
-    store.refuse_plain = sealedonly();
+    store.refuse_plain = consoleonly();
     persistent = (uintptr_t)&__flash_binary_end <= XIP_BASE + SLOT_OFFSET(0);
     if (!persistent) {
         log_msg(SOS_LOG_ERR, "config: firmware overlaps the config area; settings won't be saved");
@@ -232,14 +232,14 @@ void settings_init(void) {
     // configuration of its own.
     config_defaults(&live);
     if (store.refuse_plain) {
-        // A sealed-only board: say so if an unsealed record is lying there, so that nobody
+        // A console-only board: say so if an unsealed record is lying there, so that nobody
         // wonders why a provisioned configuration didn't take. It is not loaded and not erased.
         config_store_t open_board = store;
         open_board.refuse_plain = false;
         if (config_stored(&open_board) == CONFIG_STORED_PLAIN)
             log_msg(SOS_LOG_WARNING, "config: an unsealed configuration record is in flash and "
-                                     "was REFUSED: this is a sealed-only board");
-        log_msg(SOS_LOG_NOTICE, "config: none saved; run 'setup' on the console (a sealed-only "
+                                     "was REFUSED: this is a console-only board");
+        log_msg(SOS_LOG_NOTICE, "config: none saved; run 'setup' on the console (a console-only "
                                 "board can't be provisioned from a file)");
         return;
     }

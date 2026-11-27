@@ -17,7 +17,7 @@
 #include "core/log.h"
 #include "core/random.h"
 #include "core/seal.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 #include "core/settings.h"
 #include "ssh/hostkey_record.h"
 
@@ -92,7 +92,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
     const uint8_t *stored = keysector_page(KEYSECTOR_HOSTKEY);
     int kind = hostrec_kind(stored);
     bool have_owner = settings_has_owner_secret();
-    hostkey_action_t action = hostrec_decide(kind, have_base, have_owner, sealedonly());
+    hostkey_action_t action = hostrec_decide(kind, have_base, have_owner, consoleonly());
 
     if (action == HOSTKEY_NONE_NO_OWNER) {
         // Not an error and not final: the board hasn't been set up. Asked again later.
@@ -159,7 +159,7 @@ bool hostkey_get(const uint8_t **der, uint32_t *len) {
         if (owner_seal.have_key) {
             log_msg(SOS_LOG_NOTICE, kind == HOSTREC_SEALED_OLD
                         ? "hostkey: the stored host key isn't tied to an owner, and a "
-                          "sealed-only board doesn't carry it over; making a new host key"
+                          "console-only board doesn't carry it over; making a new host key"
                         : kind == HOSTREC_PLAIN
                               ? "hostkey: the stored host key is unsealed and isn't used; making "
                                 "a new host key"

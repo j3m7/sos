@@ -33,7 +33,7 @@
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
 #include "core/rootsource.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -92,24 +92,24 @@ static void cmd_version(shell_t *sh) {
                      : otp.secure_debug_disabled ? "Secure debug disabled" : "enabled");
     shell_printf(sh, "root secret: %s\n", rootsource() == ROOTSRC_OTP ? "in OTP"
                      : rootsource() == ROOTSRC_FLASH ? "in flash (open board)" : "none");
-    switch (sealedonly_state()) {
-    case SEALEDONLY_NO:
-        shell_printf(sh, "sealed-only: no (unsealed configuration from flash is accepted, as "
-                         "`ninja provision` writes it)\n");
+    switch (consoleonly_state()) {
+    case CONSOLEONLY_NO:
+        shell_printf(sh, "console-only setup: no (a settings file written to flash over USB is "
+                         "accepted, as `ninja provision` writes it)\n");
         break;
-    case SEALEDONLY_YES:
-        shell_printf(sh, "sealed-only: yes%s (unsealed records in flash are refused; set up on "
-                         "the console only)\n",
-                     sealedonly_forced() ? ", forced by this test build, not by the board" : "");
+    case CONSOLEONLY_YES:
+        shell_printf(sh, "console-only setup: yes%s (settings files written over USB are refused; "
+                         "set up on the console only)\n",
+                     consoleonly_forced() ? ", forced by this test build, not by the board" : "");
         break;
-    case SEALEDONLY_YES_UNREADABLE:
-        shell_printf(sh, "sealed-only: yes, because its marker in OTP can't be read\n");
+    case CONSOLEONLY_YES_UNREADABLE:
+        shell_printf(sh, "console-only setup: yes, because its marker in OTP can't be read\n");
         break;
-    case SEALEDONLY_YES_DAMAGED:
-        shell_printf(sh, "sealed-only: yes, because its marker in OTP is neither blank nor "
+    case CONSOLEONLY_YES_DAMAGED:
+        shell_printf(sh, "console-only setup: yes, because its marker in OTP is neither blank nor "
                          "whole (rows 0x%06lx 0x%06lx 0x%06lx)\n",
-                     (unsigned long)sealedonly_rows()[0], (unsigned long)sealedonly_rows()[1],
-                     (unsigned long)sealedonly_rows()[2]);
+                     (unsigned long)consoleonly_rows()[0], (unsigned long)consoleonly_rows()[1],
+                     (unsigned long)consoleonly_rows()[2]);
         break;
     }
     // Secure boot and debug are what the chip latched at reset. Its OTP rows should say the same.
@@ -1074,8 +1074,8 @@ static void cmd_rootsecret(shell_t *sh, const char *args) {
         shell_printf(sh, "the root secret can only be cleared on the serial console\n");
         return;
     }
-    if (sealedonly()) {
-        shell_printf(sh, "this is a sealed-only board: its root secret record isn't cleared "
+    if (consoleonly()) {
+        shell_printf(sh, "this is a console-only board: its root secret record isn't cleared "
                          "from here\n");
         return;
     }

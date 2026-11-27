@@ -28,7 +28,7 @@
 //
 // Version 2, written by firmware before that, is sealed under the base key alone, so it
 // survives a wipe. An open board takes it over once (same key, same fingerprint) and stores it
-// as version 3. A sealed-only board doesn't use it.
+// as version 3. A console-only board doesn't use it.
 //
 // Plain record, written by firmware from before sealing (still read, so an upgrade keeps the
 // board's host key and fingerprint; hostkey.c then seals it):
@@ -96,7 +96,7 @@ typedef enum {
 } hostkey_action_t;
 
 // `kind`: hostrec_kind() of what is stored. `have_base`: the base key could be derived.
-// `have_owner`: the configuration has an owner secret. `sealed_only`: core/sealedonly.h.
-hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool sealed_only);
+// `have_owner`: the configuration has an owner secret. `console_only`: core/consoleonly.h.
+hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool console_only);
 
 #endif
