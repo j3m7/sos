@@ -60,6 +60,10 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.write(path, s)`, `sos.append(path, s)` | write / append (through `files_write_allowed()`) |
 | `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
+| `sos.rename(from, to [, replace])` | rename or move a file or directory. `to` mustn't exist, unless `replace` is true and it's a file, which is then replaced (there's a moment when only `from` exists). The same path, or one differing only in case, is refused |
+| `sos.copy(from, to)` | copy a file (4 KB per request each way); `to` is created or replaced; returns the size. Copying a file onto itself (however it's spelled) is refused. A failure after part of it was written removes the copy |
+| `sos.stat(path)`, `sos.exists(path)` | `{size=, dir=, time=}` (`time` in seconds since 1970, from the card's timestamp) or `nil` and `"no such file"`; `true` or `false` |
+| `sos.sd.info()` | what `sd info` shows: `{mounted=, card=, card_bytes=, encrypted=, fs=, total=, free=, cluster=}` (bytes; `mounted` false and nothing else without a card). On a FAT32 card the first call counts the free space, which can take seconds on a large card (later ones are quick; exFAT is always quick) |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but always in UTC (see [Dates and the clock](#dates-and-the-clock)) |
 | `sos.clock()` | the clock's state: set or not, the last sync, the RTC (the same section) |
@@ -130,9 +134,10 @@ does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script
 other status leaves the file alone and comes back with its `body` as `get` would (an error page,
 say). With no `max_body`, a download has no size limit (the error page still stops at 32 KB). If
 the transfer fails (the connection, the card, a body over `max_body`), the call returns `nil` and
-the message: a failure before the first piece of the body leaves a file already at `path` as it
-was, while one after it removes the half-written file. The first piece replaces an existing file,
-so a refresh that fails part way (or at its first piece, say with the card full) loses the old copy. Ctrl-C leaves what was written.
+the message. The body is written to `<path>.part` and renamed over `path` only once it's all
+there, so a failed download never touches a file already at `path` (except for the instant of the
+replace itself): refreshing a file is safe.
+A failure removes the `.part` file once anything was written to it; Ctrl-C leaves it.
 
 ```lua
 local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")

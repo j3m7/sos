@@ -76,6 +76,9 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_RENAME,                      // path: from, data: to (NUL-terminated), offset 1: replace a
+                                    // file already at `to`
+    LR_STAT,                        // path -> data: lua_stat_t (result LUA_REQ_NOT_FOUND: none)
     LR_HASH,                        // offset: step, arg: algorithm (lua_hash.h), data/len: key or
                                     // message -> after the last step, data/len: the digest
     LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
@@ -113,6 +116,13 @@ extern lua_req_t lua_req;
 // LR_READ result when the file or a directory on its path doesn't exist (require tries the next
 // path; any other failure, such as no SD card, stops the search).
 #define LUA_REQ_NOT_FOUND (-2)
+
+// LR_STAT's answer. time: seconds since 1970 (the card's timestamps are UTC), 0 if unknown.
+typedef struct {
+    uint64_t size;
+    int64_t time;
+    bool dir;
+} lua_stat_t;
 
 // LR_LIST packs entries into data as: uint32 size, uint8 is_dir, name, NUL; result = count,
 // len = bytes used. A listing that doesn't fit continues with offset = entries already returned.

@@ -36,6 +36,7 @@
 #include "lua/lua_health.h"
 #include "net/http.h"
 #include "shell/words.h"
+#include "time/timeconv.h"
 #include "time/timesync.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
@@ -200,6 +201,69 @@ static void serve_change(FRESULT (*op)(const TCHAR *)) {
 }
 
 static FRESULT do_mkdir(const TCHAR *p) { return f_mkdir(p); }
+
+// sos.rename: both paths must be ones a script may change. With offset 1, a file at `to` is
+// removed first (not a directory), so the rename replaces it; there's a moment with only `from`.
+static void serve_rename(void) {
+    char from[LUA_PATH_MAX], to[LUA_PATH_MAX];
+    lua_req.data[LUA_REQ_DATA - 1] = 0;
+    if (!req_path(from) || !req_may_write(from))
+        return;
+    if (!path_resolve("/", (const char *)lua_req.data, to, sizeof(to))) {
+        req_error("path too long");
+        return;
+    }
+    if (!req_may_write(to))
+        return;
+    // One file under two spellings (another case): with replace, the unlink would delete it.
+    if (!strcasecmp(from, to)) {
+        req_error("source and destination are the same");
+        return;
+    }
+    FILINFO fi;
+    if (lua_req.offset && f_stat(to, &fi) == FR_OK) {
+        if (fi.fattrib & AM_DIR) {
+            req_error("a directory is in the way");
+            return;
+        }
+        FRESULT fr = f_unlink(to);
+        if (fr != FR_OK) {
+            req_error(files_error(fr));
+            return;
+        }
+    }
+    FRESULT fr = f_rename(from, to);
+    if (fr != FR_OK)
+        req_error(files_error(fr));
+}
+
+// sos.stat: size, kind and time; LUA_REQ_NOT_FOUND if there's nothing at the path.
+static void serve_stat(void) {
+    char path[LUA_PATH_MAX];
+    if (!req_path(path))
+        return;
+    lua_stat_t st = {0};
+    if (!strcmp(path, "/")) {                   // f_stat can't stat the root
+        st.dir = true;
+    } else {
+        FILINFO fi;
+        FRESULT fr = f_stat(path, &fi);
+        if (fr != FR_OK) {
+            req_error(files_error(fr));
+            if (fr == FR_NO_FILE || fr == FR_NO_PATH || fr == FR_INVALID_NAME)
+                lua_req.result = LUA_REQ_NOT_FOUND;
+            return;
+        }
+        st.size = fi.fsize;
+        st.dir = (fi.fattrib & AM_DIR) != 0;
+        if (fi.fdate)
+            st.time = timeconv_from_tm(80 + (fi.fdate >> 9), ((fi.fdate >> 5) & 15) - 1,
+                                       fi.fdate & 31, fi.ftime >> 11, (fi.ftime >> 5) & 63,
+                                       (fi.ftime & 31) * 2);
+    }
+    memcpy(lua_req.data, &st, sizeof(st));
+    lua_req.len = sizeof(st);
+}
 static FRESULT do_unlink(const TCHAR *p) { return f_unlink(p); }
 
 // sos.reboot([why]). Refused in the first LUA_REBOOT_MIN_S after boot: a normal restart runs
@@ -453,6 +517,8 @@ static void serve(bool main_loop) {
         case LR_LIST:   serve_list(); break;
         case LR_REMOVE: serve_change(do_unlink); break;
         case LR_MKDIR:  serve_change(do_mkdir); break;
+        case LR_RENAME: serve_rename(); break;
+        case LR_STAT:   serve_stat(); break;
         case LR_INFO:   serve_info(); break;
         case LR_WALL:   serve_wall(); break;
         case LR_TIMESYNC: serve_timesync(); break;

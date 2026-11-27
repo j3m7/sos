@@ -17,6 +17,7 @@
 // and only mark clusters.
 
 #include "files/fsck.h"
+#include "files/fsck_repair.h"
 
 #include "files/fsck_exfat.h"
 
@@ -130,6 +131,7 @@ typedef struct {
     uint32_t expected;          // clusters the entry needs; Brent starts beyond
     uint32_t tort, power, lam;  // Brent's state
     uint32_t last;              // the last cluster counted
+    uint32_t keep;              // the `expected`th cluster: where repair puts a trim's end mark
     uint32_t hits;              // clusters this chain found already marked in the window
     uint32_t bad;               // the value that broke the chain
     uint8_t status;
@@ -164,6 +166,7 @@ typedef struct {
 
 struct fsck {
     fsck_io_t io;
+    fsck_fix_t *fix;            // repair's hooks (fsck_repair.h); NULL for a check
     fsck_result_t res;
     uint32_t budget;            // reads left in this step
     uint64_t reads;             // sectors read in all
@@ -322,6 +325,15 @@ static const char *path(const fsck_t *f) {
 static void refuse(fsck_t *f, const char *why) {
     f->res.why = why;
     f->state = ST_FAILED;
+}
+
+// What repair's hooks answer: FSCK_FIX_FAIL (a write failed) stops the run at once.
+static int fixed(fsck_t *f, int rc) {
+    if (rc == FSCK_FIX_FAIL) {
+        refuse(f, fsck_fix_why(f->fix));
+        return R_FAIL;
+    }
+    return rc == FSCK_FIX_YIELD ? R_YIELD : R_OK;
 }
 
 // One sector into `buf`, if the budget allows. R_FAIL: the device refused it, or it is past the
@@ -645,6 +657,7 @@ static int st_bpb(fsck_t *f) {
     f->res.clusters = f->count;
     f->res.cluster_bytes = f->cbytes;
     f->res.passes = (f->count - 1) / f->win_bits + 1;
+    fsck_fix_volume(f->fix, f->fat_lba, f->fsize, f->nfats, f->nrsv, &f->res.passes);
     f->state = ST_BACKUP;
     return R_OK;
 }
@@ -675,6 +688,8 @@ static int st_fsinfo(fsck_t *f) {
                 && le32(f->dirbuf + FSI_StrucSig) == 0x61417272) {
             f->fsi_valid = true;
             f->fsi_free = le32(f->dirbuf + FSI_Free_Count);
+            if (fixed(f, fsck_fix_fsinfo(f->fix, f->vol_lba + 1, f->dirbuf)) != R_OK)
+                return R_FAIL;
         } else {
             emit(f, false, "the FSInfo sector's signatures are wrong");
         }
@@ -722,6 +737,8 @@ static int st_fatcmp(fsck_t *f) {
             return r;
         if (memcmp(f->aux, f->dirbuf, SECTOR) && !f->diff_n++)
             f->diff_first = f->vf_i;
+        if (fixed(f, fsck_fix_fat_copy(f->fix, f->vf_i, f->aux, f->dirbuf)) != R_OK)
+            return R_FAIL;
         f->sub = 0;
         f->vf_i++;
     }
@@ -765,6 +782,8 @@ static int chain_run(fsck_t *f) {
         }
         ch->n++;
         ch->last = c;
+        if (ch->n == ch->expected)
+            ch->keep = c;
         ch->last_in = in_window(f, c);
         ch->last_hit = ch->last_in && mark(f, c);
         if (ch->last_hit) {
@@ -1219,6 +1238,7 @@ static frame_t *top(fsck_t *f) {
 }
 
 static void stop_walk(fsck_t *f) {
+    fsck_fix_unread(f->fix);
     if (f->pass == 1)
         emit(f, false, "stopped walking the directories: chains overlap too much "
              "(the check is incomplete)");
@@ -1260,6 +1280,8 @@ static int wk_dirchain(fsck_t *f) {
     if (f->pass == 1)
         report_chain(f);
     report_cross_link(f);
+    if (ch->status == CH_LOOP || ch->status == CH_FREE || ch->status == CH_BAD)
+        fsck_fix_unread(f->fix);                // FatFs reads entries this walk doesn't
     if (ch->status == CH_LOOP || ch->status == CH_START_RANGE || !ch->n) {
         if (!f->depth)
             f->wk = WK_END;                     // the root can't be read
@@ -1416,6 +1438,7 @@ static void entry_dir(fsck_t *f, uint32_t start) {
         if (f->pass == 1)
             emit(f, false, "%s: nested more than %d levels deep: not read", path(f),
                  FSCK_DEPTH_MAX - 1);
+        fsck_fix_unread(f->fix);
         f->ent_kind = ENT_DEEP_DIR;
         f->wk = WK_FILECHAIN;
     } else {
@@ -1464,6 +1487,19 @@ static int wk_entry(fsck_t *f) {
     }
 }
 
+// Repair, pass 1: a file's chain longer than the file gets an end mark at the last cluster the
+// file needs (fsck_repair.h).
+static int fix_trim(fsck_t *f) {
+    uint32_t need = f->ent_size ? (f->ent_size - 1) / f->cbytes + 1 : 0, v;
+    int rc = fsck_fix_trim(f->fix, need, f->ch.n);
+    if (rc != FSCK_FIX_LOAD)
+        return fixed(f, rc);
+    int r = fat_get(f, f->ch.keep, &v);
+    if (r != R_OK)
+        return r;
+    return fixed(f, fsck_fix_end_mark(f->fix, f->fatbuf, f->fat_buf_lba, f->ch.keep));
+}
+
 static int wk_filechain(fsck_t *f) {
     int r = chain_run(f);
     if (r != R_OK)
@@ -1472,6 +1508,9 @@ static int wk_filechain(fsck_t *f) {
         stop_walk(f);
         return R_OK;
     }
+    if (f->pass == 1 && f->ent_kind == ENT_FILE && f->ch.status == CH_EOC
+            && (r = fix_trim(f)) != R_OK)
+        return r;
     if (f->pass == 1) {
         report_chain(f);
         if (f->ent_kind == ENT_FILE && f->ch.status == CH_EOC)
@@ -2002,7 +2041,10 @@ static void lost_flush(fsck_t *f) {
 static int st_compare(fsck_t *f) {
     while (f->cmp_next < f->win_hi) {
         uint32_t c = f->cmp_next, v;
-        int r = fat_get(f, c, &v);
+        int r = fixed(f, fsck_fix_flush(f->fix, f->fatbuf, f->fat_lba + c / FAT_PER_SEC));
+        if (r != R_OK)
+            return r;
+        r = fat_get(f, c, &v);
         if (r != R_OK)
             return r;
         if (v == 0) {
@@ -2015,13 +2057,18 @@ static int st_compare(fsck_t *f) {
             lost_flush(f);
         } else if (f->run_len && f->run_start + f->run_len == c) {
             f->run_len++;
+            fsck_fix_lost(f->fix, f->fatbuf, f->fat_buf_lba, c);
         } else {
             lost_flush(f);
             f->run_start = c;
             f->run_len = 1;
+            fsck_fix_lost(f->fix, f->fatbuf, f->fat_buf_lba, c);
         }
         f->cmp_next++;
     }
+    int r = fixed(f, fsck_fix_flush(f->fix, f->fatbuf, NO_LBA));
+    if (r != R_OK)
+        return r;
     f->state = f->pass < f->res.passes ? ST_PASS : ST_FINISH;
     return R_OK;
 }
@@ -2317,9 +2364,15 @@ int fsck_step(fsck_t *f, uint32_t budget) {
         }
         if (r == R_YIELD)
             return FSCK_MORE;
-        if (r == R_FAIL)
+        if (r == R_FAIL && f->state != ST_FAILED)
             fail_read(f);
     }
+}
+
+void fsck_set_fix(fsck_t *f, fsck_fix_t *fix) {
+    f->fix = fix;
+    if (fix)
+        fix->budget = &f->budget;
 }
 
 const fsck_result_t *fsck_result(const fsck_t *f) {
