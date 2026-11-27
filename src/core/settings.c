@@ -350,3 +350,7 @@ bool settings_reset(void) {
 bool settings_persistent(void) {
     return persistent;
 }
+
+void settings_config_slot(unsigned slot, config_slot_info_t *out) {
+    config_slot_info(&store, slot, out);
+}

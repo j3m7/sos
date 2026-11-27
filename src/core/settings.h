@@ -69,4 +69,10 @@ bool settings_reset(void);
 // False if flash can't be used (the firmware image overlaps the config slots).
 bool settings_persistent(void);
 
+// What config slot 0 or 1 holds (config_slot_info(): kind and sequence number, never contents),
+// through the store settings.c loads and saves with: a sealed record is opened with the seal key
+// already held here for saves, nothing is derived again. For the `config` health check; call
+// only when settings_persistent().
+void settings_config_slot(unsigned slot, config_slot_info_t *out);
+
 #endif

@@ -1475,3 +1475,18 @@ void sdcard_command(shell_t *sh, char *args) {
         shell_printf(sh, "usage: sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|"
                          "unmount|check [fix]" SD_USAGE_FAULT "]\n");
 }
+
+// --- for the `card` health check ----------------------------------------------------------------
+
+void sdcard_health_state(sdcard_health_t *out) {
+    out->mounted = card.state.mounted;
+    out->encrypted = card_kind == KIND_ENCRYPTED;
+    // Locked because the key doesn't open it: not for lack of a key yet (a board not set up)
+    // or of memory, which mount() looks at again.
+    out->locked = card_kind == KIND_LOCKED && !locked_without_key && !locked_no_memory;
+    out->fs = card.state.mounted ? fs_type(card.state.fatfs.fs_type) : NULL;
+    out->busy = checking ? "sd check running"
+              : formatting ? "card being formatted"
+              : unmounted_by_hand ? "card unmounted by hand" : NULL;
+    out->generation = mount_generation;
+}

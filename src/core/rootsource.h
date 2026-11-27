@@ -42,4 +42,13 @@ unsigned rootsource_otp_index(void);
 // keyprov_lock())?
 bool rootsource_otp_locked(void);
 
+// For the `rootsecret` health check: what rootsource_init() saw of a secret it FOUND in OTP
+// (it passed its check; the list's pages are locked against the bootloader, else the first
+// that isn't). Recorded at boot; nothing is read again.
+void rootsource_otp_detail(bool *secret_ok, bool *locks_ok, unsigned *open_page);
+
+// With the secret in OTP: does the chip's soft-lock register for its page say inaccessible to
+// Secure and Non-secure code? Reads the register (otp_hw->sw_lock), not the page.
+bool rootsource_otp_soft_locked(void);
+
 #endif
