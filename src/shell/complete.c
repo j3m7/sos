@@ -4,6 +4,7 @@
 // Tab completion over the command tables and the SD card's directories (see complete.h).
 
 #include "shell/complete.h"
+#include "shell/termtext.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -17,9 +18,18 @@ static bool is(const char *name, const char *word, size_t n) {
     return !strncmp(name, word, n) && name[n] == '\0';
 }
 
+// A space that isn't U+0020: it reads as a word break on the line but isn't one.
+static bool unicode_space(uint32_t cp) {
+    return cp == 0xa0 || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200a) || cp == 0x202f ||
+           cp == 0x205f || cp == 0x3000;
+}
+
 // Can a file name go on the line as one word, and be shown on the terminal as it is? Valid
 // UTF-8 (no overlong forms, surrogates or code points past U+10FFFF) from U+0021 up, without
 // DEL and the C1 controls (U+0080-U+009F): a name can't send the terminal escape sequences.
+// Nor what termtext_hidden() names (bidi controls, zero-width and other invisible characters,
+// tag characters, variation selectors) or other spaces: Tab puts the name on the line about to
+// be run, so what it shows must be what it is, and two names must never look the same.
 static bool name_ok(const char *name) {
     const unsigned char *p = (const unsigned char *)name;
     if (!*p)
@@ -48,7 +58,8 @@ static bool name_ok(const char *name) {
                 return false;
             cp = cp << 6 | (p[i] & 0x3f);
         }
-        if (cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) || cp < 0xa0)
+        if (cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) || cp < 0xa0 ||
+            termtext_hidden(cp) || unicode_space(cp))
             return false;
         p += n + 1;
     }

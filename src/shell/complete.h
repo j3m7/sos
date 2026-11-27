@@ -50,8 +50,9 @@ typedef struct {
 //
 // Calls `fn` with each match that starts with the text from *start, and returns how many.
 // Words: not SHELL_HIDDEN ones, nor SHELL_ADMIN ones unless `admin`. File names: only those
-// that can be typed as one word and shown safely (valid UTF-8, no spaces, control characters
-// or C1 controls) and fit on a line (SHELL_LINE_MAX bytes at most). None when an earlier word
+// that can be typed as one word and shown as they are (valid UTF-8; no spaces of any kind,
+// control characters, C1 controls, nor what termtext_hidden() names) and fit on a line
+// (SHELL_LINE_MAX bytes at most). None when an earlier word
 // isn't known, is offered only to an admin channel and this isn't one, or takes nothing after
 // it. *partial says the directory lister stopped early, so there may be more matches than
 // were given.

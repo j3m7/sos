@@ -158,6 +158,10 @@ static const struct {
     {"/data", {"x.csv"}},
     {"/u", {"\xc3\xa9" "1", "\xc3\xa8" "2", "Mj\xc3\xb6lnir.txt", "bad\xc2\x9b" "c", "\xff"}},
     {"/big", {"zz", "aa"}},     // listed as cut short
+    // Look like something they aren't: U+202E (right-to-left override), U+200B (zero-width
+    // space), U+00A0 and U+3000 (spaces that don't separate words), U+FEFF; then a plain one.
+    {"/look", {"safe\xe2\x80\xaetxt.exe", "a\xe2\x80\x8b" "b", "a\xc2\xa0" "b",
+               "a\xe3\x80\x80" "b", "\xef\xbb\xbf" "c", "ab"}},
 };
 static bool no_card;
 static char listed[SHELL_LINE_MAX + 1];     // the directory Tab last asked for, as typed
@@ -1416,6 +1420,18 @@ TEST(tab_skips_names_it_cannot_type_or_show) {
     CHECK_OUT("cat u/b\a");
 }
 
+TEST(tab_skips_names_that_look_like_something_else) {
+    start(&io_plain);
+    type("cat look/s\t");                            // a right-to-left override
+    CHECK_OUT("cat look/s\a");
+    start(&io_plain);
+    type("cat look/a\t");                            // only "ab" is offered
+    CHECK(line_is("cat look/ab "));
+    start(&io_plain);
+    type("cat look/\t");
+    CHECK(line_is("cat look/ab "));                  // not U+FEFF c
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1567,6 +1583,7 @@ TEST_MAIN(
     RUN(tab_completes_every_path_argument);
     RUN(tab_paths_relative_to_the_working_directory_and_absolute);
     RUN(tab_skips_names_it_cannot_type_or_show);
+    RUN(tab_skips_names_that_look_like_something_else);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);
