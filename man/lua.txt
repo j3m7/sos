@@ -23,7 +23,9 @@ DESCRIPTION
 
     Quote the code after -e with '...': the shell takes quotes, '|' and '>'
     for itself (QUOTING in 'man intro'). So: lua -e 'print("hi")', and
-    lua -e 'print(2 > 1)'.
+    lua -e 'print(2 > 1)'. Unquoted words after -e are joined with single
+    spaces (lua -e print(1 + 1) works too). A file name is one word, quoted
+    if it holds spaces: lua 'my script.lua'.
 
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the

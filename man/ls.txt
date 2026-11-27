@@ -12,7 +12,7 @@ DESCRIPTION
 
     Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
     used. Paths are relative to the shell's working directory unless they
-    start with '/'. File names with spaces aren't supported yet.
+    start with '/'. A name with spaces is quoted: ls 'my dir'.
 
 SEE ALSO
     cd, cat, sd, intro
