@@ -339,8 +339,16 @@ if (EXISTS ${FATFS_DIR}/ff.c)
         FSCK_SEEDS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/fsck")
     target_link_libraries(test_fsck PRIVATE fatfs_host)
     add_test(NAME fsck COMMAND test_fsck)
+
+    # tests/fsck_disk.c, fsck_faults.c, fsck_damage.c: the fault-injection harness for the card
+    # checker's repair (docs/design/sd-check.md §10.4): RAM disk images made by FatFs, a fault
+    # layer that cuts or fails writes and reads, a runner, file fingerprints and a seeded damage
+    # generator.
+    add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
+    add_test(NAME fsck_faults COMMAND test_fsck_faults)
 else()
-    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck is skipped")
+    message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck and test_fsck_faults are skipped")
 endif()
 
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
