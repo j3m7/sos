@@ -41,7 +41,7 @@ lint:
 tidy *files:
     tools/tidy.sh {{ files }}
 
-# libFuzzer on a parser (clang): http nts_ke nts_ntp certbundle config ping terminal (docs/development.md)
+# libFuzzer on a parser (clang): http nts_ke nts_ntp certbundle config ping terminal words (docs/development.md)
 fuzz target seconds="60":
     [[ -f build-fuzz/build.ninja ]] || CC=clang cmake -S tests -B build-fuzz -G Ninja -DSOS_FUZZ=ON
     cmake --build build-fuzz --target {{ quote("fuzz_" + target) }}

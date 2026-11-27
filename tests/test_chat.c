@@ -10,6 +10,8 @@
 #include "chat/chat.h"
 #include "shell/complete.h"
 #include "shell/shell.h"
+#include "shell/words.h"
+#include "shell/login.h"
 #include "core/heaptag.h"
 #include "test.h"
 
@@ -71,15 +73,16 @@ bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
     return false;                           // not under test here: paged when the job ends
 }
 
-void shell_execute(shell_t *sh, char *cmd) {
-    char *args = strchr(cmd, ' ');
-    if (args) {
-        *args++ = '\0';
-        while (*args == ' ')
-            args++;
-        if (!*args)
-            args = NULL;
-    }
+// The console's lock (login.c, not linked here): these shells are never locked.
+bool login_gate(shell_t *s, const char *cmd) {
+    (void)s;
+    (void)cmd;
+    return false;
+}
+
+void shell_execute(shell_t *sh, int argc, char **argv) {
+    const char *cmd = argv[0];
+    char *args = words_join(argc, argv);    // as shell.c passes it
     if (!strcmp(cmd, "wall"))
         chat_cmd_wall(sh, args);
     else if (!strcmp(cmd, "chat"))

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Shell line editing and output. Depends only on shell.h, sos_version and the C library, so it
-// builds on the host for unit tests (which define sos_version); the commands live in shell.c
-// (shell_execute).
+// Shell line editing and output. Depends only on shell.h, sos_version, login_gate() and the C
+// library, so it builds on the host for unit tests (which define sos_version, and login_gate()
+// unless they link login.c); the commands live in shell.c (shell_execute).
 
 #include "shell/shell.h"
 #include "core/version.h"
 #include "shell/charwidth.h"
 #include "shell/complete.h"
+#include "shell/login.h"
 #include "shell/termtext.h"
 
 #include <stdarg.h>
@@ -498,9 +499,10 @@ static void pipe_resume(shell_t *sh) {
         shell_run_job(sh, prod, arg);
 }
 
-// Trim spaces and hand non-empty commands to the command module. A line with stages
-// (`<command> | grep x | more`, pipe_split()) runs the command with its output going through
-// them: to the terminal, or captured and then paged with `more` last.
+// Trim spaces, split the line into words (words.h) and hand the command to the command module.
+// A line with stages (`<command> | grep x | more`) or a redirect (`<command> > file`) runs the
+// command with its output going through them: to the terminal, into the file, or captured and
+// then paged with `more` last.
 static void run_line(shell_t *sh, char *cmd) {
     while (*cmd == ' ')
         cmd++;
@@ -512,20 +514,30 @@ static void run_line(shell_t *sh, char *cmd) {
     history_add(sh, cmd);
     pipeline_t *p = &sh->pipe;
     snprintf(p->name, sizeof(p->name), "%s", cmd);
-    char *stages = pipe_split(cmd);
-    if (!stages) {
-        shell_execute(sh, cmd);
+    // The console takes no command while it's locked (shell/login.h). The gate sees the line
+    // as typed, before it is split: a locked console gets its refusal (or runs a rescue
+    // command, which login.c knows by its whole line), never a message about quotes.
+    if (sh->io->admin && login_gate(sh, cmd))
+        return;
+    words_t w;
+    const char *why = words_split(cmd, &w);
+    int argc = 0;                           // the command: the words before the first operator
+    while (!why && argc < w.n && w.v[argc])
+        argc++;
+    if (why) {                              // nothing runs
+        shell_printf(sh, "%s\n", why);
         return;
     }
-    if (!*cmd) {
-        shell_printf(sh, "usage: <command> | more, or <command> | grep|head|tail|wc ...\n");
+    if (!argc) {
+        shell_printf(sh, "usage: <command> | more, or <command> | grep|head|tail|wc|tee ..., "
+                         "or <command> > <path>\n");
         return;
     }
-    if (!shell_command_tables(sh)) {        // a locked console: the refusal, not a pipeline
-        shell_execute(sh, cmd);
+    if (argc == w.n) {                      // no stages
+        shell_execute(sh, argc, w.v);
         return;
     }
-    if (!pipe_open(sh, p, stages))          // a stage doesn't parse: its usage, nothing runs
+    if (!pipe_open(sh, p, &w, argc))        // a stage doesn't parse: why, and nothing runs
         return;
     p->out = term_out;
     if (p->sink == PIPE_SINK_PAGER) {
@@ -538,7 +550,7 @@ static void run_line(shell_t *sh, char *cmd) {
             shell_printf(sh, "%s: out of memory, running without the pager\n", p->name);
         }
     }
-    shell_execute(sh, cmd);
+    shell_execute(sh, argc, w.v);
     if (!piped(sh))                         // nothing to pipe through (the pager was out of
         return;                             // memory), or the command ended the session
     if (sh->answer)                         // it asks a question: not a thing to pipe

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 
 #include "shell/shell.h"
+#include "shell/words.h"
 #include "shell/login.h"
 
 #include <stdio.h>
@@ -2321,19 +2322,10 @@ bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
     return edit_view_growing(sh, name, text, len);
 }
 
-void shell_execute(shell_t *sh, char *cmd) {
-    // The console takes no command while it's locked (shell/login.h).
-    if (sh->io->admin && login_gate(sh, cmd))
-        return;
-    // Split "command arguments"; args is NULL without arguments.
-    char *args = strchr(cmd, ' ');
-    if (args) {
-        *args++ = '\0';
-        while (*args == ' ')
-            args++;
-        if (!*args)
-            args = NULL;
-    }
+void shell_execute(shell_t *sh, int argc, char **argv) {
+    // The console's lock was checked on the raw line (run_line(), login_gate()).
+    char *cmd = argv[0];
+    char *args = words_join(argc, argv);    // the rest, single-spaced; NULL without any
     for (const shell_cmd_t *const *t = command_tables; *t; t++)
         for (const shell_cmd_t *c = *t; c->name; c++)
             if (!strcmp(cmd, c->name)) {

@@ -128,9 +128,10 @@ static size_t complete_path(const complete_src_t *src, const char *line, size_t 
     return e.count;
 }
 
-// A command marked SHELL_REDIRECT (echo) writes to the text after the line's last '>' (or ">>"),
-// spaces before it skipped: that's a path when the cursor is in it. Complete it then; nothing
-// otherwise (the words before are free text).
+// After a '>' (or ">>") the shell writes the command's output to a file (shell/pipe.h): the text
+// after the line's last '>', spaces before it skipped, is a path when the cursor is in it.
+// Complete it then; nothing otherwise. It still scans for the line's last '>' as plain text, so
+// a '>' inside quotes misleads it: phase 3 of shell quoting (#207) makes it quote-aware.
 static size_t complete_redirect(const complete_src_t *src, const char *line, size_t from,
                                 size_t len, size_t *start, complete_fn fn, void *arg,
                                 bool *partial) {
@@ -209,6 +210,11 @@ static bool complete_stage(const complete_src_t *src, const char *line, size_t l
 size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
                       complete_fn fn, void *arg, bool *partial) {
     *partial = false;
+    size_t op = len;                    // a '>' after the last '|': the redirect's path
+    while (op > 0 && line[op - 1] != '>' && line[op - 1] != '|')
+        op--;
+    if (op > 0 && line[op - 1] == '>')
+        return complete_redirect(src, line, 0, len, start, fn, arg, partial);
     size_t stage_count;
     if (complete_stage(src, line, len, start, fn, arg, partial, &stage_count))
         return stage_count;
@@ -243,8 +249,6 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
                     }
             if (!found || (!src->admin && (found->flags & SHELL_ADMIN)))
                 return 0;
-            if (found->flags & SHELL_REDIRECT)
-                return complete_redirect(src, line, i, len, start, fn, arg, partial);
             words = found->words;
             flags = found->flags;
             at_command = false;

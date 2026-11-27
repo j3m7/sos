@@ -9,6 +9,7 @@
 
 #include "shell/complete.h"
 #include "shell/login.h"
+#include "shell/words.h"
 #include <stdlib.h>
 
 #include "core/heaptag.h"
@@ -145,9 +146,11 @@ bool shell_page_growing(shell_t *s, const char *name, char *text, size_t len) {
     return false;                           // not under test here: paged when the job ends
 }
 
-void shell_execute(shell_t *s, char *cmd) {
-    if (login_gate(s, cmd))             // as shell.c does for the console
-        return;
+// The lock was checked by run_line() (shell_core.c) on the raw line before it got here.
+void shell_execute(shell_t *s, int argc, char **argv) {
+    char cmd[SHELL_LINE_MAX + 2];
+    const char *args = words_join(argc, argv);
+    snprintf(cmd, sizeof(cmd), args ? "%s %s" : "%s", argv[0], args);
     if (!strcmp(cmd, "job")) {
         shell_run_job(s, endless_job, NULL);
         return;
@@ -517,6 +520,19 @@ TEST(no_keys_locks_with_rescue_commands_only) {
     run_ms(20);
     CHECK_EQ(n_executed, 3);
     type("rootsecret forget now\r");            // not exactly a rescue command
+    run_ms(20);
+    CHECK_EQ(n_executed, 3);
+    // The lock comes before the line is split into words: a line that wouldn't split gets the
+    // refusal, never a message about its quotes; quoting doesn't make a rescue command.
+    clear_out();
+    type("don't\r");
+    run_ms(20);
+    CHECK(shown("The console is locked: the root secret can't be used"));
+    CHECK(!shown("unmatched quote"));
+    type("'rootsecret' | wc\r");
+    run_ms(20);
+    CHECK_EQ(n_executed, 3);
+    type("rootsecret  forget\r");              // the raw line, as before quoting
     run_ms(20);
     CHECK_EQ(n_executed, 3);
     CHECK(login_locked());
