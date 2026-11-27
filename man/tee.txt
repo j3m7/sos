@@ -16,6 +16,9 @@ DESCRIPTION
     The file is written as the output comes, and a command stopped with Ctrl-C
     leaves what it had written, as on Unix. Stages before tee decide what it
     sees: 'dmesg | grep wifi | tee /w.txt' saves only the matching lines.
+    While a long command runs, the file is synced to the card about once a
+    second (at the first output after each second mark), so 'ls' shows its
+    size meanwhile and a reset loses at most the output since the last sync.
     If the card refuses a write (it is full, say) tee says so once and stops
     the command, as head does.
 

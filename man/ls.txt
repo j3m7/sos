@@ -8,7 +8,9 @@ DESCRIPTION
     Lists the directory (the working directory without a path): each entry
     with its size and date. A job: it does a little work per pass of the main
     loop, so the console, SSH and the watchdog keep going, and Ctrl-C stops it.
-    Files are dated with the system clock (UTC).
+    Files are dated with the system clock (UTC). A file that a command is
+    still writing ('tee', '>', 'cp') and that hasn't been synced yet shows
+    'being written' in place of the date, and the size written out so far.
 
     Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
     used. Paths are relative to the shell's working directory unless they
