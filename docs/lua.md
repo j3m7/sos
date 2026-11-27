@@ -69,6 +69,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 | `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
 | `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
+| `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
 
 Failures return `nil` and a message. There's no `io`, `os` or `debug`: scripts reach the system
 only through `sos`. `__gc` metamethods aren't supported (`setmetatable` refuses them; use a
@@ -218,6 +219,46 @@ sos.every(60, function()
   end
 end)
 ```
+
+## The log
+
+`sos.dmesg([cursor])` reads the system log kept in memory, the lines `dmesg` shows. It returns
+three values:
+
+- a list of entries, oldest first, each `{time=, level=, facility=, text=}`: seconds since boot
+  (a float, millisecond steps), `"err"`, `"warning"`, `"notice"`, `"info"` or `"debug"`,
+  `"kern"`, `"auth"`, `"daemon"`, `"user"` or `"none"`, and the message without the time and the
+  level's tag;
+- a cursor: pass it to the next call to get only the entries logged since;
+- `lost`: `true` if entries after the cursor you passed are gone: dropped before this call, or
+  the cursor is from before a reboot. Then the list starts at the oldest entry kept.
+
+The log keeps only the last 4 KB of messages (about 50 lines), so a script that watches it should
+read it often enough; `lost` says when it didn't. Without a cursor (or with 0) it returns all that
+is kept. A script's own `sos.log` lines and a background script's output are in it too.
+
+```lua
+-- /autorun.lua: send each warning or error to a phone, once a minute at most
+local _, cursor = sos.dmesg()                   -- start from now: skip what's already there
+sos.every(60, function()
+  local entries, next_cursor, lost = sos.dmesg(cursor)
+  if not entries then return end                -- nil and an error: try again next minute
+  cursor = next_cursor
+  local lines = {}
+  for _, e in ipairs(entries) do
+    if (e.level == "err" or e.level == "warning") and e.facility ~= "user" then
+      lines[#lines + 1] = string.format("[%.0f] %s", e.time, e.text)
+    end
+  end
+  if lost then lines[#lines + 1] = "(some log lines were lost)" end
+  if #lines > 0 then
+    sos.http.post("https://ntfy.example/sos", table.concat(lines, "\n"))
+  end
+end)
+```
+
+Leaving out `user` keeps the script from sending its own `sos.log` lines and output. A post
+that fails is logged as a `daemon` warning, which the next run sends: at most one line a minute.
 
 ## Limits and internals
 

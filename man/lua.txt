@@ -41,10 +41,12 @@ DESCRIPTION
     sos.time, sos.uptime, sos.sleep, sos.log; timers sos.every/after/cancel
     (a background script keeps going while timers are left);
     sos.http.get/post/request for HTTPS (the response includes how long the
-    request took); and tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status. There is
-    no io, os or debug. Failures return nil and a message. Each script may
-    allocate up to 128 KB. Full details: docs/lua.md in the repository.
+    request took); tables about the board: sos.sensors, sos.mem,
+    sos.version, sos.reset_reason, sos.glitch and sos.wifi.status; and
+    sos.dmesg for the system log (with a cursor, for only the newer lines).
+    There is no io, os or debug. Failures return nil and a message. Each
+    script may allocate up to 128 KB. Full details: docs/lua.md in the
+    repository.
 
 SEE ALSO
     dmesg, logger, http, mem

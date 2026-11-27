@@ -680,10 +680,11 @@ static int run_timers(lua_State *L) {
 
 // --- read-only tables: sos.sensors, sos.mem, ... (lua_health.c on core 0) ---------------------
 
-// Ask core 0 for table `which` and push it, or push nil and the error.
-static int info(lua_State *L, lua_health_table_t which) {
+// Ask core 0 for table `which` (with argument `arg`) and push it, or push nil and the error.
+static int info_arg(lua_State *L, lua_health_table_t which, uint32_t arg) {
     lua_req.type = LR_INFO;
     lua_req.offset = (uint32_t)which;
+    lua_req.arg = arg;
     request();
     check_cancel(L);
     if (lua_req.result < 0)
@@ -691,6 +692,10 @@ static int info(lua_State *L, lua_health_table_t which) {
     if (!lua_info_push(L, lua_req.data, lua_req.len))
         return luaL_error(L, "malformed answer from core 0");
     return 1;
+}
+
+static int info(lua_State *L, lua_health_table_t which) {
+    return info_arg(L, which, 0);
 }
 
 static int l_sensors(lua_State *L) { return info(L, LH_SENSORS); }
@@ -714,6 +719,47 @@ static int l_mem(lua_State *L) {
     return 1;
 }
 
+// The history holds LOG_HISTORY_SIZE (4 KB) of text: a few pages at most, even with lines logged
+// while it's read. A cap, so a log written faster than it's read can't keep the loop going.
+#define DMESG_PAGES 8
+
+// sos.dmesg([cursor]): the log entries after cursor (all of them without one), the cursor to pass
+// next time, and whether entries after the given cursor were lost. Pages from core 0 are joined
+// into one list.
+static int l_dmesg(lua_State *L) {
+    lua_Integer since = luaL_optinteger(L, 1, 0);
+    luaL_argcheck(L, since >= 0 && since <= UINT32_MAX, 1, "not a cursor from sos.dmesg");
+    uint32_t cursor = (uint32_t)since;
+    bool lost = false;
+    lua_newtable(L);                            // the list
+    int list = lua_gettop(L);
+    lua_Integer n = 0;
+    for (int page = 0; page < DMESG_PAGES; page++) {
+        if (info_arg(L, LH_DMESG, cursor) != 1)
+            return 2;                           // nil and the error
+        int t = lua_gettop(L);
+        if (lua_getfield(L, t, "entries") == LUA_TTABLE) {
+            lua_Integer k = (lua_Integer)lua_rawlen(L, -1);
+            for (lua_Integer i = 1; i <= k; i++) {
+                lua_rawgeti(L, -1, i);
+                lua_rawseti(L, list, ++n);
+            }
+        }
+        lua_getfield(L, t, "cursor");
+        cursor = (uint32_t)lua_tointeger(L, -1);
+        lua_getfield(L, t, "lost");
+        lost = lost || lua_toboolean(L, -1);    // a later page too, if the log overtook it
+        lua_getfield(L, t, "more");
+        bool more = lua_toboolean(L, -1);
+        lua_settop(L, list);
+        if (!more)
+            break;
+    }
+    lua_pushinteger(L, cursor);
+    lua_pushboolean(L, lost);
+    return 3;
+}
+
 static const luaL_Reg wifi_lib[] = {
     {"status", l_wifi_status}, {NULL, NULL},
 };
@@ -723,7 +769,8 @@ static const luaL_Reg sos_lib[] = {
     {"read", l_read},     {"write", l_write},   {"append", l_append}, {"list", l_list},
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
-    {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {NULL, NULL},
+    {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
+    {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
