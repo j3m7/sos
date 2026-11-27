@@ -95,7 +95,7 @@ static void take_entry(const char *name, bool is_dir, void *arg) {
     if ((e->dirs_only && !is_dir) || !starts_with_any_case(name, e->prefix, e->plen) ||
         !name_ok(name) || strlen(name) > SHELL_LINE_MAX)   // too long for the line anyway
         return;
-    e->fn(name, is_dir ? '/' : ' ', e->arg);
+    e->fn(name, is_dir ? '/' : ' ', NULL, e->arg);
     e->count++;
 }
 
@@ -138,6 +138,28 @@ static size_t complete_redirect(const complete_src_t *src, const char *line, siz
     if (memchr(line + p, ' ', len - p))  // a name with a space: never offered (complete.h)
         return 0;
     return complete_path(src, line, p, len, false, start, fn, arg, partial);
+}
+
+typedef struct {
+    const char *prefix;
+    size_t plen;
+    complete_fn fn;
+    void *arg;
+    size_t count;
+} values_t;
+
+// A word from a values function: offered like a file name, only if it can go on the line as
+// one word and be shown as it is.
+static void take_value(const char *value, const char *note, void *arg) {
+    values_t *v = arg;
+    if (strncmp(value, v->prefix, v->plen) || !name_ok(value) || strlen(value) > SHELL_LINE_MAX)
+        return;
+    v->fn(value, ' ', note, v->arg);
+    v->count++;
+}
+
+static bool is_values(const shell_word_t *words) {
+    return words && !words->name && (words->flags & SHELL_VALUES);
 }
 
 static char word_end(unsigned flags) {
@@ -214,14 +236,19 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
         for (const shell_cmd_t *const *t = src->tables; *t; t++)
             for (const shell_cmd_t *c = *t; c->name; c++)
                 if (offered(c->flags, src->admin) && !strncmp(c->name, prefix, plen)) {
-                    fn(c->name, word_end(c->flags), arg);
+                    fn(c->name, word_end(c->flags), NULL, arg);
                     count++;
                 }
         return count;
     }
+    if (is_values(words)) {
+        values_t v = {prefix, plen, fn, arg, 0};
+        ((const shell_values_t *)words)->list(src->sh, take_value, &v);
+        count = v.count;
+    }
     for (const shell_word_t *x = words; x && x->name; x++)
         if (offered(x->flags, src->admin) && !strncmp(x->name, prefix, plen)) {
-            fn(x->name, word_end(x->flags), arg);
+            fn(x->name, word_end(x->flags), NULL, arg);
             count++;
         }
     if (!paths)

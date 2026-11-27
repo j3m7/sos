@@ -13,8 +13,10 @@
 // tables (shell.h) and a directory lister, so it builds on the host for unit tests.
 
 // A match: `word`, and what follows it once it's complete: ' ' for a word or a file, '/' for a
-// directory, '\0' for nothing (a SHELL_NOSPACE word).
-typedef void (*complete_fn)(const char *word, char end, void *arg);
+// directory, '\0' for nothing (a SHELL_NOSPACE word). `note` (NULL for none) is shown beside it
+// in the list only; it comes from outside (a key comment, an SSID), so filter it to show it.
+// Both may live in a buffer that is reused once `fn` returns.
+typedef void (*complete_fn)(const char *word, char end, const char *note, void *arg);
 
 // A directory lister calls this with every entry.
 typedef void (*complete_entry_fn)(const char *name, bool is_dir, void *arg);
@@ -46,8 +48,10 @@ typedef struct {
 // SHELL_PATH, every word that isn't one of its words is a path, and so is the last word: then
 // the entries of the directory it names that start with what follows its last '/' match too
 // (only directories with SHELL_DIR), and *start is just after that '/'; otherwise *start is
-// where the last word begins. After a SHELL_REDIRECT command (echo) only the text after the
-// line's last '>' is completed, as a path, and only while it has no space in it.
+// where the last word begins. Words that come from a function (SHELL_VALUES_OF, shell.h) are
+// offered like the others, when they pass the same check as file names. After a SHELL_REDIRECT
+// command (echo) only the text after the line's last '>' is completed, as a path, and only
+// while it has no space in it.
 //
 // Calls `fn` with each match that starts with the text from *start (file names ignoring the
 // case of ASCII letters, as FAT does; words exactly), and returns how many.
