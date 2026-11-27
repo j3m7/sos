@@ -449,6 +449,13 @@ the Wi-Fi chip's VBUS sense pin. Nothing else uses the ADC; each reading selects
   it's the USB voltage less a diode's drop (about 0.35 V). Measured through a 1% divider
   against the same reference, it's within a few percent. A reading taken during a Wi-Fi
   transmission catches its dip, so the lowest since boot can be a brief one.
+- **Calibration** (`temp cal`): the configuration's `temp_offset`, tenths of a degree, is added
+  to every temperature reading, so the log line, `temp` and the glitch detector's reports all
+  carry it. `temp cal <degrees>` sets it to the reference minus a fresh uncalibrated reading.
+  When it changes (or `config reset` clears it), `sensors_temp_offset_changed()` moves the
+  lowest, highest and latest readings by the difference, so they stay comparable. It takes
+  two bytes of the configuration record that were padding, so the record's length doesn't
+  change. Offset only: the slope and the ADC reference stay as they are.
 - `sensors.c` (the conversions, text, lowest and highest, when to log, the scratch register
   form) has no hardware in it and is unit tested on the host.
 

@@ -93,6 +93,15 @@ typedef struct {
 // Count one reading taken at uptime now_s. SENSORS_NONE is ignored.
 void sensors_stats_add(sensors_stats_t *st, int value, uint32_t now_s);
 
+// Move every value by delta (the temperature's calibration changed), keeping the times.
+void sensors_stats_shift(sensors_stats_t *st, int delta);
+
+// A temperature as typed for `temp cal`: "23", "23.5", "-4.2", "+31.0"; at most one decimal,
+// SENSORS_CAL_MIN..SENSORS_CAL_MAX. False for anything else.
+#define SENSORS_CAL_MIN (-400)          // tenths: -40.0 degrees
+#define SENSORS_CAL_MAX 1250            // 125.0, the chip's rated range
+bool sensors_parse_temp(const char *s, int *tenths);
+
 // What the last log line said. usb: 1 present, 0 not, -1 unknown.
 typedef struct {
     bool any;                           // a line has been logged since boot
@@ -117,7 +126,11 @@ int sensors_unpack(uint32_t reg, uint32_t marker);
 
 // --- the hardware (sensors_board.c) --------------------------------------------------------------
 
-// Early in boot: the ADC and the temperature sensor on, and a first temperature reading for
+// The temperature readings below include the calibration (`temp cal`): the configuration's
+// temp_offset, tenths of a degree, 0 = uncalibrated. So do the log line and the glitch
+// detector's reports, which take them from here.
+
+// Early in boot, after the configuration has loaded: the ADC and the temperature sensor on, and a first temperature reading for
 // sensors_temp_last(). That one doesn't count in the lowest and highest: it's taken before
 // Wi-Fi starts, which shifts the readings (sensors_board.c). VSYS can be read only once the
 // Wi-Fi chip is running (its SPI clock shares the pin), so the main loop takes the first.
@@ -139,6 +152,13 @@ int sensors_last_vsys(void);
 
 // USB power at the latest reading: 1 present, 0 not, -1 not known yet.
 int sensors_usb_power(void);
+
+// For `temp cal`: a temperature reading now without the calibration, not counted anywhere.
+int sensors_read_temp_uncalibrated(void);
+
+// After the configuration's temp_offset changed from old_offset: move the lowest, highest and
+// latest temperatures (and the log's last) by the difference, so they stay comparable.
+void sensors_temp_offset_changed(int old_offset);
 
 // The readings since boot.
 const sensors_stats_t *sensors_temp_stats(void);

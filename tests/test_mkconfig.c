@@ -38,7 +38,8 @@ TEST(full_file_loads_like_on_the_device) {
                  "ssh_key = " KEY "\n"
                  "nts_server = time.example.org\n"
                  "nts_sync_hours = 24\n"
-                 "rtc_cal_ppm = 92\n", &cfg));
+                 "rtc_cal_ppm = 92\n"
+                 "temp_cal = 1.8\n", &cfg));
     static uint8_t image[MKCONFIG_IMAGE_SIZE];
     CHECK(mkconfig_image(&cfg, image));
     const config_store_t store = {rd, wr, image, NULL, false};
@@ -56,6 +57,7 @@ TEST(full_file_loads_like_on_the_device) {
     CHECK(!strcmp(back.ntp_server, "time.example.org"));
     CHECK_EQ(back.ntp_sync_hours, 24);
     CHECK_EQ(back.rtc_offset, 21);                      // 92 ppm fast: 21 steps of 4.34 ppm
+    CHECK_EQ(back.temp_offset, 18);                     // temp_cal = 1.8
     // The second slot is erased, so nothing the board had saved survives.
     for (size_t i = CONFIG_SLOT_SIZE; i < MKCONFIG_IMAGE_SIZE; i++)
         if (image[i] != 0xff) {
@@ -97,6 +99,14 @@ TEST(errors_name_the_line) {
     CHECK(e != NULL);
     CHECK(!parse("rtc_cal_ppm = -12.5\n", &cfg));
     CHECK_EQ(cfg.rtc_offset, -3);
+    CHECK(!parse("temp_cal = -2.4\n", &cfg));
+    CHECK_EQ(cfg.temp_offset, -24);
+    CHECK(!parse("temp_cal = 15\n", &cfg));
+    CHECK_EQ(cfg.temp_offset, 150);
+    e = parse("temp_cal = 15.1\n", &cfg);
+    CHECK(e != NULL);
+    e = parse("temp_cal = warm\n", &cfg);
+    CHECK(e != NULL);
     e = parse("hostname = bad name\n", &cfg);
     CHECK(e != NULL);
 }

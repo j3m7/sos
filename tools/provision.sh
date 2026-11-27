@@ -71,7 +71,7 @@ mkdir -p "$work"
 
 ${HOSTCC:-cc} -std=c11 -O1 -Wall -Wextra -I"$root/src" -I"$root/tools/host" \
     -o "$work/sos-mkconfig" "$root/tools/host/mkconfig.c" "$root/src/core/config.c" \
-    "$root/src/time/timeconv.c"
+    "$root/src/time/timeconv.c" "$root/src/core/sensors.c"
 "$work/sos-mkconfig" "$conf" "$work/config.bin"
 
 # The configuration slots are the two 4 KB sectors below the last one (the key sector: the SSH

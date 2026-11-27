@@ -91,9 +91,10 @@ SYNOPSIS
 DESCRIPTION
     'config' shows what is saved: hostname, whether a console password is set,
     the Wi-Fi networks, the number of trusted keys, the NTS server, the
-    periodic sync and the RTC calibration. Changes made by 'setup', 'wifi',
-    'key', 'hostname', 'time' and 'passwd' are saved in flash immediately,
-    survive reflashing, and only the console can make them.
+    periodic sync, and the RTC and chip temperature calibrations. Changes made
+    by 'setup', 'wifi', 'key', 'hostname', 'time', 'temp cal' and 'passwd' are
+    saved in flash immediately, survive reflashing, and only the console can
+    make them.
 
     The record is stored sealed under a key derived from the board's root
     secret, in two alternating flash sectors with a sequence number and CRC, so
@@ -979,6 +980,7 @@ NAME
 
 SYNOPSIS
     temp
+    temp cal [<degrees> | off]          (change: console only)
 
 DESCRIPTION
     The RP2350's own temperature sensor, read every 10 s, with the lowest and
@@ -988,13 +990,28 @@ DESCRIPTION
     and at least once an hour.
 
     It is the chip's temperature, not the room's: the chip runs warmer than
-    the air, more so under Wi-Fi load. The sensor is uncalibrated and can be a
-    few degrees off, but it is good for change over time on one board. The
-    glitch detector's report ('glitch') includes the last reading before a
-    detector reset.
+    the air, more so under Wi-Fi load. Uncalibrated, the sensor can be a few
+    degrees off, but it is good for change over time on one board. The last
+    line of 'temp' says whether a calibration is set. The glitch detector's
+    report ('glitch') includes the last reading before a detector reset.
+
+    'temp cal <degrees>' calibrates it: give what a thermometer beside the
+    board reads now, in degrees C (e.g. 23.5; -40 to 125). The difference
+    from the sensor's own reading, at most 15 degrees either way, is saved and
+    added to every reading after: 'temp', the log and the glitch detector's
+    reports. 'temp cal' alone shows it; 'temp cal off' removes it, and so does
+    'config reset' ('temp_cal' in a provisioning file sets it).
+
+    To calibrate: leave the board unpowered beside the thermometer for half an
+    hour, power it up, and within a minute of Wi-Fi connecting run 'temp cal'
+    with the thermometer's reading. The chip is already a little warmer than
+    the room by then, so a calibrated reading is closer to the room's
+    temperature as seen from the chip than to the chip's own: don't compare it
+    with the chip's rated maximum. It corrects the offset only, so it is best
+    near the temperature it was set at.
 
 SEE ALSO
-    power, glitch, dmesg
+    power, glitch, config, dmesg
 @@ time
 NAME
     time - the clock, the RTC and time sync over NTS
