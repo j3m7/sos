@@ -67,6 +67,7 @@ typedef struct {
     shell_values_fn list;
 } shell_values_t;
 
+_Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast back to the struct");
 #define SHELL_VALUES_INIT(fn) {{NULL, NULL, SHELL_VALUES}, (fn)}
 #define SHELL_VALUES_OF(v) (&(v).mark)
 
