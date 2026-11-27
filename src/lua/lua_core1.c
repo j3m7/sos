@@ -423,6 +423,26 @@ static void push_headers(lua_State *L) {
     }
 }
 
+static void set_int(lua_State *L, const char *name, lua_Integer v) {
+    lua_pushinteger(L, v);
+    lua_setfield(L, -2, name);
+}
+
+// The timings from the answer that ended the body, as fields of the response table on top.
+static void push_stats(lua_State *L, const lua_http_stats_t *s) {
+    set_int(L, "headers_ms", s->headers_ms);
+    set_int(L, "elapsed_ms", s->elapsed_ms);
+    if (!s->tls)
+        return;
+    lua_createtable(L, 0, 4);
+    set_int(L, "handshake_ms", s->handshake_us / 1000);
+    set_int(L, "longest_step_us", s->longest_step_us);
+    set_int(L, "heap_peak", s->heap_peak);
+    lua_pushboolean(L, s->dates_unchecked);
+    lua_setfield(L, -2, "dates_unchecked");
+    lua_setfield(L, -2, "tls");
+}
+
 // The request described by the options table at index t.
 static int http_request(lua_State *L, int t) {
     luaL_checkstack(L, 16, NULL);
@@ -469,7 +489,7 @@ static int http_request(lua_State *L, int t) {
     luaL_setmetatable(L, HTTP_CLOSER);
     lua_toclose(L, -1);
 
-    lua_createtable(L, 0, 4);
+    lua_createtable(L, 0, 7);
     lua_pushinteger(L, (lua_Integer)lua_req.result);
     lua_setfield(L, -2, "status");
     lua_pushstring(L, lua_req.path);
@@ -480,6 +500,7 @@ static int http_request(lua_State *L, int t) {
     luaL_Buffer b;
     luaL_buffinit(L, &b);
     size_t total = 0;
+    lua_http_stats_t stats;
     for (;;) {
         lua_req.type = LR_HTTP_READ;
         request();
@@ -491,6 +512,7 @@ static int http_request(lua_State *L, int t) {
         }
         if (lua_req.len == 0) {                 // the end: core 0 has dropped it
             http_open = false;
+            memcpy(&stats, lua_req.data, sizeof(stats));
             break;
         }
         if (total + lua_req.len > (size_t)max_body) {   // the guard closes it
@@ -504,6 +526,7 @@ static int http_request(lua_State *L, int t) {
     }
     luaL_pushresult(&b);
     lua_setfield(L, -2, "body");
+    push_stats(L, &stats);
     return 1;
 }
 
