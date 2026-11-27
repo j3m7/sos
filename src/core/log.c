@@ -6,10 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
-// History: a byte ring of entries "<level byte><text>\n", where the level byte is level + 1
-// (never '\n' or a printable character). Positions are absolute byte counts; the byte at
-// position p lives at hist[p % LOG_HISTORY_SIZE]. start..end is what's stored; printed..end is
-// what the console hasn't shown yet.
+// History: a byte ring of entries "<priority byte><text>\n", where the priority byte is 0x80 |
+// facility | level. Text is printable ASCII only, so that byte is never '\n' or text. Positions
+// are absolute byte counts; the byte at position p lives at hist[p % LOG_HISTORY_SIZE].
+// start..end is what's stored; printed..end is what the console hasn't shown yet.
 
 static char hist[LOG_HISTORY_SIZE];
 static uint32_t start, end, printed;
@@ -51,6 +51,13 @@ int log_console_level(void) { return console_level; }
 void log_set_history_level(int level) { history_level = level; }
 int log_history_level(void) { return history_level; }
 
+// Levels of a priority; emerg, alert and crit count as err (the level byte has room for them,
+// but nothing here tells them apart).
+static int level_of(int priority) {
+    int level = priority & SOS_LOG_LEVEL_MASK;
+    return level < SOS_LOG_ERR ? SOS_LOG_ERR : level;
+}
+
 static const char *const level_names[] = {
     [SOS_LOG_ERR] = "err", [SOS_LOG_WARNING] = "warning", [SOS_LOG_NOTICE] = "notice",
     [SOS_LOG_INFO] = "info", [SOS_LOG_DEBUG] = "debug",
@@ -69,10 +76,35 @@ int log_level_parse(const char *name) {
     return -1;
 }
 
+static const char *const facility_names[SOS_LOG_FACILITIES] = {
+    "none", "kern", "auth", "daemon", "user",
+};
+
+const char *log_facility_name(int facility) {
+    unsigned f = (unsigned)(facility & SOS_LOG_FACILITY_MASK) >> 3;
+    return f < SOS_LOG_FACILITIES ? facility_names[f] : NULL;
+}
+
+int log_facility_parse(const char *name) {
+    for (int f = 0; f < SOS_LOG_FACILITIES; f++)
+        if (!strcmp(name, facility_names[f]))
+            return f << 3;
+    return -1;
+}
+
+// The byte that starts an entry, and back.
+static char entry_byte(int facility, int level) {
+    return (char)(0x80 | (facility & SOS_LOG_FACILITY_MASK) | level);
+}
+
+static int entry_priority(char c) {
+    return (unsigned char)c & 0x7f;
+}
+
 // Drop the oldest entry. Caller holds the lock.
 static void drop_oldest(void) {
     if (before(start, end) && !before(start, printed))  // at its level byte; not shown yet
-        unprinted[level_slot(at(start) - 1)]--;
+        unprinted[level_slot(entry_priority(at(start)) & SOS_LOG_LEVEL_MASK)]--;
     while (before(start, end) && at(start) != '\n')
         start++;
     if (before(start, end))
@@ -84,25 +116,26 @@ static void drop_oldest(void) {
 }
 
 // Store one entry. Caller holds the lock.
-static void append(int level, const char *text, size_t n) {
+static void append(int facility, int level, const char *text, size_t n) {
     uint32_t need = (uint32_t)n + 2;
     while (end - start + need > LOG_HISTORY_SIZE)
         drop_oldest();
-    hist[end++ % LOG_HISTORY_SIZE] = (char)(level + 1);
+    hist[end++ % LOG_HISTORY_SIZE] = entry_byte(facility, level);
     unprinted[level_slot(level)]++;
     for (size_t i = 0; i < n; i++)
         hist[end++ % LOG_HISTORY_SIZE] = text[i];
     hist[end++ % LOG_HISTORY_SIZE] = '\n';
 }
 
-void log_vmsg(int level, const char *fmt, va_list ap) {
-    log_vmsg_prefixed(level, "", fmt, ap);
+void log_vmsg(int priority, const char *fmt, va_list ap) {
+    log_vmsg_prefixed(priority, "", fmt, ap);
 }
 
 // May run in interrupt context: a message that won't be kept costs only the level check, and
 // one that will is formatted once, into the one buffer here.
-void log_vmsg_prefixed(int level, const char *prefix, const char *fmt, va_list ap) {
+void log_vmsg_prefixed(int priority, const char *prefix, const char *fmt, va_list ap) {
     char line[LOG_LINE_MAX + 1];
+    int level = level_of(priority);
     if (!hooks || level > history_level)
         return;
 
@@ -130,24 +163,24 @@ void log_vmsg_prefixed(int level, const char *prefix, const char *fmt, va_list a
     }
 
     uint32_t saved = hooks->lock();
-    append(level, line, len);
+    append(priority & SOS_LOG_FACILITY_MASK, level, line, len);
     hooks->unlock(saved);
 
     if (!deferred && !hooks->in_irq())
         log_flush();
 }
 
-void log_msg(int level, const char *fmt, ...) {
+void log_msg(int priority, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    log_vmsg(level, fmt, ap);
+    log_vmsg(priority, fmt, ap);
     va_end(ap);
 }
 
-// Copy the entry at *pos (level byte not included) and advance past it. Caller holds the lock.
-// Returns the entry's level.
+// Copy the entry at *pos (priority byte not included) and advance past it. Caller holds the
+// lock. Returns the entry's priority (facility | level).
 static int copy_entry(uint32_t *pos, char *buf, size_t buflen) {
-    int level = at(*pos) - 1;
+    int priority = entry_priority(at(*pos));
     size_t n = 0;
     (*pos)++;
     while (before(*pos, end) && at(*pos) != '\n') {
@@ -159,7 +192,7 @@ static int copy_entry(uint32_t *pos, char *buf, size_t buflen) {
         (*pos)++;
     if (buflen)
         buf[n] = '\0';
-    return level;
+    return priority;
 }
 
 void log_flush(void) {
@@ -174,7 +207,7 @@ void log_flush(void) {
         bool lost = lost_unprinted;
         lost_unprinted = false;
         bool more = before(printed, end);
-        int level = more ? copy_entry(&printed, line, sizeof(line) - 1) : 0;
+        int level = more ? copy_entry(&printed, line, sizeof(line) - 1) & SOS_LOG_LEVEL_MASK : 0;
         if (more)
             unprinted[level_slot(level)]--;
         hooks->unlock(saved);
@@ -213,7 +246,7 @@ int log_pending(void) {
     return n;
 }
 
-bool log_history_next(uint32_t *cursor, char *buf, size_t buflen) {
+bool log_history_next(uint32_t *cursor, char *buf, size_t buflen, int *priority) {
     if (!hooks)
         return false;
     uint32_t saved = hooks->lock();
@@ -221,8 +254,31 @@ bool log_history_next(uint32_t *cursor, char *buf, size_t buflen) {
     if (*cursor == 0 || before(*cursor, start))
         *cursor = start;
     bool ok = before(*cursor, end);
-    if (ok)
-        copy_entry(cursor, buf, buflen);
+    if (ok) {
+        int p = copy_entry(cursor, buf, buflen);
+        if (priority)
+            *priority = p;
+    }
     hooks->unlock(saved);
     return ok;
+}
+
+bool log_quota_take(log_quota_t *q, unsigned per_sec) {
+    uint64_t now = hooks ? hooks->now_us() : 0;
+    if (now - q->window_us >= 1000000) {
+        q->window_us = now;
+        q->count = 0;
+    }
+    if (q->count < per_sec) {
+        q->count++;
+        return true;
+    }
+    q->dropped++;
+    return false;
+}
+
+unsigned log_quota_dropped(log_quota_t *q) {
+    unsigned n = q->dropped;
+    q->dropped = 0;
+    return n;
 }

@@ -60,10 +60,12 @@ static void otp_lock(void *ctx) {
     // It must now read as unreadable. If it doesn't, say so loudly: the lock is what keeps a
     // later bug from reading the secret.
     if (otpread_raw(ROOTOTP_ROW(otp_index, 0)) != 0xffffffffu)
-        log_msg(SOS_LOG_ERR, "rootsecret: LOCKING OTP PAGE %u DID NOT TAKE: the root secret is "
-                             "still readable by this firmware", page);
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "rootsecret: LOCKING OTP PAGE %u DID NOT TAKE: the root secret is "
+                "still readable by this firmware", page);
     else
-        log_msg(SOS_LOG_NOTICE, "rootsecret: OTP page %u is locked until the next reset", page);
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "rootsecret: OTP page %u is locked until the next reset", page);
 }
 
 static const keyprov_backend_t otp_backend = { otp_root, otp_lock, NULL };
@@ -100,18 +102,21 @@ void rootsource_init(void) {
         snprintf(why, sizeof(why), "present, in OTP page %u%s", page,
                  locks_ok ? "" : " (WARNING: an OTP page of its list can still be written "
                                  "from the USB bootloader)");
-        log_msg(SOS_LOG_NOTICE, "rootsecret: the root secret is in OTP page %u", page);
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "rootsecret: the root secret is in OTP page %u", page);
         if (!locks_ok)
-            log_msg(SOS_LOG_ERR, "rootsecret: OTP page %u is not locked against writes from "
-                                 "the USB bootloader. Someone with a cable could turn a spent "
-                                 "page into a root secret they know. This open board uses the "
-                                 "secret all the same; a console-only board would not",
+            log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                    "rootsecret: OTP page %u is not locked against writes from "
+                    "the USB bootloader. Someone with a cable could turn a spent "
+                    "page into a root secret they know. This open board uses the "
+                    "secret all the same; a console-only board would not",
                     open_page);
         return;
     case ROOTSRC_FLASH: {
         if (found == ROOTOTP_EXHAUSTED)
-            log_msg(SOS_LOG_WARNING, "rootsecret: every OTP page for the root secret is spent; "
-                                     "this open board uses its flash record");
+            log_msg(SOS_LOG_KERN | SOS_LOG_WARNING,
+                    "rootsecret: every OTP page for the root secret is spent; "
+                    "this open board uses its flash record");
         // An open board: the flash record, made now if there is none. It starts the provider.
         int state = rootflash_init();
         snprintf(why, sizeof(why), "%s",
@@ -146,7 +151,7 @@ void rootsource_init(void) {
     else
         snprintf(why, sizeof(why), "none: this is a console-only board and no root secret has "
                                    "been written to its OTP (its flash is not used for one)");
-    log_msg(SOS_LOG_ERR, "rootsecret: %s; there are no keys", why);
+    log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "rootsecret: %s; there are no keys", why);
 }
 
 rootsrc_t rootsource(void) { return source; }

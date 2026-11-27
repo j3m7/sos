@@ -130,7 +130,8 @@ static void fail(const char *why) {
     snprintf(ke.error, sizeof(ke.error), "%s (sent %u/%u, received %u bytes)", why,
              (unsigned)ke.request_sent, (unsigned)ke.request_len, (unsigned)ke.response_len);
     finish(false);
-    log_msg(SOS_LOG_WARNING, "nts: key exchange with %s failed: %s", ke.host, ke.error);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+            "nts: key exchange with %s failed: %s", ke.host, ke.error);
 }
 
 static bool export_key(WOLFSSL *ssl, bool s2c, uint8_t *key) {
@@ -154,14 +155,17 @@ static void succeed(void) {
     for (unsigned i = 0; i < result.cookie_count; i++)
         total += result.cookie_len[i];
     // Two lines: the log truncates at LOG_LINE_MAX (160).
-    log_msg(SOS_LOG_NOTICE, "nts: key exchange with %s done: %u cookies (%u bytes), NTP at %s:%u",
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+            "nts: key exchange with %s done: %u cookies (%u bytes), NTP at %s:%u",
             ke.host, result.cookie_count, total, result.server[0] ? result.server : ke.host,
             result.port ? result.port : NTS_NTP_PORT);
-    log_msg(SOS_LOG_INFO, "nts: handshake %lu ms, longest step %lu ms, wolfSSL heap peak %u bytes",
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO,
+            "nts: handshake %lu ms, longest step %lu ms, wolfSSL heap peak %u bytes",
             (unsigned long)(ke.stats.handshake_us / 1000),
             (unsigned long)(ke.stats.longest_step_us / 1000), (unsigned)ke.stats.heap_peak);
     if (ke.stats.dates_unchecked)
-        log_msg(SOS_LOG_WARNING, "nts: certificate dates not checked (clock not set)");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "nts: certificate dates not checked (clock not set)");
 }
 
 static bool sync_active(void);
@@ -181,7 +185,7 @@ static bool ke_begin(const char *host) {
         fail("out of memory");
         return true;
     }
-    log_msg(SOS_LOG_INFO, "nts: key exchange with %s:%u", ke.host, NTS_KE_PORT);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "nts: key exchange with %s:%u", ke.host, NTS_KE_PORT);
     return true;
 }
 
@@ -306,7 +310,7 @@ static void q_finish(bool ok, const char *why) {
     q.state = ok ? Q_DONE : Q_FAILED;
     if (!ok) {
         snprintf(q.error, sizeof(q.error), "%s", why);
-        log_msg(SOS_LOG_WARNING, "nts: query to %s failed: %s", q.server, why);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "nts: query to %s failed: %s", q.server, why);
     }
 }
 
@@ -388,7 +392,7 @@ static void q_check_reply(void) {
         // end the query.
         q.ignored++;
         q.last_reason = why;
-        log_msg(SOS_LOG_INFO, "nts: ignored a reply from %s: %s", q.server, why);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "nts: ignored a reply from %s: %s", q.server, why);
         q.got = false;
         heap_release(HEAP_TIME, r);
         return;
@@ -431,7 +435,7 @@ static void q_check_reply(void) {
     q_finish(true, NULL);
     // Sign printed separately: for |offset| < 1 s the whole-seconds part is 0 and loses it.
     int64_t a = q.offset_us < 0 ? -q.offset_us : q.offset_us;
-    log_msg(SOS_LOG_NOTICE,
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
             "nts: authenticated time from %s: offset %c%lld.%03lld s, delay %lld ms, stratum %u, "
             "%u cookies",
             q.server, q.offset_us < 0 ? '-' : '+', (long long)(a / 1000000),

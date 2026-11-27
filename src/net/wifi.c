@@ -197,7 +197,7 @@ static void log_aps(void) {
         used = len < 0 || (size_t)len >= sizeof(list) - used ? sizeof(list) - 1
                                                              : used + (size_t)len;
     }
-    log_msg(SOS_LOG_INFO, "wifi: access points of '%s': %s", nets[cur].ssid, list);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "wifi: access points of '%s': %s", nets[cur].ssid, list);
 }
 
 // Joining another network than the one the address is from: drop the address and the lease,
@@ -224,17 +224,19 @@ static void start_join(void) {
         cur = (unsigned)pick;
         cur_seen = wifi_pick_seen(scan_aps, scan_count, cur);
         if (net_count > 1)
-            log_msg(SOS_LOG_INFO, "wifi: trying '%s' (saved network %u of %u)", nets[cur].ssid,
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO,
+                    "wifi: trying '%s' (saved network %u of %u)", nets[cur].ssid,
                     cur + 1, net_count);
         if (cur_seen)
             log_aps();
         else            // not seen (out of reach, or a hidden network): the chip looks for it by name
-            log_msg(SOS_LOG_INFO, "wifi: '%s' not seen in the scan", nets[cur].ssid);
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO,
+                    "wifi: '%s' not seen in the scan", nets[cur].ssid);
         forget_address_unless_same_network();
     }
     int err = join();
     if (err) {
-        log_msg(SOS_LOG_WARNING, "wifi: connect request failed (%d)", err);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: connect request failed (%d)", err);
         state = W_WAIT;
         deadline = make_timeout_time_ms(RETRY_DELAY_MS);
         return;
@@ -277,9 +279,11 @@ static void begin_attempt(void) {
     // The hostname is sent with DHCP requests; the string must stay valid (it's in settings).
     netif_set_hostname(sta(), c->hostname);
     if (net_count == 1)
-        log_msg(SOS_LOG_NOTICE, "wifi: connecting to '%s' (attempt %u)", nets[0].ssid, attempt);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+                "wifi: connecting to '%s' (attempt %u)", nets[0].ssid, attempt);
     else
-        log_msg(SOS_LOG_NOTICE, "wifi: looking for %u saved networks (attempt %u)", net_count,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+                "wifi: looking for %u saved networks (attempt %u)", net_count,
                 attempt);
     clear_scan();
     verified = false;
@@ -307,7 +311,8 @@ static bool move_to_strongest(void) {
         if (mine < scan_count && (int)mine != best && switch_tries < SWITCH_TRIES &&
             scan_aps[best].rssi - scan_aps[mine].rssi >= SWITCH_MARGIN_DB) {
             const uint8_t *b = scan_aps[best].bssid;
-            log_msg(SOS_LOG_NOTICE, "wifi: joined %02x:%02x:%02x:%02x:%02x:%02x (%d dBm), but "
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+                    "wifi: joined %02x:%02x:%02x:%02x:%02x:%02x (%d dBm), but "
                     "%02x:%02x:%02x:%02x:%02x:%02x is stronger (%d dBm); moving to it",
                     now[0], now[1], now[2], now[3], now[4], now[5], (int)scan_aps[mine].rssi,
                     b[0], b[1], b[2], b[3], b[4], b[5], (int)scan_aps[best].rssi);
@@ -336,7 +341,7 @@ static void connected(void) {
     int32_t rssi = 0;
     cyw43_wifi_get_bssid(&cyw43_state, b);
     cyw43_wifi_get_rssi(&cyw43_state, &rssi);
-    log_msg(SOS_LOG_NOTICE, "wifi: connected to '%s', ip %s (access point "
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "wifi: connected to '%s', ip %s (access point "
             "%02x:%02x:%02x:%02x:%02x:%02x, %d dBm)", nets[cur].ssid, ip, b[0], b[1], b[2], b[3],
             b[4], b[5], (int)rssi);
     state = W_UP;
@@ -367,10 +372,11 @@ static void retry_later(const char *why, bool wrong_password) {
     // move on to the next network soon too. Wait longer once every network has failed.
     int delay_ms = round_over ? RETRY_DELAY_MS : QUICK_RETRY_DELAY_MS;
     if (net_count > 1 && give_up && !round_over)
-        log_msg(SOS_LOG_WARNING, "wifi: '%s': %s; trying the next network in %d s",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: '%s': %s; trying the next network in %d s",
                 nets[cur].ssid, why, delay_ms / 1000);
     else
-        log_msg(SOS_LOG_WARNING, "wifi: %s; retrying in %d s", why, delay_ms / 1000);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "wifi: %s; retrying in %d s", why, delay_ms / 1000);
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     state = W_WAIT;
     deadline = make_timeout_time_ms(delay_ms);
@@ -382,7 +388,8 @@ void wifi_apply_power(void) {
     bool on = settings()->wifi_powersave;
     int err = cyw43_wifi_pm(&cyw43_state, on ? CYW43_PERFORMANCE_PM : CYW43_NONE_PM);
     if (err)
-        log_msg(SOS_LOG_WARNING, "wifi: setting power saving %s failed (%d)", on ? "on" : "off", err);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "wifi: setting power saving %s failed (%d)", on ? "on" : "off", err);
 }
 
 uint32_t wifi_country_code(void) {
@@ -398,7 +405,8 @@ static void check_country(void) {
     if (!want[0] || wifi_iovar_get("country", &got) != 0)
         return;
     if ((got & 0xffff) != (wifi_country_code() & 0xffff))
-        log_msg(SOS_LOG_WARNING, "wifi: the chip doesn't know country %s and uses %c%c; "
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "wifi: the chip doesn't know country %s and uses %c%c; "
                 "change it with 'wifi country'", want,
                 (got & 0x7f) >= 0x20 ? (int)(got & 0x7f) : '?',
                 (got >> 8 & 0x7f) >= 0x20 ? (int)(got >> 8 & 0x7f) : '?');
@@ -411,7 +419,8 @@ void wifi_start(void) {
     attempt = 0;
     begin_attempt();
     if (state == W_OFF)
-        log_msg(SOS_LOG_NOTICE, "wifi: no network configured (use 'setup' or 'wifi set' on the console)");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+                "wifi: no network configured (use 'setup' or 'wifi set' on the console)");
 }
 
 void wifi_reconnect(void) {
@@ -478,7 +487,8 @@ void wifi_poll(void) {
     case W_UP:
         link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
         if (link != CYW43_LINK_UP) {
-            log_msg(SOS_LOG_WARNING, "wifi: link lost (status %d), reconnecting", link);
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                    "wifi: link lost (status %d), reconnecting", link);
             cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
             switch_tries = 0;
             begin_attempt();

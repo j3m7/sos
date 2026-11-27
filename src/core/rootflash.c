@@ -93,24 +93,29 @@ int rootflash_init(void) {
     usable = (uintptr_t)&__flash_binary_end <= XIP_BASE + ROOT_OFFSET;
     keyprov_init(&backend);
     if (!usable) {
-        log_msg(SOS_LOG_ERR, "rootsecret: the firmware image overlaps the root secret's sector; "
-                             "there are no keys");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "rootsecret: the firmware image overlaps the root secret's sector; "
+                "there are no keys");
         return ROOTSECRET_INVALID;
     }
     bool created;
     int state = rootsecret_ensure(&store, &created);
     if (created)
-        log_msg(SOS_LOG_NOTICE, "rootsecret: made this board's root secret (kept in flash: the "
-                                "board is open)");
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE,
+                "rootsecret: made this board's root secret (kept in flash: the "
+                "board is open)");
     else if (state == ROOTSECRET_NONE)
-        log_msg(SOS_LOG_ERR, "rootsecret: making the root secret failed; there are no keys");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "rootsecret: making the root secret failed; there are no keys");
     else if (state == ROOTSECRET_INVALID)
-        log_msg(SOS_LOG_ERR, "rootsecret: the root secret's record can't be used (damaged, or from "
-                             "newer firmware); it's kept as it is, and there are no keys: "
-                             "`rootsecret` explains");
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
+                "rootsecret: the root secret's record can't be used (damaged, or from "
+                "newer firmware); it's kept as it is, and there are no keys: "
+                "`rootsecret` explains");
     else if (rootsecret_degraded(&store))
-        log_msg(SOS_LOG_WARNING, "rootsecret: one of the root secret's two copies is damaged; "
-                                 "the other is in use");
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING,
+                "rootsecret: one of the root secret's two copies is damaged; "
+                "the other is in use");
     return state;
 }
 
@@ -128,7 +133,7 @@ bool rootflash_usable(void) {
 
 bool rootflash_forget(void) {
     bool ok = usable && rootsecret_forget(&store);
-    log_msg(ok ? SOS_LOG_NOTICE : SOS_LOG_ERR, "rootsecret: %s",
+    log_msg(SOS_LOG_KERN | (ok ? SOS_LOG_NOTICE : SOS_LOG_ERR), "rootsecret: %s",
             ok ? "the root secret was cleared" : "clearing the root secret failed");
     return ok;
 }

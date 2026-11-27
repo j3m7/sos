@@ -38,6 +38,11 @@ extern "C"
 #define LOG_NOTICE    5
 #define LOG_INFO      6
 #define LOG_DEBUG     7
+#define LOG_PRIMASK   0x07	/* the level bits of a priority */
+
+/* Syslog facility for the messages about logins and connections; OR-ed into the priority
+   passed to log_cb. The others carry no facility (the application picks one). */
+#define LOG_AUTH      (4 << 3)
 
 void ssh_server_log_level(int priority);
 
