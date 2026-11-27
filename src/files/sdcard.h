@@ -11,9 +11,9 @@
 
 #include "shell/shell.h"
 
-// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check]`;
-// test, speed <MHz>, format, unmount and check need an admin channel. While `sd check` runs
-// (docs/design/sd-check.md) the others refuse.
+// `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check [fix]]`;
+// test, speed <MHz>, format, unmount and check need an admin channel. While `sd check` or
+// `sd check fix` runs (docs/design/sd-check.md), its question included, the others refuse.
 void sdcard_command(shell_t *sh, char *args);
 
 // Mount the card if it isn't yet (initializing the driver first). Says why on failure: to `sh`,

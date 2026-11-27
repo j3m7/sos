@@ -363,6 +363,14 @@ target_include_directories(test_sdfault PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_sdfault PRIVATE SOS_TEST_COMMANDS=1)
 add_test(NAME sdfault COMMAND test_sdfault)
 
+# src/files/fsck_plan.c: what `sd check fix` says about its plan and its repair. fsck_repair.c
+# (with the checker it needs) for fsck_plan_writes().
+add_executable(test_fsck_plan test_fsck_plan.c ${SOS_ROOT}/src/files/fsck_plan.c
+    ${SOS_ROOT}/src/files/fsck_repair.c ${SOS_ROOT}/src/files/fsck.c
+    ${SOS_ROOT}/src/files/fsck_exfat.c)
+target_include_directories(test_fsck_plan PRIVATE ${SOS_ROOT}/src)
+add_test(NAME fsck_plan COMMAND test_fsck_plan)
+
 # src/files/fsck.c and fsck_exfat.c: the card checker, on images made by FatFs itself (ff.c and
 # ffunicode.c, built for the host over the test's RAM disk). SDCARD_ROOT: the SD card library, as
 # for the firmware (lib/sdcard, or -DSDCARD_ROOT=<checkout>).
