@@ -241,6 +241,13 @@ that also changed the pages, regenerate the two files instead of resolving their
 hand. `git commit --no-verify` skips the hook. Nothing checks this on GitHub; the host test
 `man-bundle` (`ctest`) runs the same check.
 
+The hook also runs [shellcheck](https://www.shellcheck.net/) on the staged shell scripts when
+the commit touches one (or `.shellcheckrc`), and refuses the commit if it reports anything. Fix
+the script, or, for a finding that is wrong in that place, add a
+`# shellcheck disable=SCnnnn` line above it saying why. Without shellcheck installed the hook
+skips this with a note. `just lint` (or `tools/lint-shell.sh`) checks every script in the working
+tree; `.shellcheckrc` holds the settings.
+
 ## Developing in a VM
 
 With the source on a host folder shared into a libvirt VM (for example virtiofs), the Pico's
