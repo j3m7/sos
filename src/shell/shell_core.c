@@ -60,6 +60,9 @@ static void pipe_reset(pipeline_t *p) {
     p->buf = NULL;
     p->len = p->cap = 0;
     p->cut = p->oom = p->pending = p->done = p->aside = false;
+    p->paging = p->capturing = p->released = p->page_later = false;
+    p->prod = NULL;
+    p->prod_arg = NULL;
     p->sink = PIPE_SINK_TERMINAL;
 }
 
@@ -82,36 +85,47 @@ static void pipe_release(shell_t *sh) {
     heap_release(HEAP_EDIT, text);
 }
 
-// The command is done: the filters flush what they hold, and with `more` the capture goes to the
-// pager (which owns the block from here on).
-static void pipe_finish(shell_t *sh) {
+// The command is done: the filters flush what they hold, and the line is idle again. With `more`
+// the capture is returned, a HEAP_EDIT block that is the caller's (with the note of a cut
+// appended, unless it is empty); with the terminal sink, NULL.
+static char *pipe_complete(shell_t *sh, size_t *len) {
     pipeline_t *p = &sh->pipe;
     pipe_end(p);
-    if (p->sink != PIPE_SINK_PAGER) {
-        pipe_reset(p);
-        return;
-    }
     char *text = p->buf;
-    size_t len = p->len;
+    bool pager = p->sink == PIPE_SINK_PAGER;
     bool cut = p->cut, oom = p->oom;
+    *len = p->len;
     pipe_reset(p);
-    if (len == 0) {
-        heap_release(HEAP_EDIT, text);
-        shell_printf(sh, "%s: no output\n", p->name);
-        return;
-    }
-    if (cut) {
+    if (!pager)
+        return NULL;
+    if (cut && *len) {
         const char *note = oom ? "\n[out of memory: the output is cut here]\n"
                                : "\n[output cut here: the pager takes 32 KB at most]\n";
         size_t nl = strlen(note);
-        char *b = heap_realloc(HEAP_EDIT, text, len + nl);
+        char *b = heap_realloc(HEAP_EDIT, text, *len + nl);
         if (b) {
             text = b;
-            memcpy(text + len, note, nl);
-            len += nl;
+            memcpy(text + *len, note, nl);
+            *len += nl;
         }
     }
-    shell_page(sh, p->name, text, len);
+    return text;
+}
+
+// The command is done: with `more` the capture goes to the pager (which owns the block from here
+// on).
+static void pipe_finish(shell_t *sh) {
+    bool pager = sh->pipe.sink == PIPE_SINK_PAGER;
+    size_t len;
+    char *text = pipe_complete(sh, &len);
+    if (!pager)
+        return;
+    if (len == 0) {
+        heap_release(HEAP_EDIT, text);
+        shell_printf(sh, "%s: no output\n", sh->pipe.name);
+        return;
+    }
+    shell_page(sh, sh->pipe.name, text, len);
 }
 
 // A stage closed the stream (head) or the capture is full: end the producing job now, silently
@@ -152,10 +166,18 @@ static void term_out(shell_t *sh, const char *buf, size_t len) {
         sh->io->write(sh->ctx, out, (int)n);
 }
 
+// Does what the shell prints now go into the line's pipeline? Not output from outside the line
+// (aside), and not the pager's own while it shows a producer that still runs (paging): only the
+// producer's steps (capturing) go to the capture then.
+static bool to_pipe(const shell_t *sh) {
+    const pipeline_t *p = &sh->pipe;
+    return piped(sh) && !p->aside && (!p->paging || p->capturing);
+}
+
 // Everything the shell and its commands print: through the line's pipeline when there is one
 // (nothing on screen with `| more`), else to the terminal.
 static void write_out(shell_t *sh, const char *buf, size_t len) {
-    if (piped(sh) && !sh->pipe.aside)
+    if (to_pipe(sh))
         pipe_write(&sh->pipe, buf, len);
     else
         term_out(sh, buf, len);
@@ -389,6 +411,93 @@ static void history_key(shell_t *sh, int key) {
     }
 }
 
+// --- `| more` while the producer runs ---------------------------------------------------------
+
+// Should the pager take over a `| more` line now? Its producer is a job (not a full-screen
+// program, nothing asked) that still runs, and it has given the first output.
+static bool page_now(const shell_t *sh) {
+    const pipeline_t *p = &sh->pipe;
+    return p->pending && p->sink == PIPE_SINK_PAGER && !p->paging && !p->page_later &&
+           !p->done && p->len > 0 && sh->job && !sh->key && !sh->answer;
+}
+
+// Hand the screen to the pager, which steps the producer itself from now on (shell_pipe_feed):
+// the producer's job is kept in the pipeline and the pager's becomes the shell's. Input typed
+// meanwhile was meant for the shell, not keys for the pager: it goes. If the pager can't start,
+// the line is paged when the producer ends, as before.
+static void page_early(shell_t *sh) {
+    pipeline_t *p = &sh->pipe;
+    p->prod = sh->job;
+    p->prod_arg = sh->job_arg;
+    sh->job = NULL;
+    sh->job_arg = NULL;
+    p->paging = true;                       // from here the pager's output reaches the screen
+    wipe(sh->ahead, sh->ahead_len);
+    sh->ahead_len = 0;
+    if (shell_page_growing(sh, p->name, p->buf, p->len))
+        return;
+    p->paging = false;                      // it said why; the producer runs on, captured
+    sh->job = p->prod;
+    sh->job_arg = p->prod_arg;
+    p->prod = NULL;
+    p->prod_arg = NULL;
+    p->page_later = true;
+}
+
+// Invariant for job authors: a producer's step must not end the session (shell_end) or start a
+// job of its own (shell_run_job, shell_run_raw) while it is paged; it may ask a question. The
+// session's end re-enters the step through the pager's cancel, and a new job would replace the
+// pager's with the terminal left in the alternate screen. No producer does either today.
+shell_fed_t shell_pipe_feed(shell_t *sh, shell_feed_t how, char **text, size_t *len) {
+    pipeline_t *p = &sh->pipe;
+    *text = NULL;
+    *len = 0;
+    if (!p->paging || !p->prod)             // can't happen: no producer under a pager
+        return SHELL_FED_GONE;
+    shell_job_fn step = p->prod;
+    void *arg = p->prod_arg;
+    bool more = false;
+    p->capturing = true;
+    if (how == SHELL_FEED_STEP) {
+        more = step(sh, arg, false);
+        if (more && p->done && !sh->answer) {   // head has its lines, or the capture is full:
+            step(sh, arg, true);                // ended silently
+            more = false;
+        }
+    } else {
+        step(sh, arg, true);
+    }
+    p->capturing = false;
+    if (how == SHELL_FEED_CANCEL) {
+        pipe_drop(sh);
+        return SHELL_FED_GONE;
+    }
+    if (sh->answer) {                       // it asks: not a thing to page; the shell shows the
+        p->prod = more ? step : NULL;       // text and the question once the pager has left,
+        p->prod_arg = more ? arg : NULL;    // and resumes the producer if it still runs
+        p->released = true;
+        return SHELL_FED_GONE;
+    }
+    if (more) {
+        *text = p->buf;
+        *len = p->len;
+        return SHELL_FED_MORE;
+    }
+    *text = pipe_complete(sh, len);
+    return SHELL_FED_DONE;
+}
+
+// The pager has left because its producer asked a question: the text so far goes to the
+// screen, and a producer that still runs is the shell's job again (the question is asked when it
+// ends, as for any job that asks).
+static void pipe_resume(shell_t *sh) {
+    shell_job_fn prod = sh->pipe.prod;
+    void *arg = sh->pipe.prod_arg;
+    pipe_release(sh);
+    if (prod)
+        shell_run_job(sh, prod, arg);
+}
+
 // Trim spaces and hand non-empty commands to the command module. A line with stages
 // (`<command> | grep x | more`, pipe_split()) runs the command with its output going through
 // them: to the terminal, or captured and then paged with `more` last.
@@ -436,9 +545,11 @@ static void run_line(shell_t *sh, char *cmd) {
         pipe_release(sh);
     else if (sh->job && sh->key)            // a full-screen program: its own screen; what it
         pipe_release(sh);                   // printed before (a warning) shows under it
-    else if (sh->job && !p->done)           // a job: the line ends when it does
-        p->pending = true;
-    else {
+    else if (sh->job && !p->done) {         // a job: the line ends when it does, and with
+        p->pending = true;                  // `more` the pager starts on its first output
+        if (page_now(sh))
+            page_early(sh);
+    } else {
         if (sh->job)                        // it has given all that is wanted (head)
             end_job_quietly(sh);
         pipe_finish(sh);
@@ -506,8 +617,9 @@ bool shell_busy(const shell_t *sh) {
 }
 
 int shell_write_space(shell_t *sh) {
-    if (sh->pipe.sink == PIPE_SINK_PAGER || !sh->io->write_space)  // a capture waits for no
-                                                                    // channel
+    // A capture waits for no channel; the pager over a running producer writes to the channel
+    // between the producer's steps, and waits for it.
+    if ((sh->pipe.sink == PIPE_SINK_PAGER && to_pipe(sh)) || !sh->io->write_space)
         return 1024;
     int n = sh->io->write_space(sh->ctx);
     return n > 0 ? n : 0;
@@ -846,8 +958,9 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
             sh->line_len = 0;
             if (!answer_question(sh, sh->line))
                 run_line(sh, sh->line);
-            if (sh->job) {  // the command started a job: keep the rest for afterwards
-                stash(sh, buf + i + 1, n - (i + 1));
+            if (sh->job) {  // the command started a job: keep the rest for afterwards, unless
+                if (!sh->pipe.paging)       // the pager has the screen (not keys for it)
+                    stash(sh, buf + i + 1, n - (i + 1));
                 return;
             }
             prompt(sh);
@@ -918,6 +1031,11 @@ static void poll_raw(shell_t *sh) {
         sh->job = NULL;
         sh->job_arg = NULL;
         sh->key = NULL;
+        if (sh->pipe.released) {            // the pager left: its producer asked a question
+            pipe_resume(sh);
+            if (sh->job)
+                return;
+        }
         if (!sh->at_line_start)
             write_out(sh, "\n", 1);
         prompt(sh);
@@ -950,6 +1068,10 @@ static void poll_job(shell_t *sh) {
     if (more && !cancel && sh->pipe.pending && sh->pipe.done) {
         end_job_quietly(sh);                // head has its lines, or the capture is full
         more = false;
+    }
+    if (more && !cancel && page_now(sh)) {  // `| more` has its first output: page it now
+        page_early(sh);
+        return;
     }
     if (!more || cancel) {
         sh->job = NULL;

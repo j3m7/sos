@@ -92,3 +92,14 @@ once a second, for the status bar; and giving the screen back at the end.
   a binary opened by mistake, reads itself again on each keystroke: slow, but correct.
 - `edit_view(sh, name, text, len)` copies the text to the heap and pages it: for any command with
   more to show than a screen (the manual pages, once there are some; nothing calls it yet).
+  `edit_view_take()` pages a block it takes over (`<command> | more` once the command ended).
+- **A command still running** (`edit_view_growing()`, from `shell_page_growing()`): the source
+  is the shell's capture, marked growing before `pager_init()` (so the window is allocated
+  whole). Each pass, after the keys, `view_step()` calls `shell_pipe_feed()` (one step of the
+  command, its output captured), points the source at the block again (the capture is
+  reallocated as it grows), calls `pager_grow()` with the new size, and only then
+  `fsterm_step()`/`fsterm_send()`. When the command finishes the block becomes the view's and
+  `pager_set_growing(false)` ends the `...` total. Ctrl-C while it runs is not the pager's quit
+  key: it stops the command (`SHELL_FEED_STOP`), keeps the text and shows "stopped"; q, and the
+  job's cancel (the session's end), end the command first (`SHELL_FEED_CANCEL`) and then leave.
+  If the command asks a question the view leaves at once and the shell prints the text.

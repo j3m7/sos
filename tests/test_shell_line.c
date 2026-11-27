@@ -67,6 +67,8 @@ static int job_steps, job_calls, job_cancels;
 static bool job_partial;
 static int job_arg_token;
 static int job_ask_step;                    // the step that asks a question (0: none)
+static int job_silent;                      // steps from the first that print nothing
+static int job_space;                       // shell_write_space() its last step saw
 static void fake_answer(shell_t *sh, char *answer, void *arg);
 
 static bool fake_job(shell_t *sh, void *arg, bool cancel) {
@@ -76,7 +78,9 @@ static bool fake_job(shell_t *sh, void *arg, bool cancel) {
         job_cancels++;
         return false;
     }
-    shell_printf(sh, job_partial ? "step %d" : "step %d\n", job_calls);
+    job_space = shell_write_space(sh);
+    if (job_calls > job_silent)
+        shell_printf(sh, job_partial ? "step %d" : "step %d\n", job_calls);
     if (job_calls == job_ask_step)
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
     return job_calls < job_steps;
@@ -122,6 +126,99 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     heap_release(HEAP_EDIT, text);
 }
 
+// The pager over a command that still runs (shell_page_growing): a raw-mode job that uses
+// shell_pipe_feed() exactly as view.c does (the same calls, in the same order in a pass: keys,
+// then the command's step or end, then the pager's own output), without the screen. It records
+// what it was given, every size the text grew to, and a copy of what it would show. q quits,
+// Ctrl-C stops the command while it runs (then quits, as the pager's key does). Each step writes
+// "[frame]" to the terminal: the pager's own output, which must never land in the capture.
+static struct {
+    bool on, live, quit, stop, owned, stopped;
+    char *text;                     // what it shows: the shell's block while live, then its own
+    size_t len, first_len;
+    int starts, frames, grows, keys, space;
+    shell_fed_t last;
+    bool refuse;                    // as if out of memory: shell_page_growing() fails
+    char name[64], shown[SHELL_PIPE_MAX + 128];
+} gp;
+
+static void gp_key(shell_t *s, int key, void *arg) {
+    (void)s;
+    CHECK(arg == &gp);
+    gp.keys++;
+    if (gp.quit)
+        return;
+    if (key == 0x03 && gp.live)
+        gp.stop = true;
+    else if (key == 'q' || key == 0x03)
+        gp.quit = true;
+}
+
+static bool gp_step(shell_t *s, void *arg, bool cancel) {
+    CHECK(arg == &gp);
+    char *t;
+    size_t n;
+    if (gp.live && (cancel || gp.quit)) {
+        gp.last = shell_pipe_feed(s, SHELL_FEED_CANCEL, &t, &n);
+        CHECK(gp.last == SHELL_FED_GONE && t == NULL);
+        gp.live = false;
+    }
+    if (!cancel && !gp.quit && gp.live) {
+        gp.last = shell_pipe_feed(s, gp.stop ? SHELL_FEED_STOP : SHELL_FEED_STEP, &t, &n);
+        if (gp.last == SHELL_FED_GONE) {
+            gp.live = false;
+            gp.quit = true;
+        } else {
+            CHECK(n >= gp.len);                 // the text only grows
+            gp.grows += n > gp.len;
+            gp.text = t;
+            gp.len = n;
+            memcpy(gp.shown, t, n < sizeof(gp.shown) - 1 ? n : sizeof(gp.shown) - 1);
+            gp.shown[n < sizeof(gp.shown) - 1 ? n : sizeof(gp.shown) - 1] = '\0';
+            if (gp.last == SHELL_FED_DONE) {
+                gp.live = false;
+                gp.owned = true;
+                gp.stopped = gp.stop;
+            }
+        }
+    }
+    if (cancel || gp.quit) {
+        if (gp.owned)
+            heap_release(HEAP_EDIT, gp.text);
+        gp.text = NULL;
+        gp.on = false;
+        if (!cancel)
+            shell_write(s, "[leave]", 7);
+        return false;
+    }
+    gp.space = shell_write_space(s);
+    shell_write(s, "[frame]", 7);
+    gp.frames++;
+    return true;
+}
+
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
+    gp.starts++;
+    if (gp.refuse) {
+        shell_printf(sh, "%s: out of memory\n", name);
+        return false;
+    }
+    snprintf(gp.name, sizeof(gp.name), "%s", name);
+    gp.on = gp.live = true;
+    gp.quit = gp.stop = gp.owned = gp.stopped = false;
+    gp.text = (char *)text;
+    gp.len = gp.first_len = len;
+    memcpy(gp.shown, text, len);
+    gp.shown[len] = '\0';
+    shell_write(sh, "[enter]", 7);
+    shell_run_raw(sh, gp_step, gp_key, &gp);
+    return true;
+}
+
+static void gp_reset(void) {
+    memset(&gp, 0, sizeof(gp));
+}
+
 static void fake_answer(shell_t *sh, char *answer, void *arg) {
     (void)arg;
     shell_printf(sh, "answered <%s>\n", answer ? answer : "(cancelled)");
@@ -151,6 +248,12 @@ void shell_execute(shell_t *sh, char *cmd) {
     if (!strcmp(cmd, "askjob")) {           // a job with a question pending (as chat's can be)
         shell_printf(sh, "hold on\n");
         shell_ask(sh, "Really? ", false, fake_answer, NULL);
+        job_calls = job_cancels = 0;
+        shell_run_job(sh, fake_job, &job_arg_token);
+        return;
+    }
+    if (!strcmp(cmd, "jobnow")) {           // a job that prints before its first step
+        shell_printf(sh, "now\n");
         job_calls = job_cancels = 0;
         shell_run_job(sh, fake_job, &job_arg_token);
         return;
@@ -267,6 +370,8 @@ static void start(const shell_io_t *io) {
     n_executed = 0;
     no_tables = false;
     no_card = false;
+    gp_reset();
+    job_silent = 0;
     shell_init(&sh, io, &fake);
     fake.out_len = 0;
     fake.out[0] = '\0';
@@ -733,38 +838,132 @@ TEST(pipe_to_more_pages_a_commands_output) {
     CHECK(sh.history_len > 0 && strstr(sh.history, "help | more") != NULL);   // as typed
 }
 
-TEST(pipe_to_more_waits_for_a_job) {
+TEST(pipe_to_more_pages_a_job_as_it_runs) {
     start(&io_plain);
     paged_calls = 0;
-    job_steps = 3;
+    job_steps = 4;
     job_partial = false;
     type("job | more\r");
     CHECK(shell_job_running(&sh));
     CHECK(sh.pipe.pending);
+    CHECK_EQ(gp.starts, 0);                     // nothing to show yet
     clear_out();
+    type("");                                   // step 1, the first output: the pager takes over
+    CHECK_EQ(job_calls, 1);
+    CHECK_EQ(gp.starts, 1);
+    CHECK(gp.on && gp.live && shell_raw_mode(&sh));
+    CHECK(!strcmp(gp.name, "job | more"));
+    CHECK(!strcmp(gp.shown, "step 1\n"));
+    CHECK_OUT("[enter]");                       // the pager's output only, not the job's
+    type("");                                   // the pager steps the job: the text grows
+    CHECK_EQ(job_calls, 2);
+    CHECK(gp.last == SHELL_FED_MORE);
+    CHECK(!strcmp(gp.shown, "step 1\nstep 2\n"));
+    CHECK(gp.text == sh.pipe.buf);              // still the shell's block
+    CHECK_OUT("[enter][frame]");
+    type("");
+    type("");                                   // the last step: the text is complete, the pager's
+    CHECK(gp.last == SHELL_FED_DONE);
+    CHECK(!gp.live && gp.owned && !gp.stopped);
+    CHECK(!strcmp(gp.shown, "step 1\nstep 2\nstep 3\nstep 4\n"));
+    CHECK_EQ(gp.grows, 3);
+    CHECK_EQ(job_cancels, 0);
+    CHECK(!piped_now());
+    CHECK(gp.on && shell_job_running(&sh));     // the pager stays until q
+    CHECK_OUT("[enter][frame][frame][frame]");
+    type("");
+    CHECK_EQ(job_calls, 4);                     // not stepped again
+    type("q");
+    CHECK(!gp.on && !shell_job_running(&sh));
+    CHECK_EQ(paged_calls, 0);                   // the finished-text path wasn't taken
+    CHECK_OUT("[enter][frame][frame][frame][frame][leave]\nsos> ");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+
+    start(&io_plain);                           // output with the command: the pager at once
+    job_steps = 2;
+    type("jobnow | more\r");
+    CHECK_EQ(job_calls, 0);
+    CHECK_EQ(gp.starts, 1);
+    CHECK(!strcmp(gp.shown, "now\n"));
+    CHECK_OUT("jobnow | more\n[enter]");
     type("");
     type("");
-    CHECK_OUT("");                              // nothing on screen while it runs
-    CHECK_EQ(paged_calls, 0);
-    type("");                                   // the last step: paged
-    CHECK(!shell_job_running(&sh));
-    CHECK_EQ(paged_calls, 1);
-    CHECK(!strcmp(paged_text, "step 1\nstep 2\nstep 3\n"));
-    CHECK(!strcmp(paged_name, "job | more"));
-    CHECK_OUT("sos> ");                         // (the pager stub didn't start a job)
-    CHECK(sh.pipe.buf == NULL && !sh.pipe.pending);
+    CHECK(gp.last == SHELL_FED_DONE);
+    CHECK(!strcmp(gp.shown, "now\nstep 1\nstep 2\n"));
+    type("q");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_more_q_cancels_the_job_quietly) {
+    start(&io_plain);
+    job_steps = 100;
+    job_partial = false;
+    type("job | more\r");
+    type("");
+    type("");
+    CHECK(gp.live);
+    clear_out();
+    type("q");                                  // leaves at once, the job ended first
+    CHECK_EQ(job_cancels, 1);
+    CHECK_EQ(job_calls, 3);                     // two steps, then the cancel
+    CHECK(gp.last == SHELL_FED_GONE);
+    CHECK(!gp.on && !shell_job_running(&sh));
+    CHECK(!piped_now());
+    CHECK_OUT("[leave]\nsos> ");                // no ^C, nothing of the text
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_more_ctrl_c_stops_the_job_and_pages_on) {
+    start(&io_plain);
+    job_steps = 100;
+    job_partial = false;
+    type("job | more\r");
+    type("");
+    type("");
+    clear_out();
+    type("\x03");                               // a key for the pager: the job stops
+    CHECK_EQ(job_cancels, 1);
+    CHECK(gp.last == SHELL_FED_DONE);
+    CHECK(gp.on && gp.stopped && gp.owned);
+    CHECK(!strcmp(gp.shown, "step 1\nstep 2\n")); // the text is kept, and no ^C in it
+    CHECK(shell_job_running(&sh));
+    CHECK(!piped_now());
+    CHECK_OUT("[frame]");
+    type("");
+    CHECK_EQ(job_calls, 3);                     // not stepped any more
+    type("\x03");                               // the pager's own key now: it leaves
+    CHECK(!gp.on && !shell_job_running(&sh));
+    CHECK_OUT("[frame][frame][leave]\nsos> ");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+
+    start(&io_plain);                           // a filter's held text goes in at the stop
+    job_steps = 100;
+    job_partial = true;                         // grep holds the line still being written
+    type("jobnow | grep -v x | more\r");
+    CHECK(gp.on);
+    type("");
+    type("");
+    CHECK(!strcmp(gp.shown, "now\n"));
+    type("\x03");
+    CHECK(gp.stopped);
+    CHECK(!strcmp(gp.shown, "now\nstep 1step 2\n"));
+    job_partial = false;
+    type("q");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(pipe_to_more_is_dropped_by_ctrl_c) {
     start(&io_plain);
     paged_calls = 0;
     job_steps = 5;
+    job_silent = 5;                             // before any output: no pager yet
     job_partial = false;
     type("job | more\r");
     type("");
     type("\x03");
     CHECK_EQ(job_cancels, 1);
     CHECK_EQ(paged_calls, 0);
+    CHECK_EQ(gp.starts, 0);
     CHECK(sh.pipe.buf == NULL);
     CHECK(strstr(fake.out, "^C\nsos> ") != NULL);
 }
@@ -817,15 +1016,34 @@ TEST(pipe_to_more_leaves_a_full_screen_program_alone) {
 TEST(pipe_to_more_drops_input_typed_during_the_job) {
     start(&io_plain);
     paged_calls = 0;
-    job_steps = 2;
+    job_steps = 3;
+    job_silent = 1;
     job_partial = false;
     type("job | more\r");
     type("q\r");                                // would quit the pager, or run as a command
-    CHECK(sh.ahead_len > 0);
+    CHECK(sh.ahead_len > 0);                    // kept while the job prints nothing
+    CHECK_EQ(gp.starts, 0);
+    type("");                                   // the first output: the pager, and that input goes
+    CHECK_EQ(gp.starts, 1);
+    CHECK_EQ(sh.ahead_len, 0);
+    CHECK_EQ(gp.keys, 0);
     type("");
-    CHECK_EQ(paged_calls, 1);
-    CHECK_EQ(sh.ahead_len, 0);                  // neither: dropped
+    CHECK(gp.on);
     CHECK_EQ(n_executed, 1);
+    type("q");
+    CHECK(!gp.on);
+
+    start(&io_plain);                           // typed with the line, the pager started at once
+    job_steps = 3;
+    type("jobnow | more\rq\r");
+    CHECK(gp.on);
+    CHECK_EQ(sh.ahead_len, 0);
+    type("");
+    CHECK_EQ(gp.keys, 0);
+    CHECK(gp.on);
+    CHECK_EQ(n_executed, 1);
+    type("q");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(pipe_to_more_lets_a_jobs_question_through) {
@@ -850,11 +1068,33 @@ TEST(pipe_to_more_lets_a_jobs_question_through) {
     CHECK(sh.pipe.pending);
     clear_out();
     type("");
-    CHECK_OUT("");                              // step 1, captured
-    type("");                                   // step 2 asks and ends the job
+    CHECK_OUT("[enter]");                       // step 1, captured, and paged
+    type("");                                   // step 2 asks and ends the job: the pager leaves
     CHECK_EQ(paged_calls, 0);
-    CHECK(sh.pipe.buf == NULL);
-    CHECK_OUT("step 1\nstep 2\nReally? ");
+    CHECK(gp.last == SHELL_FED_GONE && !gp.on);
+    CHECK(sh.pipe.buf == NULL && !piped_now());
+    CHECK_OUT("[enter][leave]step 1\nstep 2\nReally? ");
+    type("y\r");
+    CHECK(strstr(fake.out, "answered <y>") != NULL);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+
+    start(&io_plain);                           // ...and runs on: the shell's job again, unpiped
+    job_steps = 3;
+    job_ask_step = 2;
+    type("job | more\r");
+    clear_out();
+    type("");
+    type("");
+    CHECK(!gp.on);
+    CHECK(shell_job_running(&sh) && !shell_raw_mode(&sh));
+    CHECK_OUT("[enter][leave]step 1\nstep 2\n");
+    type("");
+    CHECK(!shell_job_running(&sh));
+    CHECK_OUT("[enter][leave]step 1\nstep 2\nstep 3\nReally? ");
+    CHECK_EQ(job_cancels, 0);
+    type("n\r");
+    CHECK(strstr(fake.out, "answered <n>") != NULL);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
     job_ask_step = 0;
 }
 
@@ -870,15 +1110,86 @@ TEST(pipe_to_more_on_a_locked_console_runs_plain) {
 
 TEST(pipe_to_more_holds_the_screen_for_messages) {
     start(&io_plain);
-    job_steps = 2;
+    job_steps = 3;
+    job_silent = 1;
     type("job | more\r");
     CHECK(shell_screen_held(&sh));
     clear_out();
     shell_hide_input(&sh);                      // a message wanting the line: nothing to hide
     CHECK_OUT("");
-    type("");
-    type("");
+    type("");                                   // still capturing, no pager yet
+    CHECK(shell_screen_held(&sh) && !shell_raw_mode(&sh));
+    type("");                                   // the pager, the job still running
+    CHECK(gp.live);
+    CHECK(shell_screen_held(&sh) && shell_raw_mode(&sh));  // raw: the console holds its log lines
+    clear_out();
+    shell_hide_input(&sh);
+    CHECK_OUT("");
+    type("q");
     CHECK(!shell_screen_held(&sh));
+}
+
+TEST(pipe_to_more_under_the_pager_sizes_output_by_its_sink) {
+    start(&io_space);
+    fake_space = 100;
+    job_steps = 3;
+    type("job | more\r");
+    type("");                                   // step 1, into the capture
+    CHECK_EQ(job_space, 1024);
+    CHECK(gp.on);
+    type("");                                   // step 2, under the pager: still the capture's
+    CHECK_EQ(job_space, 1024);
+    CHECK_EQ(gp.space, 100);                    // the pager's frames wait for the channel
+    CHECK_EQ(shell_write_space(&sh), 100);      // between the job's steps too
+    type("q");
+    fake_space = -1;
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(pipe_to_more_pages_at_the_end_if_the_pager_cant_start) {
+    start(&io_plain);
+    gp.refuse = true;
+    paged_calls = 0;
+    job_steps = 3;
+    type("job | more\r");
+    type("");
+    CHECK_EQ(gp.starts, 1);
+    CHECK(strstr(fake.out, "job | more: out of memory\n") != NULL);
+    CHECK(sh.pipe.pending && shell_job_running(&sh) && !shell_raw_mode(&sh));
+    type("");
+    CHECK_EQ(gp.starts, 1);                     // not tried again
+    type("");                                   // the end: paged as before
+    CHECK_EQ(paged_calls, 1);
+    CHECK(!strcmp(paged_text, "step 1\nstep 2\nstep 3\n"));
+    CHECK(!piped_now());
+}
+
+TEST(pipe_to_more_with_filters_pages_as_it_runs) {
+    start(&io_plain);
+    job_steps = 4;
+    type("job | grep -v 3 | more\r");
+    type("");
+    CHECK(gp.on);
+    type("");
+    type("");
+    type("");
+    CHECK(gp.last == SHELL_FED_DONE);
+    CHECK(!strcmp(gp.shown, "step 1\nstep 2\nstep 4\n"));
+    type("q");
+
+    start(&io_plain);                           // head ends the job silently, the pager stays
+    job_steps = 100;
+    type("job | head 3 | more\r");
+    type("");
+    type("");
+    type("");
+    CHECK(gp.last == SHELL_FED_DONE && gp.on && !gp.stopped);
+    CHECK_EQ(job_cancels, 1);
+    CHECK_EQ(job_calls, 4);
+    CHECK(!strcmp(gp.shown, "step 1\nstep 2\nstep 3\n"));
+    CHECK(strstr(fake.out, "^C") == NULL);
+    type("q");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(pipe_to_more_on_a_command_that_ends_the_session) {
@@ -898,6 +1209,29 @@ TEST(pipe_to_more_ends_with_the_session) {
     shell_end(&sh);
     CHECK(sh.pipe.buf == NULL);
     CHECK_EQ(paged_calls, 0);
+
+    start(&io_plain);                           // under the pager: both go, the job first
+    job_steps = 100;
+    type("job | more\r");
+    type("");
+    type("");
+    clear_out();
+    shell_end(&sh);
+    CHECK_EQ(job_cancels, 1);
+    CHECK(!gp.on && !shell_job_running(&sh));
+    CHECK(!piped_now());
+    CHECK_OUT("");                              // nothing said into a closed session
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+
+    start(&io_plain);                           // after a stop: the pager's text goes
+    job_steps = 100;
+    type("job | more\r");
+    type("");
+    type("\x03");
+    CHECK(gp.owned);
+    shell_end(&sh);
+    CHECK(!gp.on);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 // --- filters: `| grep`, `| head`, `| tail`, `| wc` --------------------------------------------
@@ -966,14 +1300,20 @@ TEST(pipe_to_more_ends_a_job_at_the_limit) {
     job_steps = 100000;
     job_partial = false;
     type("job | more\r");
-    for (int i = 0; i < 5000 && shell_job_running(&sh); i++)
+    for (int i = 0; i < 5000 && (gp.live || !gp.starts); i++) {
         type("");
-    CHECK(!shell_job_running(&sh));
+        clear_out();                            // a frame a pass
+    }
+    CHECK(!gp.live && gp.on && gp.owned);
+    CHECK(gp.last == SHELL_FED_DONE && !gp.stopped);
     CHECK_EQ(job_cancels, 1);                   // ended, not run to its end
     CHECK(job_calls < 5000);
-    CHECK_EQ(paged_calls, 1);
-    CHECK(strstr(paged_text, "[output cut here") != NULL);
+    CHECK_EQ(paged_calls, 0);
+    CHECK(gp.len > SHELL_PIPE_MAX && gp.len < SHELL_PIPE_MAX + 100);   // the limit, the note
+    CHECK(strstr(gp.shown, "[output cut here") != NULL);
     CHECK(strstr(fake.out, "^C") == NULL);
+    type("q");
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
 }
 
 TEST(pipe_grep_then_more_keeps_every_match) {
@@ -2292,7 +2632,9 @@ TEST_MAIN(
     RUN(plain_channel_leaves_newlines);
     RUN(printf_truncates_long_output);
     RUN(pipe_to_more_pages_a_commands_output);
-    RUN(pipe_to_more_waits_for_a_job);
+    RUN(pipe_to_more_pages_a_job_as_it_runs);
+    RUN(pipe_to_more_q_cancels_the_job_quietly);
+    RUN(pipe_to_more_ctrl_c_stops_the_job_and_pages_on);
     RUN(pipe_to_more_is_dropped_by_ctrl_c);
     RUN(pipe_to_more_cuts_at_the_limit);
     RUN(pipe_to_more_with_nothing_says_so);
@@ -2302,6 +2644,9 @@ TEST_MAIN(
     RUN(pipe_to_more_lets_a_jobs_question_through);
     RUN(pipe_to_more_on_a_locked_console_runs_plain);
     RUN(pipe_to_more_holds_the_screen_for_messages);
+    RUN(pipe_to_more_under_the_pager_sizes_output_by_its_sink);
+    RUN(pipe_to_more_pages_at_the_end_if_the_pager_cant_start);
+    RUN(pipe_to_more_with_filters_pages_as_it_runs);
     RUN(pipe_to_more_on_a_command_that_ends_the_session);
     RUN(pipe_to_more_ends_with_the_session);
     RUN(pipe_to_grep_streams_to_the_terminal);

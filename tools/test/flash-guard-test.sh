@@ -21,17 +21,17 @@ bytes() {
     local hex="$*" i
     hex=${hex// /}
     for ((i = 0; i < ${#hex}; i += 2)); do
-        printf "\\x${hex:i:2}"
+        printf '%b' "\\x${hex:i:2}"
     done
 }
 rep() { local i; for ((i = 0; i < $2; i++)); do printf '%s' "$1"; done; }
 
 start="d3deffff" imagedef="42012110" end="00000000 793512ab"
 # An unsigned image: one block with only the image definition.
-bytes $start $imagedef "ff010000" $end > "$tmp/unsigned.bin"
+bytes $start $imagedef "ff010000" "$end" > "$tmp/unsigned.bin"
 # Signed: the same with a SIGNATURE item (0x21 words: header, 64 key bytes, 64 signature bytes).
 signed() {      # signed <key byte> <file>
-    bytes $start $imagedef "09210001" "$(rep "$1" 64)" "$(rep ee 64)" "ff220000" $end > "$2"
+    bytes $start $imagedef "09210001" "$(rep "$1" 64)" "$(rep ee 64)" "ff220000" "$end" > "$2"
 }
 signed 11 "$tmp/key1.bin"
 signed 22 "$tmp/key2.bin"
@@ -152,8 +152,8 @@ run 1 "line 4 is not a key hash" "a bad line in another board's section" SOS_FLA
 dev1=F94525FD61D9A1CC
 devkey1=0c66c643cee65d14a55fd8cf2142a1fab2a769d555238f551b4836af46d61d1779efb62425ec5d3586fe42a473bdc5bd24b16df92d074d127b7301651b867124
 devkey2=7c8778fd06d7f8faaaf4912910b441397aba3f9af7ba6f5fd05a819b4a2d03bba5c3a916fd26ccf8d92a44d11d170f30ba142997583df93ab0223710ecf8ea5d
-bytes $start $imagedef "09210001" "$devkey1" "$(rep ee 64)" "ff220000" $end > "$tmp/dev1.bin"
-bytes $start $imagedef "09210001" "$devkey2" "$(rep ee 64)" "ff220000" $end > "$tmp/dev2.bin"
+bytes $start $imagedef "09210001" "$devkey1" "$(rep ee 64)" "ff220000" "$end" > "$tmp/dev1.bin"
+bytes $start $imagedef "09210001" "$devkey2" "$(rep ee 64)" "ff220000" "$end" > "$tmp/dev2.bin"
 devhash1=e2f7cff033600f5ab00e33b6f891a0ff6e635ad0f2088613ca8b71b5f56d0d51
 devhash2=b97c0fd7efb68937e733c4916b44ce4f940141c4e6ecc90994c941f396d7c910
 list "$devhash1" "$devhash2" "$hash1"

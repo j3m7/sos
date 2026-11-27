@@ -32,7 +32,7 @@
 
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-dry= flash=$((4 * 1024 * 1024)) work=
+dry='' flash=$((4 * 1024 * 1024)) work=''
 serial=${SOS_FLASH_SERIAL:-}
 while getopts "ns:f:w:" opt; do
     case $opt in
