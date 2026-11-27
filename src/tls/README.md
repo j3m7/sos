@@ -30,6 +30,12 @@ The timeout covers DNS, connect and handshake together. When ready, `tls_read()`
 `tls_write()` never block. `tls_error()` says why a connection failed, and `tls_stats()` gives
 timings and heap use.
 
+When wolfSSL reports an error, `tls_error()` gives SOS's own wording for the ones a person
+meets and can act on (an untrusted or expired certificate, a wrong host name, a refused or
+closed connection, no TLS 1.3, no memory), followed by wolfSSL's number; any other error is
+"wolfSSL error N". wolfSSL's own table of error texts is not built (`NO_ERROR_STRINGS`),
+which saves about 20 KB of flash. A build with `SOS_WOLF_DEBUG` keeps it.
+
 - **I/O:** the lwIP callbacks (interrupt context) only queue received data in a ring buffer
   and set flags. They don't log: a close or a TCP error is logged from the main loop, by `io_recv`
   when it next reads or in the warning when wolfSSL next fails.
