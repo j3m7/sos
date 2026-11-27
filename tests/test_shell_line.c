@@ -350,7 +350,7 @@ static const shell_word_t t_time[] = {
 static const shell_word_t t_url[] = {{"https://", NULL, SHELL_NOSPACE}, {0}};
 static const shell_word_t t_http[] = {{"get", t_url, 0}, {0}};
 // Values from a function, as shell.c's key numbers: notes from outside, one with an escape
-// sequence and a line break; a value with a space, which can't be offered.
+// sequence and a line break; a value with a space, offered escaped.
 static void t_key_numbers(shell_t *s, shell_value_fn fn, void *arg) {
     (void)s;
     char buf[8];
@@ -401,6 +401,7 @@ static const struct {
     {"/data", {"x.csv"}},
     {"/u", {"\xc3\xa9" "1", "\xc3\xa8" "2", "Mj\xc3\xb6lnir.txt", "bad\xc2\x9b" "c", "\xff"}},
     {"/big", {"zz", "aa"}},     // listed as cut short
+    {"/sp", {"my file.txt", "my notes/", "it's", "a|b>c"}},     // to be quoted on the line
     {"/case", {"README.TXT", "ReadMe.md", "x.Bin", "\xc3\x96l.txt", "Docs/"}},
     // Look like something they aren't: U+202E (right-to-left override), U+200B (zero-width
     // space), U+00A0 and U+3000 (spaces that don't separate words), U+FEFF; then a plain one.
@@ -2618,8 +2619,8 @@ TEST(tab_paths_relative_to_the_working_directory_and_absolute) {
 
 TEST(tab_skips_names_it_cannot_type_or_show) {
     start(&io_plain);
-    type("cat my\t");                                // "my file": a space
-    CHECK_OUT("cat my\a");
+    type("cat my\t");                                // "my file": offered since #207, escaped
+    CHECK_OUT("cat my\\ file ");
     start(&io_plain);
     type("cat es\t");                                // an escape sequence
     CHECK_OUT("cat es\a");
@@ -2687,7 +2688,7 @@ TEST(tab_completes_the_file_after_echo_redirect) {
     type("echo hi>r\t");                             // no spaces: echo still writes to it
     CHECK(line_is("echo hi>readme.txt "));
     start(&io_plain);
-    type("echo a > b >r\t");                         // the last '>' is the one echo uses
+    type("echo a > b >r\t");                         // an error once run, but a path
     CHECK(line_is("echo a > b >readme.txt "));
     start(&io_plain);
     type("echo hi > case/read\t");                   // any case, as for other paths
@@ -2708,7 +2709,7 @@ TEST(tab_echo_text_is_free) {
     type("echo r\t");                                // no '>': text, not a path
     CHECK_OUT("echo r\a");
     start(&io_plain);
-    type("echo hi > my f\t");                        // a name with a space: never offered
+    type("echo hi > my f\t");                        // a word after the redirect's path
     CHECK_OUT("echo hi > my f\a");
     start(&io_plain);
     type("echo hi > readme.txt and\t");
@@ -2739,10 +2740,11 @@ TEST(tab_values_from_a_function) {
     clear_out();
     type("\t");
     // One a line with notes; the note's escape and line break can't reach the terminal.
-    CHECK_OUT("\n1   laptop\n2   evil.[2J x\n12\nsos> key del ");
+    // "a b" too since #207: a value with a space is offered, and escaped on the line.
+    CHECK_OUT("\n1    laptop\n2    evil.[2J x\n12\na b\nsos> key del ");
     start(&io_plain);
-    type("key del a\t");                             // "a b": not one word
-    CHECK_OUT("key del a\a");
+    type("key del a\t");
+    CHECK_OUT("key del a\\ b ");
     start(&io_plain);
     type("key del 2 \t");                            // nothing after a value
     CHECK_OUT("key del 2 \a");
@@ -2939,6 +2941,135 @@ TEST(tab_words_and_file_names_together) {
     CHECK_OUT("lua ps \a");
 }
 
+// --- Tab with the shell's quoting (#207) -----------------------------------------------------
+
+TEST(tab_completes_inside_an_open_quote_and_leaves_it_open) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'my f\t");
+    CHECK(line_is("cat 'my file.txt"));             // no space: it would be in the name
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"my f\t");
+    CHECK(line_is("cat \"my file.txt"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'my n\t");                            // a directory still ends in '/'
+    CHECK(line_is("cat 'my notes/"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat 'it\t");                              // a quote in '...': closed, escaped, reopened
+    CHECK(line_is("cat 'it'\\''s"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"it\t");                             // in "...": as it is
+    CHECK(line_is("cat \"it's"));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat \"a\t");                              // in "...": '|' and '>' as they are
+    CHECK(line_is("cat \"a|b>c"));
+}
+
+TEST(tab_escapes_what_the_shell_would_split) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat my\\ f\t");
+    CHECK(line_is("cat my\\ file.txt "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat i\t");
+    CHECK(line_is("cat it\\'s "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat a\t");
+    CHECK(line_is("cat a\\|b\\>c "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat my\\\t");                             // the line ends in '\': it escapes the space
+    CHECK(line_is("cat my\\ "));
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat it\\'s\\\t");                         // whole, after a '\': no space added to it
+    CHECK(line_is("cat it\\'s\\"));
+    start(&io_plain);
+    type("cat 'docs'/g\t");                         // a quoted directory part: listed de-quoted
+    CHECK(line_is("cat 'docs'/gui"));
+    CHECK(!strcmp(listed, "docs/"));
+}
+
+TEST(tab_lists_names_with_spaces) {
+    start(&io_plain);
+    strcpy(sh.cwd, "/sp");
+    type("cat m\t");                                // "my file.txt", "my notes": "my " shared
+    CHECK(line_is("cat my\\ "));
+    clear_out();
+    type("\t\t");
+    CHECK_OUT("\a\nmy file.txt  my notes/\nsos> cat my\\ ");
+    type("n\t");
+    CHECK(line_is("cat my\\ notes/"));
+}
+
+TEST(tab_redirect_and_pipe_only_when_unquoted) {
+    start(&io_plain);
+    type("echo \"a>b\" > do\t");                     // a path after the real '>'
+    CHECK(line_is("echo \"a>b\" > docs/"));
+    start(&io_plain);
+    type("echo 'a|b' | gr\t");                       // a stage after the real '|'
+    CHECK(line_is("echo 'a|b' | grep "));
+    start(&io_plain);
+    type("echo \"a>b\" r\t");                        // echo's text, not a path
+    CHECK_OUT("echo \"a>b\" r\a");
+    start(&io_plain);
+    type("echo a\\>r\t");
+    CHECK_OUT("echo a\\>r\a");
+    start(&io_plain);
+    type("echo 'a|b' gr\t");                         // not a stage
+    CHECK_OUT("echo 'a|b' gr\a");
+    start(&io_plain);
+    type("cat 'a > r\t");                            // one quoted word: no such file
+    CHECK_OUT("cat 'a > r\a");
+    start(&io_plain);
+    type("echo \"x | gr\t");
+    CHECK_OUT("echo \"x | gr\a");
+    start(&io_plain);
+    type("echo hi > 'do\t");                         // a quoted path after a '>'
+    CHECK(line_is("echo hi > 'docs/"));
+    start(&io_plain);
+    type("ls | 'gr\t");                              // a quoted stage name
+    CHECK(line_is("ls | 'grep"));
+}
+
+TEST(tab_matches_earlier_words_de_quoted) {
+    start(&io_plain);
+    type("\"time\" sy\t");
+    CHECK(line_is("\"time\" sync "));
+    start(&io_plain);
+    type("'time' st\t");
+    CHECK(line_is("'time' stat"));
+    start(&io_plain);
+    type("ti\\me s\"y\"\t");                         // the word at the cursor too
+    CHECK(line_is("ti\\me s\"y\"nc "));
+    start(&io_plain);
+    type("ls | \"grep\" -\t\t");
+    CHECK(strstr(fake.out, "-i  -n  -v") != NULL);
+    start(&io_plain);
+    type("\"ti me\" \t");                            // not a command
+    CHECK_OUT("\"ti me\" \a");
+}
+
+TEST(tab_case_fix_keeps_the_quoting) {
+    start(&io_plain);
+    type("cat 'case/read\t");
+    CHECK(line_is("cat 'case/README."));
+    CHECK_OUT("cat 'case/read\b\b\b\bREADME.");   // the letters retyped, the quote kept
+    start(&io_plain);
+    type("cat case/rea\\d\t");                       // an escaped letter: still that letter
+    CHECK(line_is("cat case/REA\\DME."));
+    start(&io_plain);
+    type("cat \"case/x.\"b\t");
+    CHECK(line_is("cat \"case/x.\"Bin "));
+}
+
 TEST_MAIN(
     RUN(utf8_characters_are_taken);
     RUN(utf8_byte_at_a_time);
@@ -3101,4 +3232,10 @@ TEST_MAIN(
     RUN(tab_completes_tee_and_its_paths);
     RUN(tab_no_card_or_no_such_directory);
     RUN(tab_words_and_file_names_together);
+    RUN(tab_completes_inside_an_open_quote_and_leaves_it_open);
+    RUN(tab_escapes_what_the_shell_would_split);
+    RUN(tab_lists_names_with_spaces);
+    RUN(tab_redirect_and_pipe_only_when_unquoted);
+    RUN(tab_matches_earlier_words_de_quoted);
+    RUN(tab_case_fix_keeps_the_quoting);
 )

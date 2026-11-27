@@ -159,9 +159,103 @@ TEST(join_gives_the_arguments_single_spaced) {
     CHECK(args == w.v[1] && !strcmp(args, "one two three") && !strcmp(w.v[0], "say"));
 }
 
+// words_at() on `line` as "start [text] quote escape after": quote '-' for none, escape 1 or 0,
+// after one of ^ (nothing) w (a word) | (a pipe) > (a redirect).
+static const char *at(const char *line) {
+    static char out[600];
+    char text[300];
+    memset(text, 'X', sizeof(text));
+    word_at_t a;
+    size_t len = strlen(line);
+    words_at(line, len, text, &a);
+    CHECK(a.start <= len && a.len <= len - a.start && text[a.len] == '\0');
+    snprintf(out, sizeof(out), "%zu [%s] %c %d %c", a.start, text, a.quote ? a.quote : '-',
+             a.escape, "^w|>"[a.after]);
+    return out;
+}
+
+TEST(at_reports_the_word_at_the_cursor) {
+    static const struct {
+        const char *line, *want;
+    } cases[] = {
+        {"", "0 [] - 0 ^"},
+        {"  ", "2 [] - 0 ^"},
+        {"ca", "0 [ca] - 0 ^"},
+        {"  ca", "2 [ca] - 0 ^"},
+        {"cat ", "4 [] - 0 w"},
+        {"cat my", "4 [my] - 0 w"},
+        // Quotes and backslashes: de-quoted, the open quote said.
+        {"cat 'my f", "4 [my f] ' 0 w"},
+        {"cat \"my f", "4 [my f] \" 0 w"},
+        {"cat my\\ f", "4 [my f] - 0 w"},
+        {"cat my\\", "4 [my] - 1 w"},
+        {"cat \\", "4 [] - 1 w"},
+        {"cat a'b c'd", "4 [ab cd] - 0 w"},
+        {"cat 'it'\\''s", "4 [it's] ' 0 w"},
+        {"cat \"a\\\"b\\\\c", "4 [a\"b\\c] \" 0 w"},
+        {"cat \"a\\", "4 [a\\] \" 0 w"},       // inside "...": literal for now
+        {"cat 'a\\", "4 [a\\] ' 0 w"},
+        {"cat ''", "4 [] - 0 w"},
+        {"cat '", "4 [] ' 0 w"},
+        // Operators: unquoted ones end the word and say what the next one is.
+        {"ls | gr", "5 [gr] - 0 |"},
+        {"ls|gr", "3 [gr] - 0 |"},
+        {"ls |", "4 [] - 0 |"},
+        {"ls | grep x", "10 [x] - 0 w"},
+        {"echo hi > do", "10 [do] - 0 >"},
+        {"echo hi >> do", "11 [do] - 0 >"},
+        {"echo hi>do", "8 [do] - 0 >"},
+        {"echo hi >", "9 [] - 0 >"},
+        {"echo hi > f x", "12 [x] - 0 w"},
+        // Quoted or escaped operators are text.
+        {"echo \"a>b\" > do", "13 [do] - 0 >"},
+        {"echo \"a>b\" do", "11 [do] - 0 w"},
+        {"echo 'a|b' | gr", "13 [gr] - 0 |"},
+        {"echo 'a|b' gr", "11 [gr] - 0 w"},
+        {"echo 'a > b", "5 [a > b] ' 0 w"},
+        {"echo a\\>b", "5 [a>b] - 0 w"},
+        {"echo a\\|b", "5 [a|b] - 0 w"},
+        {"echo \"x | y", "5 [x | y] \" 0 w"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const char *got = at(cases[i].line);
+        if (strcmp(got, cases[i].want)) {
+            fprintf(stderr, "  %s\n    got:      %s\n    expected: %s\n", cases[i].line, got,
+                    cases[i].want);
+            CHECK(false);
+        }
+    }
+}
+
+// The words before the cursor's word are whole: words_split() takes them, and the word, its
+// quote closed, is what words_split() makes of it.
+TEST(at_agrees_with_split) {
+    static const char *const lines[] = {
+        "cat 'my f", "cat \"a\\\"b", "x | y 'a b", "a\"b c\"d", "echo \"a>b\" > 'do", "w  ",
+        "e a\\ b",
+    };
+    for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) {
+        char text[300], buf[300];
+        word_at_t a;
+        size_t len = strlen(lines[i]);
+        words_at(lines[i], len, text, &a);
+        memcpy(buf, lines[i], a.start);
+        buf[a.start] = '\0';
+        words_t w;
+        CHECK(words_split(buf, &w) == NULL);
+        char close[2] = {a.quote, '\0'};
+        snprintf(buf, sizeof(buf), "%s%s", lines[i] + a.start, close);
+        CHECK(words_split(buf, &w) == NULL);
+        CHECK(w.n == (a.len || a.start < len ? 1 : 0));
+        CHECK(!w.n || !strcmp(w.v[0], text));
+    }
+}
+
 TEST_MAIN(
     RUN(splits_every_rule);
     RUN(thirty_two_words_and_no_more);
     RUN(splits_in_place);
     RUN(join_gives_the_arguments_single_spaced);
+    RUN(at_reports_the_word_at_the_cursor);
+    RUN(at_agrees_with_split);
 )

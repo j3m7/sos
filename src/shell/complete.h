@@ -33,7 +33,7 @@ typedef complete_dir_t (*complete_dir_fn)(shell_t *sh, const char *dir, complete
                                           void *arg);
 
 // The stages a line's output can go through after a '|' (pipe.c), with their options: Tab
-// offers these after "| " (only their names and options, no `run`).
+// offers these after a '|' (only their names and options, no `run`).
 extern const shell_cmd_t pipe_stage_table[];
 
 // The SD card's lister (files.c); the host tests have their own.
@@ -46,27 +46,40 @@ typedef struct {
     shell_t *sh;                // passed to list_dir
 } complete_src_t;
 
-// The last word of `line` (`len` bytes, the cursor at its end; it may be empty) is the one Tab
-// completes. The words before it pick what it can be: the first is a command from the tables,
-// each later one a word that may follow the one before. After a command or word marked
-// SHELL_PATH, every word that isn't one of its words is a path, and so is the last word: then
-// the entries of the directory it names that start with what follows its last '/' match too
-// (only directories with SHELL_DIR), and *start is just after that '/'; otherwise *start is
-// where the last word begins. Words that come from a function (SHELL_VALUES_OF, shell.h) are
-// offered like the others, when they pass the same check as file names. After a '>' or '>>'
-// (the shell's redirect, on any command) only the text after the line's last '>' is completed,
-// as a path, and only while it has no space in it.
+// Where the text Tab completes is on the line, and how it is spelt there.
+typedef struct {
+    size_t start;               // where the word being completed begins (with its quote, if any)
+    size_t typed;               // bytes of each match already typed: the end of the word's
+                                // de-quoted text (after its last '/' for a path)
+    char quote;                 // the quote open at the cursor: '\0', '\'' or '"'
+    bool escape;                // the line ends in an unquoted, unescaped backslash
+} complete_at_t;
+
+// The word at the end of `line` (`len` bytes, the cursor at its end; it may be empty) is the one
+// Tab completes, read with the shell's quoting rules (words.h, words_at()): it starts after the
+// last unquoted space, '|' or '>', a quote open at the cursor is part of it, and it is matched
+// de-quoted. So are the words before it in its segment (after the last unquoted '|'), which
+// pick what it can be: the first is a command from the tables (a stage name from
+// pipe_stage_table after a '|'), each later one a word that may follow the one before. After a
+// command or word marked SHELL_PATH, every word that isn't one of its words is a path, and so is
+// the last word: then the entries of the directory it names that start with what follows its
+// last '/' match too (only directories with SHELL_DIR). After an unquoted '>' or '>>' (the
+// shell's redirect, on any command) the word is a path; after that path, nothing. Words that
+// come from a function (SHELL_VALUES_OF, shell.h) are offered like the others, when they pass
+// the same check as file names.
 //
-// Calls `fn` with each match that starts with the text from *start (file names ignoring the
-// case of ASCII letters, as FAT does; words exactly), and returns how many.
-// Words: not SHELL_HIDDEN ones, nor SHELL_ADMIN ones unless `admin`. File names: only those
-// that can be typed as one word and shown as they are (valid UTF-8; no spaces of any kind,
-// control characters, C1 controls, nor what termtext_hidden() names) and fit on a line
-// (SHELL_LINE_MAX bytes at most). None when an earlier word
-// isn't known, is offered only to an admin channel and this isn't one, or takes nothing after
-// it. *partial says the directory lister stopped early, so there may be more matches than
-// were given.
-size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
+// Calls `fn` with each match that starts with the de-quoted text (file names ignoring the case
+// of ASCII letters, as FAT does; words exactly), and returns how many. The matches are given as
+// they are, unquoted: the caller spells them for the line, `at` saying how (shell_core.c: a
+// space, quote, backslash, '|' or '>' backslash-escaped outside quotes, raw inside the open
+// quote). Words: not SHELL_HIDDEN ones, nor SHELL_ADMIN ones unless `admin`. File names and
+// values: only those that can be shown as they are (valid UTF-8; no control characters, C1
+// controls, spaces other than U+0020, nor what termtext_hidden() names; U+0020 only between
+// other characters and one at a time, so that names in a list can't look alike) and fit on a
+// line (SHELL_LINE_MAX bytes at most). None when an earlier word isn't known, is offered only
+// to an admin channel and this isn't one, or takes nothing after it. *partial says the
+// directory lister stopped early, so there may be more matches than were given.
+size_t complete_words(const complete_src_t *src, const char *line, size_t len, complete_at_t *at,
                       complete_fn fn, void *arg, bool *partial);
 
 // Tab at a question with a completer (shell_ask_complete): the whole answer typed so far,

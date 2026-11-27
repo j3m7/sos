@@ -39,15 +39,23 @@ translation (`crlf`), and `admin` (true for the console only).
   main loop waits) for the directory named up to the last `/`, and offers its entries that start
   with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
   name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
-  `SHELL_DIR` keeps to directories. After a `>` or `>>` (the shell's redirect, any command) only
-  the text after the line's last `>` is a path, a `SHELL_NOSPACE` word (`https://`) ends with
-  nothing instead of a space, and a word list that is a `shell_values_t` (`SHELL_VALUES_OF`)
-  comes from a function: key numbers,
-  saved networks, hosts. Those values pass the file-name check; their notes (a key's comment, an
-  SSID) show only in the list, one match a line, through `termtext`. Names that aren't valid
-  UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or hold what
-  `termtext_hidden()` names (bidi controls, invisible characters) are never offered: a file name
-  can't send the terminal an escape sequence, nor look like another.
+  `SHELL_DIR` keeps to directories. The line is read with the shell's quoting rules
+  (`words_at()` in words.c, up to the cursor): the word starts after the last unquoted space or
+  operator, a quote open at the cursor is part of it, and it and the words before it in its
+  segment are matched de-quoted. After an unquoted `|` the word is a stage name
+  (`pipe_stage_table`); after an unquoted `>` or `>>` (the shell's redirect, any command) it is
+  a path. What Tab adds is spelt for the line (`tab_spell()` in shell_core.c): a space, quote,
+  `\`, `|` or `>` backslash-escaped outside quotes, raw inside the open quote (`'` as `'\''`
+  inside `'...'`, `"` and `\` escaped inside `"..."`), which stays open (no space after a whole
+  match there); the case rewrite changes only the typed letters, so the spelling stays valid.
+  A `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and a word list that
+  is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers, saved networks,
+  hosts. Those values pass the file-name check; their notes (a key's comment, an SSID) show only
+  in the list, one match a line, through `termtext`. Names that aren't valid UTF-8 from U+0020
+  up (other spaces, controls, C1 controls), that have a space at either end or two in a row (in
+  a list they would look like another), or hold what `termtext_hidden()` names (bidi controls,
+  invisible characters) are never offered: a file name can't send the terminal an escape
+  sequence, nor look like another.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop

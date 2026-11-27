@@ -450,13 +450,19 @@ DESCRIPTION
     card after 'man'.
 
     After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
-    after a '>' or '>>', Tab completes file names on the SD card
+    after a '>' or '>>' on any line, Tab completes file names on the SD card
     ('cat do' Tab gives 'cat docs/', the next Tab goes on inside it); cd and
-    mkdir offer directories only. Upper and lower case don't matter, as on the
-    card itself (ASCII letters only). Names with control characters aren't
-    offered, nor yet names with spaces: type those quoted ('cat "my file"').
-    Tab doesn't mount the card. In a directory of more than 256 entries it
-    lists what it read and says there is more.
+    mkdir offer directories only. After a '|' it completes the stage names
+    (grep, head, ...). Tab reads the line as the shell does (QUOTING): a '|'
+    or '>' inside quotes is text, and quoted words count as what they spell.
+    A name with a space (or a quote, '\', '|', '>') is inserted escaped:
+    'cat my' Tab gives 'cat my\ file.txt '; typed inside a quote it goes in as
+    it is and the quote is left open for you to close: "cat 'my f" Tab gives
+    "cat 'my file.txt". Upper and lower case don't matter, as on the card
+    itself (ASCII letters only); names with control characters, with a space
+    at either end or two in a row, aren't offered, and Tab doesn't mount the
+    card. In a directory of more than 256 entries it lists what it read and
+    says there is more.
 
     At the question for a Wi-Fi network's name ('wifi set', 'wifi add',
     setup), Tab completes the names of the networks around, strongest first,
