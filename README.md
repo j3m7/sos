@@ -525,8 +525,10 @@ What it stores equates the sensor's reading with the room thermometer at that mo
 then the chip is already a little warmer than the room from running. So that warmth is folded
 into the calibration: a calibrated board reports something closer to the room temperature as
 worked out from the chip than the chip's own temperature, and under load the chip itself is
-warmer than it says. Don't compare a calibrated reading with the chip's rated maximum. The calibration is stored in two bytes of the configuration that were spare, so
-firmware without `temp cal` still reads the configuration (and ignores it).
+warmer than it says. Don't compare a calibrated reading with the chip's rated maximum.
+
+The calibration is stored in two bytes of the configuration that were spare, so firmware
+without `temp cal` still reads the configuration (and ignores it).
 
 ## Files (SD card)
 
