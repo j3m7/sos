@@ -26,13 +26,18 @@ DESCRIPTION
                     the build expects, WARN on an unknown maker
         trng        raw bits from the random number generator's oscillator:
                     the repetition count and adaptive proportion tests of NIST
-                    SP 800-90B, and the generator's own tests. FAIL refuses
-                    making keys
-        crypto      known answers for SHA-256, SHA-512, HMAC, AES-GCM, AES-XTS,
-                    Ed25519 and X25519, and that a changed GCM ciphertext or
-                    signed message is refused. FAIL refuses making keys and
-                    encrypting
-    The background checks read what SOS already keeps:
+                    SP 800-90B, and the generator's own repetition test. FAIL
+                    refuses making keys
+        crypto      known answers for SHA-256, SHA-512, HMAC, AES-GCM, AES-XTS
+                    and the Ed25519 public key, and that a changed GCM
+                    ciphertext is refused; the text gives the time of each
+                    group. FAIL refuses making keys and encrypting
+    The background checks:
+        crypto-ssh  30 s after boot, then daily: the known answers too slow for
+                    boot, those of SSH: Ed25519 signing and verifying (and that
+                    a changed message is refused), X25519. FAIL refuses as
+                    crypto does
+    and these read what SOS already keeps:
         glitch      every minute: WARN if the glitch detector's loop guard
                     left it off at this boot (see 'glitch')
         stack       every minute: WARN when core 0's stack peak is over 75 %
@@ -51,8 +56,8 @@ DESCRIPTION
     the SSH host key, an encrypted card, a console password's salt) or
     encrypting new data (saving the configuration). The refusal names the
     check, and the latest result counts: a check that passes again lifts it.
-    Reading what is already stored is never refused. Only trng and crypto
-    refuse anything.
+    Reading what is already stored is never refused. Only trng, crypto and
+    crypto-ssh refuse anything.
 
     A fresh board whose root secret was refused this way keeps its console
     locked, saying which check failed; 'health' and 'reboot' work there.

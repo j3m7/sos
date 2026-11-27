@@ -527,15 +527,21 @@ host's wolfCrypt by `tests/test_selftest.c`).
   ID through `flash_safe_execute()` and `flash_do_cmd()`; FAIL if smaller than
   `PICO_FLASH_SIZE_BYTES`), `trng` (holds KEYS: SP 800-90B repetition count and adaptive
   proportion over 3072 raw oscillator bits read from the TRNG block under pico_rand's spin lock,
-  H = 0.5, alpha = 2^-30, plus the block's own CRNGT and autocorrelation errors; the block is
-  reset before and after), `crypto` (holds KEYS and CRYPTO: 13 known answers for SHA-256,
-  SHA-512, HMAC, AES-GCM, XTS, Ed25519 and X25519, with refusal tests for a changed GCM
-  ciphertext and a changed signed message; 1.7 KB of heap while it runs). Thresholds and
-  cutoffs are in `hwtest.h`. `crypto` and `trng` give their time in their text.
+  one sample per 256 cycles, the corrector and the block's autocorrelation test bypassed, its
+  CRNGT on; H = 0.5, alpha = 2^-30; the block is reset before and after), `crypto` (holds KEYS
+  and CRYPTO: the boot subset of `selftest.c`'s 13 known answers, SHA-256, SHA-512, HMAC,
+  AES-GCM with a refusal test, XTS and the Ed25519 public key). The rest (Ed25519 signing,
+  verifying with a refusal test, X25519: tens of ms each) is `crypto-ssh`, a background check
+  30 s after boot and then daily, holding the same gates. At boot `crypto` runs in one call;
+  elsewhere both run one known answer per step. About 2 KB of heap while they run. Their text
+  gives the time per group, and a passing run is logged at info. Thresholds and cutoffs are in
+  `hwtest.h`.
 - **Test builds** (`-DSOS_TEST_COMMANDS=ON`): `health inject <name> fail|clear` sets a result by
   hand; `health inject gate keys|crypto` adds a test-only full-tier check holding that gate at
   FAIL, to see each refusal on the board (`health full` runs it, and it passes, which opens the
-  gate again).
+  gate again). `health crypto-times` times every known answer; `health trng-diag` runs the TRNG
+  test under 12 setups (sample period, autocorrelation test, corrector) to compare with the
+  check's.
 - **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 24 at
   most.
 
