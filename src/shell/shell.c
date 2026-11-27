@@ -1946,7 +1946,8 @@ static const shell_word_t sd_words[] = {
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
     END};
-static const shell_word_t lua_words[] = {W("-e"), W("-b"), W("ps"), W("stop"), END};
+static const shell_word_t lua_words[] = {
+    W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
 static const shell_word_t http_words[] = {W("get"), W("head"), W("post"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
@@ -1978,9 +1979,9 @@ static const shell_cmd_t commands[] = {
     {"wifi", cmd_wifi, wifi_words, 0},
     {"hostname", run_hostname, NULL, 0},
     {"sd", sdcard_command, sd_words, 0},
-    {"lua", lua_command, lua_words, 0},
-    {"edit", edit_command, NULL, 0},
-    {"more", view_command, NULL, 0},
+    {"lua", lua_command, lua_words, SHELL_PATH},
+    {"edit", edit_command, NULL, SHELL_PATH},
+    {"more", view_command, NULL, SHELL_PATH},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, SHELL_ADMIN},

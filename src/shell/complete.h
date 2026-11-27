@@ -10,18 +10,53 @@
 #include "shell/shell.h"
 
 // Tab completion: which words could finish the line being typed. Pure C over the command
-// tables (shell.h), so it builds on the host for unit tests.
+// tables (shell.h) and a directory lister, so it builds on the host for unit tests.
 
-typedef void (*complete_fn)(const char *word, void *arg);
+// A match: `word`, and what follows it once it's complete: ' ' for a word or a file, '/' for a
+// directory.
+typedef void (*complete_fn)(const char *word, char end, void *arg);
+
+// A directory lister calls this with every entry.
+typedef void (*complete_entry_fn)(const char *name, bool is_dir, void *arg);
+
+typedef enum {
+    COMPLETE_DIR_NONE,          // can't list it: no card, no such directory, path too long
+    COMPLETE_DIR_ALL,           // every entry given
+    COMPLETE_DIR_PART,          // stopped early (a large directory): the entries may be some only
+} complete_dir_t;
+
+// List the directory `dir` (as typed: relative to the shell's working directory, or absolute;
+// "" for the working directory itself), calling `fn` with each entry except "." and "..".
+typedef complete_dir_t (*complete_dir_fn)(shell_t *sh, const char *dir, complete_entry_fn fn,
+                                          void *arg);
+
+// The SD card's lister (files.c); the host tests have their own.
+complete_dir_t shell_list_dir(shell_t *sh, const char *dir, complete_entry_fn fn, void *arg);
+
+typedef struct {
+    const shell_cmd_t *const *tables;   // NULL-terminated (shell_command_tables())
+    bool admin;                 // offer SHELL_ADMIN words
+    complete_dir_fn list_dir;   // file names; NULL for none
+    shell_t *sh;                // passed to list_dir
+} complete_src_t;
 
 // The last word of `line` (`len` bytes, the cursor at its end; it may be empty) is the one Tab
-// completes; it starts at *start. The words before it pick the level: the first is a command
-// from `tables`, each later one a word that may follow the one before. Calls `fn` with every
-// word of that level that starts with the last word, except SHELL_HIDDEN ones and, unless
-// `admin`, SHELL_ADMIN ones, and returns how many. None when an earlier word isn't known (or
-// is offered only to an admin channel and this isn't one), or takes no words after it. Words
-// are separated by spaces; spaces before the command don't count.
-size_t complete_words(const shell_cmd_t *const *tables, bool admin, const char *line, size_t len,
-                      size_t *start, complete_fn fn, void *arg);
+// completes. The words before it pick what it can be: the first is a command from the tables,
+// each later one a word that may follow the one before. After a command or word marked
+// SHELL_PATH, every word that isn't one of its words is a path, and so is the last word: then
+// the entries of the directory it names that start with what follows its last '/' match too
+// (only directories with SHELL_DIR), and *start is just after that '/'; otherwise *start is
+// where the last word begins.
+//
+// Calls `fn` with each match that starts with the text from *start, and returns how many.
+// Words: not SHELL_HIDDEN ones, nor SHELL_ADMIN ones unless `admin`. File names: only those
+// that can be typed as one word and shown as they are (valid UTF-8; no spaces of any kind,
+// control characters, C1 controls, nor what termtext_hidden() names) and fit on a line
+// (SHELL_LINE_MAX bytes at most). None when an earlier word
+// isn't known, is offered only to an admin channel and this isn't one, or takes nothing after
+// it. *partial says the directory lister stopped early, so there may be more matches than
+// were given.
+size_t complete_words(const complete_src_t *src, const char *line, size_t len, size_t *start,
+                      complete_fn fn, void *arg, bool *partial);
 
 #endif
