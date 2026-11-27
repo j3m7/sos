@@ -14,6 +14,7 @@ Where this note and the code differ in detail, the code and its header comments 
 reference.
 
 Status (2026-11-27): design only; the phases below are still to be built. Tracking issue: #213.
+Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
 
@@ -30,7 +31,9 @@ Status (2026-11-27): design only; the phases below are still to be built. Tracki
   partition table (a boot sector at sector 0), two FATs, or other cluster sizes. FatFs mounts
   all of these, so the checker has to read all of them.
 - **Cluster counts:** f_mkfs uses 32 KB clusters on a 32 GB card, whether exFAT or FAT32
-  (64 sectors per cluster below 64 M sectors). That is about 1 M clusters, so a bitmap of the
+  (exFAT: 64 sectors per cluster from 512 K to 64 M sectors; FAT32: the `cst32` table). f_mkfs
+  leaves 63 sectors before an MBR partition and `GPT_ALIGN` before a GPT one; the checker reads
+  the partition table, so the gap doesn't matter. That is about 1 M clusters, so a bitmap of the
   whole card is 128 KB, too much to hold beside Wi-Fi, TLS and SSH. §6 handles this.
 - **The encryption layer** sits in `sdcard.c`'s block hooks. It is set up by `detect()`, which
   runs when the card is initialized (`init_layer()`), not when FatFs mounts it. So
@@ -56,16 +59,35 @@ Status (2026-11-27): design only; the phases below are still to be built. Tracki
 3. **A `checking` flag** in `sdcard.c`, set for the whole check. While it is set:
    - `sdcard_mount()` and `sdcard_mount_retry()` return false without touching the card. With
      a shell, `sdcard_mount()` prints `the card is being checked (sd check)`.
-   - `sd format`, `sd test`, `sd speed` and `sd unmount` refuse with the same message.
+   - `sd`/`sd info` (`cmd_info()` mounts), `sd format`, `sd test`, `sd speed` and `sd unmount`
+     refuse with the same message.
+   - `sdcard_owner_gone()` (run by `config reset`) turns the layer off (`crypt_off()`). After
+     that the checker would read ciphertext. Under a check it doesn't refuse: the
+     configuration is already erased when it runs. Instead it sets `check_stop`, and the job
+     tests that flag **before every `fsck_step()`**. The main loop is single-threaded, so
+     owner_gone can only run between steps, never inside one. The check then ends with
+     `stopped: the configuration was erased (the card is locked now)`.
    - Callers already handle a failed mount, as they do when there's no card: file commands
      print an error, SFTP returns errors, the TLS root loader has no roots (an `http` request
      fails), and the log writer keeps lines in its buffers and writes them after the next mount. As
      whenever the card is out, lines that don't fit are dropped and counted (`log_file_lost()`).
-4. **Starting:** `driver_init()`, then `disk_initialize(0)`. This runs `detect()`, which opens
-   an encrypted card's layer with the card key. A locked, unsupported or missing card ends the
-   check with the reason (`kind_why`) and no problems reported.
-5. **Ending** (finished, Ctrl-C, or an error): `crypt_off()` (forget the key),
-   `STA_NOINIT` set, `checking` cleared, and `unmounted_by_hand` left true. The card ends up as
+4. **Starting:** the part of `mount()` that comes before `f_mount` (sdcard.c, from
+   `disk_initialize(0)` through the `KIND_LOCKED`/`KIND_UNSUPPORTED` refusal) becomes one
+   helper, `card_open()`, called by both `mount()` and the check. That way the check gets
+   the same retries a mount does:
+   - a card locked for lack of a key is looked at again once a key exists;
+   - a card locked for lack of memory is tried again;
+   - a card whose kind is `KIND_UNKNOWN` runs `detect()`.
+
+   After `sd unmount`, `STA_NOINIT` is set, so `disk_initialize(0)` is a real initialization:
+   `init_layer()` runs `detect()`, which opens an encrypted card's layer with the card key. A
+   locked, unsupported or missing card ends the check with the reason (`kind_why`) and no
+   problems reported.
+5. **Ending** (finished, Ctrl-C, stopped, or an error): `crypt_off()` (forget the key),
+   `STA_NOINIT` set, `checking` cleared, and **`unmounted_by_hand` set to true**. A check can
+   start on a card that hasn't mounted since boot, where the flag is false, so the check sets
+   it rather than leaving it as it was. Whoever just checked the card may be about to pull it,
+   and the log writer's quiet retry shouldn't remount it under them. The card ends up as
    `sd unmount` leaves it: the next file command mounts it, and the quiet retry doesn't.
 6. **Reads only** in the check phases. The checker gets a read callback and no write callback.
    Repair (§10) adds writes later, and only under the same rule.
@@ -107,37 +129,64 @@ FSInfo or allocation bitmap update in flight that it could disagree with or corr
   `HEAP_FILES`, and runs the checker as a shell job. Each job step calls `fsck_step()` with a
   budget sized for about 20 ms (like `files.c`'s `STEP_US`), so SSH, the console and the
   watchdog keep running. Ctrl-C ends the job (§2.5). The read callback is
-  `disk_read(0, …)`.
+  `disk_read(0, …)`, and `io->sectors` is `get_num_sectors_layer()`: the card's size, less
+  8192 sectors on an encrypted card.
 - **Host:** `tests/test_fsck.c` runs the same code on image files (§8), and a fuzz target runs
   it on mutated images.
 
 ## 4. Finding the volume
 
-The checker goes through the same steps FatFs does to find volume 0, and reports when one fails:
+The checker finds volume 0 the way FatFs's `find_volume()` and `check_fs()` do (ff.c), so that
+it checks exactly the volume FatFs would mount:
 
-1. Sector 0 is a FAT32 or exFAT boot sector (`find_volume()`'s tests: `0x55AA`, the
-   `"EXFAT   "` name, or a valid FAT BPB): the volume starts at 0.
-2. Otherwise an MBR (`0x55AA`, four entries): the first entry with a non-zero type. Type `0xEE`
-   (protective MBR) means GPT.
-3. GPT: the header at LBA 1 (signature, header CRC32, entry array CRC32), then the first entry
-   with the Microsoft basic data type GUID, which is what FatFs looks for.
+- **VBR test** (`check_fs()`), applied to one sector:
+  - *exFAT*: bytes 0–10 are `EB 76 90 "EXFAT   "` and bytes 510–511 are `55 AA`.
+  - *FAT*: a jump byte (`EB`, `E9` or `E8`) at 0, and either `55 AA` with `"FAT32   "` at
+    offset 82, or a plausible BPB.
+  - *Not a VBR*: anything else, split into *a valid boot sector* (`55 AA`) or *invalid*.
+1. **Sector 0** passes the VBR test: the volume starts at 0 (no partition table).
+2. **GPT:** otherwise, if the first MBR entry's type byte is `0xEE`, the header at LBA 1 must
+   pass `test_gpt_header()`: signature and version 1.0, header size 92–512, header CRC32, entry
+   size 128, at most 128 entries. If it doesn't, there is no volume. The volume is the **first
+   entry with the Microsoft basic data type GUID whose first LBA passes the VBR test**. FatFs
+   doesn't check the entry array's CRC32. The checker does, and reports a mismatch as a
+   problem, then goes on.
+3. **MBR:** otherwise the type bytes are ignored, as FatFs ignores them. The checker takes the
+   four entries' start LBAs in order, skips any that are 0, and uses the first that passes the
+   VBR test.
 
-Checks on the boot sector itself:
+Failing to find a volume ends the check with `FSCK_FAILED: no FAT32 or exFAT volume`.
 
-- **FAT32:** bytes per sector 512 (`FF_MAX_SS`), sectors per cluster a power of two ≤ 128,
-  reserved sectors ≥ 1, 1 or 2 FATs, FAT size large enough for the cluster count, root cluster
-  in range, cluster count ≥ 65 525 (otherwise it is FAT12/16, which FatFs could mount but SOS
-  never makes: reported as `not FAT32 or exFAT` and not checked). The backup boot sector
-  (normally sector 6) matches sector 0. The FSInfo signatures are present.
-- **exFAT:** the boot region checksum (sector 11 of the 12-sector boot region, computed over
-  sectors 0–10 the way the spec says), the backup boot region (sectors 12–23) equal to the main
-  one, the FAT offset and length, the cluster heap offset and count fitting inside the volume,
-  the root directory cluster in range, the `VolumeFlags` field read (and the dirty bit reported,
-  §7).
-- The volume must fit in `io->sectors`.
+Then the boot sector. Its checks fall into two groups, the same split FatFs makes.
 
-A volume that fails these checks ends the check with `FSCK_FAILED` and the reason. Nothing
-further can be trusted.
+**Refused** (`FSCK_FAILED`, with the reason). These are the things FatFs itself refuses to
+mount, so nothing further can be trusted:
+
+- bytes per sector not 512 (`FF_MAX_SS`);
+- sectors per cluster 0 or not a power of two;
+- reserved sectors 0;
+- number of FATs not 1 or 2;
+- FAT too small for the cluster count;
+- cluster count 0;
+- the volume not fitting in `io->sectors`.
+
+For FAT, a cluster count of **65 525 or fewer** is FAT12/16 (`MAX_FAT16`, ff.c): FatFs would
+mount it, but SOS never makes one, so it is refused as `not FAT32 or exFAT`. FAT32 is 65 526 up
+to `0x0FFFFFF5` clusters. On exFAT the FAT offset and length, the cluster heap offset and count,
+and the root directory cluster must be in range.
+
+**Reported, then the check goes on from the primary copy.** These are redundancy mismatches:
+FatFs mounts the volume whatever their state, so refusing would refuse cards FatFs uses every
+day.
+
+- **FAT32:** the backup boot sector (normally sector 6) differs from sector 0. The FSInfo
+  signatures are missing or wrong; FatFs then only distrusts the free count and the
+  next-free hint.
+- **exFAT:** the boot region checksum. That is sector 11 of the 12-sector boot region,
+  computed over sectors 0–10 as the spec says; only f_mkfs writes it, and `mount_volume()`
+  computes none. Also the backup boot region (sectors 12–23) differing from the main one.
+  The `VolumeFlags` dirty bit is read and noted (§7).
+- **GPT:** the entry array's CRC32 (above).
 
 ## 5. What is checked
 
@@ -151,6 +200,9 @@ For every directory entry, from the root down:
 - **Size against chain:** a file needs `ceil(size / cluster_size)` clusters (0 for size 0, with
   start cluster 0). A chain that is shorter means data is lost. A chain that is longer means
   clusters are wasted (a common result of an interrupted write; harmless but counted).
+  **FAT32 directories are exempt.** Their entries carry size 0, so a directory's chain is only
+  checked for range, loops and its end mark. exFAT directories have a `DataLength` and are
+  checked like files.
 - **Directories:** a directory's chain is walked as entries. A directory nested more than
   `FSCK_DEPTH_MAX` (64) levels deep is reported and not entered. That also catches a
   subdirectory whose start cluster points back at an ancestor, which is also checked directly
@@ -159,7 +211,9 @@ For every directory entry, from the root down:
   directory (case-insensitive, as FatFs compares them), `.`/`..` entries where they don't
   belong.
 - **Cluster accounting (§6):** clusters used by two entries (*cross-linked*), clusters marked
-  used that nothing reaches (*lost*), and clusters reached but marked free.
+  used that nothing reaches (*lost*), and clusters reached but marked free. A FAT32 cluster
+  marked bad (`0x0FFFFFF7`) is neither lost nor free. Bad clusters are counted in the summary,
+  never reported as lost, and never freed (§10.1).
 - **Free count:** FAT32's FSInfo free count, when it isn't `0xFFFFFFFF` (unknown), against the
   free clusters counted. A mismatch is a note, not a problem: FatFs recounts on mount when it
   doesn't trust it. exFAT has no stored free count.
@@ -263,7 +317,8 @@ pass 8/8
   are made with `f_mkfs` using the same `MKFS_PARM` as `sd format` (FAT32 and exFAT, with and
   without a partition table, one GPT case at a size over `FF_MIN_GPT`, written sparse), and
   filled with `f_write`/`f_mkdir`. FatFs is a pure C library, so this is the same formatter and
-  writer as on the board.
+  writer as on the board. `ffconf.h` has no board includes and `FF_FS_REENTRANT` is 0;
+  `FF_USE_LFN 3` needs `ff_memalloc`/`ff_memfree`, from `ffsystem.c` or two lines in the test.
 - **Damage, one kind per case**, written directly into the image, each with the exact problem
   line expected: lost chain, cross-link (two files sharing a cluster), size larger and smaller
   than the chain, chain into a free cluster, chain loop, directory loop to an ancestor, bad
@@ -317,10 +372,12 @@ can't race FatFs's cache. That is the main reason for checking unmounted.
 Only fixes that can't lose data that is still reachable:
 
 - **Lost clusters** are freed: on FAT32, FAT entries set to 0; on exFAT, bitmap bits cleared
-  (the FAT entries of free clusters don't matter on exFAT).
+  (the FAT entries of free clusters don't matter on exFAT). FAT32 bad-cluster marks
+  (`0x0FFFFFF7`) are left alone.
 - **Chains longer than their file** are trimmed to `ceil(size / cluster_size)` clusters: an
-  end-of-chain mark at the last needed cluster, then the tail freed. For exFAT this applies to
-  files with a FAT chain and, for NoFatChain files, to bitmap bits past the run.
+  end-of-chain mark at the last needed cluster, then the tail freed, but only where nothing
+  else uses it (§10.2). For exFAT this covers files with a FAT chain and, for NoFatChain files,
+  bitmap bits past the run. FAT32 directories (size 0, §5) are never trimmed.
 - **exFAT clusters reached but clear in the bitmap** get their bitmap bit set, so FatFs won't
   hand that cluster to another file later.
 - **FAT32's FSInfo free count** is set to `0xFFFFFFFF` (unknown) before any other write, so
@@ -345,17 +402,36 @@ bytes as before the repair.
 - On exFAT a bit is set before any bit is cleared in the same sector, and a sector's new
   bitmap state is written in a single write.
 
-Repair runs inside the passes of §6.2. Trims are decided and written in pass 1 while each chain
-is followed, so the tail is never marked in any window. Lost clusters are freed at the end of
-the pass whose window holds them. When the last pass ends, a full check runs again by itself,
-and its summary is what `sd check fix` reports. It must show no problem of a kind §10.1 repairs.
+Repair runs inside the passes of §6.2.
+
+- **A full check comes first.** `sd check fix` first runs an ordinary check (all passes, no
+  writes) inside the same job, under the same `checking` flag, so the card can't change
+  between it and the repair. Its summary is the plan shown before the `yes` (§10.3).
+- **Trims happen only if that check found no cross-link anywhere.** When chains share
+  clusters, FAT's one-successor-per-cluster rule means they share everything from the merge
+  point on. If the merge point is at or before a file's last needed cluster L, the new
+  end-of-chain mark at L would also cut the other file short. A per-cluster "tail" tag
+  doesn't help, because the harm is the end mark itself, not the freeing. With cross-links
+  present, trims are skipped and the summary says so (`trims skipped: cross-linked files,
+  fix those on a PC first`). Freeing lost clusters and setting exFAT bitmap bits still
+  happen: neither touches a cluster anything reaches.
+- **With no cross-links**, every cluster belongs to at most one chain. In pass 1, when a chain
+  turns out longer than its file, the end-of-chain mark at L is written at once. That is safe:
+  the tail becomes a lost run, which is a state the checker already handles. The tail isn't
+  marked, so it is freed as lost clusters in the passes whose windows hold it.
+- **Lost clusters** are freed at the end of the pass whose window holds them.
+
+When the last pass ends, a full check runs again by itself, and its summary is what
+`sd check fix` reports. It must show no problem of a kind §10.1 repairs.
 
 ### 10.3 The command
 
-`sd check fix`: console only and only unmounted, like `sd check`. It explains that it will
-write to the card, and that cross-links and damaged entries are only reported, then asks for
-`yes`, as `sd format` does. A read or write error stops repair at once: no further writes, and
-the card is left as §10.2 guarantees. The summary and every fix (as a count per kind) go to the
+`sd check fix`: console only and only unmounted, like `sd check`. It runs the check of §10.2,
+prints what it found and what it will fix (or that there is nothing to fix), explains that
+cross-links and damaged entries are only reported, then asks for `yes`, as `sd format`
+does. The `checking` flag stays set from the first check, through the question and the repair,
+to the final check; answering anything but `yes` ends it there. A read or write error stops
+repair at once: no further writes, and the card is left as §10.2 guarantees. The summary and every fix (as a count per kind) go to the
 log.
 
 ### 10.4 Fault injection
@@ -363,7 +439,8 @@ log.
 Repair is tested by injecting two kinds of fault: damage to the volume before repair, and
 failures of repair's own writes.
 
-- **Damage catalogue:** every §8 damage case, with repair run on it. After repair the check
+- **Damage catalogue:** every §8 damage case, including an over-long chain cross-linked with
+  a later file (the trim must be skipped and both files must read the same), with repair run on it. After repair the check
   must show no problem of a repaired kind. Files the damage didn't touch must read the same
   bytes as before the damage (the test keeps a hash of each). Host FatFs must mount the
   volume, write a new file and read everything back.
