@@ -19,6 +19,7 @@ typedef enum {
     HEAP_FILES,     // ls, cat, cp, format
     HEAP_HTTP,      // http requests
     HEAP_TIME,      // NTS time sync
+    HEAP_PING,      // ping runs
     HEAP_TAGS
 } heap_tag_t;
 

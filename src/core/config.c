@@ -163,6 +163,12 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
     return true;
 }
 
+// One configuration's worth of working space, too big for the stack: where slot_read() opens a
+// record to check it, and where config_save() prepares what it writes. Never both at once
+// (loads and saves are single-threaded, and config_save() is done with it before it reads the
+// slot back), and wiped after each use: it holds the configuration in the clear.
+static sos_config_t scratch;
+
 // What a slot holds that this store can use: nothing, a plain record or a sealed one. A record
 // counts only if its header and CRC check out, it opens (a sealed one), and its contents are
 // within bounds. A plain record doesn't count in a store that refuses them, nor a sealed one in
@@ -170,7 +176,7 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
 // the fields a shorter record lacks as 0.
 static int slot_read(const config_store_t *store, unsigned slot, record_header_t *hdr,
                      sos_config_t *out) {
-    static sos_config_t tmp;    // too big for the stack; loads and saves are single-threaded
+    sos_config_t *tmp = &scratch;
     const uint8_t *record = store->read(store->ctx, slot);
     record_header_t h;
     memcpy(&h, record, sizeof(h));
@@ -192,24 +198,24 @@ static int slot_read(const config_store_t *store, unsigned slot, record_header_t
         return CONFIG_STORED_NONE;
 
     bool ok = true;
-    memset(&tmp, 0, sizeof(tmp));
+    memset(tmp, 0, sizeof(*tmp));
     if (kind == CONFIG_STORED_PLAIN) {
-        memcpy(&tmp, record + HEADER_LEN, h.length);
+        memcpy(tmp, record + HEADER_LEN, h.length);
         // A plain record doesn't carry an owner secret or a password verifier, whatever its
         // bytes say.
-        memset(tmp.owner_secret, 0, sizeof(tmp.owner_secret));
-        tmp.console_iterations = 0;
-        memset(tmp.console_salt, 0, sizeof(tmp.console_salt));
-        memset(tmp.console_verifier, 0, sizeof(tmp.console_verifier));
+        memset(tmp->owner_secret, 0, sizeof(tmp->owner_secret));
+        tmp->console_iterations = 0;
+        memset(tmp->console_salt, 0, sizeof(tmp->console_salt));
+        memset(tmp->console_verifier, 0, sizeof(tmp->console_verifier));
     } else
         ok = store->sealer->open(store->sealer->ctx, record, HEADER_AAD, record + HEADER_LEN,
-                                 stored, (uint8_t *)&tmp);
+                                 stored, (uint8_t *)tmp);
     if (ok && kind == CONFIG_STORED_SEALED)     // and a sealed one no password in the clear
-        memset(tmp.console_password, 0, sizeof(tmp.console_password));
-    ok = ok && contents_valid(&tmp, h.length);
+        memset(tmp->console_password, 0, sizeof(tmp->console_password));
+    ok = ok && contents_valid(tmp, h.length);
     if (ok && out)
-        memcpy(out, &tmp, sizeof(*out));
-    wipe(&tmp, sizeof(tmp));
+        memcpy(out, tmp, sizeof(*out));
+    wipe(tmp, sizeof(*tmp));
     return ok ? kind : CONFIG_STORED_NONE;
 }
 
@@ -345,25 +351,27 @@ bool config_save(const config_store_t *store, const sos_config_t *cfg) {
     size_t stored = sizeof(sos_config_t);
     memset(rec, 0, sizeof(rec));
     memcpy(rec, &h, HEADER_LEN);
-    static sos_config_t out;            // what is written: cfg less what this kind never holds
-    memcpy(&out, cfg, sizeof(out));
+    // What is written: cfg less what this kind never holds. slot_read() (in scan() above) is
+    // done with the scratch, and it is wiped again before slot_read() checks the write below.
+    sos_config_t *out = &scratch;
+    memcpy(out, cfg, sizeof(*out));
     if (store->sealer) {
         // The password itself is never stored sealed (the verifier is).
-        memset(out.console_password, 0, sizeof(out.console_password));
+        memset(out->console_password, 0, sizeof(out->console_password));
         bool sealed = store->sealer->seal(store->sealer->ctx, rec, HEADER_AAD,
-                                          (const uint8_t *)&out, sizeof(out), rec + HEADER_LEN);
-        wipe(&out, sizeof(out));
+                                          (const uint8_t *)out, sizeof(*out), rec + HEADER_LEN);
+        wipe(out, sizeof(*out));
         if (!sealed)
             return false;
         stored += SEALER_OVERHEAD;
     } else {
         // The owner secret and the password verifier are never written plain.
-        memset(out.owner_secret, 0, sizeof(out.owner_secret));
-        out.console_iterations = 0;
-        memset(out.console_salt, 0, sizeof(out.console_salt));
-        memset(out.console_verifier, 0, sizeof(out.console_verifier));
-        memcpy(rec + HEADER_LEN, &out, sizeof(out));
-        wipe(&out, sizeof(out));
+        memset(out->owner_secret, 0, sizeof(out->owner_secret));
+        out->console_iterations = 0;
+        memset(out->console_salt, 0, sizeof(out->console_salt));
+        memset(out->console_verifier, 0, sizeof(out->console_verifier));
+        memcpy(rec + HEADER_LEN, out, sizeof(*out));
+        wipe(out, sizeof(*out));
     }
     h.crc = record_crc(rec, stored);
     memcpy(rec, &h, HEADER_LEN);

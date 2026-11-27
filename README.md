@@ -170,6 +170,7 @@ Public key: ssh-ed25519 AAAAC3Nza... julio@laptop    (paste ~/.ssh/id_ed25519.pu
 | `wifi power on` / `wifi power off` | Wi-Fi power saving (default off; see below) |
 | `wifi country US` / `wifi country worldwide` | radio rules to follow (two-letter country; default worldwide; after reboot) |
 | `wifi stats` / `wifi stats chip` | signal, noise and packet counters, for chasing packet loss / plus the chip's raw counters |
+| `ping <host> [<count>]` | is a host reachable? ICMP echo requests, one a second (default 4), with round-trip times and loss |
 | `wifi keepalive on` / `wifi keepalive off` | address announcement (see below); off is for testing and lasts until reboot |
 | `key list` / `key add [line]` / `key del <n>` | trusted keys (ssh-ed25519, ecdsa-sha2-nistp256; up to 8) |
 | `hostname <name>` | hostname (applies at the next Wi-Fi connect) |
@@ -638,6 +639,14 @@ bidi characters); `sos.http` gives a script the bytes as they are.
 - A request is refused while the heap is too low for a TLS handshake (about 64 KB free).
 
 See [docs/commands.md](docs/commands.md#https) and [`src/net/`](src/net/README.md).
+
+## Pager
+
+`more <file>` reads a file of any size a screen at a time (a 16 KB window of it is in memory),
+with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches, q
+quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
+it is the viewer for any command with more text to show than a screen (`edit_view()`; the
+manual pages, when they come, will use it). See [docs/commands.md](docs/commands.md#pager).
 
 ## Lua scripts (prototype)
 
