@@ -260,15 +260,21 @@ static void detect(void) {
     repair_header = false;
     locked_without_key = false;
     locked_no_memory = false;
+    // Logged when it starts, not at every try: a mount is tried again while memory is short
+    // (by hand, or by anything that remounts on a timer).
+    static bool no_memory_logged;
     if (!crypt_alloc()) {
         // Not known to be plain, so not usable as one: an encrypted card read without the
         // layer looks like a card with no filesystem.
         card_kind = KIND_LOCKED;
         locked_no_memory = true;
         kind_why = "not enough memory to look at the card (7.5 KB): free some and try again";
-        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: %s", kind_why);
+        if (!no_memory_logged)
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: %s", kind_why);
+        no_memory_logged = true;
         return;
     }
+    no_memory_logged = false;
     sdcrypt_info_t info;
     bool from_backup;
     int r = open_card(&info, &from_backup);
@@ -621,6 +627,7 @@ static bool start_encrypted(shell_t *sh) {
 // A plain card: no layer, and no header copy left behind (f_mkfs overwrites sector 0, not the
 // backup at 4096, which would otherwise make the card look encrypted again).
 static bool start_plain(shell_t *sh) {
+    crypt_free();       // the card was looked at before the format: forget an old card's key now
     uint8_t zero[SDCRYPT_SECTOR] = {0};
     if (write_blocks_fed(&card, zero, SDCRYPT_BACKUP, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
         shell_printf(sh, "format failed: couldn't write the card\n");
