@@ -104,7 +104,7 @@ To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over S
 ## Building
 
 ```sh
-cmake --preset debug          # or: release
+cmake --preset debug          # or: release, minsize
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
 
