@@ -30,7 +30,11 @@ typedef struct {
     // the text, 0 on error.
     size_t (*read)(void *ctx, size_t off, char *buf, size_t n);
     void *ctx;
-    size_t size;                // bytes in the text
+    size_t size;                // bytes in the text (so far, if growing)
+    // The text grows while it is shown (pager_grow()): the window is allocated whole from the
+    // start, as `size` says nothing about how large the text will get. Set it here, before
+    // pager_init(); pager_set_growing() ends it, when the text is complete.
+    bool growing;
 } pager_source_t;
 
 typedef enum {
@@ -54,6 +58,8 @@ typedef struct {
     long end_top_line;          // its line number (-1: not counted yet)
     int end_shown;              // lines on screen at end_top
     size_t col_off;             // first column shown (horizontal scrolling)
+    bool growing;               // the text may still grow: no total, the end is the end so far
+    bool follow;                // growing: stay on the end as text arrives (the F key)
 
     bool finding;               // the status row is a search prompt
     char find[PAGER_FIND_MAX + 1];
@@ -85,9 +91,24 @@ void pager_message(pager_t *p, const char *msg);
 // Console log messages waiting (log_pending()), shown in the status row.
 void pager_set_log_waiting(pager_t *p, int n);
 
+// A text that grows while it is shown (a pipeline's output, a log being written). The source
+// is marked `growing` in pager_init(); the caller appends to the text and then calls
+// pager_grow() with the new size (larger than before; a smaller one is ignored). The line count
+// is extended, not redone; a view scrolled back doesn't move; a view on the end shows the new
+// lines on the next frame, and so does one in follow mode (the F key: stay on the end as text
+// arrives; any other key, except h, ? and Ctrl-L, leaves it). While growing, the status row shows
+// the total as `...` and the end key goes to the end so far. pager_set_growing(p, false) says
+// the text is complete: the total is shown from then on, and follow mode ends.
+// Bytes already in the text must not change; only the end grows.
+void pager_grow(pager_t *p, size_t size);
+void pager_set_growing(pager_t *p, bool growing);
+
 // Terminal output goes through the screen: screen_draw(&p->scr, ...) until screen_drawn().
 
-// A source over a text in RAM: ctx points at the text.
+// A source over a text in RAM: ctx points at the text. If the caller's block moves as the text
+// grows (realloc), it sets p->src.ctx to the new block before the next pager call (the window
+// holds copies of what was read, and the text before the end doesn't change). That is the
+// re-pointing rule: ctx stays the pointer to the text, not to a pointer to it.
 size_t pager_read_mem(void *ctx, size_t off, char *buf, size_t n);
 
 #endif
