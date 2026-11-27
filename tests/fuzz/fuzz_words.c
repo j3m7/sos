@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // src/shell/words.c: a line typed at the shell (or pasted, or sent over SSH), split into words
-// in place, then each command or stage segment joined as shell_execute() joins it.
+// in place, then each command or stage segment joined as shell_execute() joins it; and the word
+// Tab would complete at its end.
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +21,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     memcpy(line, data, size);
     line[size] = '\0';
     size_t len = strlen(line);              // the line stops at a NUL, as the shell's does
+    // Tab's view (words_at()) of the line up to its end: the word is inside it, its text no
+    // longer, and the words before it split without an error but "too many words".
+    char text[1024], before[1024];
+    word_at_t at;
+    words_at(line, len, text, &at);
+    MUST(at.start <= len && at.len <= len - at.start && text[at.len] == '\0');
+    MUST(at.after <= WORD_AFTER_REDIRECT);
+    MUST(at.quote == '\0' || at.quote == '\'' || at.quote == '"');
+    memcpy(before, line, at.start);
+    before[at.start] = '\0';
     words_t w;
+    const char *why = words_split(before, &w);
+    MUST(!why || !strcmp(why, "too many words"));
+    if (at.start < len && !at.quote && !at.escape) {    // a whole word: as words_split() has it
+        memcpy(before, line + at.start, len - at.start + 1);
+        MUST(words_split(before, &w) == NULL && w.n == 1 && !strcmp(w.v[0], text));
+    }
     if (words_split(line, &w))
         return 0;
     MUST(w.n >= 0 && w.n <= SHELL_WORDS_MAX);
