@@ -16,7 +16,7 @@ working directory:
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
-| `sd check` | console only, on an unmounted card: check its file system, reporting problems without writing (in progress, see below) |
+| `sd check` | console only, on an unmounted card: check its file system, reporting problems without writing (FAT32 only for now) |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -51,10 +51,26 @@ problem and a summary, which also goes to the log (`sd: check: ...`). It reads o
 a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
 next file command mounts it again, and the log writer's once-a-minute retry doesn't.
 
-In progress: the checker itself (design: [docs/design/sd-check.md](design/sd-check.md)) isn't
-built in yet. Until it is, `sd check` opens the card, confirms that sector 0 of the volume reads
-as a partition table or boot sector, reads the first 32 MB through the encryption layer, and
-reports read errors.
+The output looks like this (design: [docs/design/sd-check.md](design/sd-check.md)):
+
+```
+checking FAT32, 29.7 GB, 970752 clusters of 32 KB, encrypted (8 passes)
+pass 1/8
+/var/log/messages: 3 clusters for 70000 bytes, chain has 2
+pass 2/8
+...
+pass 8/8
+1 problem; 0 bytes lost, 0 cross-linked
+```
+
+Lines starting `note:` (a stale FSInfo free count, a chain longer than its file, the volume's
+dirty flag) are notes, not problems.
+
+A card has about a million clusters, too many to track at once beside Wi-Fi, TLS and SSH, so
+the clusters are checked a window at a time, one pass over the directory tree per window: 16 KB
+of memory gives 8 passes on a 32 GB card, and less memory more passes (it needs about 10 KB at
+least). Only FAT32 is checked so far: an exFAT card (what `sd format` makes by default) ends with
+`not checked: exFAT is not checked yet`.
 
 ## Encrypted cards
 

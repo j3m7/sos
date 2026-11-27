@@ -13,7 +13,9 @@ This note sets the rules so that the phases (§9) can be built without deciding 
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design only; the phases below are still to be built. Tracking issue: #213.
+Status (2026-11-27): phases 1 (the FAT32 checker) and 3 (`sd check` on the device) are built;
+the timing in §6.2 is still to be measured on dev-1, and phases 2, 4 and 5 are to come. Tracking
+issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today

@@ -29,9 +29,9 @@ still refers to.
   `disk_read(0)`. `sdcard_owner_gone()` (`config reset`) sets `check_stop`, tested before every
   step. Every end (finished, Ctrl-C, stopped, or refused once started) goes through
   `check_end()`: the memory wiped and freed, `crypt_off()`, `STA_NOINIT`, `checking` cleared,
-  `unmounted_by_hand` set, and the last line printed and logged. In progress: the checker
-  (`fsck.c`) is reached only through `check_begin()`/`check_run()`/`check_outcome()`, and
-  until `SD_CHECK_HAVE_FSCK` is set a stand-in reads sector 0 and the first 32 MB instead.
+  `unmounted_by_hand` set, and the last line printed and logged. The job's budget (sector
+  reads per `fsck_step()`) doubles or halves to keep a step near 20 ms. Report lines lose
+  their control characters on the way to the terminal (names come from the card).
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
   end), unmounting and checking.
@@ -129,8 +129,8 @@ its own working directory (`shell_t.cwd`).
 
 ## `fsck.c`: checking the card (pure C, host tested)
 
-The checker behind the coming `sd check` ([design](../../docs/design/sd-check.md)). Not in the
-firmware yet: phase 3 adds the command, which runs it only while the card is unmounted.
+The checker behind `sd check` ([design](../../docs/design/sd-check.md)), which runs it only
+while the card is unmounted (see `sdcard.c` above).
 
 - **Shape:** it reads sectors through a callback and hands back report lines, so it knows
   nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
