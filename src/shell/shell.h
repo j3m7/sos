@@ -180,7 +180,7 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len);
 // shell_pipe_feed(), once per pass. False if the pager can't start (after saying why): the line
 // is then paged with shell_page() when the command ends. Implemented by the command module
 // (shell.c).
-bool shell_page_growing(shell_t *sh, const char *name, const char *text, size_t len);
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len);
 
 // What shell_pipe_feed() does to the command under the pager.
 typedef enum {

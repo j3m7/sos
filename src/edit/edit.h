@@ -29,6 +29,6 @@ void edit_view_take(shell_t *sh, const char *name, char *text, size_t len);
 // the command for (shell_pipe_feed()) until the command ends and the block becomes the pager's.
 // Ctrl-C stops the command and keeps the text; q ends it and leaves. False (after saying so) if
 // the pager can't start.
-bool edit_view_growing(shell_t *sh, const char *name, const char *text, size_t len);
+bool edit_view_growing(shell_t *sh, const char *name, char *text, size_t len);
 
 #endif

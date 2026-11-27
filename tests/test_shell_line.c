@@ -197,7 +197,7 @@ static bool gp_step(shell_t *s, void *arg, bool cancel) {
     return true;
 }
 
-bool shell_page_growing(shell_t *sh, const char *name, const char *text, size_t len) {
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
     gp.starts++;
     if (gp.refuse) {
         shell_printf(sh, "%s: out of memory\n", name);

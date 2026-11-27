@@ -2313,7 +2313,7 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     edit_view_take(sh, name, text, len);
 }
 
-bool shell_page_growing(shell_t *sh, const char *name, const char *text, size_t len) {
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
     return edit_view_growing(sh, name, text, len);
 }
 

@@ -199,7 +199,7 @@ void edit_view_take(shell_t *sh, const char *name, char *text, size_t len) {
     run(sh, v, name, src);
 }
 
-bool edit_view_growing(shell_t *sh, const char *name, const char *text, size_t len) {
+bool edit_view_growing(shell_t *sh, const char *name, char *text, size_t len) {
     view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
     if (!v) {
         shell_printf(sh, "%s: out of memory\n", name);
@@ -207,7 +207,7 @@ bool edit_view_growing(shell_t *sh, const char *name, const char *text, size_t l
     }
     v->live = true;
     // Growing: the window is allocated whole now, as the size says nothing about the end.
-    pager_source_t src = { .read = pager_read_mem, .ctx = (void *)text, .size = len,
+    pager_source_t src = { .read = pager_read_mem, .ctx = text, .size = len,
                            .growing = true };
     return run(sh, v, name, src);
 }
