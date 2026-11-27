@@ -46,6 +46,7 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
 #include "net/http.h"
+#include "net/ping.h"
 #include "net/wifi.h"
 #include "ssh/hostkey.h"
 #include "ssh/sshd.h"
@@ -234,6 +235,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
     shell_printf(sh, "mem               heap (by feature) and stack usage\n");
     shell_printf(sh, "net               Wi-Fi and IP status\n");
+    shell_printf(sh, "ping <host> [n]   is the host reachable? n echo requests, default 4 (Ctrl-C stops)\n");
     shell_printf(sh, "ssh               SSH server status\n");
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
     shell_printf(sh, "wall <message>    send a message to every other shell\n");
@@ -1739,6 +1741,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_mem(sh);
     else if (!strcmp(cmd, "net"))
         cmd_net(sh);
+    else if (!strcmp(cmd, "ping"))
+        ping_command(sh, args);
     else if (!strcmp(cmd, "ssh"))
         sshd_status(sh);
     else if (!strcmp(cmd, "who"))
