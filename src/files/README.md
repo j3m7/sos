@@ -14,9 +14,27 @@ still refers to.
   command, SFTP, or the TLS root certificates. Tab completion never mounts it
   (`sdcard_mounted()`): it lists directories only once the card is mounted.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
+- **`card_open()`:** the part of a mount before `f_mount`: `disk_initialize(0)` (which
+  detects the card's kind on a real initialization), then the retries for a card locked for
+  lack of a key or of memory and the detection of a forgotten kind, and the refusal of a
+  locked or unsupported card. `mount()` and `sd check` both start with it; afterwards
+  `disk_read(0, ...)` reads the volume, decrypted on an encrypted card.
+- **`sd check`** ([design](../../docs/design/sd-check.md)): console only, refused while the
+  card is mounted or files are held. It sets `checking` for the whole check: `sdcard_mount()`
+  and `sdcard_mount_retry()` then return false without touching the card, and the other `sd`
+  subcommands refuse. It unregisters FatFs's volume (a failed mount leaves it registered, and
+  any `f_*` call would remount from it), opens the card with `card_open()`, allocates the
+  checker's state and a 16 KB cluster window (8 KB, then 4 KB, if memory is short) from
+  `HEAP_FILES`, and runs as a shell job of about 20 ms a step, reading through
+  `disk_read(0)`. `sdcard_owner_gone()` (`config reset`) sets `check_stop`, tested before every
+  step. Every end (finished, Ctrl-C, stopped, or refused once started) goes through
+  `check_end()`: the memory wiped and freed, `crypt_off()`, `STA_NOINIT`, `checking` cleared,
+  `unmounted_by_hand` set, and the last line printed and logged. The job's budget (sector
+  reads per `fsck_step()`) doubles or halves to keep a step near 20 ms. Report lines lose
+  their control characters on the way to the terminal (names come from the card).
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the
-  end).
+  end), unmounting and checking.
 - **File dates:** the library's `get_fattime()` and `time()` read the RP2350's always-on timer,
   which `time/timesync.c` keeps equal to the system clock.
 
@@ -111,8 +129,8 @@ its own working directory (`shell_t.cwd`).
 
 ## `fsck.c`: checking the card (pure C, host tested)
 
-The checker behind the coming `sd check` ([design](../../docs/design/sd-check.md)). Not in the
-firmware yet: phase 3 adds the command, which runs it only while the card is unmounted.
+The checker behind `sd check` ([design](../../docs/design/sd-check.md)), which runs it only
+while the card is unmounted (see `sdcard.c` above).
 
 - **Shape:** it reads sectors through a callback and hands back report lines, so it knows
   nothing of SPI, FatFs or the shell. All its memory is a buffer the caller gives it (about
