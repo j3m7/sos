@@ -17,7 +17,10 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
   and are printed once it ends; if they overflowed the history meanwhile, the console says some
   were dropped. `log_pending()` counts the messages waiting, so the program can say so.
 - **Interrupt context:** a message logged from an interrupt (lwIP, CYW43) is only stored;
-  `log_flush()` in the main loop prints it.
+  `log_flush()` in the main loop prints it. What is done in the interrupt is kept small: a
+  message above the history level returns before it is formatted, and the others are formatted
+  once. `log_vmsg_prefixed()` is for a caller that tags messages it passes on (the SSH
+  server's go in as "sshd: ..."), so it needs no buffer or formatting pass of its own.
 - **Deferred mode**, turned on once the main loop runs: every message waits for
   `log_flush()`, so log lines never land in the middle of a command's output.
 - **Pure C:** all platform access goes through `log_hooks_t`, so it's unit tested on the host.
