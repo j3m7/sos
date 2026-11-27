@@ -20,9 +20,10 @@ this page is the reference.
   there. Tab does nothing at a password or other question.
 - After a file command (`ls`, `cd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `edit`, `more`, `lua`,
   `lua -b`), Tab completes **file names** on the SD card: `cat do` Tab gives `cat docs/`, and
-  the next Tab goes on inside it. `cd` and `mkdir` offer directories only. Names are matched
-  as typed (upper and lower case differ, although the card doesn't mind), and names with
-  spaces or control characters aren't offered. Tab doesn't mount the card: it completes names
+  the next Tab goes on inside it. `cd` and `mkdir` offer directories only. Upper and lower
+  case don't matter, as on the card itself: `cat read` Tab gives `cat README.TXT`, rewriting
+  what you typed in the name's own case (ASCII letters only: `ö` doesn't match `Ö`). Names
+  with spaces or control characters aren't offered. Tab doesn't mount the card: it completes names
   once a file command (or the boot) has. In a directory of more than 256 entries it reads the
   first 256 only, and says so when it lists them.
 - **Ctrl-C** discards the line, cancels a question (`setup`, `wifi set`, …), or stops a running

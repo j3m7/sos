@@ -158,6 +158,7 @@ static const struct {
     {"/data", {"x.csv"}},
     {"/u", {"\xc3\xa9" "1", "\xc3\xa8" "2", "Mj\xc3\xb6lnir.txt", "bad\xc2\x9b" "c", "\xff"}},
     {"/big", {"zz", "aa"}},     // listed as cut short
+    {"/case", {"README.TXT", "ReadMe.md", "x.Bin", "\xc3\x96l.txt", "Docs/"}},
     // Look like something they aren't: U+202E (right-to-left override), U+200B (zero-width
     // space), U+00A0 and U+3000 (spaces that don't separate words), U+FEFF; then a plain one.
     {"/look", {"safe\xe2\x80\xaetxt.exe", "a\xe2\x80\x8b" "b", "a\xc2\xa0" "b",
@@ -1432,6 +1433,42 @@ TEST(tab_skips_names_that_look_like_something_else) {
     CHECK(line_is("cat look/ab "));                  // not U+FEFF c
 }
 
+TEST(tab_file_names_match_in_any_ascii_case) {
+    start(&io_plain);
+    type("cat case/x.b\t");
+    CHECK(line_is("cat case/x.Bin "));
+    CHECK_OUT("cat case/x.b\b\b\bx.Bin ");          // retyped in the name's case
+    start(&io_plain);
+    type("cat case/read\t");                         // README.TXT, ReadMe.md
+    CHECK(line_is("cat case/README."));              // the first one's case
+    type("M\t");
+    CHECK(line_is("cat case/ReadMe.md "));
+    start(&io_plain);
+    type("cat case/readme.txt\t");                   // whole, but in another case
+    CHECK(line_is("cat case/README.TXT "));
+    start(&io_plain);
+    type("cd case/d\t");
+    CHECK(line_is("cd case/Docs/"));
+}
+
+TEST(tab_case_folds_ascii_only) {
+    start(&io_plain);
+    type("cat case/\xc3\xb6\t");                     // ö doesn't match Ö
+    CHECK_OUT("cat case/\xc3\xb6\a");
+    start(&io_plain);
+    type("cat case/\xc3\x96\t");
+    CHECK(line_is("cat case/\xc3\x96l.txt "));
+}
+
+TEST(tab_commands_stay_case_sensitive) {
+    start(&io_plain);
+    type("TI\t");
+    CHECK_OUT("TI\a");
+    start(&io_plain);
+    type("time SY\t");
+    CHECK_OUT("time SY\a");
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1584,6 +1621,9 @@ TEST_MAIN(
     RUN(tab_paths_relative_to_the_working_directory_and_absolute);
     RUN(tab_skips_names_it_cannot_type_or_show);
     RUN(tab_skips_names_that_look_like_something_else);
+    RUN(tab_file_names_match_in_any_ascii_case);
+    RUN(tab_case_folds_ascii_only);
+    RUN(tab_commands_stay_case_sensitive);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);
