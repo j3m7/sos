@@ -68,8 +68,12 @@ translation (`crlf`), and `admin` (true for the console only).
   a job slow down for a slow client instead of losing output.
 - **Words:** `run_line()` splits the line with `words_split()` (`words.c`, pure C, host tested
   and fuzzed; design in `docs/design/shell-quoting.md`): sh-style quotes and backslashes, and
-  `|`, `>`, `>>` outside quotes are operators. The command's words go to `shell_execute()`,
-  which joins them with single spaces (`words_join()`) for the handler's flat string.
+  `|`, `>`, `>>` outside quotes are operators. The command's words go to `shell_execute()`.
+  A table entry (`shell_cmd_t`) has one of two handlers: `runv(sh, argc, argv)` gets the words
+  as they are (every command flagged `SHELL_PATH`, so `cat 'my file'` gets one path), `run(sh,
+  args)` gets them joined with single spaces (`words_join()`) as one flat string (free text such
+  as `echo`, `wall`, and the commands not moved yet). `shell_tables_check()` (`cmdcheck.c`)
+  checks the rule: in debug builds at startup, and in `tests/test_files.c`.
 - **Pipes:** `<command> | grep x | head 5 | more` and `<command> > file` (`pipe.c`, pure C, host
   tested; design in `docs/design/shell-pipes.md`). `|` is always a pipe and the word after it
   must be a stage name; `> file` / `>> file` at the end is a quiet `tee`. `pipe_open()` checks
@@ -163,7 +167,8 @@ where 0x9B is CSI on 8-bit terminals, and U+0080–U+009F in UTF-8) and invalid 
 ## `shell.c`: the commands
 
 `shell_execute()` looks the command up in two tables (`shell_cmd_t`, shell.h): `commands[]`
-here and `files_commands[]` (`files/`), and runs it with its arguments. Each entry also lists
+here and `files_commands[]` (`files/`), and runs it with its arguments: its words (`runv`) or
+their join (`run`). Each entry also lists
 the words Tab offers after the name. System commands are implemented here: `help`, `config`,
 `wifi`, `net`, `key`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`, `uptime`, `reboot`,
 `ssh`, `nts`, `tls`, `logout`/`exit`. Others belong to a subsystem: `sdcard_command()` (`sd`),
@@ -177,7 +182,8 @@ channel but the console.
 
 Add it to `commands[]` and to `help` in `shell.c`, and to `docs/commands.md`. Give it the
 subcommand words its parser takes, so Tab offers them (`SHELL_ADMIN` on those only the console
-may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories), and a
+may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories; such a
+command takes its words, `runv`, so that a quoted path reaches it whole), and a
 `shell_values_t` where its values are known only at run time. If it takes
 more than a few milliseconds, make it a job so the watchdog and the other sessions keep running.
 If it changes the configuration or other protected state, call `require_admin()`.

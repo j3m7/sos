@@ -174,18 +174,19 @@ void edit_view_file(shell_t *sh, const char *path, const char *name) {
     run(sh, v, !strcmp(name, "more") ? path : name, src);
 }
 
-void view_command(shell_t *sh, char *args) {
-    if (!args || !*args || strchr(args, ' ')) {
+void view_command(shell_t *sh, int argc, char **argv) {
+    if (argc != 2 || !*argv[1]) {           // the file is one word (quoted, it may hold spaces)
         shell_printf(sh, "usage: more <file>\n");
         return;
     }
+    const char *file = argv[1];
     char path[PATH_LEN];
-    if (!path_resolve(sh->cwd, args, path, sizeof(path))) {
+    if (!path_resolve(sh->cwd, file, path, sizeof(path))) {
         shell_printf(sh, "path too long\n");
         return;
     }
     if (shell_output_piped(sh)) {           // `more <file> | tail 5`: the text, not the pager
-        files_cat(sh, "more", args);
+        files_cat(sh, "more", file);
         return;
     }
     edit_view_file(sh, path, "more");

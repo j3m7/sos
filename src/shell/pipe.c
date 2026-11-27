@@ -618,10 +618,10 @@ static const shell_word_t grep_options[4] = {
     {"-i", grep_options, 0}, {"-n", grep_options, 0}, {"-v", grep_options, 0}, {0}};
 static const shell_word_t tee_options[2] = {{"-a", NULL, SHELL_PATH}, {0}};
 const shell_cmd_t pipe_stage_table[] = {
-    {"grep", NULL, grep_options, 0},
-    {"head", NULL, NULL, 0},
-    {"more", NULL, NULL, 0},
-    {"tail", NULL, NULL, 0},
-    {"tee", NULL, tee_options, SHELL_PATH},
-    {"wc", NULL, NULL, 0},
+    {"grep", NULL, NULL, grep_options, 0},
+    {"head", NULL, NULL, NULL, 0},
+    {"more", NULL, NULL, NULL, 0},
+    {"tail", NULL, NULL, NULL, 0},
+    {"tee", NULL, NULL, tee_options, SHELL_PATH},
+    {"wc", NULL, NULL, NULL, 0},
     {0}};

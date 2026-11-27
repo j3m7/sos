@@ -75,15 +75,27 @@ _Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast b
 // may still grow (a scan still running, say).
 typedef bool (*shell_ask_complete_fn)(shell_t *sh, shell_value_fn fn, void *arg);
 
-// A command: `run` gets the words after the name joined with single spaces (quoted spaces kept:
-// `echo "a  b"` passes "a  b"), or NULL without any. Tables end with an entry whose name is
-// NULL.
+// A command, with one of two handlers (docs/design/shell-quoting.md §4):
+// - `run` gets the words after the name joined with single spaces (quoted spaces kept:
+//   `echo "a  b"` passes "a  b"), or NULL without any: for free text, and for commands not yet
+//   moved to `runv`;
+// - `runv` gets the words themselves, as words_split() left them: argv[0] is the name, argv[argc]
+//   is NULL. A word may hold spaces (`cat 'my file'`), or be empty (`cat ''`).
+// A table that shell_execute() dispatches from sets exactly one of them in every entry, and
+// `runv` in every entry flagged SHELL_PATH (shell_tables_check()). Tables only Tab reads (the
+// pipeline stages, pipe_stage_table) set neither. Tables end with an entry whose name is NULL.
 typedef struct {
     const char *name;
     void (*run)(shell_t *sh, char *args);
+    void (*runv)(shell_t *sh, int argc, char **argv);
     const shell_word_t *words; // words that may follow the name, for Tab
     unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR
 } shell_cmd_t;
+
+// The first entry of the NULL-terminated `tables` that breaks the rule above (neither handler
+// or both, or SHELL_PATH without `runv`), or NULL if none does. shell.c checks its tables with
+// it at startup in debug builds; tests/test_files.c checks files_commands.
+const shell_cmd_t *shell_tables_check(const shell_cmd_t *const *tables);
 
 // Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the
 // question was cancelled with Ctrl-C.
@@ -166,10 +178,11 @@ void shell_logout(shell_t *sh);
 
 // Run one command: its words (argc >= 1, argv[0] the name, argv[argc] NULL), as words_split()
 // left them in the line buffer (words.h), in line order and without operators; the line's
-// stages, if any, are set up already. The words are clobbered (joined in place). False, with
-// nothing printed, when there is no command of that name: the caller tears the line's stages
-// down and says so on the terminal. Implemented by the command module (shell.c); shell_core.c
-// (line editing) calls it.
+// stages, if any, are set up already. A `runv` handler gets the words as they are; for a `run`
+// handler they are joined in place (words_join()), which clobbers them. False, with nothing
+// printed, when there is no command of that name: the caller tears the line's stages down and
+// says so on the terminal (a wrong argument count is the handler's to say: true). Implemented by
+// the command module (shell.c); shell_core.c (line editing) calls it.
 bool shell_execute(shell_t *sh, int argc, char **argv);
 
 // Show `len` bytes of `text`, a HEAP_EDIT block that the callee owns from here on, in the pager
