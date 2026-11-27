@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/net/ping_msg.c: ping's arguments, echo requests and replies, statistics.
+// Unit tests for src/net/ping_msg.c: ping's arguments, echo requests, replies and errors, and
+// statistics.
 
 #include "net/ping_msg.h"
 #include "test.h"
@@ -169,6 +170,147 @@ TEST(reply_refused) {
     CHECK_EQ(ttl, 99);
 }
 
+// --- ICMP errors ---------------------------------------------------------------------------------
+
+// What a router sends back about request (id, seq): an IP header of `ihl` bytes, the error's
+// 8-byte ICMP header (type, code, checksum, 4 unused bytes), then the request's datagram, with an
+// IP header of `qihl` bytes, cut to `quote` bytes of ICMP. Returns the packet's length.
+static size_t error(uint8_t *pkt, size_t ihl, uint8_t type, uint8_t code, size_t qihl,
+                    size_t quote, uint16_t id, uint16_t seq) {
+    size_t len = ihl + 8 + qihl + quote;
+    memset(pkt, 0, len);
+    pkt[0] = (uint8_t)(0x40 | ihl / 4);
+    pkt[2] = (uint8_t)(len >> 8);
+    pkt[3] = (uint8_t)len;
+    pkt[8] = 63;
+    pkt[9] = 1;
+    uint8_t *icmp = pkt + ihl;
+    icmp[0] = type;
+    icmp[1] = code;
+    uint8_t *q = icmp + 8;                              // the quoted datagram
+    q[0] = (uint8_t)(0x40 | qihl / 4);
+    q[2] = 0;
+    q[3] = (uint8_t)(qihl + PING_ICMP_SIZE);            // its length as sent, whatever is quoted
+    q[8] = 1;                                           // TTL left when it died
+    q[9] = 1;
+    uint8_t req[PING_ICMP_SIZE];
+    ping_build_request(req, id, seq);
+    memcpy(q + qihl, req, quote);
+    uint16_t c = ping_checksum(icmp, len - ihl);
+    icmp[2] = (uint8_t)(c >> 8);
+    icmp[3] = (uint8_t)c;
+    return len;
+}
+
+// Redo the error's ICMP checksum after changing it.
+static void resum(uint8_t *pkt, size_t ihl, size_t len) {
+    pkt[ihl + 2] = pkt[ihl + 3] = 0;
+    uint16_t c = ping_checksum(pkt + ihl, len - ihl);
+    pkt[ihl + 2] = (uint8_t)(c >> 8);
+    pkt[ihl + 3] = (uint8_t)c;
+}
+
+TEST(error_accepted) {
+    uint8_t p[PING_RECV_MAX];
+    ping_error_t e = { 0 };
+    size_t n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);    // host unreachable, the minimum quote
+    CHECK_EQ(n, 56);
+    CHECK(ping_parse_error(p, n, 0x1234, &e));
+    CHECK_EQ(e.seq, 7);
+    CHECK_EQ(e.type, 3);
+    CHECK_EQ(e.code, 1);
+    n = error(p, 20, 3, 13, 20, PING_ICMP_SIZE, 0x1234, 8);    // all of it quoted (Linux does)
+    CHECK(ping_parse_error(p, n, 0x1234, &e));
+    CHECK_EQ(e.seq, 8);
+    CHECK_EQ(e.code, 13);
+    n = error(p, 20, 11, 0, 20, 8, 0x1234, 9);          // time exceeded
+    CHECK(ping_parse_error(p, n, 0x1234, &e));
+    CHECK_EQ(e.type, 11);
+    CHECK_EQ(e.seq, 9);
+    n = error(p, 60, 3, 0, 60, PING_ICMP_SIZE, 0x1234, 65535);  // both headers at their longest
+    CHECK_EQ(n, PING_RECV_MAX);
+    CHECK(ping_parse_error(p, n, 0x1234, &e));
+    CHECK_EQ(e.seq, 65535);
+    n = error(p, 20, 3, 3, 24, 12, 0x1234, 10);         // options in the quoted header
+    CHECK(ping_parse_error(p, n, 0x1234, &e));
+    CHECK_EQ(e.seq, 10);
+}
+
+TEST(error_refused) {
+    uint8_t p[PING_RECV_MAX + 8];
+    ping_error_t e = { 99, 99, 99 };
+    size_t n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    CHECK(!ping_parse_error(p, n, 0x1235, &e));         // another run's request
+    p[23] ^= 1;                                         // bad checksum
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+
+    n = error(p, 20, 3, 1, 20, 7, 0x1234, 7);           // the quote is a byte short of 8
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    CHECK(!ping_parse_error(p, n - 1, 0x1234, &e));     // shorter than the IP length says
+    CHECK(!ping_parse_error(p, 20, 0x1234, &e));
+    CHECK(!ping_parse_error(p, 0, 0x1234, &e));
+
+    n = error(p, 20, 5, 1, 20, 8, 0x1234, 7);           // a redirect isn't an error about delivery
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 0, 0, 20, 8, 0x1234, 7);           // nor is a reply
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+
+    n = error(p, 20, 3, 3, 20, 8, 0x1234, 7);
+    p[20 + 8 + 9] = 17;                                 // it quotes a UDP datagram
+    resum(p, 20, n);
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    p[20 + 8 + 20] = 0;                                 // it quotes an echo reply, not a request
+    resum(p, 20, n);
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    p[20 + 8] = 0x44;                                   // quoted header shorter than 20 bytes
+    resum(p, 20, n);
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    p[20 + 8] = 0x65;                                   // quoted IPv6
+    resum(p, 20, n);
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 24, 8, 0x1234, 7);
+    p[20 + 8] = 0x47;                                   // quoted IHL says more than is there
+    resum(p, 20, n);
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+    n = error(p, 20, 3, 1, 20, 8, 0x1234, 7);
+    p[9] = 17;                                          // the error itself isn't ICMP
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+
+    CHECK_EQ(e.seq, 99);                                // untouched when refused
+    CHECK_EQ(e.type, 99);
+
+    uint16_t seq;                                       // and an error is never a reply
+    uint8_t ttl;
+    n = error(p, 20, 3, 1, 20, PING_ICMP_SIZE, 0x1234, 7);
+    CHECK(!ping_parse_reply(p, n, 0x1234, &seq, &ttl));
+    n = reply(p, 20, 0x1234, 7);                        // nor a reply an error
+    CHECK(!ping_parse_error(p, n, 0x1234, &e));
+}
+
+TEST(error_text) {
+    char t[40];
+    ping_error_text(3, 1, t);
+    CHECK(!strcmp(t, "host unreachable"));
+    ping_error_text(3, 0, t);
+    CHECK(!strcmp(t, "network unreachable"));
+    ping_error_text(3, 13, t);
+    CHECK(!strcmp(t, "administratively prohibited"));
+    ping_error_text(3, 8, t);                           // no name
+    CHECK(!strcmp(t, "destination unreachable (code 8)"));
+    ping_error_text(3, 255, t);
+    CHECK(!strcmp(t, "destination unreachable (code 255)"));
+    ping_error_text(11, 0, t);
+    CHECK(!strcmp(t, "time to live exceeded"));
+    ping_error_text(11, 1, t);
+    CHECK(!strcmp(t, "reassembly time exceeded"));
+    ping_error_text(11, 2, t);
+    CHECK(!strcmp(t, "time exceeded (code 2)"));
+}
+
 // --- statistics ----------------------------------------------------------------------------------
 
 TEST(ms_text) {
@@ -239,9 +381,21 @@ TEST(summary) {
     CHECK_EQ(n, (int)strlen(t));
 
     s = stats(2, 0);
-    s.errors = 1;
+    s.not_sent = 1;
     ping_summary(&s, t, sizeof(t));
     CHECK(!strcmp(t, "2 sent, 0 received, 100% loss, 1 not sent"));
+
+    s = stats(4, 0);
+    s.icmp_errors = 3;
+    s.not_sent = 2;
+    ping_stats_reply(&s, 2000);
+    ping_summary(&s, t, sizeof(t));
+    CHECK(!strcmp(t, "4 sent, 1 received, 75% loss, 3 ICMP errors, 2 not sent; "
+                     "round trip min/avg/max 2.0/2.0/2.0 ms"));
+    s = stats(1, 0);
+    s.icmp_errors = 1;
+    ping_summary(&s, t, sizeof(t));
+    CHECK(!strcmp(t, "1 sent, 0 received, 100% loss, 1 ICMP error"));
 
     s = stats(0, 0);
     ping_summary(&s, t, sizeof(t));
@@ -260,6 +414,9 @@ TEST_MAIN(
     RUN(request);
     RUN(reply_accepted);
     RUN(reply_refused);
+    RUN(error_accepted);
+    RUN(error_refused);
+    RUN(error_text);
     RUN(ms_text);
     RUN(loss_text);
     RUN(summary);
