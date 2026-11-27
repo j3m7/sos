@@ -33,6 +33,10 @@ test *ctest_args:
     cmake --build build-tests
     ctest --test-dir build-tests --output-on-failure {{ ctest_args }}
 
+# shellcheck on the repository's shell scripts (settings in .shellcheckrc)
+lint:
+    tools/lint-shell.sh
+
 # Which key an image is signed with, and the flash guard's verdict; flashes nothing
 flash-check dir="build":
     tools/flash.sh -n {{ quote(dir / "sos.bin") }}

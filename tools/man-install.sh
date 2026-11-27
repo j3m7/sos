@@ -15,4 +15,5 @@ host=${1:?usage: tools/man-install.sh [user@]<host>}
         echo "put $f /man/$(basename "$f")"
     done
 } | sftp -b - "$host"
-echo "installed $(ls man/*.txt | wc -l) pages in /man on $host"
+pages=(man/*.txt)
+echo "installed ${#pages[@]} pages in /man on $host"

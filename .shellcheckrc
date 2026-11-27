@@ -1,0 +1,7 @@
+# Settings for shellcheck on the repository's scripts (`just lint`, and the pre-commit hook when
+# shellcheck is installed). Default checks only: the optional ones (-o all) are brace and quoting
+# style in the hundreds, not bugs.
+
+# "See if you can use ${variable//search/replace}": a style suggestion; sed 's/^/    /' to indent
+# a block of output reads better than the expansion that replaces it.
+disable=SC2001

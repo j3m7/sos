@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Julio Martinez
 #
-# Refuses a commit whose generated files are stale. Enabled once per clone with
+# Refuses a commit whose generated files are stale, or whose shell scripts shellcheck finds
+# fault with. Enabled once per clone with
 #
 #   git config core.hooksPath .githooks
 #
@@ -26,5 +27,23 @@ if grep -qE '^(man/|docs/commands\.md$|tools/man-bundle\.sh$|tools/man-docs\.py$
         echo "pre-commit: the manual pages' generated files don't match the staged pages." >&2
         echo "Run tools/man-bundle.sh, then git add man/pages.bundle docs/commands.md." >&2
         exit 1
+    fi
+fi
+
+# Shell scripts: shellcheck (tools/lint-shell.sh) on the staged versions, when the commit touches
+# a script or .shellcheckrc. Skipped, with a note, where shellcheck isn't installed.
+if grep -qE '(\.sh$|^\.githooks/|^tools/host/pico-vm-attach$|^\.shellcheckrc$)' <<<"$staged"; then
+    if command -v shellcheck >/dev/null; then
+        sc=$(mktemp -d)
+        trap 'rm -rf "${tmp:-}" "$sc"' EXIT
+        git checkout-index -a --prefix="$sc/"
+        if ! out=$(bash "$sc/tools/lint-shell.sh" "$sc" 2>&1); then
+            echo "$out" >&2
+            echo >&2
+            echo "pre-commit: shellcheck found problems in the staged scripts (above)." >&2
+            exit 1
+        fi
+    else
+        echo "pre-commit: shellcheck isn't installed; the shell scripts weren't checked." >&2
     fi
 fi
