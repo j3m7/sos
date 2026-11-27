@@ -700,8 +700,20 @@ size_t editor_draw(editor_t *ed, char *out, size_t cap) {
     if (!ed->dirty)
         return 0;
     if (!ed->drawing) {
-        if (cap < 16)
-            return 0;
+        // A row cut short when the frame restarted goes out whole first: stale, but complete, so
+        // the terminal never sees a sequence or character cut by a new one. It's drawn again
+        // below (its row isn't valid).
+        if (ed->row_sent < ed->row_len) {
+            size_t take = ed->row_len - ed->row_sent;
+            if (take > cap)
+                take = cap;
+            n = put(out, n, ed->row + ed->row_sent, take);
+            ed->row_sent += take;
+            if (ed->row_sent < ed->row_len)
+                return n;
+        }
+        if (cap - n < 16)
+            return n;
         scroll(ed);
         ed->drawing = true;
         ed->draw_row = 0;
@@ -713,16 +725,25 @@ size_t editor_draw(editor_t *ed, char *out, size_t cap) {
             ed->clear = false;
         }
     }
-    char *row = ed->row;
     while (ed->draw_row < ed->rows) {
         int r = ed->draw_row;
-        size_t len = render_row(ed, r, row);
-        uint32_t h = hash(row, len);
-        if (!ed->row_valid[r] || ed->drawn[r] != h) {
-            if (n + len > cap)
-                return n;                   // the rest on the next call
-            n = put(out, n, row, len);
+        if (ed->row_sent == ed->row_len) {  // not in the middle of a row: render this one
+            size_t len = render_row(ed, r, ed->row);
+            uint32_t h = hash(ed->row, len);
+            if (ed->row_valid[r] && ed->drawn[r] != h)
+                ed->row_valid[r] = false;   // what it shows is wrong until the whole row is out
             ed->drawn[r] = h;
+            ed->row_len = ed->row_valid[r] ? 0 : len;
+            ed->row_sent = 0;
+        }
+        if (ed->row_sent < ed->row_len) {
+            size_t take = ed->row_len - ed->row_sent;
+            if (take > cap - n)
+                take = cap - n;             // the rest on the next call
+            n = put(out, n, ed->row + ed->row_sent, take);
+            ed->row_sent += take;
+            if (ed->row_sent < ed->row_len)
+                return n;
             ed->row_valid[r] = true;
         }
         if (r < text_rows(ed) && !ed->draw_past_end) {

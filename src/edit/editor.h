@@ -15,14 +15,15 @@
 // Bytes of text at most. The heap (about 345 KB) is shared with SSH, TLS and Lua, so edit.c lowers
 // the limit of an editor it opens to what the heap can spare then (editor_t.limit).
 #define EDITOR_MAX_TEXT  (128 * 1024)
+// Screen size: a bigger terminal uses only this much of itself. The cost of the maximum is the
+// row scratch below (about 4.8 KB) and a hash per row.
 #define EDITOR_ROWS_MIN  4
-#define EDITOR_ROWS_MAX  60
+#define EDITOR_ROWS_MAX  200
 #define EDITOR_COLS_MIN  20
-#define EDITOR_COLS_MAX  160
+#define EDITOR_COLS_MAX  400
 #define EDITOR_MAX_MARKS 2              // combining marks shown on one character; more show as '?'
-// Most output one screen row can take: each column holds one character of up to 4 bytes with
-// its marks. It must fit in what edit.c can send at once (2048 bytes, SSH's output per pass),
-// which is what limits EDITOR_COLS_MAX.
+// Most output one screen row can take: positioning, then each column holds one character of up
+// to 4 bytes with its marks. A row goes out in pieces if the channel has less room than this.
 #define EDITOR_ROW_BYTES (16 + EDITOR_COLS_MAX * 4 * (1 + EDITOR_MAX_MARKS))
 #define EDITOR_FIND_MAX  64
 #define EDITOR_TAB       8
@@ -69,6 +70,7 @@ typedef struct {
     bool dirty;                 // the screen needs a frame
     bool clear;                 // the next frame starts by clearing the whole screen
     char row[EDITOR_ROW_BYTES]; // scratch for one row (kept off the stack)
+    size_t row_len, row_sent;   // the rendered row being sent, and how much of it has gone
 } editor_t;
 
 // Start with `len` bytes of file contents (copied; CRLF line ends are stripped and remembered).
@@ -101,9 +103,11 @@ size_t editor_saved_len(const editor_t *ed);
 size_t editor_export(const editor_t *ed, size_t *pos, char *out, size_t cap);
 
 // Terminal output. editor_draw() fills `out` with up to `cap` bytes of the next screen update,
-// whole rows only, skipping rows that already show the right thing, and positions the cursor
-// when it has finished. Call it until editor_drawn() is true; any change in between restarts the
-// frame. Returns 0 when `cap` can't take the next row: call again with more room.
+// a row at a time (in pieces, if `cap` has less room than a row), skipping rows that already
+// show the right thing, and positions the cursor when it has finished. Call it until
+// editor_drawn() is true; any change in between restarts the frame (a row sent in part is sent
+// again whole). Returns 0 only when `cap` (at least 16 to start a frame, about 32 to end one)
+// is too small to make progress: call again with more room.
 size_t editor_draw(editor_t *ed, char *out, size_t cap);
 bool editor_drawn(const editor_t *ed);
 // Redraw everything (Ctrl-L, a new size, or the screen was disturbed).

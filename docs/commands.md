@@ -172,7 +172,7 @@ much it can take; the text can't grow past that limit either.
 It needs a VT100/xterm-compatible terminal and uses its alternate screen, so the shell's output
 is back as it was afterwards. The screen size is asked from the terminal when the editor starts
 and on Ctrl-L (so resize the window, then press Ctrl-L); without an answer it's 80×24. It uses
-at most 160 columns and 60 rows of a bigger window.
+at most 400 columns and 200 rows of a bigger window.
 
 | Key | What it does |
 |---|---|

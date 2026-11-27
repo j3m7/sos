@@ -16,14 +16,16 @@ of up to 128 KB on the console or over SSH, less while the heap has less to spar
   (up to `EDITOR_MAX_MARKS`, 2) move and delete as one, and a mark beyond that or with no letter
   to go on shows as `?`. A wide character cut by either edge of the screen shows as spaces. All of
   this is one function, `unit_bytes()`, so layout, cursor and drawing agree; and since each column
-  holds one unit of at most 12 bytes, a row's output is bounded (`EDITOR_ROW_BYTES`, 1936 bytes at
-  the 160-column limit) whatever the file holds, and fits one SSH write. Controls, invalid
+  holds one unit of at most 12 bytes, a row's output is bounded (`EDITOR_ROW_BYTES`, 4816 bytes at
+  the 400-column limit) whatever the file holds. Controls, invalid
   UTF-8 and the code points `termtext_hidden()` names show as `?`, so nothing in a file can send
   the terminal a sequence or hide what its bytes are. Lines don't wrap; the view scrolls
   sideways.
-- **Drawing** (`editor_draw()`) only sends rows that changed (a hash of what each row shows), in
-  whole rows, as many as the caller has room for, and restarts the frame if something changes
-  in between. Typing a character sends one text row, the status bar and the cursor.
+- **Drawing** (`editor_draw()`) only sends rows that changed (a hash of what each row shows), a
+  row at a time, as many as the caller has room for, in pieces when the caller has less room
+  than a row (SSH takes 2048 bytes a pass, a 400-column row of emoji can be more), and restarts
+  the frame if something changes in between (a row cut short goes out again whole). Typing a
+  character sends one text row, the status bar and the cursor.
 
 ## `edit.c`: the command
 

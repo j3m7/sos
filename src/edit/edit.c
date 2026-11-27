@@ -52,10 +52,6 @@ typedef struct {
     uint64_t next_log_check;
 } edit_t;
 
-// A screen row goes out whole, so the largest must fit in one write (and in SSH's 2048 bytes a
-// pass), or it would never be drawn.
-_Static_assert(EDITOR_ROW_BYTES + 32 <= sizeof(((edit_t *)0)->out), "a screen row must fit in out[]");
-
 static void put(shell_t *sh, const char *s) {
     sh->io->write(sh->ctx, s, (int)strlen(s));     // raw: no newline translation needed
 }
