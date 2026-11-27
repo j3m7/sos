@@ -124,8 +124,8 @@ SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s aga
 single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
 about 3,550 of 8,192 bytes).
 
-A `build/` directory from before `minsize` became the default (2026-11-27) holds a debug
-build: run `cmake --preset minsize` once to switch it over.
+A `build/` directory from before `minsize` became the default holds a debug build: run
+`cmake --preset minsize` once to switch it over.
 
 The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer

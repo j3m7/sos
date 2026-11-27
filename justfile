@@ -14,10 +14,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list --unsorted
 
+# `build` configures every time: that is quick, and a build/ left from when it held the debug
+# build would otherwise go on being built that way.
+
 # Configure and build the firmware; preset: minsize (the default, in build/), debug or release
 build preset="minsize":
-    # Configured every time: it is quick, and a build/ left from when it held the debug build
-    # would otherwise go on being built that way.
     cmake --preset {{ quote(preset) }}
     cmake --build --preset {{ quote(preset) }}
 

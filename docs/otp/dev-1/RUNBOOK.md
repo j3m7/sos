@@ -44,6 +44,10 @@ in step 13.
 
 ## 1. Save the OTP and build the images
 
+These commands build with the `debug` preset because that is what dev-1's images were built and
+tested with when this was run. The everyday build is `minsize` now; a runbook for another board
+should name that, after its burn image has been tried built that way.
+
 ```sh
 picotool otp dump -f --ser $SOS_FLASH_SERIAL > dev-1-otp-before.txt
 cmake --preset debug -B build -DSOS_SIGN_KEY=$PWD/keys/dev-INSECURE-1.pem && cmake --build build
