@@ -150,7 +150,8 @@ static void grep_write(pipe_stage_t *st, const char *buf, size_t len) {
     grep_t *g = (grep_t *)st;
     for (size_t i = 0; i < len; i++) {
         if (buf[i] == '\n') {
-            grep_line(g);
+            if (!g->cont || g->len)         // not the empty rest of a line cut at a piece's end
+                grep_line(g);
             g->cont = false;
             continue;
         }

@@ -155,6 +155,14 @@ TEST(grep_cuts_long_lines_into_pieces) {
     got = run("grep -n b", in);
     CHECK_EQ(strlen(got), 2 + PIPE_LINE_MAX + 1 + 4);
     CHECK(!strcmp(got + 2 + PIPE_LINE_MAX + 1, "2:b\n"));
+    // ...and its '\n' doesn't make an empty second piece: -v shows no blank line for it.
+    got = run("grep -vn fox", in);
+    CHECK_EQ(strlen(got), 2 + PIPE_LINE_MAX + 1 + 4);
+    CHECK(!strcmp(got + 2 + PIPE_LINE_MAX + 1, "2:b\n"));
+    memset(in, 'c', 2 * PIPE_LINE_MAX);
+    strcpy(in + 2 * PIPE_LINE_MAX, "\n");
+    got = run("grep -v fox", in);
+    CHECK_EQ(strlen(got), 2 * (PIPE_LINE_MAX + 1));
 }
 
 TEST(head_passes_the_first_lines_then_shuts) {
