@@ -161,6 +161,8 @@ set(SOS_SOURCES
     src/net/wifi_pick.c
     src/net/http.c
     src/net/http_msg.c
+    src/net/ping.c
+    src/net/ping_msg.c
     src/ssh/sshd.c
     src/ssh/hostkey.c
     src/ssh/hostkey_record.c
