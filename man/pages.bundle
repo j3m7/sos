@@ -409,6 +409,31 @@ DESCRIPTION
                     temperature, see 'temp')
         supply      every minute: the lowest VSYS since the last run; on USB
                     power WARN under 4.3 V, and FAIL under 3.0 V (see 'power')
+    and these compare what is stored with what the board uses, hourly (the
+    card every 6 hours), the first a minute or so after boot. They read
+    only: none writes flash, OTP or the card, or repairs anything:
+        config      both configuration records: PASS when the one in use is
+                    sealed and the other is empty or an older sealed one;
+                    WARN when the other is damaged (no fallback if a save
+                    fails), or the one in use is still plain; FAIL when no
+                    record can be used though one is there (see 'config')
+        rootsecret  where the root secret comes from, against the OTP flags,
+                    as 'rootsecret' and 'version' say: WARN on an OTP page not
+                    locked, or one flash copy damaged; FAIL with no secret
+        otp         the OTP rows SOS relies on (the security flags and the boot
+                    key slots, never the root secret's): WARN on a row that
+                    can't be read or whose error correction doesn't match, on
+                    copies that disagree, and on a public development key in a
+                    release build; FAIL when secure boot is on and this
+                    firmware's key is in no valid slot (see 'bootkey')
+        failcount   the count of wrong console passwords: WARN when it isn't
+                    zero (the text gives the count)
+        hostkey     the stored SSH host key is still the one sshd serves (its
+                    fingerprint in the text); FAIL if the record changed
+        card        /var/log and /certs on the mounted card, and the approved
+                    TLS roots against /certs/roots.pem (see 'tls'): WARN if it
+                    changed since approval. SKIP while anything else has the
+                    card: unmounted by hand, sd check, a format, open files
 
     A change of status is logged (facility kern): a FAIL at err, a WARN at
     warning, the way back to PASS at notice. A board that stays healthy logs
@@ -418,7 +443,8 @@ DESCRIPTION
     encrypting new data (saving the configuration). The refusal names the
     check, and the latest result counts: a check that passes again lifts it.
     Reading what is already stored is never refused. Only trng, crypto and
-    crypto-ssh refuse anything.
+    crypto-ssh refuse anything: a FAIL of the others says what the board is
+    doing, and the feature's own command fixes it.
 
     A fresh board whose root secret was refused this way keeps its console
     locked, saying which check failed; 'health' and 'reboot' work there.
@@ -433,7 +459,8 @@ CONSOLE ONLY
     result, those already done keep their new ones.
 
 SEE ALSO
-    uptime, glitch, mem, temp, power, dmesg, lua
+    uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
+    bootkey, tls
 @@ help
 NAME
     help - list the commands this channel may use

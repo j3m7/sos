@@ -12,7 +12,8 @@ reference.
 
 Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware and crypto checks,
 built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in §9.2, and waits for
-the second. Phase 3, checks of stored state: design in §9.3, for review before the code.
+the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
+waiting for its board run.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -560,9 +561,10 @@ runs, 384 bytes of stack for `trng`.
 ### 9.3 Phase 3 design: checks of stored state
 
 Status: design approved by Reviewer (#254), with the `config` cases of a plain record split as
-below. Phase 3 adds six background checks that read
+below. Built: §9.4 lists where the code settled details, the texts shortened to fit a line
+among them. Phase 3 adds six background checks that read
 what the board keeps in flash, in OTP and on the card, and compare it with what the running
-board uses. §9.4 will record what the build settles.
+board uses. §9.4 records what the build settled.
 
 **Common rules.**
 
@@ -683,9 +685,9 @@ bit-repair flip (both BRBP bits set: invert all 24), recomputes the 6 parity bit
 bits (the OTP macro's Hamming code, as picotool's `otp_calculate_ecc()` computes it), and
 compares. It also compares the 16 data bits with what the unguarded corrected alias
 (`otpread_ecc()`, which doesn't fault) returns for the same row: on a clean row they agree, and
-a row the hardware corrected shows as a difference. A blank row (all zero) is consistent. Pure and host tested (`statecheck.c`), with known
-rows from picotool's code. A row that reads as all ones (no permission) is reported, never
-judged.
+a row the hardware corrected shows as a difference. A blank row (all zero) is consistent. Pure
+and host tested (`statecheck.c`), with known rows from picotool's code. A row that reads as all
+ones (no permission) is reported, never judged.
 
 **Dev keys.** The OTP hashes of `keys/dev-INSECURE-1.pem` and `-2.pem` (SHA-256 of the 64-byte
 public key, as `keys/README.md` shows them) are constants in `statecheck.c`, with the command
@@ -826,6 +828,83 @@ dev key constants against the `.pem` files, and the card and host key judging.
 5. `card`: with SFTP holding a file open, `health run card` is SKIP `files open`; after
    `sd unmount`, SKIP `card unmounted by hand`; `sd mount` again, PASS.
 
+### 9.4 As built (phase 3)
+
+Built as §9.3 says, with these details settled by the code. The judging is in `statecheck.c`
+(`tests/test_statecheck.c`: 43 tests, one per status path at least), the reads in
+`statecheck_board.c`; `config_slot_info()` and `config_in_use()` are tested in
+`tests/test_config.c`, `failcount_inspect()` in `tests/test_failcount.c`.
+
+**Texts.** A result is one line of at most 63 characters, so some of §9.3's texts are shorter;
+the host test fails any tested text that reaches 63 (it may have been cut). Where they differ:
+
+| Check | §9.3 | As built |
+|---|---|---|
+| `config` | `rev 3 plain, in use (slot A): written after sealing (downgrade, ...)` | `plain rev 3 (A) in use, written after sealing (downgrade?)` |
+| `config` | `rev 3 plain, in use (slot A): not sealed yet (see dmesg)` | `plain rev 3 (A) in use: not sealed yet (see dmesg)` |
+| `config` | `...; slot A damaged (bad CRC): no fallback` | `rev 28 sealed, in use (B); A bad CRC: no fallback` |
+| `config` | `sealed record doesn't open (another root secret?); running unconfigured` | `sealed record in A doesn't open; running unconfigured` |
+| `otp` | `image key in no valid slot: it won't start after a reset (running on)` | `image key in no valid slot: no boot after a reset; running on` |
+| `otp` | `secure boot, debug on; slots 0,1 valid: dev keys 1,2; image key slot 0` | `secure boot on, debug on; valid 0=dev1 1=dev2; image key in 0` |
+| `otp` | `CRIT1 rows ... written since reset or damaged` | `CRIT1 rows 0x05 vs latched 0x01: written since reset/damaged` |
+| `otp` | `valid slot 0 holds public dev key 1: anyone can sign firmware` | `valid slot 0 holds public dev key 1 (release build)` |
+| `card` | `...; /certs/roots.pem matches its approval` | `exFAT encrypted; /var/log ok; roots.pem matches its approval` |
+| `card` | (`/certs` present, nothing approved) | `exFAT encrypted; /var/log ok; unapproved roots: built-in only` |
+| `card` | `/var/log missing: log files aren't written` | `/var/log missing: the log files aren't being written`, and `/var/log is a file: no log files; rm it on the console` |
+| `failcount` | `firmware overlaps the sector; wrong passwords counted in RAM only` | `firmware overlaps the sector; wrong passwords in RAM only` |
+
+`hostkey`'s PASS (`sealed, as loaded; SHA256:...`) shows the first 37 characters of the
+fingerprint's 43; `ssh` shows all of it. **Release build** means `NDEBUG`, which CMake sets for
+the `release` preset (Release) and the size preset (MinSizeRel); the `debug` preset is a debug
+build, where a dev key in a valid slot is named in the PASS.
+
+**Also settled:**
+
+- `config` reads slot A in its first step and slot B in its second. A save between the two
+  writes only the slot not in use, so the pair it judges is still consistent; a `config reset`
+  between them gives one stale result, put right at the next run.
+- `config`'s FAIL for "nothing usable" takes `unopened` before a damaged slot (it says more),
+  and a damaged slot before a `refused` one.
+- `failcount` judges, in order: the firmware overlapping the sector (FAIL), counts in RAM that
+  flash didn't take, no marker, inconsistent tracks, a count above 0 (WARN), then PASS. The
+  capacity in its text is `FAILCOUNT_CAPACITY` (7 pages of 256 bytes, one bit each: 14336).
+- `otp` judges unreadable rows first, then the SKIP of an open board, then each boot key row
+  (`ECC mismatch` before `corrected`), then CRIT1 against the latched register, CRIT1's copies,
+  BOOT_FLAGS1's copies, the image's key, and dev keys. Copies are compared only on the bits SOS
+  relies on (CRIT1 0x7f, BOOT_FLAGS1's KEY_VALID and KEY_INVALID). The dev key hashes are
+  constants checked by the host test with `openssl` (it says so and skips the comparison when
+  `openssl` is missing). `_Static_assert`s pin the row numbers and bits to the SDK's names, and
+  the last row read below the root secret's first page (`ROOTOTP_ROW(0, 0)`).
+- `card`'s `locked` WARN is for an encrypted card this board's key doesn't open (another
+  board's, or a configuration erased since its format); a card locked for lack of a key (a board
+  not set up yet) or of memory is SKIP `no card mounted`, since mounting looks at it again. A
+  card unmounted, remounted or taken by `sd check` between hashing steps ends the check with SKIP
+  `the card changed during the check; next run`; no memory for the 2.8 KB of hashing state
+  (`HEAP_FILES`) is SKIP `no memory to read roots.pem; next run`.
+- `hostkey.c` records the page digest at the end of every successful `hostkey_get()` (after any
+  store: a new key, or one taken over), and clears it in `hostkey_owner_gone()` (`config reset`,
+  which doesn't reboot: the check is then SKIP until setup makes the next key) and
+  `hostkey_erase()`. Nothing else writes the key sector.
+- `health state-dump` (test builds) is in any shell, as Reviewer allowed; it reads the config
+  slots (with their read times), what the root secret check reads, the OTP rows (per slot: the
+  hash's first 8 bytes, its valid and invalid bits, which dev key, and how many rows failed the
+  ECC comparison), the failcount tracks, the host key's state, and the card's owners. It
+  doesn't touch the card.
+
+**Step times** (estimates; `health state-dump` measures the config slots and the OTP reads on
+the board): `config` about 3.5 ms per step (one slot: CRC-32 over 2.2 KB bit by bit, about
+0.6 ms, and an AES-GCM open, 2 to 3 ms), `otp` about 0.3 ms (139 row reads, one SHA-256 of 64
+bytes, the image's block loop), `rootsecret`, `failcount` and `hostkey` under 0.5 ms each,
+`card` about 5 ms per step (two `f_stat` calls, or 2 KB read, decrypted and hashed).
+
+**Cost** (debug build, `arm-none-eabi-size`, against main 61ea7d6): text +8.8 KB
+(1229096 to 1238152 bytes), bss +536 bytes (the OTP rows gathered, 400 bytes, kept off the
+stack; the config check's two slot records; the host key digest). While `card` hashes
+`roots.pem`, about 2.8 KB of heap (`HEAP_FILES`: the open file, a SHA-256 context and a 2 KB
+buffer).
+
+**Board run:** as §9.3 lists, with the texts above.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -837,7 +916,7 @@ dev key constants against the `.pem` files, and the card and host key judging.
    source against the OTP flags, the host key against its fingerprint, the card key unwraps,
    the failcount marker, `/var/log` and `/certs` present and protected, the man bundle and cert
    store hashes. Also the OTP ECC rows, the boot key hashes (dev or production set), and the CRIT
-   flags against `version`. Reads only, never writes OTP. Design: §9.3.
+   flags against `version`. Reads only, never writes OTP. Design: §9.3; as built: §9.4.
 4. **Background tier:** RTC drift as ppm after each NTS sync, the brownout detector and
    `last reset: brownout`, a heap free-list walk in steps, a core 1 heartbeat while a script
    runs, and reset history.

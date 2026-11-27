@@ -144,6 +144,10 @@ Two layers:
     configuration the user set last. The sealed save that follows is numbered above both.
     `config_scrub_plain()` erases only what has a plain record's header and doesn't load
     (damaged), next to the sealed configuration.
+  - **What each slot holds** (`config_slot_info()`, for the `config` health check): its kind
+    (empty, junk, bad header, bad CRC, refused plain, doesn't open, out of bounds, plain,
+    sealed) and sequence number, never its contents; `config_in_use()` picks the slot loading
+    takes by the same rule. `slot_read()`, which loading uses, is a mapping of it.
   - **A secured board** (`refuse_plain`, not set anywhere yet) doesn't see plain records at
     all: they take no part in choosing the newest record, so a planted one can't hide the sealed
     configuration.
@@ -484,7 +488,7 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
-## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`)
+## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`)
 
 `health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
 with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
@@ -536,12 +540,28 @@ host's wolfCrypt by `tests/test_selftest.c`).
   elsewhere both run one known answer per step. About 2 KB of heap while they run. Their text
   gives the time per group, and a passing run is logged at info. Thresholds and cutoffs are in
   `hwtest.h`.
+- **Checks of stored state** (phase 3, docs/design/health.md §9.3): `config`, `rootsecret`,
+  `otp`, `failcount`, `hostkey` (hourly, first run 40 to 60 s after boot) and `card` (every 6
+  hours, first at 90 s), background checks that hold no gate and read only. The judging is pure
+  in `statecheck.c` (`tests/test_statecheck.c`); `statecheck_board.c` gathers what each reads:
+  each config slot through `settings_config_slot()` (`config_slot_info()`: kind and sequence
+  number, never contents, with the seal key `settings.c` already holds), what
+  `rootsource_init()` recorded and the OTP page's soft-lock register, the named OTP rows only
+  (CRIT1 0x040-0x047, BOOT_FLAGS1 0x04b-0x04d, the boot key slots 0x080-0x0bf; never the root
+  secret's pages) with each boot key row's ECC recomputed from its raw bits and compared with the
+  corrected alias, the failcount sector (`failcount_inspect()`), `hostkey.c`'s digest of the
+  stored page against the page now (the record is never opened), and on the card `/var/log`,
+  `/certs` and `/certs/roots.pem` (2 KB per step, under `files_hold()`), yielding to `sd check`,
+  a format, a card unmounted by hand and open files (`sdcard_health_state()`, `files_busy()`).
 - **Test builds** (`-DSOS_TEST_COMMANDS=ON`): `health inject <name> fail|clear` sets a result by
   hand; `health inject gate keys|crypto` adds a test-only full-tier check holding that gate at
   FAIL, to see each refusal on the board (`health full` runs it, and it passes, which opens the
   gate again). `health crypto-times` times every known answer; `health trng-diag` runs the TRNG
   test under 12 setups (sample period, autocorrelation test, corrector) to compare with the
-  check's.
+  check's. `health state-dump` prints what the checks of stored state read (each config slot's
+  kind and sequence number with its read time, the root secret's source, the OTP rows and slots,
+  the failcount tracks, the host key's state, the card's owners); it only reads and works in any
+  shell.
 - **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 24 at
   most.
 
