@@ -93,7 +93,6 @@ static const char *keys_held_by;
 const char *health_gate(uint32_t gate) {
     return (gate & HEALTH_GATE_KEYS) ? keys_held_by : NULL;
 }
-const char *health_gate_refuse(uint32_t gate) { return health_gate(gate); }
 
 static char last_log[512];
 void log_msg(int level, const char *fmt, ...) {

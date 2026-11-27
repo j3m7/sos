@@ -719,7 +719,7 @@ static bool start_encrypted(shell_t *sh) {
     uint8_t wrap[CARDKEY_LEN];
     // A new card id and data key are random numbers, and the card is encrypted under them:
     // refused, before anything is written, while a check holding either gate fails.
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+    const char *held = health_gate(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
     if (held) {
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
                 "failed", held);
@@ -904,7 +904,7 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     // Asked again in start_encrypted(), which is where it counts; here so a refusal comes
     // before the card is looked at and the question asked.
     const char *held = format_plain ? NULL
-                                    : health_gate_refuse(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
+                                    : health_gate(HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO);
     if (held) {
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: encrypted format refused: health check %s "
                 "failed", held);

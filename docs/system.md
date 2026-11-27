@@ -65,7 +65,11 @@ Nothing blocks the loop for long: Wi-Fi connects in the background and console q
 
 ## Health checks
 
-SOS checks itself at boot and every minute while it runs: the last reset, the glitch detector's
+SOS checks itself at boot and every minute while it runs. At boot, before anything can make a
+key: the last reset, the clocks, the flash chip, the random number generator's raw output (NIST
+SP 800-90B's startup tests) and the crypto (known answers for SHA-2, HMAC, AES-GCM, AES-XTS
+and the Ed25519 public key). Thirty seconds after boot, then daily: the slower known answers
+SSH relies on (Ed25519 signing and verifying, X25519). Every minute: the glitch detector's
 guard, both cores' stacks, free heap, the chip's temperature and the supply. `health` shows the
 latest result of each (PASS, WARN, FAIL or SKIP, with the reason), in any shell; `health run`
 and `health full` run them now, on the console only. A change of status is logged (`kern`): a

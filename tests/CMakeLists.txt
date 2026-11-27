@@ -137,6 +137,14 @@ add_executable(test_health test_health.c ${SOS_ROOT}/src/core/health.c)
 target_include_directories(test_health PRIVATE ${SOS_ROOT}/src)
 add_test(NAME health COMMAND test_health)
 
+# src/core/hwtest.c: the boot tier's hardware checks, the pure half: the TRNG's startup tests
+# (SP 800-90B repetition count and adaptive proportion) over made-up streams, and the judging of
+# the trng, clocks and flash checks.
+add_executable(test_hwtest test_hwtest.c ${SOS_ROOT}/src/core/hwtest.c)
+target_include_directories(test_hwtest PRIVATE ${SOS_ROOT}/src)
+target_link_libraries(test_hwtest PRIVATE m)
+add_test(NAME hwtest COMMAND test_hwtest)
+
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
 add_executable(test_bootkey test_bootkey.c ${SOS_ROOT}/src/core/bootkey.c)
@@ -245,7 +253,10 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
         ${WOLFSSL_ROOT}/wolfcrypt/src/wc_port.c ${WOLFSSL_ROOT}/wolfcrypt/src/error.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/logging.c ${WOLFSSL_ROOT}/wolfcrypt/src/hmac.c
         ${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c ${WOLFSSL_ROOT}/wolfcrypt/src/hash.c
-        ${WOLFSSL_ROOT}/wolfcrypt/src/sha.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha512.c)
+        ${WOLFSSL_ROOT}/wolfcrypt/src/sha.c ${WOLFSSL_ROOT}/wolfcrypt/src/sha512.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/ed25519.c ${WOLFSSL_ROOT}/wolfcrypt/src/curve25519.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/ge_operations.c ${WOLFSSL_ROOT}/wolfcrypt/src/fe_operations.c
+        ${WOLFSSL_ROOT}/wolfcrypt/src/random.c)
     target_compile_definitions(wolfcrypt_host PUBLIC WOLFSSL_USER_SETTINGS)
     target_include_directories(wolfcrypt_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/wolfcrypt_host
         ${WOLFSSL_ROOT})
@@ -285,6 +296,15 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_include_directories(test_lua_hash PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_hash PRIVATE wolfcrypt_host)
     add_test(NAME lua_hash COMMAND test_lua_hash)
+
+    # src/core/selftest.c: the crypto known-answer tests of the `crypto` health check, run against
+    # the host's wolfCrypt, with a fault made in each test in turn to see it caught.
+    add_executable(test_selftest test_selftest.c ${SOS_ROOT}/src/core/selftest.c
+        ${SOS_ROOT}/src/core/heaptag.c)
+    target_compile_definitions(test_selftest PRIVATE SELFTEST_TEST)
+    target_include_directories(test_selftest PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_selftest PRIVATE wolfcrypt_host)
+    add_test(NAME selftest COMMAND test_selftest)
 else()
     message(WARNING "sdcrypt and keyprov tests skipped: they need wolfSSL (WOLFSSL_ROOT)")
 endif()

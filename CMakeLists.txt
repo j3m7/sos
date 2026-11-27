@@ -189,6 +189,8 @@ set(SOS_SOURCES
     src/core/sensors_board.c
     src/core/health.c
     src/core/health_board.c
+    src/core/hwtest.c
+    src/core/selftest.c
     src/core/logfile.c
     src/core/logfile_board.c
     src/core/bootkey.c

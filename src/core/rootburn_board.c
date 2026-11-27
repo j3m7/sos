@@ -87,7 +87,7 @@ static bool wr_lock1(void *ctx, unsigned page, uint32_t bits) {
 // anything is written (rootburn_run() then reports ROOTBURN_RANDOM; the log names the check).
 static bool get_random(void *ctx, uint8_t *out, size_t len) {
     (void)ctx;
-    const char *held = health_gate_refuse(HEALTH_GATE_KEYS);
+    const char *held = health_gate(HEALTH_GATE_KEYS);
     if (held) {
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "rootburn: no secret made: health check %s failed",
                 held);

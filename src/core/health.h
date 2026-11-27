@@ -72,17 +72,8 @@ typedef struct health_check {
 
 // NULL if the gate (one or more HEALTH_GATE_* bits) is open, else the name of the first
 // FAILed check that holds it. Every gate is open until a check that holds it has failed: NONE,
-// SKIP, PASS and WARN don't close it.
+// SKIP, PASS and WARN don't close it. A caller that refuses logs the refusal, naming the check.
 const char *health_gate(uint32_t gate);
-
-// The same, for a caller that is about to refuse: also remembers the check's name for
-// health_refusal(). The caller logs the refusal, naming the check.
-const char *health_gate_refuse(uint32_t gate);
-
-// The check named by the last refusal (health_gate_refuse), or NULL if nothing was refused
-// since boot. For the console's rescue state: a fresh board whose root secret wasn't made says
-// why (shell.c, console_no_keys).
-const char *health_refusal(void);
 
 // --- the framework -------------------------------------------------------------------------------
 
@@ -220,6 +211,14 @@ void health_boot(void);
 // `health inject gate keys|crypto` (test builds): add a test-only check holding that gate and
 // set it to FAIL. False if the gate's name is unknown or the registry is full.
 bool health_board_inject_gate(const char *gate);
+
+// Measurements for a board run (test builds), each printed a line at a time (no newline):
+// `health crypto-times`, every known answer timed; `health trng-diag`, the TRNG's startup test
+// numbers under several setups (docs/design/health.md §9.2). Both hold the main loop while they
+// run (a few hundred milliseconds).
+typedef void (*health_print_fn)(void *arg, const char *line);
+void health_board_crypto_times(health_print_fn print, void *arg);
+void health_board_trng_diag(health_print_fn print, void *arg);
 #endif
 
 #endif
