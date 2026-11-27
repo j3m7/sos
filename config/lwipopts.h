@@ -28,6 +28,16 @@
 // 8 segments) on a connection. 12 covers one connection in that state and the rest in passing.
 // When the pool is empty a received frame is dropped and TCP sends it again.
 #define PBUF_POOL_SIZE              12
+// Two things that could otherwise pin most of the pool:
+// - Segments queued out of order are capped per connection, so several connections losing
+//   packets at once can't take every buffer between them. Past the cap a segment is dropped
+//   and sent again, which a loss needs anyway.
+#define TCP_OOSEQ_MAX_PBUFS         6
+// - No IP fragments, in or out. Pieces of an unfinished fragmented datagram are held in pool
+//   buffers for up to 15 s (lwIP's default allows 10), and anyone on the network can send
+//   one. Nothing here needs fragments: SSH and TLS are TCP, and DNS, NTP and ping fit a frame.
+#define IP_REASSEMBLY               0
+#define IP_FRAG                     0
 
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
