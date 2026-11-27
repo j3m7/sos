@@ -95,10 +95,10 @@ int sftp_fs_pwrite(int fd, const unsigned char *buf, int len, const unsigned int
     FIL *f = get(fd);
     UINT n;
     // Seeking past the end extends the file (FatFs, in write mode), as pwrite() does.
-    // Then a sync if the last one is a second old; its failure is the write's. wolfsftp.c calls
-    // this once per SFTP write request (again only after a short write), never with len 0.
+    // Then, if bytes landed, a sync when the last one is a second old; its failure is the
+    // write's. wolfsftp.c calls this once per SFTP write request (again only after a short write).
     if (!f || len < 0 || !seek(f, offset) || f_write(f, buf, (UINT)len, &n) != FR_OK ||
-        files_sync_if_due(f, &synced_at[fd]) != FR_OK)
+        (n && files_sync_if_due(f, &synced_at[fd]) != FR_OK))
         return -1;
     return (int)n;
 }
