@@ -1,0 +1,11 @@
+NAME
+    pwd - show the working directory
+
+SYNOPSIS
+    pwd
+
+DESCRIPTION
+    Prints this shell's working directory.
+
+SEE ALSO
+    cd, ls

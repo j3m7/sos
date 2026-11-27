@@ -1,0 +1,48 @@
+NAME
+    sd - the SD card: information, speed, unmounting, benchmark and format
+
+SYNOPSIS
+    sd
+    sd info
+    sd speed [<MHz>]                      (change: console only)
+    sd unmount                            (console only)
+    sd test [<KB> [keep]]                 (console only)
+    sd format [exfat | fat32] [plain]     (console only)
+
+DESCRIPTION
+    'sd' (or 'sd info') shows the card and volume information, the SPI clock,
+    and whether the card is encrypted, with its card id. 'sd speed' shows the
+    SPI clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
+    reinitializes the card; not saved.
+
+    'sd unmount' unmounts the card before it is taken out; refused while a
+    file is open. No card-detect switch is wired by default, so the board
+    doesn't notice a swap: unmount, swap, and the next file command mounts
+    the new card.
+
+    'sd test [<KB> [keep]]' is a write and read benchmark: 4 to 65536 KB,
+    default 256; everything else waits until it finishes. 'keep' leaves
+    /sos-test.txt on the card.
+
+    'sd format' erases the whole card (all partitions) and formats it with
+    one partition, exFAT by default, after you type 'yes'. The card is
+    ENCRYPTED (XTS-AES-128, with a new key this board keeps) unless 'plain'
+    is given; a PC sees an encrypted card as unformatted. When an encrypted
+    format finishes it shows the card's id and data key, ONCE: store the key
+    offline, it is the only way to read the card if the board is lost or its
+    configuration erased (tools/host/sdcrypt.c, or cryptsetup). It can't be
+    shown again later. Old files on the card aren't erased: what was written
+    unencrypted before stays readable until overwritten. SSH sessions pause
+    until the format finishes.
+
+    An encrypted card's key is stored on the card, wrapped with a key made
+    from the board's root secret and the owner secret in its configuration,
+    so the card unlocks at boot with nobody logged in and survives
+    reflashing. Erasing the configuration ('config reset', provisioning,
+    erasing over USB) locks the board's cards: that is deliberate. A card made
+    by another board is refused; 'sd format' erases it for use here.
+    Encryption is software AES: about 1.1 MB/s write and 1.0 MB/s read,
+    against 2.0 / 1.7 MB/s unencrypted.
+
+SEE ALSO
+    ls, config, rootsecret

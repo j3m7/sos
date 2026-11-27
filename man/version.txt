@@ -1,0 +1,36 @@
+NAME
+    version - firmware commit, board serial, chip revision, how it is secured
+
+SYNOPSIS
+    version
+
+DESCRIPTION
+    The first line names the commit the firmware was built from: 12 hex
+    digits, '-dirty' if the build had uncommitted changes, 'unknown' if it was
+    not built from a git checkout. It names the SOS commit only, not libraries
+    a build takes from outside the tree. The same line greets the console
+    above its first prompt and each SSH login.
+
+    Then:
+
+        board: serial ...     the serial number the board reports over USB
+                              and to picotool
+        chip: RP2350 A4 (revision 3, ROM 4)
+                              the chip revision, from its revision field and
+                              boot ROM version ('unknown revision' if the pair
+                              isn't one this firmware knows)
+        secure boot: on|off   as the chip latched it at reset
+        debug port: enabled | Secure debug disabled | disabled
+        root secret: in OTP | in flash (open board) | none
+        console-only setup: no|yes
+                              whether the board takes its settings only from
+                              'setup' on its console, refusing a configuration
+                              or host key written to its flash over USB (a
+                              marker of its own in OTP, not secure boot; 'yes'
+                              also when the marker can't be read)
+
+    A further line appears only if the OTP rows behind the flags can't be read
+    or say something else.
+
+SEE ALSO
+    bootkey, rootsecret, uptime

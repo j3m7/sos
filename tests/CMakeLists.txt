@@ -261,3 +261,6 @@ if (TARGET wolfcrypt_host AND OpenSSL_FOUND)
 elseif (TARGET wolfcrypt_host)
     message(WARNING "sdcrypt and seal tests skipped: they also need OpenSSL's libcrypto")
 endif()
+
+# man/: the pages are well formed and man/pages.bundle is what tools/man-bundle.sh builds from them.
+add_test(NAME man-bundle COMMAND bash ${SOS_ROOT}/tools/man-bundle.sh --check)

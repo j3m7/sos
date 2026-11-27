@@ -1,0 +1,13 @@
+NAME
+    hostname - show or set the board's hostname
+
+SYNOPSIS
+    hostname
+    hostname <name>      (console only)
+
+DESCRIPTION
+    Shows the hostname, or sets it; the default is 'sos'. Saved; a new name
+    takes effect at the next Wi-Fi connect ('wifi connect').
+
+SEE ALSO
+    net, wifi, config

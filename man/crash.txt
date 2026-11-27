@@ -1,0 +1,14 @@
+NAME
+    crash - stop the firmware on purpose, to test the reset reporting
+
+SYNOPSIS
+    crash fault | stack | panic | hang      (console only)
+
+DESCRIPTION
+    Testing only. Stops the firmware with a hard fault (a bad memory access),
+    a stack overflow, an SDK panic, or a hang that the watchdog ends after
+    SOS_WATCHDOG_MS (default 8 s). The next boot's log and 'uptime' report
+    what happened, with the addresses to look up in build/sos.dis.
+
+SEE ALSO
+    uptime, dmesg

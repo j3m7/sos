@@ -1,0 +1,13 @@
+NAME
+    cd - change the working directory
+
+SYNOPSIS
+    cd [<dir>]
+
+DESCRIPTION
+    Changes this shell's working directory, to '/' without an argument. Each
+    shell (the console, every SSH session) has its own; paths given to the
+    file commands are relative to it unless they start with '/'.
+
+SEE ALSO
+    pwd, ls
