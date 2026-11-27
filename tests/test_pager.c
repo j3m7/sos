@@ -120,7 +120,6 @@ TEST(no_newline_at_the_end_and_empty_text) {
 
     open_text("", 5, 40, 0);
     key('j');
-    key('j');                               // the hint gives way to the status
     draw();
     CHECK_LINE(0, "~");
     CHECK(strstr(status(), "empty") != NULL);
