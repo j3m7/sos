@@ -68,6 +68,8 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.cancel(id)` | stop a timer; true if it existed |
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
+| `sos.http.head(url [, opts])` | HTTPS HEAD: the status and headers |
+| `sos.http.download(url, path [, opts])` | HTTPS GET into a file on the card (see [HTTPS](#https)) |
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 | `sos.sensors()`, `sos.mem()`, `sos.version()` | tables about the board (see [Board health](#board-health)) |
 | `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()` | the same |
@@ -115,6 +117,23 @@ option, a body over `max_body`). Options, all optional except `url` for `request
 | `body`, `content_type` | request body (up to 16 KB) and its type (no `Content-Type` header if not given) |
 | `timeout` | milliseconds until the headers arrive, then between pieces of the body (default 30000) |
 | `max_body` | the most response body to accept, in bytes (default 32 KB; the script's 128 KB covers it) |
+
+`sos.http.download(url, path [, opts])` writes the body to the file at `path` (as `sos.write`
+does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script's memory. Only a
+2xx response is written: the response then has `size` (the bytes written) instead of `body`. Any
+other status leaves the file alone and comes back with its `body` as `get` would (an error page,
+say). With no `max_body`, a download has no size limit (the error page still stops at 32 KB). If
+the transfer fails (the connection, the card, a body over `max_body`), the call returns `nil` and
+the message: a failure before the first piece of the body leaves a file already at `path` as it
+was, while one after it removes the half-written file. The first piece replaces an existing file,
+so a refresh that fails part way (or at its first piece, say with the card full) loses the old copy. Ctrl-C leaves what was written.
+
+```lua
+local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")
+if not r then print("failed: " .. err)
+elseif r.status ~= 200 then print(r.status, r.body)
+else print("saved " .. r.size .. " bytes in " .. r.elapsed_ms .. " ms") end
+```
 
 The response's `headers` table has lower-case names; a repeated header's values are joined with
 `, `. The body is the server's bytes as they are: a script that prints it prints whatever the
@@ -292,8 +311,8 @@ end)
 `sos.hash(alg, data [, raw])` returns the digest of the string `data`, and `sos.hmac(alg, key,
 data [, raw])` its HMAC with `key` (up to 4 KB; an empty key is allowed, as HMAC defines it), as lower-case hex, or as raw bytes when `raw` is
 true. `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. They run in wolfCrypt on core 0, the
-code TLS uses: about 5 ms for each 4 KB of data, which a long hash spends without stopping
-anything else. Failures (not enough memory) return `nil` and a message.
+code TLS uses: about 8 ms for each 4 KB of data (40 KB in 81 ms with SHA-256, 95 ms with
+SHA-512, measured on the board), which a long hash spends without stopping anything else. Failures (not enough memory) return `nil` and a message.
 
 `sos.base64.encode(s [, "url"])` and `sos.base64.decode(s [, "url"])` convert to and from base64:
 the standard alphabet with `=` padding, or with `"url"` the URL-safe one (`-` and `_`) without
@@ -329,6 +348,11 @@ gives text that isn't valid JSON (decoding doesn't check UTF-8 either). Floats a
 significant digits). Functions, NaN, infinities, keys that are neither strings nor integers, and
 tables nested more than 32 deep (which includes a table that contains itself) raise an error.
 `nil` and `sos.json.null` encode as `null`. Decoding is limited to 32 levels too.
+
+Decoded values live in the script's 128 KB, and Lua tables are larger than their text: about
+180 bytes for a small object (`{"id": 1, "name": "item1", "ok": true}`), so a script can hold
+the decoded form of roughly 20 KB of JSON. Speed, measured on the board: 150 such objects (5.5 KB)
+encode in 26 ms and decode in 21 ms.
 
 ```lua
 local r = sos.http.get("https://api.example/status")

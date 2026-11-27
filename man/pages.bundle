@@ -713,9 +713,9 @@ DESCRIPTION
     and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
     sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
     sos.sleep, sos.log; timers sos.every/after/cancel (a background script
-    keeps going while timers are left);
-    sos.http.get/post/request for HTTPS (the response includes how long the
-    request took); tables about the board: sos.sensors, sos.mem,
+    keeps going while timers are left); sos.http.get/post/head/request and
+    sos.http.download (into a file) for HTTPS (the response includes how
+    long the request took); tables about the board: sos.sensors, sos.mem,
     sos.version, sos.reset_reason, sos.glitch and sos.wifi.status;
     sos.dmesg for the system log (with a cursor, for only the newer lines);
     sos.hash, sos.hmac (SHA-1, SHA-2), sos.base64 and sos.json; and
