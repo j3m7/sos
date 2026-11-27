@@ -79,8 +79,9 @@ bool editor_init(editor_t *ed, const char *name, const char *text, size_t len);
 // The same in two steps, so a file can be read straight into the editor without a second copy
 // of it: editor_open() gives room for `len` bytes, the caller fills it (all of it), then
 // editor_opened() looks at the text (CRLF) and the editor is ready. `limit` is the most text
-// this editor may hold, at most EDITOR_MAX_TEXT. NULL if `len` is over the limit or memory is
-// short; editor_free() is safe after either outcome, and nothing else may be called in between.
+// this editor may hold, at most EDITOR_MAX_TEXT, and is allocated whole at once. NULL if `len`
+// (the file's bytes as stored, CRs included) is over the limit or memory is short; editor_free()
+// is safe after either outcome, and nothing else may be called in between.
 char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit);
 void editor_opened(editor_t *ed);
 void editor_free(editor_t *ed);

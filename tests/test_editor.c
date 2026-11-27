@@ -601,6 +601,7 @@ TEST(open_in_two_steps_with_a_lower_limit) {
     CHECK_EQ(editor_len(&ed), 5);
     CHECK(!strcmp(saved(), "ab\r\ncd"));
     CHECK_EQ(ed.limit, 2000);
+    CHECK_EQ(ed.cap, 2000);                 // allocated whole: no growth while typing
     for (int i = 0; i < 2100; i++)
         keys("x");
     CHECK_EQ(editor_len(&ed), 2000);       // the limit holds where EDITOR_MAX_TEXT would not
@@ -619,7 +620,7 @@ TEST(grows_while_typing) {
     for (int i = 0; i < 5000; i++)
         keys(i % 50 == 49 ? "\r" : "q");
     CHECK_EQ(editor_len(&ed), 5000);
-    CHECK(ed.cap >= 5000);
+    CHECK_EQ(ed.cap, (size_t)EDITOR_MAX_TEXT);
     CHECK_EQ(saved()[49], '\n');
     draw();
     CHECK(strstr(t_line(3), "line 101/101") != NULL);

@@ -33,8 +33,10 @@ of up to 128 KB on the console or over SSH, less while the heap has less to spar
   second copy), then runs the editor as a raw-mode shell job (`shell_run_raw()`), sending screen
   updates as the channel's free space allows (`shell_write_space()`).
 - **Memory:** the text may grow to what the heap had free when the file was opened minus a
-  reserve (`HEAP_RESERVE`, 64 KB: what a TLS handshake needs), up to `EDITOR_MAX_TEXT`. A file
-  bigger than that is refused with the size it could take.
+  reserve (`HEAP_RESERVE`, 64 KB: what a TLS handshake needs), up to `EDITOR_MAX_TEXT`. The
+  buffer is allocated at that limit at once, so it never has to grow while typing (a realloc
+  would hold the old and the new block together, and eat the reserve). A file bigger than the
+  limit is refused with the size it could take, as is any file when the limit is under 1 KB.
 - **Screen size:** on start and Ctrl-L it moves the cursor to row and column 999 and asks where it
   is (`ESC [ 6 n`); the answer is the size. The first frame waits up to 0.5 s for it.
 - **Terminal:** the alternate screen, with autowrap off so a wide character can't push a row onto

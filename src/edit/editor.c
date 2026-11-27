@@ -58,27 +58,11 @@ static void move_gap(editor_t *ed, size_t pos) {
     }
 }
 
-// Room for n more bytes, growing the buffer (up to ed->limit) if needed.
-static bool reserve(editor_t *ed, size_t n) {
-    if (ed->gap_end - ed->gap >= n)
-        return true;
-    size_t len = editor_len(ed);
-    if (len + n > ed->limit)
-        return false;
-    size_t cap = ed->cap ? ed->cap : 1024;
-    while (cap - len < n)
-        cap *= 2;
-    if (cap > ed->limit)
-        cap = ed->limit;                    // still enough: len + n <= ed->limit
-    char *b = heap_realloc(HEAP_EDIT, ed->buf, cap);
-    if (!b)
-        return false;
-    size_t tail = ed->cap - ed->gap_end;
-    memmove(b + cap - tail, b + ed->gap_end, tail);
-    ed->buf = b;
-    ed->gap_end = cap - tail;
-    ed->cap = cap;
-    return true;
+// Room for n more bytes. The buffer is allocated at its limit when the editor opens, so it never
+// grows: a realloc would hold the old and the new block at once, twice the text, when the limit
+// (what the heap could spare, see edit.c) was set for one copy.
+static bool reserve(const editor_t *ed, size_t n) {
+    return ed->gap_end - ed->gap >= n;
 }
 
 static bool insert(editor_t *ed, const char *s, size_t n) {
@@ -313,8 +297,7 @@ char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit) {
     ed->limit = limit > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : limit;
     if (len > ed->limit)
         return NULL;
-    // Some room to type into before the first realloc.
-    size_t cap = len + 1024 > ed->limit ? ed->limit : len + 1024;
+    size_t cap = ed->limit;                 // all of it at once: see reserve()
     ed->buf = heap_alloc(HEAP_EDIT, cap ? cap : 1);
     if (!ed->buf)
         return NULL;

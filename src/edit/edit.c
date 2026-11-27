@@ -35,6 +35,7 @@
 // so an editor can't take what SSH and HTTPS need to keep working. The text can grow to what was
 // free beyond it, up to EDITOR_MAX_TEXT.
 #define HEAP_RESERVE    (64 * 1024)
+#define MIN_LIMIT       1024        // an editor that could hold less than this isn't opened
 #define SIZE_WAIT_US    500000      // first frame: wait this long for the terminal's size
 #define SIZE_ANSWER_US  3000000     // a cursor position report later than this isn't the answer
 #define LOG_CHECK_US    1000000     // how often to count held log messages (console)
@@ -54,6 +55,15 @@ typedef struct {
 
 static void put(shell_t *sh, const char *s) {
     sh->io->write(sh->ctx, s, (int)strlen(s));     // raw: no newline translation needed
+}
+
+// A size for a message: whole KB once rounding down loses under a tenth, else bytes.
+static const char *size_text(char *buf, size_t cap, size_t n) {
+    if (n >= 10 * 1024)
+        snprintf(buf, cap, "%lu KB", (unsigned long)(n / 1024));
+    else
+        snprintf(buf, cap, "%lu bytes", (unsigned long)n);
+    return buf;
 }
 
 // --- saving --------------------------------------------------------------------------------------
@@ -146,6 +156,11 @@ static bool edit_step(shell_t *sh, void *arg, bool cancel) {
         // when it locks itself (shell/login.h) with the terminal possibly still there: give
         // that terminal its screen back too, for the password prompt.
         if (!cancel || sh->io->admin) {
+            // A row cut short between passes goes out to its end first, so the terminal never
+            // sees a sequence or character cut by what follows.
+            editor_t *ed = &e->ed;
+            if (ed->row_sent < ed->row_len)
+                sh->io->write(sh->ctx, ed->row + ed->row_sent, (int)(ed->row_len - ed->row_sent));
             // Bottom row, erased, for a terminal without an alternate screen (the prompt goes
             // there); autowrap back on; back to the shell's screen.
             char bye[48];
@@ -219,14 +234,15 @@ static bool stat_file(shell_t *sh, const char *path, bool quiet_missing, bool *e
 // False after saying why; the editor is then free.
 static bool read_file(shell_t *sh, edit_t *e, const char *path, size_t size) {
     size_t limit = text_limit();
-    if (size > limit) {
-        if (size > EDITOR_MAX_TEXT)
-            shell_printf(sh, "edit: %s: too big to edit (%lu bytes, %u KB at most)\n", path,
-                         (unsigned long)size, EDITOR_MAX_TEXT / 1024);
-        else
-            shell_printf(sh, "edit: %s: not enough free memory to edit it (%lu bytes, %lu KB "
-                         "free for the editor)\n", path, (unsigned long)size,
-                         (unsigned long)(limit / 1024));
+    char a[24], b[24];
+    if (size > EDITOR_MAX_TEXT) {
+        shell_printf(sh, "edit: %s: too big to edit (%s, %u KB at most)\n", path,
+                     size_text(a, sizeof(a), size), EDITOR_MAX_TEXT / 1024);
+        return false;
+    }
+    if (size > limit || limit < MIN_LIMIT) {
+        shell_printf(sh, "edit: %s: not enough free memory to edit it (%s, %s free for the "
+                     "editor)\n", path, size_text(a, sizeof(a), size), size_text(b, sizeof(b), limit));
         return false;
     }
     char *fill = editor_open(&e->ed, e->path, size, limit);
@@ -237,6 +253,12 @@ static bool read_file(shell_t *sh, edit_t *e, const char *path, size_t size) {
     if (path) {
         UINT got = 0;
         FRESULT fr = f_open(&e->file, path, FA_READ);
+        if (fr == FR_OK && f_size(&e->file) != size) {      // grown since stat_file() (SFTP, HTTP)
+            f_close(&e->file);
+            shell_printf(sh, "edit: %s: changed while opening, try again\n", path);
+            editor_free(&e->ed);
+            return false;
+        }
         if (fr == FR_OK) {
             fr = f_read(&e->file, fill, (UINT)size, &got);
             f_close(&e->file);
