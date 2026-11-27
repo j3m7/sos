@@ -107,7 +107,7 @@ static void compute_host_fingerprint(const uint8_t *der, uint32_t der_len) {
 // Called in interrupt context too (the server's lwIP callbacks), so nothing is formatted here:
 // the log drops a message above its level before formatting, formats the others once, and
 // defers printing (#105).
-static void log_cb(int priority, const char *format, ...) {
+static __attribute__((format(printf, 2, 3))) void log_cb(int priority, const char *format, ...) {
     va_list ap;
     va_start(ap, format);
     log_vmsg_prefixed(priority, "sshd: ", format, ap);

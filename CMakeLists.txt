@@ -112,6 +112,10 @@ target_sources(sos-ssh INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
 )
 target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+# The server's log formats go to the log module's vsnprintf as they are (#105): have the
+# compiler check each LOG_MSG() against its arguments. (The copied code isn't built with -Wall.)
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
+    PROPERTIES COMPILE_OPTIONS "-Wformat")
 
 # --- SOS firmware ------------------------------------------------------------
 # One directory per subsystem; see src/README.md.
