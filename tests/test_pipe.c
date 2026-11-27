@@ -50,6 +50,15 @@ static size_t card_fail_at;
 static int card_opens, card_closes;
 static int card_dummy;
 
+bool pipe_file_check(shell_t *s, const char *name, char *path, size_t size) {
+    if (card_refuse) {
+        shell_printf(s, "tee: %s: not allowed to change this path\n", name);
+        return false;
+    }
+    snprintf(path, size, "%s", name);
+    return true;
+}
+
 pipe_file_t *pipe_file_open(shell_t *s, const char *path, bool append) {
     if (card_refuse) {
         shell_printf(s, "tee: %s: not allowed to change this path\n", path);
@@ -267,8 +276,27 @@ TEST(tee_parses_its_arguments) {
     CHECK(!open_stages("tee -a a b"));
     CHECK(card_opens == 0);
     CHECK(open_stages("tee -ax"));                  // a path that starts with a dash
+    CHECK(card_opens == 0);                         // nothing opened until output arrives
+    pipe_write(&p, "x", 1);
     CHECK_STR(card_path, "-ax");
     pipe_close(&p);
+    // A later stage that doesn't parse leaves the file alone: it was never opened.
+    card_reset();
+    CHECK(!open_stages("tee /notes | head x"));
+    CHECK(card_opens == 0 && !card_open);
+    // No output at all still makes the file, empty, at the end.
+    card_reset();
+    CHECK(open_stages("tee /empty"));
+    pipe_end(&p);
+    CHECK(card_opens == 1 && card_closes == 1 && card_len == 0);
+    // An error reaches the sink even when a later filter would drop it.
+    card_reset();
+    card_fail_at = 2;
+    CHECK(open_stages("tee /f | grep zzz"));
+    pipe_write(&p, "abc\n", 4);
+    CHECK(p.done);
+    CHECK_STR(out, "tee: /f: card full\n");
+    pipe_end(&p);
     CHECK(pipe_is_stage("tee /f") && pipe_is_stage("tee"));
     CHECK(!pipe_is_stage("teepee"));
     // A refused path stops the line before the command runs, with the permission's message.

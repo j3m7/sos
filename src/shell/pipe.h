@@ -84,9 +84,16 @@ struct pipeline {
 // pipe.c that refuse for want of a card. A handle is opaque to pipe.c.
 typedef struct pipe_file pipe_file_t;
 
-// Resolve `path` against the shell's working directory, check that the shell may write it
-// (the check and message of `echo`) and open it: replaced, or appended to. Holds the card's
-// files (files_hold()) until pipe_file_close(). NULL after printing why ("tee: ...").
+// Resolve `name` against the shell's working directory into `path` (`size` bytes; PIPE_FILE_PATH
+// is enough) and check that the shell may write it (the check and message of `echo`). False
+// after printing why ("tee: ..."). Run when the line is parsed, so a refusal comes before the
+// command runs; the file itself is opened only when output arrives (a typo in a later stage
+// must not truncate it).
+bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size);
+#define PIPE_FILE_PATH 256      // a resolved path (files.c's PATH_LEN)
+
+// Open the checked `path`: replaced, or appended to. Holds the card's files (files_hold()) until
+// pipe_file_close(). NULL after printing why ("tee: ...").
 pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append);
 
 // Write `len` bytes (all of them or an error). NULL when written, else the error as text.

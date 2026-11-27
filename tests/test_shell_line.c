@@ -134,13 +134,17 @@ static bool tee_append, tee_refuse, tee_open_now;
 static int tee_full_at;                     // the write that would pass this size fails (0: never)
 static int tee_dummy;
 
-pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append) {
-    char abs[SHELL_PATH_MAX];
-    if (tee_refuse || !path_resolve(sh->cwd, path, abs, sizeof(abs))) {
-        shell_printf(sh, "tee: %s: not allowed to change this path\n", path);
-        return NULL;
+bool pipe_file_check(shell_t *s, const char *name, char *path, size_t size) {
+    if (tee_refuse || !path_resolve(s->cwd, name, path, size)) {
+        shell_printf(s, "tee: %s: not allowed to change this path\n", name);
+        return false;
     }
-    snprintf(tee_path, sizeof(tee_path), "%s", abs);
+    return true;
+}
+
+pipe_file_t *pipe_file_open(shell_t *s, const char *path, bool append) {
+    (void)s;
+    snprintf(tee_path, sizeof(tee_path), "%s", path);
     tee_append = append;
     tee_open_now = true;
     if (!append)

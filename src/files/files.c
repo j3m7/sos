@@ -324,9 +324,21 @@ struct pipe_file {
     FIL f;
 };
 
+bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
+    char abs[PATH_LEN];
+    if (!resolve(sh, name, abs) || !may_write(sh, "tee", abs))
+        return false;
+    if (strlen(abs) >= size) {
+        shell_printf(sh, "path too long\n");
+        return false;
+    }
+    strcpy(path, abs);
+    return true;
+}
+
 pipe_file_t *pipe_file_open(shell_t *sh, const char *name, bool append) {
     char path[PATH_LEN];
-    if (!resolve(sh, name, path) || !may_write(sh, "tee", path))
+    if (!resolve(sh, name, path))           // checked at parse time; mounts the card again
         return NULL;
     pipe_file_t *pf = heap_zalloc(HEAP_FILES, sizeof(*pf));
     if (!pf) {

@@ -361,6 +361,13 @@ static const pipe_filter_t wc_filter = {"wc", wc_open, wc_write, wc_end, stage_f
 // --- tee [-a] <path> ------------------------------------------------------------------------
 
 // The card side, unless files.c (or a test) supplies it: no card, nothing opens.
+__attribute__((weak)) bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
+    (void)path;
+    (void)size;
+    shell_printf(sh, "tee: %s: no SD card\n", name);
+    return false;
+}
+
 __attribute__((weak)) pipe_file_t *pipe_file_open(shell_t *sh, const char *path, bool append) {
     (void)append;
     shell_printf(sh, "tee: %s: no SD card\n", path);
@@ -381,24 +388,27 @@ __attribute__((weak)) const char *pipe_file_close(pipe_file_t *f) {
 
 typedef struct {
     pipe_stage_t st;
-    pipe_file_t *file;          // NULL once closed (or after a write error)
+    pipe_file_t *file;          // the file, from the first output on; NULL before, and once closed
+    bool append;
+    bool done;                  // closed (the output ended, or a write failed): don't open again
     char path[SHELL_PATH_MAX + 1];  // as typed, for the messages
+    char abs[PIPE_FILE_PATH];   // resolved and checked when the line was parsed
 } tee_t;
 
 static const pipe_filter_t tee_filter;
 
-// Say why, down the line like any output of the command's (there is no stderr; under `| more`
-// it lands in the pager's text, not on top of its frame). Only once the file is closed, so the
-// message isn't written into it.
+// Say why, straight to the sink (the terminal, or the pager's text under `| more`): not down
+// the line, where a later filter could drop it, and not into the file, which is closed by now.
 static void tee_say(tee_t *t, const char *what) {
     char msg[SHELL_PATH_MAX + 80];
     int n = snprintf(msg, sizeof(msg), "tee: %s: %s\n", t->path, what);
     if (n > 0)
-        pipe_emit(&t->st, msg, (size_t)n < sizeof(msg) ? (size_t)n : sizeof(msg) - 1);
+        t->st.pipe->out(t->st.pipe->sh, msg, (size_t)n < sizeof(msg) ? (size_t)n : sizeof(msg) - 1);
 }
 
 // Close the file (once); a failure to write it out is reported unless one was already.
 static void tee_finish(tee_t *t, bool report) {
+    t->done = true;
     if (!t->file)
         return;
     const char *err = pipe_file_close(t->file);
@@ -407,23 +417,35 @@ static void tee_finish(tee_t *t, bool report) {
         tee_say(t, err);
 }
 
+// The file is opened on the first output (or at the end, for an empty output): a line that
+// doesn't parse, or a command that refuses to run, leaves it as it was.
+static const char *tee_put(tee_t *t, const char *buf, size_t len) {
+    if (t->done)
+        return NULL;
+    if (!t->file) {
+        t->file = pipe_file_open(t->st.pipe->sh, t->abs, t->append);
+        if (!t->file)                       // why was printed
+            return "not written";
+    }
+    return len ? pipe_file_write(t->file, buf, len) : NULL;
+}
+
 static void tee_write(pipe_stage_t *st, const char *buf, size_t len) {
     tee_t *t = (tee_t *)st;
-    if (t->file) {
-        const char *err = pipe_file_write(t->file, buf, len);
-        if (err) {                          // once: the file is closed, the line ends
-            tee_finish(t, false);
-            pipe_emit(st, buf, len);        // what the terminal was owed from this write
-            tee_say(t, err);
-            pipe_shut(st);
-            return;
-        }
+    const char *err = tee_put(t, buf, len);
+    pipe_emit(st, buf, len);                // what the sink was owed from this write
+    if (err) {                              // once: the file is closed, the line ends
+        tee_finish(t, false);
+        tee_say(t, err);
+        pipe_shut(st);
     }
-    pipe_emit(st, buf, len);
 }
 
 static void tee_end(pipe_stage_t *st) {
-    tee_finish((tee_t *)st, true);
+    tee_t *t = (tee_t *)st;
+    if (!t->done && !t->file)               // no output at all: the file still gets made, empty
+        tee_put(t, "", 0);
+    tee_finish(t, true);
 }
 
 static void tee_close(pipe_stage_t *st) {
@@ -447,11 +469,11 @@ static pipe_stage_t *tee_open(shell_t *sh, const char *args) {
     tee_t *t = stage_new(sh, &tee_filter, sizeof(tee_t));
     if (!t)
         return NULL;
-    t->file = pipe_file_open(sh, a, append);
-    if (!t->file) {                         // why was printed
+    if (!pipe_file_check(sh, a, t->abs, sizeof(t->abs))) {    // why was printed
         stage_free(&t->st);
         return NULL;
     }
+    t->append = append;
     strcpy(t->path, a);
     return &t->st;
 }
