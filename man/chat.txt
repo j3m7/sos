@@ -8,7 +8,7 @@ DESCRIPTION
     Joins the chat room: shows the last few lines and who is there, then each
     line typed at the 'chat> ' prompt goes to everyone else in the room, as
 
-        [14:03] alice@laptop: hi
+        [14:03 UTC] alice@laptop: hi
 
     Lines typed in the room are sent as they are: unlike a command line
     (QUOTING in 'man intro'), quotes, '|' and '>' in them are plain text.

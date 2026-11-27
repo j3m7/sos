@@ -172,11 +172,11 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
             finished = true;
             break;
         }
-        char date[20];
+        char date[24];
         if (!fi.fdate)      // month 0: an entry not yet written out (files_sync_if_due())
-            snprintf(date, sizeof(date), "%-16s", fi.fattrib & AM_DIR ? "" : "being written");
+            snprintf(date, sizeof(date), "%-20s", fi.fattrib & AM_DIR ? "" : "being written");
         else
-            snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u", (fi.fdate >> 9) + 1980,
+            snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u UTC", (fi.fdate >> 9) + 1980,
                      (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11,
                      (fi.ftime >> 5) & 63);
         if (fi.fattrib & AM_DIR) {
