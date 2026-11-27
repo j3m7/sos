@@ -627,7 +627,9 @@ static bool start_encrypted(shell_t *sh) {
 // A plain card: no layer, and no header copy left behind (f_mkfs overwrites sector 0, not the
 // backup at 4096, which would otherwise make the card look encrypted again).
 static bool start_plain(shell_t *sh) {
-    crypt_free();       // the card was looked at before the format: forget an old card's key now
+    // The card was looked at before the format, which turns the layer on for an encrypted
+    // one: turn it off and forget that card's key now (KIND_ENCRYPTED must not outlive it).
+    crypt_off();
     uint8_t zero[SDCRYPT_SECTOR] = {0};
     if (write_blocks_fed(&card, zero, SDCRYPT_BACKUP, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
         shell_printf(sh, "format failed: couldn't write the card\n");
