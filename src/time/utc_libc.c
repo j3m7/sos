@@ -6,7 +6,7 @@
 // The C library's versions consult the time zone, and its time zone code parses the TZ
 // variable with sscanf(). Two libraries call them: the SD card library stamps files with
 // localtime_r() (get_fattime), and wolfSSH's SFTP server converts file times with both. That
-// chain was the only thing in the image that used scanf, about 8 KB of it (issue #123).
+// chain was the only thing in the image that used scanf, about 10 KB with it (issue #123).
 //
 // The linker is told to send both names here (-Wl,--wrap in CMakeLists.txt), so neither
 // library needs changing. With no TZ set the C library's answers are UTC too, so nothing that

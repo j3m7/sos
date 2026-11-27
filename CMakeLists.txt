@@ -261,7 +261,7 @@ target_compile_definitions(sos PRIVATE
 )
 pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
 # The board keeps UTC: localtime_r() and mktime() go to src/time/utc_libc.c, so the C library's
-# time zone code and the scanf it parses TZ with stay out of the image (about 8 KB).
+# time zone code and the scanf it parses TZ with stay out of the image (about 10 KB).
 target_link_options(sos PRIVATE -Wl,--wrap=localtime_r -Wl,--wrap=mktime)
 pico_add_linker_script_override_path(sos ${CMAKE_CURRENT_SOURCE_DIR}/config/ld
     FILES memory_ram.incl sections_stack.incl section_end.incl)
