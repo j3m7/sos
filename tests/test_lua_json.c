@@ -143,6 +143,9 @@ static void encode_refusals(void) {
     CHECK(holds("local ok, err = pcall(json.encode, print) return not ok and err:find('function')"));
     CHECK(holds("local ok, err = pcall(json.encode, {[{}] = 1}) return not ok and err:find('table key')"));
     CHECK(holds("local ok, err = pcall(json.encode, {[1.5] = 1}) return not ok and err:find('number key')"));
+    CHECK(holds("local ok, err = pcall(json.encode, {[1] = 'a', ['1'] = 'b'}) "
+                "return not ok and err:find('both \"1\"', 1, true)"));
+    CHECK(holds("return json.encode({1, 2, nil, 4}) == '{\"1\":1,\"2\":2,\"4\":4}'"));
     CHECK(holds("local ok, err = pcall(json.encode, 0/0) return not ok and err:find('NaN')"));
     CHECK(holds("local ok, err = pcall(json.encode, 1/0) return not ok and err:find('infinity')"));
     CHECK(holds("local t = {} t.self = t local ok, err = pcall(json.encode, t) "

@@ -297,7 +297,10 @@ went wrong (`"expected ',' or ']' at byte 9"`).
 `sos.json.encode(v)` does the opposite. A table whose keys are exactly 1 to n is an array; any
 other is an object, its keys (strings, or integers written as text) in sorted order, so the same
 table always gives the same text, which matters when the text is signed (`sos.hmac`). An empty
-table is `{}`; there's no way to write an empty array. Floats are written as Lua prints them (14
+table is `{}`; there's no way to write an empty array, and a table with holes (`{1, 2, nil, 4}`)
+is an object (`{"1":1,"2":2,"4":4}`). A table with both the key `1` and the key `"1"` is an error,
+since both would be the member `"1"`. Strings are written as their bytes: one that isn't UTF-8
+gives text that isn't valid JSON (decoding doesn't check UTF-8 either). Floats are written as Lua prints them (14
 significant digits). Functions, NaN, infinities, keys that are neither strings nor integers, and
 tables nested more than 32 deep (which includes a table that contains itself) raise an error.
 `nil` and `sos.json.null` encode as `null`. Decoding is limited to 32 levels too.

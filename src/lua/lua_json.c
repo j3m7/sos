@@ -439,6 +439,9 @@ static void object(enc_t *e, int idx, int depth) {
         lua_rawseti(L, keys, (lua_Integer)++n);
     }
     qsort(k, n, sizeof(json_key_t), key_cmp);
+    for (size_t i = 1; i < n; i++)              // the string "1" and the integer 1, say
+        if (!key_cmp(&k[i - 1], &k[i]))
+            luaL_error(L, "two keys are both \"%s\" in JSON", k[i].s);
     put(e, "{", 1);
     for (size_t i = 0; i < n; i++) {
         if (i)
