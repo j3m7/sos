@@ -508,6 +508,50 @@ TEST(crlf_files_keep_their_line_ends) {
     editor_free(&ed);
 }
 
+TEST(word_skip_and_text_start_and_end) {
+    open_text("foo  bar-baz\n  qux", 5, 40);
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 3u);                // to the end of the word
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 8u);                // past the spaces, to the end of "bar"
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 12u);               // "baz": '-' separates
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 18u);               // across the newline and the indentation
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 18u);               // the end: stays
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 15u);               // to the start of "qux"
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 9u);                // "baz"
+    key(KEY_WORD_LEFT);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    key(KEY_CTRL_END);
+    CHECK_EQ(ed.cursor, 18u);
+    draw();
+    CHECK_EQ(t_row, 1);
+    CHECK_EQ(t_col, 5);
+    key(KEY_CTRL_HOME);
+    CHECK_EQ(ed.cursor, 0u);
+    CHECK(!ed.modified);
+    editor_free(&ed);
+
+    open_text("\xc3\xa9t\xc3\xa9 x", 5, 40);     // été x: a word is whole characters
+    key(KEY_WORD_RIGHT);
+    CHECK_EQ(ed.cursor, 5u);
+    draw();
+    CHECK_EQ(t_col, 3);
+    key(KEY_WORD_RIGHT);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 6u);
+    key(KEY_WORD_LEFT);
+    CHECK_EQ(ed.cursor, 0u);
+    editor_free(&ed);
+}
+
 TEST(find_moves_to_the_next_match) {
     open_text("cat dog\nbird dog\ncat", 6, 40);
     keys("\x06" "dog\r");                   // Ctrl-F dog
@@ -848,6 +892,7 @@ TEST(random_keys_keep_invariants) {
         'a', 'z', ' ', '\r', '\t', 0x7f, 0x04, 0xc3, 0xa9, 0xe2, 0x80, 0xae, 0x1b,
         0xe6, 0xbc, 0xa2, 0xcc, 0x81,       // pieces of a wide character and a combining mark
         KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_HOME, KEY_END, KEY_PGUP, KEY_PGDN, KEY_DELETE,
+        KEY_WORD_LEFT, KEY_WORD_RIGHT, KEY_CTRL_HOME, KEY_CTRL_END,
     };
     static char out[600];
     for (int i = 0; i < 20000; i++) {
@@ -878,6 +923,7 @@ TEST_MAIN(
     RUN(save_and_quit);
     RUN(ctrl_l_redraws_and_asks_for_size);
     RUN(crlf_files_keep_their_line_ends);
+    RUN(word_skip_and_text_start_and_end);
     RUN(find_moves_to_the_next_match);
     RUN(size_limit);
     RUN(open_in_two_steps_with_a_lower_limit);

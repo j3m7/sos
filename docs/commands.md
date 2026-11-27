@@ -179,6 +179,8 @@ at most 400 columns and 200 rows of a bigger window.
 | typing, **Enter**, **Tab** | Insert (UTF-8 text is fine) |
 | **Backspace** / **Delete**, **Ctrl-D** | Delete before / at the cursor |
 | arrows, **Home**/**End** (**Ctrl-A**/**Ctrl-E**), **PgUp**/**PgDn** | Move |
+| **Ctrl-←**/**Ctrl-→** (or **Alt-←**/**Alt-→**, **Alt-B**/**Alt-F**) | A word back / forward (a word is letters, digits, `_` and any non-ASCII text) |
+| **Ctrl-Home**/**Ctrl-End** | Start / end of the text |
 | **Ctrl-S** (or **Ctrl-O**) | Save |
 | **Ctrl-Q** (or **Ctrl-X**) | Quit; with unsaved changes, press it twice |
 | **Ctrl-F** (or **Ctrl-W**) | Find: type the text, **Enter** finds the next match (empty: the last search again), **Ctrl-C** cancels |

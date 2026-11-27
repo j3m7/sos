@@ -416,6 +416,33 @@ static void line_down(editor_t *ed) {
         ed->cursor = pos_at_col(ed, e + 1, ed->want_col);
 }
 
+// A word is letters, digits, '_' and anything non-ASCII (so every byte of a UTF-8 character,
+// marks included, and the move stays on character boundaries); the rest, newlines included,
+// separates words. Right goes to the end of the next word, left to the start of the previous
+// one, as in Emacs and readline.
+static bool word_byte(unsigned char c) {
+    return c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+static void word_right(editor_t *ed) {
+    size_t len = editor_len(ed), p = ed->cursor;
+    while (p < len && !word_byte(at(ed, p)))
+        p++;
+    while (p < len && word_byte(at(ed, p)))
+        p++;
+    ed->cursor = p;
+}
+
+static void word_left(editor_t *ed) {
+    size_t p = ed->cursor;
+    while (p > 0 && !word_byte(at(ed, p - 1)))
+        p--;
+    while (p > 0 && word_byte(at(ed, p - 1)))
+        p--;
+    ed->cursor = p;
+}
+
 static void find_next(editor_t *ed) {
     const char *q = ed->find_len ? ed->find : ed->last_find;
     size_t qn = strlen(q), len = editor_len(ed);
@@ -519,6 +546,18 @@ editor_action_t editor_key(editor_t *ed, int key) {
         break;
     case KEY_RIGHT:
         ed->cursor = next_pos(ed, ed->cursor);
+        break;
+    case KEY_WORD_LEFT:
+        word_left(ed);
+        break;
+    case KEY_WORD_RIGHT:
+        word_right(ed);
+        break;
+    case KEY_CTRL_HOME:
+        ed->cursor = 0;
+        break;
+    case KEY_CTRL_END:
+        ed->cursor = len;
         break;
     case KEY_UP:
         line_up(ed);

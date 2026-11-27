@@ -66,9 +66,36 @@ TEST(vt220_tilde_keys) {
 }
 
 TEST(modifiers_are_ignored) {
-    CHECK_EQ(one("\x1b[1;5C"), KEY_RIGHT);          // Ctrl+Right
+    CHECK_EQ(one("\x1b[1;2C"), KEY_RIGHT);          // Shift+Right
     CHECK_EQ(one("\x1b[1;2A"), KEY_UP);             // Shift+Up
+    CHECK_EQ(one("\x1b[1;5A"), KEY_UP);             // Ctrl+Up
     CHECK_EQ(one("\x1b[3;5~"), KEY_DELETE);         // Ctrl+Delete
+    CHECK_EQ(one("\x1b[1;3H"), KEY_HOME);           // Alt+Home
+    CHECK_EQ(one("\x1b[5;5~"), KEY_PGUP);           // Ctrl+PgUp
+}
+
+TEST(word_and_text_keys) {
+    CHECK_EQ(one("\x1b[1;5C"), KEY_WORD_RIGHT);     // Ctrl+Right (xterm)
+    CHECK_EQ(one("\x1b[1;5D"), KEY_WORD_LEFT);
+    CHECK_EQ(one("\x1b[1;3C"), KEY_WORD_RIGHT);     // Alt+Right
+    CHECK_EQ(one("\x1b[1;7D"), KEY_WORD_LEFT);      // Ctrl+Alt+Left
+    CHECK_EQ(one("\x1b[1;6C"), KEY_WORD_RIGHT);     // Ctrl+Shift+Right
+    CHECK_EQ(one("\x1bOc"), KEY_WORD_RIGHT);        // rxvt
+    CHECK_EQ(one("\x1bOd"), KEY_WORD_LEFT);
+    CHECK_EQ(one("\x1b" "b"), KEY_WORD_LEFT);          // Alt+B, Alt+F (macOS Option+arrows)
+    CHECK_EQ(one("\x1b" "f"), KEY_WORD_RIGHT);
+    CHECK_EQ(one("\x1b[1;5H"), KEY_CTRL_HOME);      // Ctrl+Home, three ways
+    CHECK_EQ(one("\x1b[1;5~"), KEY_CTRL_HOME);
+    CHECK_EQ(one("\x1b[7^"), KEY_CTRL_HOME);
+    CHECK_EQ(one("\x1b[1;5F"), KEY_CTRL_END);
+    CHECK_EQ(one("\x1b[8;5~"), KEY_CTRL_END);
+    CHECK_EQ(one("\x1b[8^"), KEY_CTRL_END);
+    CHECK_EQ(one("\x1b[2^"), KEYS_NONE);            // rxvt Ctrl+Insert: nothing
+    keys_t k = KEYS_INIT;
+    int out[4];
+    CHECK_EQ(feed(&k, "\x1b" "bx", out, 4), 2);        // the key after Alt+B is its own
+    CHECK_EQ(out[0], KEY_WORD_LEFT);
+    CHECK_EQ(out[1], 'x');
 }
 
 TEST(cursor_position_report) {
@@ -188,6 +215,7 @@ TEST_MAIN(
     RUN(ss3_arrows_home_end);
     RUN(vt220_tilde_keys);
     RUN(modifiers_are_ignored);
+    RUN(word_and_text_keys);
     RUN(cursor_position_report);
     RUN(private_sequences_are_not_keys);
     RUN(alt_key_is_dropped);
