@@ -107,6 +107,17 @@ extern lua_req_t lua_req;
 // LR_HTTP_REQUEST packs the headers into data as http_resp_t stores them: "name:value\n" each,
 // names in lower case.
 
+// The LR_HTTP_READ answer that ends the body (len 0) carries the request's timings in data.
+typedef struct {
+    uint32_t headers_ms;            // request started -> headers in
+    uint32_t elapsed_ms;            // request started -> end of the body
+    bool tls;                       // the rest is there (a TLS connection was made)
+    bool dates_unchecked;           // certificate dates skipped: the clock wasn't set
+    uint32_t handshake_us;          // TCP connected -> TLS handshake done
+    uint32_t longest_step_us;       // longest single wolfSSL call
+    uint32_t heap_peak;             // most wolfSSL heap in use at once, in bytes
+} lua_http_stats_t;
+
 // --- output: core 1 writes, core 0 reads -------------------------------------------------------
 
 typedef struct {

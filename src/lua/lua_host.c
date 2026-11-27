@@ -240,6 +240,27 @@ static bool serve_http_request(void) {
     return true;
 }
 
+_Static_assert(sizeof(lua_http_stats_t) <= LUA_REQ_DATA, "the timings must fit in one answer");
+
+static uint32_t clamp_u32(uint64_t v) {
+    return v > UINT32_MAX ? UINT32_MAX : (uint32_t)v;
+}
+
+// The finished request's timings, for the answer that ends its body.
+static void http_stats(lua_http_stats_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->headers_ms = http_headers_ms(http);
+    s->elapsed_ms = http_elapsed_ms(http);
+    const tls_stats_t *ts = http_tls_stats(http);
+    if (ts) {
+        s->tls = true;
+        s->dates_unchecked = ts->dates_unchecked;
+        s->handshake_us = clamp_u32(ts->handshake_us);
+        s->longest_step_us = ts->longest_step_us;
+        s->heap_peak = clamp_u32(ts->heap_peak);
+    }
+}
+
 // Answer LR_HTTP_READ with as much of the body as there is now, up to a full answer.
 static bool serve_http_read(void) {
     if (!http)
@@ -260,7 +281,8 @@ static bool serve_http_read(void) {
         }
         if (st != HTTP_DONE)
             return false;                       // nothing yet
-        http_drop();                            // the end: len 0
+        http_stats((lua_http_stats_t *)(void *)lua_req.data);
+        http_drop();                            // the end: len 0, and the timings
     }
     lua_req.len = got;
     lua_req.result = got;
