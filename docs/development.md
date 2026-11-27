@@ -187,6 +187,33 @@ can't be turned off again
 - If it gets in the way of other work, `glitch off` is fine. Say so in the same place, with
   what it was doing, and leave the setting off rather than lowering the sensitivity silently.
 
+## Test commands: running the heap short
+
+An image configured with `-DSOS_TEST_COMMANDS=ON` (off by default) has two more console
+subcommands, for making the out-of-memory paths happen on a board (issue #188). They take heap
+memory with plain `malloc` and keep it until `mem release`; `mem` counts it under `other` and
+adds a `held:` line.
+
+| Command | What it holds |
+|---|---|
+| `mem hold <KB>` | One more block of that size. Repeat to stack blocks. |
+| `mem hold leave <KB>` | Everything but about `<KB>` of the heap, so any request larger than that fails. |
+| `mem hold holes <count> <KB>` | Everything but `<count>` holes of `<KB>` each, each between two held blocks: `<count> × <KB>` is free, but no single request larger than `<KB>` fits (fragmentation). |
+| `mem release` | Frees all of it. |
+| `mem release first [<seconds>]` | Frees the block held first, now or that many seconds later: memory comes back while a command waits for an answer (the console can't take `mem release` then). |
+
+Each prints what it holds, the bytes left unallocated and the largest block that still fits
+(found by trying allocations). Sizes may have a fraction (`7.5`). The commands work on the
+console only, like configuration changes.
+
+For example, `sd format`'s encrypted path asks for the card's 7.5 KB block only after the
+question, and after its 32 KB work buffer: `mem hold 34`, `sd unmount`, `mem hold leave 3`,
+`mem release first 12`, `sd format`, then wait for the 34 KB to come back before typing `yes`.
+
+With the heap held down, other parts of the system fail too (a new SSH session, a TLS
+connection, the log writer's card retry), so run these from the console and release before
+handing the board on. Don't leave such an image on a board in use.
+
 ## Editor
 
 `.vscode/` configures VS Code to use [clangd](https://clangd.llvm.org/) (extension
