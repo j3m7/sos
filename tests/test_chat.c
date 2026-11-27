@@ -49,6 +49,11 @@ static const shell_io_t io = {
     .name = "ssh", .read = fake_read, .write = fake_write, .crlf = false, .write_space = fake_space,
 };
 
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
+    (void)sh;
+    return NULL;
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     char *args = strchr(cmd, ' ');
     if (args) {

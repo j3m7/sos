@@ -10,8 +10,15 @@ this page is the reference.
 
 ## Line editing
 
-- **Enter** runs the line. **Backspace** deletes. Arrow keys are ignored; there's no history.
-  (For files, there's a full-screen [editor](#editor).)
+- **Enter** runs the line. **Backspace** deletes. (For files, there's a full-screen
+  [editor](#editor).)
+- **Up** and **Down** go through the commands typed in this session; Down past the newest
+  gives back what you were typing. Left and Right are ignored.
+- **Tab** completes the command name, and the subcommand words after it (`time s` Tab Tab
+  lists `sync server`; `wifi st` Tab gives `wifi stats `). When the matches agree no further,
+  the terminal beeps; a second Tab lists them. Words only the console takes are offered only
+  there. File names aren't completed (yet), and Tab does nothing at a password or other
+  question.
 - **Ctrl-C** discards the line, cancels a question (`setup`, `wifi set`, …), or stops a running
   job (`ls`, `cat`, `cp`, a Lua script).
 - **Ctrl-D** on an empty line logs out, like `logout`.
