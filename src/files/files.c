@@ -109,15 +109,15 @@ static bool into_dir(shell_t *sh, const char *src, char *dst) {
     return true;
 }
 
-// Split "a b" into two arguments (names with spaces aren't supported yet).
-static bool two_args(shell_t *sh, char *args, char **a, char **b, const char *usage) {
-    *a = args ? strtok(args, " ") : NULL;
-    *b = *a ? strtok(NULL, " ") : NULL;
-    if (!*a || !*b || strtok(NULL, " ")) {
+// The command's path arguments are its words (a quoted name may hold spaces): between `min`
+// and `max` of them, none empty, or say the usage line and return false.
+static bool path_args(shell_t *sh, int argc, char **argv, int min, int max, const char *usage) {
+    bool ok = argc - 1 >= min && argc - 1 <= max;
+    for (int i = 1; ok && i < argc; i++)
+        ok = *argv[i] != '\0';
+    if (!ok)
         shell_printf(sh, "usage: %s\n", usage);
-        return false;
-    }
-    return true;
+    return ok;
 }
 
 static void job_start(shell_t *sh, shell_job_fn step, void *arg) {
@@ -229,10 +229,6 @@ static void cmd_cd(shell_t *sh, const char *arg) {
 
 static void cmd_mkdir(shell_t *sh, const char *arg) {
     char path[PATH_LEN];
-    if (!arg) {
-        shell_printf(sh, "usage: mkdir <dir>\n");
-        return;
-    }
     if (!resolve(sh, arg, path) || !may_write(sh, "mkdir", path))
         return;
     FRESULT fr = f_mkdir(path);
@@ -242,10 +238,6 @@ static void cmd_mkdir(shell_t *sh, const char *arg) {
 
 static void cmd_rm(shell_t *sh, const char *arg) {
     char path[PATH_LEN];
-    if (!arg) {
-        shell_printf(sh, "usage: rm <file or empty directory>\n");
-        return;
-    }
     if (!resolve(sh, arg, path))
         return;
     size_t len = strlen(path);
@@ -261,10 +253,11 @@ static void cmd_rm(shell_t *sh, const char *arg) {
         shell_printf(sh, "rm: %s: %s\n", arg, files_error(fr));
 }
 
-static void cmd_mv(shell_t *sh, char *args) {
-    char *a, *b, src[PATH_LEN], dst[PATH_LEN];
-    if (!two_args(sh, args, &a, &b, "mv <from> <to>"))
+static void cmd_mv(shell_t *sh, int argc, char **argv) {
+    char src[PATH_LEN], dst[PATH_LEN];
+    if (!path_args(sh, argc, argv, 2, 2, "mv <from> <to>"))
         return;
+    const char *a = argv[1], *b = argv[2];
     if (!resolve(sh, a, src) || !resolve(sh, b, dst) || !into_dir(sh, src, dst) ||
         !may_write(sh, "mv", src) || !may_write(sh, "mv", dst))
         return;
@@ -378,14 +371,6 @@ void files_cat(shell_t *sh, const char *who, const char *arg) {
     job_start(sh, cat_step, j);
 }
 
-static void cmd_cat(shell_t *sh, const char *arg) {
-    if (!arg) {
-        shell_printf(sh, "usage: cat <file>\n");
-        return;
-    }
-    files_cat(sh, "cat", arg);
-}
-
 // --- cp ----------------------------------------------------------------------------------------
 
 typedef struct {
@@ -438,10 +423,11 @@ static bool cp_step(shell_t *sh, void *arg, bool cancel) {
     return job_done(j);
 }
 
-static void cmd_cp(shell_t *sh, char *args) {
-    char *a, *b, src[PATH_LEN];
-    if (!two_args(sh, args, &a, &b, "cp <from> <to>"))
+static void cmd_cp(shell_t *sh, int argc, char **argv) {
+    char src[PATH_LEN];
+    if (!path_args(sh, argc, argv, 2, 2, "cp <from> <to>"))
         return;
+    const char *a = argv[1], *b = argv[2];
     cp_job_t *j = heap_alloc(HEAP_FILES, sizeof(*j));
     if (!j) {
         shell_printf(sh, "cp: out of memory\n");
@@ -505,23 +491,44 @@ complete_dir_t shell_list_dir(shell_t *sh, const char *dir, complete_entry_fn fn
     return r;
 }
 
-static void run_ls(shell_t *sh, char *args) { cmd_ls(sh, args); }
-static void run_cd(shell_t *sh, char *args) { cmd_cd(sh, args); }
+// The path commands take their words (shell.h: runv), each path one word.
+static void run_ls(shell_t *sh, int argc, char **argv) {
+    if (path_args(sh, argc, argv, 0, 1, "ls [path]"))
+        cmd_ls(sh, argv[1]);
+}
+
+static void run_cd(shell_t *sh, int argc, char **argv) {
+    if (path_args(sh, argc, argv, 0, 1, "cd [dir]"))
+        cmd_cd(sh, argv[1]);
+}
+
+static void run_cat(shell_t *sh, int argc, char **argv) {
+    if (path_args(sh, argc, argv, 1, 1, "cat <file>"))
+        files_cat(sh, "cat", argv[1]);
+}
+
+static void run_rm(shell_t *sh, int argc, char **argv) {
+    if (path_args(sh, argc, argv, 1, 1, "rm <file or empty directory>"))
+        cmd_rm(sh, argv[1]);
+}
+
+static void run_mkdir(shell_t *sh, int argc, char **argv) {
+    if (path_args(sh, argc, argv, 1, 1, "mkdir <dir>"))
+        cmd_mkdir(sh, argv[1]);
+}
+
 static void run_pwd(shell_t *sh, char *args) { (void)args; shell_printf(sh, "%s\n", sh->cwd); }
-static void run_cat(shell_t *sh, char *args) { cmd_cat(sh, args); }
-static void run_rm(shell_t *sh, char *args) { cmd_rm(sh, args); }
-static void run_mkdir(shell_t *sh, char *args) { cmd_mkdir(sh, args); }
 
 const shell_cmd_t files_commands[] = {
-    {"ls", run_ls, NULL, SHELL_PATH},
-    {"cd", run_cd, NULL, SHELL_PATH | SHELL_DIR},
-    {"pwd", run_pwd, NULL, 0},
-    {"cat", run_cat, NULL, SHELL_PATH},
-    {"cp", cmd_cp, NULL, SHELL_PATH},
-    {"mv", cmd_mv, NULL, SHELL_PATH},
-    {"rm", run_rm, NULL, SHELL_PATH},
-    {"mkdir", run_mkdir, NULL, SHELL_PATH | SHELL_DIR},
-    {"echo", cmd_echo, NULL, 0},
+    {"ls", NULL, run_ls, NULL, SHELL_PATH},
+    {"cd", NULL, run_cd, NULL, SHELL_PATH | SHELL_DIR},
+    {"pwd", run_pwd, NULL, NULL, 0},
+    {"cat", NULL, run_cat, NULL, SHELL_PATH},
+    {"cp", NULL, cmd_cp, NULL, SHELL_PATH},
+    {"mv", NULL, cmd_mv, NULL, SHELL_PATH},
+    {"rm", NULL, run_rm, NULL, SHELL_PATH},
+    {"mkdir", NULL, run_mkdir, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", cmd_echo, NULL, NULL, 0},
     {0},
 };
 

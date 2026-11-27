@@ -124,7 +124,8 @@ static bool endless_job(shell_t *s, void *arg, bool cancel) {
     return !cancel;
 }
 
-static const shell_cmd_t commands[] = {{"job", NULL, NULL, 0}, {"logout", NULL, NULL, 0}, {0}};
+static const shell_cmd_t commands[] = {
+    {"job", NULL, NULL, NULL, 0}, {"logout", NULL, NULL, NULL, 0}, {0}};
 static const shell_cmd_t *const tables[] = {commands, NULL};
 
 const shell_cmd_t *const *shell_command_tables(const shell_t *s) {   // as shell.c does

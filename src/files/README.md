@@ -80,6 +80,12 @@ FatFs ──► sdcard.c layer ──► driver          physical sector 0     h
 shell's redirect, a quiet `tee`: `pipe_file_*()` here). Each shell has
 its own working directory (`shell_t.cwd`).
 
+- **Arguments:** the path commands take their words (`runv`, shell.h), each path one word, so a
+  quoted or escaped name may hold spaces (`cat 'my file'`, `cp a\ b c`). `path_args()` checks
+  the count (an empty word counts as missing) and prints the command's usage line;
+  `resolve()` makes each word absolute against the working directory. `pwd` and `echo` take the
+  joined text (`run`). `tests/test_files.c` runs them from typed lines over a card in memory.
+
 - **Jobs:** `ls`, `cat` and `cp` run as shell jobs, a bounded amount of work per main-loop pass
   (see `shell/`). Ctrl-C stops them, and a stopped `cp` removes its partial copy.
 - **Open files:** `files_hold()`/`files_release()` count the holders of open files: running

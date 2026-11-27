@@ -1641,7 +1641,10 @@ static const login_hooks_t console_login = {
     failflash_count, failflash_attempt, failflash_clear,    // the count is kept across reboots
 };
 
+static void check_tables(void);
+
 void shell_console_start(shell_t *console) {
+    check_tables();
     if (!console_no_keys() && !settings_console_has_password())
         log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING,
                 "console: no console password is set: the console is open to "
@@ -2255,58 +2258,69 @@ static const shell_word_t mem_words[] = {
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
-    {"help", run_help, NULL, 0},
-    {"?", run_help, NULL, SHELL_HIDDEN},
-    {"uptime", run_uptime, NULL, 0},
-    {"temp", cmd_temp, temp_words, 0},
-    {"power", run_power, NULL, 0},
-    {"version", run_version, NULL, 0},
-    {"time", cmd_time, time_words, 0},
-    {"tls", cmd_tls, tls_words, 0},
-    {"nts", cmd_nts, nts_words, 0},
+    {"help", run_help, NULL, NULL, 0},
+    {"?", run_help, NULL, NULL, SHELL_HIDDEN},
+    {"uptime", run_uptime, NULL, NULL, 0},
+    {"temp", cmd_temp, NULL, temp_words, 0},
+    {"power", run_power, NULL, NULL, 0},
+    {"version", run_version, NULL, NULL, 0},
+    {"time", cmd_time, NULL, time_words, 0},
+    {"tls", cmd_tls, NULL, tls_words, 0},
+    {"nts", cmd_nts, NULL, nts_words, 0},
 #ifdef SOS_TEST_COMMANDS
-    {"mem", run_mem, mem_words, 0},
+    {"mem", run_mem, NULL, mem_words, 0},
 #else
-    {"mem", run_mem, NULL, 0},
+    {"mem", run_mem, NULL, NULL, 0},
 #endif
-    {"net", run_net, NULL, 0},
-    {"ping", ping_command, SHELL_VALUES_OF(ping_hosts), 0},
-    {"ssh", run_ssh, NULL, 0},
-    {"who", chat_cmd_who, NULL, 0},
-    {"wall", chat_cmd_wall, NULL, 0},
-    {"chat", chat_cmd_chat, NULL, 0},
-    {"dmesg", cmd_dmesg, dmesg_words, 0},
-    {"logger", cmd_logger, logger_words, 0},
-    {"log", cmd_log, log_words, 0},
-    {"config", cmd_config, config_words, 0},
-    {"glitch", cmd_glitch, glitch_words, 0},
-    {"bootkey", run_bootkey, NULL, 0},
-    {"rootsecret", run_rootsecret, rootsecret_words, 0},
-    {"key", cmd_key, key_words, 0},
-    {"wifi", cmd_wifi, wifi_words, 0},
-    {"hostname", run_hostname, NULL, 0},
-    {"sd", sdcard_command, sd_words, 0},
-    {"lua", lua_command, lua_words, SHELL_PATH},
-    {"edit", edit_command, NULL, SHELL_PATH},
-    {"more", view_command, NULL, SHELL_PATH},
-    {"man", man_command, SHELL_VALUES_OF(man_topics), 0},
-    {"http", http_command, http_words, 0},
-    {"passwd", run_passwd, NULL, SHELL_ADMIN},
-    {"setup", run_setup, NULL, SHELL_ADMIN},
-    {"logout", run_logout, NULL, 0},
-    {"exit", run_logout, NULL, 0},
-    {"crash", run_crash, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
-    {"grep", run_grep, NULL, SHELL_HIDDEN},     // pipeline stages: Tab offers them after "| "
-    {"head", run_head, NULL, SHELL_HIDDEN},
-    {"tail", run_tail, NULL, SHELL_HIDDEN},
-    {"tee", run_tee, NULL, SHELL_HIDDEN},
-    {"wc", run_wc, NULL, SHELL_HIDDEN},
-    {"reboot", run_reboot, NULL, 0},
+    {"net", run_net, NULL, NULL, 0},
+    {"ping", ping_command, NULL, SHELL_VALUES_OF(ping_hosts), 0},
+    {"ssh", run_ssh, NULL, NULL, 0},
+    {"who", chat_cmd_who, NULL, NULL, 0},
+    {"wall", chat_cmd_wall, NULL, NULL, 0},
+    {"chat", chat_cmd_chat, NULL, NULL, 0},
+    {"dmesg", cmd_dmesg, NULL, dmesg_words, 0},
+    {"logger", cmd_logger, NULL, logger_words, 0},
+    {"log", cmd_log, NULL, log_words, 0},
+    {"config", cmd_config, NULL, config_words, 0},
+    {"glitch", cmd_glitch, NULL, glitch_words, 0},
+    {"bootkey", run_bootkey, NULL, NULL, 0},
+    {"rootsecret", run_rootsecret, NULL, rootsecret_words, 0},
+    {"key", cmd_key, NULL, key_words, 0},
+    {"wifi", cmd_wifi, NULL, wifi_words, 0},
+    {"hostname", run_hostname, NULL, NULL, 0},
+    {"sd", sdcard_command, NULL, sd_words, 0},
+    {"lua", NULL, lua_command, lua_words, SHELL_PATH},
+    {"edit", NULL, edit_command, NULL, SHELL_PATH},
+    {"more", NULL, view_command, NULL, SHELL_PATH},
+    {"man", man_command, NULL, SHELL_VALUES_OF(man_topics), 0},
+    {"http", http_command, NULL, http_words, 0},
+    {"passwd", run_passwd, NULL, NULL, SHELL_ADMIN},
+    {"setup", run_setup, NULL, NULL, SHELL_ADMIN},
+    {"logout", run_logout, NULL, NULL, 0},
+    {"exit", run_logout, NULL, NULL, 0},
+    {"crash", run_crash, NULL, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
+    {"grep", run_grep, NULL, NULL, SHELL_HIDDEN},     // pipeline stages: Tab offers them after "| "
+    {"head", run_head, NULL, NULL, SHELL_HIDDEN},
+    {"tail", run_tail, NULL, NULL, SHELL_HIDDEN},
+    {"tee", run_tee, NULL, NULL, SHELL_HIDDEN},
+    {"wc", run_wc, NULL, NULL, SHELL_HIDDEN},
+    {"reboot", run_reboot, NULL, NULL, 0},
     END};
 #undef W
 #undef END
 
 static const shell_cmd_t *const command_tables[] = {commands, files_commands, NULL};
+
+// Debug builds, once at startup: every command has one handler, and those that take paths take
+// words (shell.h). The host tests check files_commands; this checks commands[] too.
+static void check_tables(void) {
+#ifndef NDEBUG
+    const shell_cmd_t *bad = shell_tables_check(command_tables);
+    if (bad)
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "shell: command `%s` breaks the table rule (one of "
+                "run and runv; runv for SHELL_PATH)", bad->name);
+#endif
+}
 
 const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
     if (sh->io->admin && login_locked())        // nothing to offer before the password
@@ -2324,12 +2338,16 @@ bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
 
 bool shell_execute(shell_t *sh, int argc, char **argv) {
     // The console's lock was checked on the raw line (run_line(), login_gate()).
-    char *cmd = argv[0];
-    char *args = words_join(argc, argv);    // the rest, single-spaced; NULL without any
+    // A `runv` handler gets the words; a `run` handler the rest joined, single-spaced (NULL
+    // without any).
+    const char *cmd = argv[0];
     for (const shell_cmd_t *const *t = command_tables; *t; t++)
         for (const shell_cmd_t *c = *t; c->name; c++)
             if (!strcmp(cmd, c->name)) {
-                c->run(sh, args);
+                if (c->runv)
+                    c->runv(sh, argc, argv);
+                else
+                    c->run(sh, words_join(argc, argv));
                 return true;
             }
     return false;                           // run_line() says so, on the terminal

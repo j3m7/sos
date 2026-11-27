@@ -32,8 +32,9 @@ card after 'man'.
 After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and after a '>' or '>>', Tab
 completes file names on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on inside
 it); cd and mkdir offer directories only. Upper and lower case don't matter, as on the card itself
-(ASCII letters only); names with spaces or control characters aren't offered, and Tab doesn't mount
-the card. In a directory of more than 256 entries it lists what it read and says there is more.
+(ASCII letters only). Names with control characters aren't offered, nor yet names with spaces: type
+those quoted ('cat "my file"'). Tab doesn't mount the card. In a directory of more than 256 entries
+it lists what it read and says there is more.
 
 At the question for a Wi-Fi network's name ('wifi set', 'wifi add', setup), Tab completes the names
 of the networks around, strongest first, and a second Tab lists them with their signal. They come
@@ -48,8 +49,8 @@ again on logout, when the USB terminal disconnects and after 10 minutes with not
 whatever it was running is ended.
 
 Paths given to the file commands are relative to the shell's working directory ('cd', 'pwd') unless
-they start with '/'. The file commands don't take names with spaces yet, but tee and a '>' do,
-quoted.
+they start with '/'. A name with spaces is given quoted or escaped ('cat "my file"', 'cp my\ file
+backup'), to the file commands as to tee and a '>'.
 
 Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a screen at a time, and
 'man <topic>' shows a page in the same viewer. Any command's output can be read that way too: end

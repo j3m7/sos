@@ -32,6 +32,7 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_health.h"
 #include "net/http.h"
+#include "shell/words.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
 
@@ -808,36 +809,42 @@ static void lua_stop(shell_t *sh) {
     __sev();
 }
 
-void lua_command(shell_t *sh, char *args) {
-    if (args && !strcmp(args, "ps")) {
-        lua_ps(sh);
+void lua_command(shell_t *sh, int argc, char **argv) {
+    const char *opt = argc > 1 ? argv[1] : NULL;
+    if (opt && (!strcmp(opt, "ps") || !strcmp(opt, "stop"))) {
+        if (argc != 2)
+            shell_printf(sh, "usage: lua %s\n", opt);
+        else if (!strcmp(opt, "ps"))
+            lua_ps(sh);
+        else
+            lua_stop(sh);
         return;
     }
-    if (args && !strcmp(args, "stop")) {
-        lua_stop(sh);
-        return;
-    }
-    const char *code = NULL, *err;
+    const char *code = NULL, *file = NULL, *err;
     char path[LUA_PATH_MAX];
     bool bg = false;
-    if (args && !strncmp(args, "-e ", 3)) {
-        code = args + 3;
-    } else if (args && !strcmp(args, "-b")) {
-        shell_printf(sh, "usage: lua -b <file>\n");
-        return;
-    } else if (args) {
-        if (!strncmp(args, "-b ", 3)) {
-            bg = true;
-            args += 3;
-            while (*args == ' ')
-                args++;
+    if (opt && !strcmp(opt, "-e")) {
+        // The code is free text: the words after -e, single-spaced (`lua -e print(1 +  1)`), or
+        // one quoted word kept as it is (`lua -e 'print("a  b")'`).
+        code = words_join(argc - 1, argv + 1);
+        if (!code) {
+            shell_printf(sh, "usage: lua -e <code>\n");
+            return;
         }
-        if (!*args || !path_resolve(sh->cwd, args, path, sizeof(path))) {
-            shell_printf(sh, *args ? "lua: path too long\n" : "usage: lua -b <file>\n");
+    } else if (opt) {
+        bg = !strcmp(opt, "-b");
+        file = argv[bg ? 2 : 1];
+        if (argc != (bg ? 3 : 2) || !*file) {
+            shell_printf(sh, bg ? "usage: lua -b <file>\n"
+                                : "usage: lua [<file> | -b <file> | -e <code> | ps | stop]\n");
+            return;
+        }
+        if (!path_resolve(sh->cwd, file, path, sizeof(path))) {
+            shell_printf(sh, "lua: path too long\n");
             return;
         }
     }
-    err = start_job(sh, code, (args && !code) ? path : NULL, sh->cwd, bg);
+    err = start_job(sh, code, file ? path : NULL, sh->cwd, bg);
     if (err) {
         shell_printf(sh, "lua: %s\n", err);
         return;

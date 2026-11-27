@@ -24,8 +24,9 @@ working directory:
   at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **Open files are protected:** a file that a running command has open can't be deleted or
   renamed, and the card can't be formatted or unmounted meanwhile.
-- File names with spaces aren't supported by the commands yet. Files are dated with the system
-  clock (UTC), which comes from the RTC or NTS.
+- A file name with spaces is quoted or escaped, as in a Unix shell: `cat 'my file'`,
+  `cp my\ file backup` (QUOTING in `man intro`). Tab doesn't offer such names yet. Files are
+  dated with the system clock (UTC), which comes from the RTC or NTS.
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
