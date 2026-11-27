@@ -42,11 +42,11 @@
 //   them (it only frees: nothing else is left to do). Without trims there is one repair run.
 // - Every write is one sector (io->write with count 1). A failed read or write stops the repair
 //   at once: FSCK_FAILED, no further write, fsck_repair_why() says which sector.
-// - Stopping after any write leaves the volume no worse: every file reads the same bytes, and a
-//   check reports a subset of the first check's problems, plus "the two FATs differ" (a cut
-//   between the two copies of a FAT write) and lost clusters that are the tails of chains being
-//   trimmed (§10.2: until the tail is freed it is a run of lost clusters). Repair run again then
-//   finishes the job.
+// - Stopping at any write leaves the volume no worse (§10.2): a check reports a subset of the
+//   first check's problems, plus at most (a) a "FAT copies differ" note, and (b) lost clusters
+//   that are the tail of a chain being trimmed: its end mark was written and the tail not yet
+//   freed, which costs space, not data, and running repair again frees it. Every file still
+//   reads the same bytes.
 // - Budget: fsck_repair_step()'s budget counts sectors read and written alike, one unit each.
 //   A write that must follow its read (FSInfo, a FAT sector copied to the second FAT) or the
 //   other copy of a FAT write may go past it, so a step transfers at most budget + 2 sectors and
@@ -134,7 +134,7 @@ bool fsck_plan_writes(const fsck_plan_t *p);
 // (a plain check) fsck.c calls them with NULL and they do nothing. In counting mode they count
 // what a repair would do and write nothing; in writing mode they write what the run allows.
 //
-// exFAT (fsck.c's exFAT walk): the same shape, with hooks still to add in fsck.c's exFAT paths:
+// exFAT (fsck.c's exFAT walk): the same shape, with hooks still to add in its exFAT paths:
 // in the bitmap comparison, bits of lost clusters cleared and bits of clusters reached but free
 // set, a bitmap sector's new state in one write, any set before a clear in that sector (§10.2);
 // trims of FAT chains with the end mark as here (exFAT FAT entries are 32 bits, end mark
