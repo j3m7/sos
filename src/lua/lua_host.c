@@ -32,6 +32,7 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_hash.h"
 #include "lua/lua_health.h"
+#include "lua/lua_net.h"
 #include "net/http.h"
 #include "shell/words.h"
 
@@ -364,6 +365,29 @@ static bool is_http(lua_req_type_t t) {
     return t == LR_HTTP_REQUEST || t == LR_HTTP_READ || t == LR_HTTP_CLOSE;
 }
 
+static bool is_net(lua_req_type_t t) {
+    return t == LR_SCAN || t == LR_RESOLVE || t == LR_PING;
+}
+
+// sos.wifi.scan, sos.net.resolve, sos.ping (lua_net.c): true once answered.
+static bool serve_net(void) {
+    if (lua_job.cancel || !script_alive()) {
+        lua_net_drop();
+        return !req_error("interrupted");
+    }
+    lua_req.path[LUA_PATH_MAX - 1] = '\0';
+    size_t len;
+    const char *err;
+    if (!lua_net_serve(lua_req.type, lua_req.path, lua_req.offset, lua_req.data, LUA_REQ_DATA,
+                       &len, &err))
+        return false;
+    if (err)
+        req_error(err);
+    else
+        lua_req.len = (uint32_t)len;
+    return true;
+}
+
 // Answer the pending request, if it can be answered here and now.
 static void serve(bool main_loop) {
     if (is_http(lua_req.type)) {
@@ -374,6 +398,13 @@ static void serve(bool main_loop) {
         if (!serve_http())
             return;                             // not yet: again next pass
         http_started = false;
+    } else if (is_net(lua_req.type)) {
+        if (!main_loop)
+            return;
+        lua_req.result = 0;
+        lua_req.error[0] = '\0';
+        if (!serve_net())
+            return;
     } else {
         lua_req.result = 0;
         lua_req.error[0] = '\0';
@@ -437,6 +468,7 @@ static void finish(void) {
     script_log_dropped();
     http_drop();
     http_started = false;
+    lua_net_drop();                     // a scan, lookup or ping the script didn't wait out
     lua_hash_drop();                    // one the script didn't finish
     heap_release(HEAP_LUA, owner_code);
     owner_code = NULL;

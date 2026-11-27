@@ -79,6 +79,10 @@ typedef enum {
                                     // message -> after the last step, data/len: the digest
     LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
                                     // error (up for less than LUA_REBOOT_MIN_S)
+    // Like LR_HTTP_*, these take a while and are answered from the main loop once done:
+    LR_SCAN,                        // -> data: lua_info.h records, a list of {ssid, rssi}
+    LR_RESOLVE,                     // path: the name -> data: records {address}
+    LR_PING,                        // path: the host, offset: count -> data: records (stats)
     LR_INFO,                        // offset: a lua_health_table_t, arg: its argument (sos.dmesg's
                                     // cursor) -> data/len: lua_info.h records
     // HTTPS (net/http.h), one request at a time, answered from the main loop once there's
