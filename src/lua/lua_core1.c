@@ -1069,6 +1069,55 @@ static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
 static int l_sd_info(lua_State *L) { return info(L, LH_SD); }
+static int l_who(lua_State *L) { return info(L, LH_WHO); }
+static int l_ssh_status(lua_State *L) { return info(L, LH_SSH); }
+static int l_tls_roots(lua_State *L) { return info(L, LH_TLS); }
+
+// sos.wall(msg): to every shell; returns how many (0: nobody is logged in), or nil and why.
+static int l_wall(lua_State *L) {
+    size_t len;
+    const char *s = luaL_checklstring(L, 1, &len);
+    if (len >= LUA_REQ_DATA)
+        len = LUA_REQ_DATA - 1;
+    lua_req.type = LR_WALL;
+    memcpy(lua_req.data, s, len);
+    lua_req.data[len] = '\0';
+    request();
+    if (lua_req.result < 0)
+        return fail(L);
+    lua_pushinteger(L, (lua_Integer)lua_req.result);
+    return 1;
+}
+
+// sos.clock_sync(): start an NTS sync, as `time sync` does; true, or nil and why. The result shows
+// in sos.clock() once the sync is done.
+static int l_clock_sync(lua_State *L) {
+    lua_req.type = LR_TIMESYNC;
+    request();
+    if (lua_req.result < 0)
+        return fail(L);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sos.random(n): n random bytes (from core 0's DRBG, 4 KB per request).
+static int l_random(lua_State *L) {
+    lua_Integer n = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, n >= 0 && n <= 128 * 1024, 1, "from 0 to 131072 bytes (a script's memory)");
+    luaL_Buffer b;
+    char *out = luaL_buffinitsize(L, &b, (size_t)n);
+    for (lua_Integer at = 0; at < n; at += LUA_REQ_DATA) {
+        lua_Integer k = n - at < LUA_REQ_DATA ? n - at : LUA_REQ_DATA;
+        lua_req.type = LR_RANDOM;
+        lua_req.offset = (uint32_t)k;
+        request();
+        if (lua_req.result < 0)
+            return fail(L);
+        memcpy(out + at, lua_req.data, (size_t)k);
+    }
+    luaL_pushresultsize(&b, (size_t)n);
+    return 1;
+}
 static int l_clock(lua_State *L) { return info(L, LH_CLOCK); }
 static int l_health(lua_State *L) { return info(L, LH_HEALTH); }
 
@@ -1132,6 +1181,14 @@ static const luaL_Reg sd_lib[] = {
     {"info", l_sd_info}, {NULL, NULL},
 };
 
+static const luaL_Reg ssh_lib[] = {
+    {"status", l_ssh_status}, {NULL, NULL},
+};
+
+static const luaL_Reg tls_lib[] = {
+    {"roots", l_tls_roots}, {NULL, NULL},
+};
+
 static const luaL_Reg wifi_lib[] = {
     {"status", l_wifi_status}, {NULL, NULL},
 };
@@ -1143,8 +1200,9 @@ static const luaL_Reg sos_lib[] = {
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
-    {"hmac", l_hmac},     {"health", l_health}, {"rename", l_rename}, {"copy", l_copy},
-    {"stat", l_stat},     {"exists", l_exists}, {NULL, NULL},
+    {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
+    {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
+    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -1301,6 +1359,10 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "wifi");
     luaL_newlib(L, sd_lib);
     lua_setfield(L, -2, "sd");
+    luaL_newlib(L, ssh_lib);
+    lua_setfield(L, -2, "ssh");
+    luaL_newlib(L, tls_lib);
+    lua_setfield(L, -2, "tls");
     luaL_newlib(L, base64_lib);
     lua_setfield(L, -2, "base64");
     luaL_newlib(L, json_lib);

@@ -38,7 +38,11 @@
 #include "core/stackmon.h"
 #include "core/version.h"
 #include "core/wdog.h"
+#include "chat/chat.h"
 #include "files/sdcard.h"
+#include "ssh/sshd.h"
+#include "tls/certstore.h"
+#include "tls/tls_roots.h"
 #include "lua/lua_core1.h"
 #include "net/wifi.h"
 #include "time/rtc.h"
@@ -246,6 +250,70 @@ static void clock_table(lua_info_t *w) {
     lua_info_close(w);
 }
 
+// What `who` lists: one entry per shell, in slot order.
+static void who_table(lua_info_t *w) {
+    chat_peer_t p[CHAT_MAX_PEERS];
+    unsigned n = chat_peers(p, CHAT_MAX_PEERS);
+    for (unsigned i = 0; i < n; i++) {
+        lua_info_open(w, "");
+        lua_info_int(w, "slot", p[i].slot);
+        lua_info_str(w, "name", p[i].name);
+        lua_info_str(w, "from", p[i].from);
+        lua_info_int(w, "seconds", p[i].since_s);
+        lua_info_bool(w, "chat", p[i].in_chat);
+        lua_info_close(w);
+    }
+}
+
+// What `ssh` shows. The sessions are a list: login, address, state, sftp, seconds.
+static void ssh_table(lua_info_t *w) {
+    sshd_info_t s;
+    lua_info_bool(w, "running", sshd_info(&s));
+    if (!s.fingerprint)
+        return;
+    lua_info_str(w, "key_type", s.key_type);
+    lua_info_str(w, "fingerprint", s.fingerprint);
+    lua_info_int(w, "max_sessions", s.max_sessions);
+    lua_info_int(w, "logins", s.logins);
+    lua_info_int(w, "refused_busy", s.refused_busy);
+    lua_info_int(w, "refused_penalty", s.refused_penalty);
+    lua_info_int(w, "dropped_stale", s.dropped_stale);
+    lua_info_open(w, "sessions");
+    for (unsigned i = 0; i < s.max_sessions; i++) {
+        sshd_session_info_t ss;
+        if (!sshd_session(i, &ss))
+            continue;
+        lua_info_open(w, "");
+        lua_info_int(w, "slot", i + 1);
+        lua_info_str(w, "login", ss.login);
+        lua_info_str(w, "address", ss.address);
+        lua_info_str(w, "state", ss.state);
+        lua_info_bool(w, "sftp", ss.sftp);
+        lua_info_int(w, "seconds", ss.seconds);
+        lua_info_close(w);
+    }
+    lua_info_close(w);
+}
+
+// What `tls roots` shows: the built-in roots by name, and the card's file. Reading and checking
+// the file takes what `tls roots` takes (up to CERTSTORE_FILE_MAX from the card, hashed).
+static void tls_table(lua_info_t *w) {
+    lua_info_open(w, "builtin");
+    for (unsigned i = 0; i < tls_root_count; i++)
+        lua_info_str(w, "", tls_roots[i].name);
+    lua_info_close(w);
+    certstore_info_t c;
+    certstore_info(&c);
+    lua_info_open(w, "file");
+    lua_info_str(w, "path", CERTSTORE_FILE);
+    lua_info_str(w, "state", c.state);
+    lua_info_bool(w, "used", c.used);
+    if (c.used)
+        lua_info_int(w, "count", c.count);
+    lua_info_str(w, "why", c.why);
+    lua_info_close(w);
+}
+
 // What `sd info` shows. Counting free space can take a moment on a FAT32 card (exFAT keeps a
 // bitmap); `sd info` does the same from any shell.
 static void sd_table(lua_info_t *w) {
@@ -316,6 +384,9 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_GLITCH:  glitch_table(&w); break;
     case LH_WIFI:    wifi_table(&w); break;
     case LH_CLOCK:   clock_table(&w); break;
+    case LH_WHO:     who_table(&w); break;
+    case LH_SSH:     ssh_table(&w); break;
+    case LH_TLS:     tls_table(&w); break;
     case LH_SD:      sd_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
     case LH_HEALTH:  health_lua_table(&w); break;     // results only: no check is run

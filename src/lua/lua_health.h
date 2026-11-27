@@ -20,6 +20,9 @@ typedef enum {
     LH_GLITCH,                  // sos.glitch()
     LH_WIFI,                    // sos.wifi.status()
     LH_CLOCK,                   // sos.clock()
+    LH_WHO,                     // sos.who()
+    LH_SSH,                     // sos.ssh.status()
+    LH_TLS,                     // sos.tls.roots()
     LH_SD,                      // sos.sd.info()
     LH_DMESG,                   // sos.dmesg(): one page of the log, from cursor `arg`
     LH_HEALTH,                  // sos.health()

@@ -20,6 +20,8 @@
 #include "ff.h"
 #include "lua.h"
 
+#include "chat/chat.h"
+#include "core/random.h"
 #include "core/fault.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -35,6 +37,7 @@
 #include "net/http.h"
 #include "shell/words.h"
 #include "time/timeconv.h"
+#include "time/timesync.h"
 
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
 
@@ -305,6 +308,57 @@ static void serve_hash(void) {
     lua_req.len = (uint32_t)n;
 }
 
+// sos.wall(msg): to every shell, from the script (its tag as the sender). It shares the log's
+// limit of SCRIPT_LOG_PER_SEC, and never waits: a full ring of unread messages is an error.
+static void serve_wall(void) {
+    lua_req.data[LUA_REQ_DATA - 1] = 0;
+    if (!script_alive()) {
+        req_error("the script's session has ended");
+        return;
+    }
+    if (!log_quota_take(&script_quota, SCRIPT_LOG_PER_SEC)) {
+        req_error("more than 10 messages a second");
+        return;
+    }
+    int n = chat_wall_from(job_tag, (const char *)lua_req.data);
+    if (n < 0)
+        req_error("other shells haven't read the last messages yet: try again shortly");
+    else
+        lua_req.result = n;
+}
+
+// sos.time.sync(): as `time sync` (which any shell may run), but at most one started by scripts
+// every LUA_TIMESYNC_MIN_S, so a script in a loop can't hammer the NTS server.
+static void serve_timesync(void) {
+    static uint64_t last_us;
+    static bool started;
+    uint64_t now = time_us_64();
+    if (started && now - last_us < (uint64_t)LUA_TIMESYNC_MIN_S * 1000000) {
+        char msg[sizeof(lua_req.error)];
+        snprintf(msg, sizeof(msg), "a script started one %u s ago (at most one per %u s)",
+                 (unsigned)((now - last_us) / 1000000), (unsigned)LUA_TIMESYNC_MIN_S);
+        req_error(msg);
+        return;
+    }
+    if (!timesync_request_nts()) {
+        req_error("a sync is already running");
+        return;
+    }
+    started = true;
+    last_us = now;
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "%s started a time sync", job_tag);
+}
+
+// sos.random(n): bytes from wolfCrypt's DRBG, seeded by the chip's TRNG (core/random.h).
+static void serve_random(void) {
+    uint32_t n = lua_req.offset;
+    if (n > LUA_REQ_DATA || !random_bytes(NULL, lua_req.data, n)) {
+        req_error("no random bytes");
+        return;
+    }
+    lua_req.len = n;
+}
+
 // sos.sensors, sos.mem, ...: a read-only table (lua_health.c).
 static void serve_info(void) {
     size_t n = lua_req.offset < LH_TABLES
@@ -466,6 +520,9 @@ static void serve(bool main_loop) {
         case LR_RENAME: serve_rename(); break;
         case LR_STAT:   serve_stat(); break;
         case LR_INFO:   serve_info(); break;
+        case LR_WALL:   serve_wall(); break;
+        case LR_TIMESYNC: serve_timesync(); break;
+        case LR_RANDOM: serve_random(); break;
         case LR_REBOOT: serve_reboot(); break;
         case LR_HASH:   serve_hash(); break;
         default:        req_error("unknown request"); break;

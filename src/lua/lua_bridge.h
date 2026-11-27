@@ -26,6 +26,7 @@
 #define LUA_LINE_MAX   256          // one line at the interactive prompt (SHELL_LINE_MAX)
 #define LUA_REBOOT_MIN_S 600        // sos.reboot() is refused before the board has been up this long
 #define LUA_REBOOT_WHY_MAX 100      // the most of sos.reboot()'s reason that's logged
+#define LUA_TIMESYNC_MIN_S 300      // sos.time.sync(): at most one sync started per 5 minutes
 
 // --- one script at a time -------------------------------------------------------------------
 
@@ -82,6 +83,9 @@ typedef enum {
                                     // message -> after the last step, data/len: the digest
     LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
                                     // error (up for less than LUA_REBOOT_MIN_S)
+    LR_WALL,                        // data: the message -> result: the shells it went to
+    LR_TIMESYNC,                    // start an NTS sync (at most one per LUA_TIMESYNC_MIN_S)
+    LR_RANDOM,                      // offset: bytes wanted (up to LUA_REQ_DATA) -> data/len
     LR_INFO,                        // offset: a lua_health_table_t, arg: its argument (sos.dmesg's
                                     // cursor) -> data/len: lua_info.h records
     // HTTPS (net/http.h), one request at a time, answered from the main loop once there's
