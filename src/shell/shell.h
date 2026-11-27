@@ -113,6 +113,7 @@ struct shell {
     bool secret;                // don't echo the answer (passwords)
     bool ask_eof;               // Ctrl-D on an empty line answers SHELL_EOF (see shell_ask_eof)
     shell_ask_complete_fn ask_complete;     // Tab's answers to it (shell_ask_complete); NULL: none
+    bool ask_words;             // ...for its last word only (shell_ask_complete_words)
     // Running job (shell_run_job): stepped by shell_poll; no prompt or command input meanwhile.
     shell_job_fn job;
     void *job_arg;
@@ -181,6 +182,11 @@ void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn ans
 // with their notes. Refused for a secret question: nothing typed at a password prompt is ever
 // completed, listed or rung at. Ends with the question (answered, cancelled, or another asked).
 void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete);
+
+// The same for a question whose answer is free text (a chat line): Tab completes its last word
+// from `complete`'s values, which must be single words, and adds a space after one, as on the
+// command line.
+void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete);
 
 // Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
 // prompt: Ctrl-D on an empty line answers SHELL_EOF ("end of input") instead of logging out.

@@ -16,6 +16,9 @@ DESCRIPTION
         /quit         leave (so do Ctrl-C, and Ctrl-D on an empty line)
         //text        send a line that begins with '/'
 
+    Tab completes the word being typed: /who, /quit, or the name of someone in
+    the room (a name with a space in it isn't offered).
+
     Messages are kept only in memory (the last 16), never in the log or on the
     card. See 'wall' for how messages arrive and what happens to a reader who
     falls behind.

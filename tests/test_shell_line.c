@@ -1638,6 +1638,25 @@ TEST(tab_never_completes_a_secret_question) {
     CHECK_EQ(sh.line_len, 1);
 }
 
+TEST(tab_question_completes_the_last_word_when_asked_to) {
+    start_ask(&io_plain);
+    ssids_partial = false;
+    shell_ask(&sh, "> ", false, on_answer, NULL);
+    shell_ask_complete_words(&sh, t_ssids);          // single words only: "Cafe" here
+    type("at the C\t");
+    CHECK(line_is("at the Cafe "));                  // a word gets a space
+    type("H\t");                                     // Home Net, Hotel Guest: not one word
+    CHECK_OUT("at the Cafe H\a");
+    start_ask(&io_plain);
+    ssids_calls = 0;
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    shell_ask_complete_words(&sh, t_ssids);          // refused, like shell_ask_complete
+    CHECK(sh.ask_complete == NULL);
+    type("C\t");
+    CHECK_OUT("");
+    CHECK_EQ(ssids_calls, 0);
+}
+
 TEST(tab_question_completer_ends_with_the_question) {
     start_ask(&io_plain);
     shell_ask(&sh, "SSID: ", false, on_answer, NULL);
@@ -1820,6 +1839,7 @@ TEST_MAIN(
     RUN(tab_question_answers_hold_spaces);
     RUN(tab_question_list_still_growing);
     RUN(tab_never_completes_a_secret_question);
+    RUN(tab_question_completes_the_last_word_when_asked_to);
     RUN(tab_question_completer_ends_with_the_question);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);

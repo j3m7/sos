@@ -268,6 +268,7 @@ size_t complete_words(const complete_src_t *src, const char *line, size_t len, s
 typedef struct {
     const char *typed;
     size_t len;
+    bool words;
     complete_fn fn;
     void *arg;
     size_t count;
@@ -275,15 +276,23 @@ typedef struct {
 
 static void take_answer(const char *value, const char *note, void *arg) {
     answers_t *a = arg;
-    if (strncmp(value, a->typed, a->len) || !text_ok(value, true) || strlen(value) > SHELL_LINE_MAX)
+    if (strncmp(value, a->typed, a->len) || !text_ok(value, !a->words) ||
+        strlen(value) > SHELL_LINE_MAX)
         return;
-    a->fn(value, '\0', note, a->arg);  // nothing after it: the answer is done, Enter sends it
+    // A whole answer is done once completed (Enter sends it); a word gets a space, as on the
+    // command line.
+    a->fn(value, a->words ? ' ' : '\0', note, a->arg);
     a->count++;
 }
 
 size_t complete_answer(shell_t *sh, shell_ask_complete_fn list, const char *line, size_t len,
-                       complete_fn fn, void *arg, bool *partial) {
-    answers_t a = {line, len, fn, arg, 0};
+                       bool words, size_t *start, complete_fn fn, void *arg, bool *partial) {
+    size_t s = 0;
+    if (words)
+        for (s = len; s > 0 && line[s - 1] != ' '; s--)
+            ;
+    *start = s;
+    answers_t a = {line + s, len - s, words, fn, arg, 0};
     *partial = list(sh, take_answer, &a);
     return a.count;
 }
