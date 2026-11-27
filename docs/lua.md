@@ -64,7 +64,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
-| `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=}` (see [HTTPS](#https)) |
+| `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
 | `sos.http.request(opts)` | any method: `opts.url` and `opts.method` (default `GET`, or `POST` with a body) |
 
@@ -110,6 +110,27 @@ option, a body over `max_body`). Options, all optional except `url` for `request
 The response's `headers` table has lower-case names; a repeated header's values are joined with
 `, `. The body is the server's bytes as they are: a script that prints it prints whatever the
 server sent, escape sequences included.
+
+The response also says how long the request took, for scripts that check a server:
+
+| Field | |
+|---|---|
+| `headers_ms` | from the start of the request (DNS, TCP and TLS included) until the status line and headers were in |
+| `elapsed_ms` | from the start until the end of the body, as the script received it: the body comes to core 1 4 KB per main-loop pass, so a large one adds a few milliseconds per 4 KB |
+| `tls.handshake_ms` | the TLS handshake, from the TCP connection to the handshake done |
+| `tls.longest_step_us` | the longest single wolfSSL call, in microseconds: how long the main loop was held up at most |
+| `tls.heap_peak` | the most heap wolfSSL used at once, in bytes |
+| `tls.dates_unchecked` | `true` if the certificate dates weren't checked because the clock wasn't set |
+
+A request that fails returns `nil` and a message, without timings.
+
+```lua
+local r, err = sos.http.get("https://letsencrypt.org/")
+if r then
+  print(r.status, r.headers_ms .. " ms to headers", r.elapsed_ms .. " ms in all",
+        "handshake " .. r.tls.handshake_ms .. " ms")
+end
+```
 
 ```lua
 local r, err = sos.http.post("https://ntfy.example/alerts", "disk almost full",

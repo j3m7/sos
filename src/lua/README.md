@@ -106,6 +106,9 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   a pending one with "interrupted" at once. `http_request()` keeps a guard in a to-be-closed
   slot, so however the call ends with the body unread (an error, "not enough memory", Ctrl-C,
   `max_body`), it sends `LR_HTTP_CLOSE` and the TLS connection is freed while the script goes on.
+  The `LR_HTTP_READ` answer that ends the body (`len` 0) carries the request's timings and TLS
+  figures (`lua_http_stats_t`), taken just before core 0 frees the request; the script adds
+  them to the response table.
   The exception is a coroutine that dies with an error, which isn't unwound until
   `coroutine.close()`: core 0 then drops the request when the next one starts, when a prompt line
   ends, or when the script ends. The whole body goes into one Lua string, limited by `max_body` (default 32 KB),
