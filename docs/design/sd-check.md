@@ -13,11 +13,11 @@ This note sets the rules so that the phases (§9) can be built without deciding 
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): phases 1 (the FAT32 checker, #223), 2 (exFAT, #232), 3 (`sd check` on the
-device, #226) and 5a (the test-build fault commands, #231) are merged; phase 4 (the fault
-harness and the repairs, `src/files/fsck_repair.c`) is built for FAT32 (in review, #238) and
-exFAT (on top of it), and phase 5b (`sd check fix` on the device, #239) is built on them; the
-board run is to come. Tracking issue: #213.
+Status (2026-11-27): all phases are built and merged: 1 (the FAT32 checker, #223), 2 (exFAT,
+#232), 3 (`sd check` on the device, #226), 4 (the fault harness and FAT32 repair, #238; exFAT
+repair, #249) and 5 (the test-build fault commands, #231; `sd check fix`, #239). The phase 5
+board run was done on dev-1 on 2026-11-27 with an exFAT card. Still owed: the same run on a
+FAT32 card, blocked because `sd format fat32` fails on dev-1's card (#247). Tracking issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
