@@ -1891,6 +1891,72 @@ static void run_reboot(shell_t *sh, char *args) {
     watchdog_reboot(0, 0, 0);
 }
 
+// --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
+
+// `key del <n>`: the trusted keys' numbers, as `key list` shows them, with their comments.
+static void tab_key_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    const sos_config_t *c = settings();
+    char n[4];
+    for (unsigned i = 0; i < c->key_count; i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, c->keys[i].comment, arg);
+    }
+}
+
+// `wifi remove|prefer <n>`: the saved networks' numbers, as `wifi` shows them, with their SSIDs.
+static void tab_wifi_numbers(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    char n[4];
+    config_wifi_net_t net;
+    for (unsigned i = 0; config_wifi_get(settings(), i, &net); i++) {
+        snprintf(n, sizeof(n), "%u", i + 1);
+        fn(n, net.ssid, arg);
+    }
+}
+
+// NTS servers the board knows: the build's default and the one set with `time server`.
+static void nts_servers(shell_value_fn fn, void *arg) {
+    const char *set = settings()->ntp_server;
+    fn(NTS_DEFAULT_SERVER, "default", arg);
+    if (set[0] && strcmp(set, NTS_DEFAULT_SERVER))
+        fn(set, "set with 'time server'", arg);
+}
+
+// `nts ke <host>` and `time server <name>`: those servers; console only, as another host is.
+static void tab_nts_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (sh->io->admin)
+        nts_servers(fn, arg);
+}
+
+static void tab_time_server(shell_t *sh, shell_value_fn fn, void *arg) {
+    if (!sh->io->admin)
+        return;
+    fn("default", NULL, arg);
+    nts_servers(fn, arg);
+}
+
+// `ping <host>`: the NTS servers and the gateway, while Wi-Fi is up.
+static void tab_ping_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    nts_servers(fn, arg);
+    if (!wifi_up())
+        return;
+    char gw[IP4ADDR_STRLEN_MAX] = "";
+    cyw43_arch_lwip_begin();
+    if (netif_default && !ip4_addr_isany_val(*netif_ip4_gw(netif_default)))
+        ip4addr_ntoa_r(netif_ip4_gw(netif_default), gw, sizeof(gw));
+    cyw43_arch_lwip_end();
+    if (gw[0])
+        fn(gw, "gateway", arg);
+}
+
+static const shell_values_t key_numbers = SHELL_VALUES_INIT(tab_key_numbers);
+static const shell_values_t wifi_numbers = SHELL_VALUES_INIT(tab_wifi_numbers);
+static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
+static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
+static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
+
 // The words Tab offers after each command (shell.h): the subcommands its parser takes.
 #define END {0}
 #define W(name) {name, NULL, 0}
@@ -1905,14 +1971,14 @@ static const shell_word_t facilities[] = {
 static const shell_word_t time_words[] = {
     {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, END}, 0},
     {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
-    {"server", (const shell_word_t[]){{"default", NULL, SHELL_ADMIN}, END}, 0},
+    {"server", SHELL_VALUES_OF(time_servers), 0},
     {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
     END};
 static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},
                                      END}, 0},
     END};
-static const shell_word_t nts_words[] = {W("ke"), W("query"), END};
+static const shell_word_t nts_words[] = {{"ke", SHELL_VALUES_OF(nts_hosts), 0}, W("query"), END};
 static const shell_word_t dmesg_words[] = {{"-f", facilities, 0}, END};
 static const shell_word_t logger_words[] = {{"-p", levels, 0}, END};
 static const shell_word_t rotate_words[] = {W("every"), W("at"), END};
@@ -1920,21 +1986,24 @@ static const shell_word_t log_words[] = {
     {"console", levels, SHELL_ADMIN}, {"history", levels, SHELL_ADMIN},
     {"file", levels, SHELL_ADMIN}, {"rotate", rotate_words, SHELL_ADMIN}, END};
 static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
+static const shell_word_t sensitivities[] = {W("0"), W("1"), W("2"), W("3"), END};
 static const shell_word_t glitch_words[] = {
-    {"watch", NULL, SHELL_ADMIN}, {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN},
+    {"watch", sensitivities, SHELL_ADMIN}, {"on", sensitivities, SHELL_ADMIN},
+    {"off", NULL, SHELL_ADMIN},
     {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
 static const shell_word_t rootsecret_words[] = {
     {"forget", NULL, SHELL_ADMIN},
     {"burn", (const shell_word_t[]){W("plan"), W("rehearse"), END}, SHELL_ADMIN},
     END};
 static const shell_word_t key_words[] = {
-    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", NULL, SHELL_ADMIN}, END};
+    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", SHELL_VALUES_OF(key_numbers), SHELL_ADMIN},
+    END};
 static const shell_word_t wifi_words[] = {
     {"stats", (const shell_word_t[]){W("chip"), END}, 0},
     {"set", NULL, SHELL_ADMIN},
     {"add", NULL, SHELL_ADMIN},
-    {"remove", NULL, SHELL_ADMIN},
-    {"prefer", NULL, SHELL_ADMIN},
+    {"remove", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
+    {"prefer", SHELL_VALUES_OF(wifi_numbers), SHELL_ADMIN},
     {"connect", NULL, SHELL_ADMIN},
     {"power", on_off_admin, 0},             // shows the setting anywhere; on|off: console
     {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
@@ -1948,8 +2017,11 @@ static const shell_word_t sd_words[] = {
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
     END};
-static const shell_word_t lua_words[] = {W("-e"), W("-b"), W("ps"), W("stop"), END};
-static const shell_word_t http_words[] = {W("get"), W("head"), W("post"), END};
+static const shell_word_t lua_words[] = {
+    W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
+static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
+static const shell_word_t http_words[] = {
+    {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
 static const shell_word_t man_words[] = {W("install"), END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
@@ -1965,7 +2037,7 @@ static const shell_cmd_t commands[] = {
     {"nts", cmd_nts, nts_words, 0},
     {"mem", run_mem, NULL, 0},
     {"net", run_net, NULL, 0},
-    {"ping", ping_command, NULL, 0},
+    {"ping", ping_command, SHELL_VALUES_OF(ping_hosts), 0},
     {"ssh", run_ssh, NULL, 0},
     {"who", chat_cmd_who, NULL, 0},
     {"wall", chat_cmd_wall, NULL, 0},
@@ -1981,9 +2053,9 @@ static const shell_cmd_t commands[] = {
     {"wifi", cmd_wifi, wifi_words, 0},
     {"hostname", run_hostname, NULL, 0},
     {"sd", sdcard_command, sd_words, 0},
-    {"lua", lua_command, lua_words, 0},
-    {"edit", edit_command, NULL, 0},
-    {"more", view_command, NULL, 0},
+    {"lua", lua_command, lua_words, SHELL_PATH},
+    {"edit", edit_command, NULL, SHELL_PATH},
+    {"more", view_command, NULL, SHELL_PATH},
     {"man", man_command, man_words, 0},
     {"http", http_command, http_words, 0},
     {"passwd", run_passwd, NULL, SHELL_ADMIN},

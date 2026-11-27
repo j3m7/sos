@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "shell/complete.h"
 #include "shell/login.h"
 #include "test.h"
 
@@ -124,6 +125,11 @@ static const shell_cmd_t *const tables[] = {commands, NULL};
 
 const shell_cmd_t *const *shell_command_tables(const shell_t *s) {   // as shell.c does
     return s->io->admin && login_locked() ? NULL : tables;
+}
+
+complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn, void *arg) {
+    (void)s; (void)dir; (void)fn; (void)arg;
+    return COMPLETE_DIR_NONE;
 }
 
 void shell_execute(shell_t *s, char *cmd) {

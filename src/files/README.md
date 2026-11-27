@@ -8,7 +8,8 @@ The SD card library ([no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk
 - **Hardware:** `sdcard.c` supplies the library's hardware configuration (`hw_config.h`):
   SPI0 (SCK GP18, MOSI GP19, MISO GP16, CS GP17) at 25 MHz.
 - **Mounting:** `sdcard_mount()` mounts the card the first time something needs it: a file
-  command, SFTP, or the TLS root certificates.
+  command, SFTP, or the TLS root certificates. Tab completion never mounts it
+  (`sdcard_mounted()`): it lists directories only once the card is mounted.
 - **No card detect:** a swapped card isn't noticed, so run `sd unmount` before removing it.
 - **`sd` command:** card information, a benchmark, and, on the console only, the SPI clock,
   formatting (encrypted unless `plain`; an encrypted format shows the card's key once, at the

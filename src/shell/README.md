@@ -27,6 +27,19 @@ translation (`crlf`), and `admin` (true for the console only).
   rest of it and a space. Several: as far as they agree; when they agree no further, a bell,
   and a second Tab in a row lists them in columns and redraws the line. `SHELL_ADMIN` words
   are offered only on an admin channel, `SHELL_HIDDEN` ones never. Nothing at a question.
+  After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
+  `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
+  main loop waits) for the directory named up to the last `/`, and offers its entries that start
+  with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
+  name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
+  `SHELL_DIR` keeps to directories. `SHELL_REDIRECT` (echo) makes only the text after the line's
+  last `>` a path, a `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space, and
+  a word list that is a `shell_values_t` (`SHELL_VALUES_OF`) comes from a function: key numbers,
+  saved networks, hosts. Those values pass the file-name check; their notes (a key's comment, an
+  SSID) show only in the list, one match a line, through `termtext`. Names that aren't valid
+  UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or hold what
+  `termtext_hidden()` names (bidi controls, invisible characters) are never offered: a file name
+  can't send the terminal an escape sequence, nor look like another.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
@@ -123,6 +136,7 @@ channel but the console.
 
 Add it to `commands[]` and to `help` in `shell.c`, and to `docs/commands.md`. Give it the
 subcommand words its parser takes, so Tab offers them (`SHELL_ADMIN` on those only the console
-may run). If it takes
+may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories), and a
+`shell_values_t` where its values are known only at run time. If it takes
 more than a few milliseconds, make it a job so the watchdog and the other sessions keep running.
 If it changes the configuration or other protected state, call `require_admin()`.

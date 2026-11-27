@@ -369,13 +369,20 @@ DESCRIPTION
     Tab completes the command name and the subcommand words after it ('time s'
     Tab Tab lists 'sync server'; 'wifi st' Tab gives 'wifi stats '). When the
     matches agree no further the terminal beeps, and a second Tab lists them;
-    words only the console takes are offered only there. After a file command
-    (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) Tab completes file names
-    on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on inside
-    it); cd and mkdir offer directories only. Names are matched as typed, names
-    with spaces or control characters aren't offered, and Tab doesn't mount the
-    card. In a directory of more than 256 entries it lists what it read and
-    says there is more. Tab does nothing at a password or other question.
+    words only the console takes are offered only there. Some values are
+    offered too: the sensitivity after 'glitch watch|on', 'https://' after
+    'http get|head|post', the key numbers after 'key del', the saved networks'
+    numbers after 'wifi remove|prefer', the NTS servers after 'nts ke' and
+    'time server', and those and the gateway after 'ping'.
+
+    After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
+    after the '>' or '>>' of echo, Tab completes file names on the SD card
+    ('cat do' Tab gives 'cat docs/', the next Tab goes on inside it); cd and
+    mkdir offer directories only. Upper and lower case don't matter, as on the
+    card itself (ASCII letters only); names with spaces or control characters
+    aren't offered, and Tab doesn't mount the card. In a directory of more
+    than 256 entries it lists what it read and says there is more. Tab does
+    nothing at a password or other question.
 
     The console asks for its password before taking any command, once one is
     set, and locks itself again on logout, when the USB terminal disconnects
