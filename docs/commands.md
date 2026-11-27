@@ -140,7 +140,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | `rm <path>` | any | delete a file or an empty directory ([page](../man/rm.txt)) |
 | `mkdir <dir>` | any | create a directory ([page](../man/mkdir.txt)) |
 | `echo <text>` | any | print text ([page](../man/echo.txt)) |
-| `sd`<br>`sd info`<br>`sd speed [<MHz>]` *(console only to change)*<br>`sd unmount` *(console only)*<br>`sd check` *(console only)*<br>`sd test [<KB> [keep]]` *(console only)*<br>`sd format [exfat \| fat32] [plain]` *(console only)* | any (marked forms: console only) | the SD card: information, speed, unmounting, checks, benchmark, format ([page](../man/sd.txt)) |
+| `sd`<br>`sd info`<br>`sd speed [<MHz>]` *(console only to change)*<br>`sd unmount` *(console only)*<br>`sd check` *(console only)*<br>`sd check fix` *(console only)*<br>`sd test [<KB> [keep]]` *(console only)*<br>`sd format [exfat \| fat32] [plain]` *(console only)* | any (marked forms: console only) | the SD card: information, speed, unmounting, checks, benchmark, format ([page](../man/sd.txt)) |
 
 ## Editor
 

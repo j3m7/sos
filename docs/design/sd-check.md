@@ -15,8 +15,9 @@ reference.
 
 Status (2026-11-27): phases 1 (the FAT32 checker, #223), 2 (exFAT, #232), 3 (`sd check` on the
 device, #226) and 5a (the test-build fault commands, #231) are merged; phase 4's FAT32 part (the
-fault harness and the FAT32 repairs, `src/files/fsck_repair.c`) is in review. exFAT repair and
-phase 5b (`sd check fix` on the device) are to come. Tracking issue: #213.
+fault harness and the FAT32 repairs, `src/files/fsck_repair.c`) is in review, and phase 5b
+(`sd check fix` on the device, FAT32) is built on it, not yet board-tested. exFAT repair is to
+come. Tracking issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
@@ -375,8 +376,12 @@ pass 8/8
    `fsck_repair.h` and §10.1, §10.2). exFAT repair is to come, through the same hooks.
 5. **`sd check fix` on the device:** §10.3's command, the test-build-only fault commands of
    §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults. *5a, the fault
-   commands (`sd fault`, test builds only), is merged (#231)*; 5b, the command itself, is to
-   come.
+   commands (`sd fault`, test builds only), is merged (#231)*. *5b, the command itself, is
+   built* (`cmd_check()` in `sdcard.c`, its words in `src/files/fsck_plan.c`): FAT32 only, with
+   exFAT ending `not repaired: exFAT repair isn't built yet` until exFAT repair drops the plan's
+   refusal. The question ends the job but keeps its memory and the `checking` flag; a question
+   the console drops unanswered (it locked itself) is ended the next time the card is wanted.
+   Board test with `sd fault` to come.
 
 Each phase is a PR that leaves main working. Phases 1, 2 and 4 are host code only. `fsck.c`
 enters the firmware image in phase 3, and repair's code reaches the board in phase 5b.
