@@ -523,5 +523,20 @@ def exfat_image(sectors, part_lba, damage=False):
     return sec
 
 
-for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat):
+# --- tzrule: [year - 1970] then a POSIX TZ rule ------------------------------------------------
+
+def tzrule():
+    with open(os.path.join(HERE, "..", "..", "tz", "zones.bundle"), "rb") as f:
+        rules = sorted({line.split(b" ")[1].strip() for line in f if not line.startswith(b"#")})
+    for i, r in enumerate(rules):                   # each distinct rule the zones use
+        write("tzrule", "bundle-%03d" % i, bytes([56]) + r)
+    write("tzrule", "all-year-dst", bytes([56]) + b"EST5EDT,0/0,J365/25")
+    write("tzrule", "limits", bytes([255]) + b"AAA-24BBB+24,J1/167,J2/-167")
+    write("tzrule", "julian", bytes([58]) + b"AAA0BBB,J60/0,59/-1:30:15")
+    write("tzrule", "negative-dst", bytes([56]) + b"IST-1GMT0,M10.5.0,M3.5.0/1")
+    write("tzrule", "past-24h", bytes([56]) + b"<+05>-5<+06>,J100/100,J300/-100:59:59")
+
+
+for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat,
+          tzrule):
     f()
