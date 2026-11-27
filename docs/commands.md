@@ -117,7 +117,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 
 | Command | Where | What it does |
 |---|---|---|
-| `time`<br>`time sync`<br>`time sync sntp` *(console only)*<br>`time auto [<hours> \| off]` *(console only to change)*<br>`time cal [<ppm> \| off]` *(console only to change)*<br>`time server [<name> \| default]` *(console only to change)* | any (marked forms: console only) | the clock, the RTC and time sync over NTS ([page](../man/time.txt)) |
+| `time`<br>`time sync`<br>`time sync sntp` *(console only)*<br>`time auto [<hours> \| off]` *(console only to change)*<br>`time cal [<ppm> \| off]` *(console only to change)*<br>`time server [<name> \| default]` *(console only to change)*<br>`time zone [<name> \| utc]` *(console only to change)*<br>`time zone list [<prefix>]`<br>`time zone install` | any (marked forms: console only) | the clock, the RTC and time sync over NTS ([page](../man/time.txt)) |
 | `nts`<br>`nts ke`<br>`nts ke <host>` *(console only)*<br>`nts query` | any (marked forms: console only) | NTS state, and its two steps run by hand ([page](../man/nts.txt)) |
 | `tls roots`<br>`tls roots approve` *(console only)*<br>`tls roots forget` *(console only)* | any (marked forms: console only) | the root certificates TLS trusts ([page](../man/tls.txt)) |
 
