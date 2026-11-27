@@ -65,7 +65,48 @@ if (NOT EXISTS "${SDCARD_ROOT}/src/CMakeLists.txt")
     message(FATAL_ERROR "SDCARD_ROOT (${SDCARD_ROOT}) is empty or missing. "
         "Run 'git submodule update --init', or point SDCARD_ROOT at a checkout in local.cmake.")
 endif()
-add_subdirectory(${SDCARD_ROOT}/src ${CMAKE_CURRENT_BINARY_DIR}/sdcard)
+# The library's own CMakeLists.txt builds everything it has. SOS's slot is on SPI (src/files/
+# sdcard.c), so only what that needs is listed here: not the SDIO driver and its PIO program
+# (about 8 KB, with interrupt handlers that were never used), and not the library's crash
+# handler (src/core/fault.c takes the fault vector itself). The few names the SPI side still
+# refers to are in src/files/sd_stubs.c. When the library is updated, compare this list with
+# its src/CMakeLists.txt.
+add_library(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE)
+target_compile_definitions(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+    PICO_MAX_SHARED_IRQ_HANDLERS=8u
+)
+target_sources(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+    ${SDCARD_ROOT}/src/ff15/source/ff.c
+    ${SDCARD_ROOT}/src/ff15/source/ffsystem.c
+    ${SDCARD_ROOT}/src/ff15/source/ffunicode.c
+    ${SDCARD_ROOT}/src/sd_driver/dma_interrupts.c
+    ${SDCARD_ROOT}/src/sd_driver/sd_card.c
+    ${SDCARD_ROOT}/src/sd_driver/sd_timeouts.c
+    ${SDCARD_ROOT}/src/sd_driver/SPI/my_spi.c
+    ${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c
+    ${SDCARD_ROOT}/src/sd_driver/SPI/sd_spi.c
+    ${SDCARD_ROOT}/src/src/crc.c
+    ${SDCARD_ROOT}/src/src/f_util.c
+    ${SDCARD_ROOT}/src/src/ff_stdio.c
+    ${SDCARD_ROOT}/src/src/file_stream.c
+    ${SDCARD_ROOT}/src/src/glue.c
+    ${SDCARD_ROOT}/src/src/my_debug.c
+    ${SDCARD_ROOT}/src/src/my_rtc.c
+    ${SDCARD_ROOT}/src/src/util.c
+)
+target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+    ${SDCARD_ROOT}/src/ff15/source
+    ${SDCARD_ROOT}/src/sd_driver
+    ${SDCARD_ROOT}/src/include
+)
+target_link_libraries(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+    hardware_dma
+    hardware_pio
+    hardware_spi
+    pico_aon_timer
+    pico_stdlib
+    cmsis_core
+)
 
 # Lua 5.4 (lib/lua by default), run on core 1 by src/lua/lua_core1.c.
 if (NOT DEFINED LUA_ROOT)
@@ -165,6 +206,7 @@ set(SOS_SOURCES
     src/edit/screen.c
     src/edit/view.c
     src/man/man.c
+    src/man/man_topic.c
     src/chat/chat.c
     src/net/wifi.c
     src/net/wifi_pick.c
@@ -177,6 +219,7 @@ set(SOS_SOURCES
     src/ssh/hostkey.c
     src/ssh/hostkey_record.c
     src/ssh/sftp_fs.c
+    src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/files.c
     src/files/path.c
@@ -184,6 +227,7 @@ set(SOS_SOURCES
     src/files/cardkey.c
     src/time/rtc.c
     src/time/timeconv.c
+    src/time/utc_libc.c
     src/time/timesync.c
     src/time/nts.c
     src/time/nts_ke.c
@@ -262,6 +306,9 @@ target_compile_definitions(sos PRIVATE
                                     # the SDK default: panic, i.e. halt until the watchdog resets
 )
 pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
+# The board keeps UTC: localtime_r() and mktime() go to src/time/utc_libc.c, so the C library's
+# time zone code and the scanf it parses TZ with stay out of the image (about 10 KB).
+target_link_options(sos PRIVATE -Wl,--wrap=localtime_r -Wl,--wrap=mktime)
 pico_add_linker_script_override_path(sos ${CMAKE_CURRENT_SOURCE_DIR}/config/ld
     FILES memory_ram.incl sections_stack.incl section_end.incl)
 
@@ -326,8 +373,8 @@ else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
 endif()
 
-# The burn image (docs/securing-a-board.md, step 3): the one build that can write a board's
-# root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
+# The burn image (docs/security/design.md, "Writing it"): the one build that can write a
+# board's root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
 # job and replaced by the everyday firmware afterwards. Everyday firmware has no code that
 # programs OTP: the two files below are compiled only here.
 option(SOS_BURN_IMAGE "Build the image that writes the root secret into OTP (permanent)" OFF)

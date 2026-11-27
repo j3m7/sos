@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // The burn image's hardware side: the only code in SOS that can program OTP memory.
-// Compiled only with -DSOS_BURN_IMAGE=ON. See core/rootburn.h and docs/securing-a-board.md.
+// Compiled only with -DSOS_BURN_IMAGE=ON. See core/rootburn.h and docs/security/design.md.
 
 #ifndef SOS_ROOTBURN_BOARD_H
 #define SOS_ROOTBURN_BOARD_H

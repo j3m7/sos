@@ -91,9 +91,10 @@ SYNOPSIS
 DESCRIPTION
     'config' shows what is saved: hostname, whether a console password is set,
     the Wi-Fi networks, the number of trusted keys, the NTS server, the
-    periodic sync and the RTC calibration. Changes made by 'setup', 'wifi',
-    'key', 'hostname', 'time' and 'passwd' are saved in flash immediately,
-    survive reflashing, and only the console can make them.
+    periodic sync, and the RTC and chip temperature calibrations. Changes made
+    by 'setup', 'wifi', 'key', 'hostname', 'time', 'temp cal' and 'passwd' are
+    saved in flash immediately, survive reflashing, and only the console can
+    make them.
 
     The record is stored sealed under a key derived from the board's root
     secret, in two alternating flash sectors with a sequence number and CRC, so
@@ -373,7 +374,8 @@ DESCRIPTION
     offered too: the sensitivity after 'glitch watch|on', 'https://' after
     'http get|head|post', the key numbers after 'key del', the saved networks'
     numbers after 'wifi remove|prefer', the NTS servers after 'nts ke' and
-    'time server', and those and the gateway after 'ping'.
+    'time server', those and the gateway after 'ping', and the pages on the
+    card after 'man'.
 
     After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
     after the '>' or '>>' of echo, Tab completes file names on the SD card
@@ -456,10 +458,12 @@ DESCRIPTION
     Over SSH, ends the session. On the console, locks it: it asks for the
     console password again before taking any command (not possible while no
     password is set). The console also locks itself when the USB terminal
-    disconnects (the terminal program drops DTR or the cable is unplugged) and
-    after 10 minutes with nothing typed; either lock ends whatever the console
-    was running: a copy, 'sd test', a Lua script, the chat, the editor (unsaved
-    text is lost). The command history of the session is wiped.
+    stays disconnected for a second (the terminal program drops DTR or the
+    cable is unplugged; a shorter drop, as around a port being reopened,
+    doesn't lock) and after 10 minutes with nothing typed. Either lock ends
+    whatever the console was running: a copy, 'sd test', a Lua script, the
+    chat, the editor (unsaved text is lost). The command history of the
+    session is wiped.
 
 SEE ALSO
     passwd, intro
@@ -591,7 +595,8 @@ SYNOPSIS
 DESCRIPTION
     'man' lists the pages on the card with a line on each; 'man <topic>' shows
     one in the pager (q quits, h lists the keys, / searches). A topic is a
-    command name ('man wifi'); 'man intro' is a place to start.
+    command name ('man wifi'); 'man intro' is a place to start. Tab after
+    'man' completes the topics of the pages on the card.
 
     The pages live on the SD card as /man/<topic>.txt; the firmware holds
     none. When there are none, 'man' offers to download them. 'man install'
@@ -775,11 +780,18 @@ DESCRIPTION
         reply from 192.168.1.1: seq=1 ttl=64 time=4.2 ms
 
     A request with no reply within the second prints 'seq=2 timeout', and a
-    later reply to it is ignored. Then a summary: sent, received, loss, and
-    the lowest, average and highest round-trip time. A job: Ctrl-C stops it
-    and prints the summary. Every shell can run one at the same time, and the
-    board still answers pings itself meanwhile. Refused while Wi-Fi isn't
-    connected.
+    later reply to it is ignored. If a router or the host sends back an ICMP
+    error about a request instead (destination unreachable, time exceeded),
+    that prints in its place and the request counts as lost:
+
+        error from 192.168.1.1: seq=2 host unreachable
+
+    A host on the LAN that is off or missing sends nothing, so that is still a
+    timeout. Then a summary: sent, received, loss, how many ICMP errors came
+    back, and the lowest, average and highest round-trip time. A job: Ctrl-C
+    stops it and prints the summary. Every shell can run one at the same time,
+    and the board still answers pings itself meanwhile. Refused while Wi-Fi
+    isn't connected.
 
 SEE ALSO
     net, wifi
@@ -988,6 +1000,7 @@ NAME
 
 SYNOPSIS
     temp
+    temp cal [<degrees> | off]          (change: console only)
 
 DESCRIPTION
     The RP2350's own temperature sensor, read every 10 s, with the lowest and
@@ -997,13 +1010,28 @@ DESCRIPTION
     and at least once an hour.
 
     It is the chip's temperature, not the room's: the chip runs warmer than
-    the air, more so under Wi-Fi load. The sensor is uncalibrated and can be a
-    few degrees off, but it is good for change over time on one board. The
-    glitch detector's report ('glitch') includes the last reading before a
-    detector reset.
+    the air, more so under Wi-Fi load. Uncalibrated, the sensor can be a few
+    degrees off, but it is good for change over time on one board. The last
+    line of 'temp' says whether a calibration is set. The glitch detector's
+    report ('glitch') includes the last reading before a detector reset.
+
+    'temp cal <degrees>' calibrates it: give what a thermometer beside the
+    board reads now, in degrees C (e.g. 23.5; -40 to 125). The difference
+    from the sensor's own reading, at most 15 degrees either way, is saved and
+    added to every reading after: 'temp', the log and the glitch detector's
+    reports. 'temp cal' alone shows it; 'temp cal off' removes it, and so does
+    'config reset' ('temp_cal' in a provisioning file sets it).
+
+    To calibrate: leave the board unpowered beside the thermometer for half an
+    hour, power it up, and within a minute of Wi-Fi connecting run 'temp cal'
+    with the thermometer's reading. The chip is already a little warmer than
+    the room by then, so a calibrated reading is closer to the room's
+    temperature as seen from the chip than to the chip's own: don't compare it
+    with the chip's rated maximum. It corrects the offset only, so it is best
+    near the temperature it was set at.
 
 SEE ALSO
-    power, glitch, dmesg
+    power, glitch, config, dmesg
 @@ time
 NAME
     time - the clock, the RTC and time sync over NTS

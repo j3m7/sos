@@ -18,10 +18,13 @@ static bool cut_power;                  // a program is "cut": only half of its 
 static bool silent_program;             // a program reports success and changes nothing
 static bool silent_erase;               // an erase reports success and changes nothing
 
-static const uint8_t *f_read(void *ctx) { (void)ctx; return flash; }
+static bool no_sector;                  // the store has no sector: reads NULL, writes fail
+static const uint8_t *f_read(void *ctx) { (void)ctx; return no_sector ? NULL : flash; }
 static bool f_program(void *ctx, unsigned page, const uint8_t *data) {
     (void)ctx;
     CHECK(page < FAILCOUNT_SECTOR / FAILCOUNT_PAGE);
+    if (no_sector)
+        return false;
     if (fail_program_at == 0) {
         fail_program_at = -1;
         return false;
@@ -40,7 +43,7 @@ static bool f_program(void *ctx, unsigned page, const uint8_t *data) {
 }
 static bool f_erase(void *ctx) {
     (void)ctx;
-    if (fail_erase)
+    if (fail_erase || no_sector)
         return false;
     erases++;
     if (!silent_erase)
@@ -248,6 +251,29 @@ TEST(a_cut_write_leaves_a_sane_count) {
 
 // The flash call itself reports nothing on the board, so a write that didn't take must be
 // found by reading back: it is reported, and the count still goes up in RAM.
+// A board whose firmware image reaches the count's sector has no sector to use (failflash.c):
+// the store reads NULL and refuses writes. The count is zero at boot, goes up in RAM, each
+// attempt reports that it wasn't stored, and nothing is ever read through the NULL.
+TEST(no_sector_counts_in_ram_only) {
+    memset(flash, 0xff, sizeof(flash));
+    no_sector = true;
+    programs = erases = 0;
+    failcount_init(&store);
+    CHECK_EQ(failcount_get(), 0);
+    CHECK(!failcount_attempt());
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 2);
+    CHECK(failcount_clear());           // nothing stored, so nothing to clear in flash
+    CHECK_EQ(failcount_get(), 0);
+    CHECK(!failcount_attempt());
+    CHECK_EQ(failcount_get(), 1);
+    CHECK_EQ(programs, 0);
+    CHECK_EQ(erases, 0);
+    failcount_init(&store);             // a reboot: nothing was kept
+    CHECK_EQ(failcount_get(), 0);
+    no_sector = false;
+}
+
 TEST(a_write_that_did_not_take_is_noticed) {
     fresh();
     CHECK(failcount_attempt());
@@ -345,6 +371,7 @@ TEST_MAIN(
     RUN(write_failures_count_in_ram);
     RUN(a_failed_clear_is_not_a_clear);
     RUN(a_cut_write_leaves_a_sane_count);
+    RUN(no_sector_counts_in_ram_only);
     RUN(a_write_that_did_not_take_is_noticed);
     RUN(a_failed_restart_keeps_the_count);
     RUN(marker_stays);

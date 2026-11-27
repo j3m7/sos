@@ -84,6 +84,8 @@ extern "C"
  * more than it, and OpenSSH's sftp asks for 32 KB. Each request is handled in one main-loop pass,
  * so a 32 KB reply holds the loop while it's encrypted (see README: Files). */
 
+/* The hybrid post-quantum SSH key exchange (mlkem768x25519-sha256). About 30 KB of flash with
+ * SHA-3; why it is on anyway: "Key exchange" in src/ssh/README.md (issue #120). */
 #if __GNUC__ >= 15
 #define WOLFSSL_HAVE_MLKEM
 #define WOLFSSL_WC_MLKEM
@@ -431,15 +433,14 @@ extern time_t ssh_server_my_time(time_t *);
 #undef DEBUG_WOLFSSL
 #undef NO_ERROR_STRINGS
 #ifdef SOS_WOLF_DEBUG
-#if 1
 #define DEBUG_WOLFSSL
 #define DEBUG_WOLFSSH
 #define DEBUG_MLKEM
 #else
-#if 0
+/* wolfSSL's table of error texts stays out (about 20 KB). src/tls/tls.c has its own wording
+ * for the errors a person meets and reports the rest by number. A debug build keeps the
+ * table, since wolfSSL's own log lines use it. */
 #define NO_ERROR_STRINGS
-#endif
-#endif
 #endif
 
 /* ------------------------------------------------------------------------- */

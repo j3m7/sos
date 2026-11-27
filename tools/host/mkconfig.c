@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/sensors.h"
 #include "time/timeconv.h"
 
 // --- parsing -------------------------------------------------------------------------------------
@@ -89,6 +90,14 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         if (!timeconv_parse_ppm(value, &mppm) || !timeconv_cal_steps(mppm, &steps))
             return "must be how fast the RTC runs in ppm, from -277 to 273";
         cfg->rtc_offset = (int8_t)steps;
+        return NULL;
+    }
+    if (!strcmp(name, "temp_cal")) {
+        int tenths;
+        if (!sensors_parse_temp(value, &tenths) || tenths < -CONFIG_TEMP_OFFSET_MAX ||
+            tenths > CONFIG_TEMP_OFFSET_MAX)
+            return "must be the degrees to add to the chip temperature, from -15.0 to 15.0";
+        cfg->temp_offset = (int16_t)tenths;
         return NULL;
     }
     if (!strcmp(name, "glitch_detector")) {

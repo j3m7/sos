@@ -1,7 +1,7 @@
 # Securing dev-1: runbook
 
 Do the steps in order. Each gives a command, what you should see, and when to stop. Why each
-step exists is in [`docs/securing-a-board.md`](../../securing-a-board.md).
+step exists is in [`docs/security/design.md`](../../security/design.md) and [RECORD.md](RECORD.md).
 
 - Board: dev-1, serial `F94525FD61D9A1CC`. **No other board connected.**
 - **PERMANENT** steps write one-time-programmable (OTP) memory and can't be undone.

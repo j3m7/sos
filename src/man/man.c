@@ -34,13 +34,13 @@
 #include "edit/edit.h"
 #include "files/files.h"
 #include "files/sdcard.h"
+#include "man/man_topic.h"
 #include "net/http.h"
+#include "shell/complete.h"
 #include "shell/termtext.h"
 
 #define MAN_DIR         "/man"
-#define MAN_EXT         ".txt"
 #define MAN_NEW_EXT     ".~new"         // a page being downloaded
-#define MAN_TOPIC_MAX   32              // characters in a topic (a command name)
 #define MAN_PAGES_MAX   96              // pages the listing can sort
 #define MAN_HEAD_BYTES  256             // the start of a page: NAME and its description line
 #define MAN_DESC_MAX    64              // description shown in the listing
@@ -56,20 +56,6 @@
     "no manual pages on the card: 'man install' downloads them from GitHub (the board needs\n" \
     "the network), or copy them over SFTP from the repository: tools/man-install.sh <host>\n"
 
-// A topic is a command name: letters, digits, '-' and '_', lower-cased here. Nothing else, so
-// it names a file in /man and nowhere else.
-static bool topic_ok(char *s) {
-    size_t n = strlen(s);
-    if (n == 0 || n > MAN_TOPIC_MAX || !isalnum((unsigned char)s[0]))
-        return false;
-    for (char *p = s; *p; p++) {
-        if (isupper((unsigned char)*p))
-            *p = (char)tolower((unsigned char)*p);
-        if (!isalnum((unsigned char)*p) && *p != '-' && *p != '_')
-            return false;
-    }
-    return true;
-}
 
 static void page_path(char *out, size_t cap, const char *topic, const char *ext) {
     snprintf(out, cap, MAN_DIR "/%s%s", topic, ext);
@@ -83,11 +69,9 @@ static bool have_pages(void) {
         return false;
     FILINFO fi;
     bool found = false;
-    while (!found && f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
-        size_t n = strlen(fi.fname);
-        found = !(fi.fattrib & AM_DIR) && n > strlen(MAN_EXT) &&
-                !strcmp(fi.fname + n - strlen(MAN_EXT), MAN_EXT);
-    }
+    char topic[MAN_TOPIC_MAX + 1];
+    while (!found && f_readdir(&d, &fi) == FR_OK && fi.fname[0])
+        found = !(fi.fattrib & AM_DIR) && man_topic_of(fi.fname, topic, sizeof(topic));
     f_closedir(&d);
     return found;
 }
@@ -180,7 +164,7 @@ static void finish_page(shell_t *sh, install_job_t *j) {
 // The directory is made at the first page, so a download that fails before any leaves none.
 static void start_page(shell_t *sh, install_job_t *j, char *topic) {
     finish_page(sh, j);
-    if (!topic_ok(topic)) {
+    if (!man_topic_ok(topic)) {
         j->skipped++;
         return;
     }
@@ -464,18 +448,15 @@ static bool list_step(shell_t *sh, void *arg, bool cancel) {
                 shell_printf(sh, "manual pages ('man <topic>' shows one; in it, q quits, h lists the keys):\n");
                 return true;
             }
-            size_t n = strlen(fi.fname);
-            if ((fi.fattrib & AM_DIR) || n <= strlen(MAN_EXT) ||
-                strcmp(fi.fname + n - strlen(MAN_EXT), MAN_EXT))
-                continue;
-            fi.fname[n - strlen(MAN_EXT)] = '\0';
-            if (!topic_ok(fi.fname))
+            // The same pages Tab offers: ".txt" in any case (FAT), a topic's name.
+            char topic[MAN_TOPIC_MAX + 1];
+            if ((fi.fattrib & AM_DIR) || !man_topic_of(fi.fname, topic, sizeof(topic)))
                 continue;
             if (j->count == MAN_PAGES_MAX) {
                 j->more = true;
                 continue;
             }
-            strcpy(j->names[j->count++], fi.fname);
+            strcpy(j->names[j->count++], topic);
         }
         return true;
     }
@@ -555,6 +536,26 @@ static void show_page(shell_t *sh, const char *topic) {
     edit_view_file(sh, path, name);
 }
 
+// Tab after `man`: `install`, and the topics of the pages on the card. They come through the
+// file lister (files.c): only while the card is mounted, at most 256 entries.
+typedef struct {
+    shell_value_fn fn;
+    void *arg;
+} man_tab_t;
+
+static void man_tab_entry(const char *name, bool is_dir, void *arg) {
+    man_tab_t *t = arg;
+    char topic[MAN_TOPIC_MAX + 1];
+    if (!is_dir && man_topic_of(name, topic, sizeof(topic)))
+        t->fn(topic, NULL, t->arg);
+}
+
+void man_tab_topics(shell_t *sh, shell_value_fn fn, void *arg) {
+    fn("install", NULL, arg);
+    man_tab_t t = {fn, arg};
+    shell_list_dir(sh, MAN_DIR, man_tab_entry, &t);
+}
+
 void man_command(shell_t *sh, char *args) {
     if (!args || !*args) {
         list_pages(sh);
@@ -564,7 +565,7 @@ void man_command(shell_t *sh, char *args) {
         install(sh);
         return;
     }
-    if (strchr(args, ' ') || !topic_ok(args)) {
+    if (strchr(args, ' ') || !man_topic_ok(args)) {
         shell_printf(sh, "usage: man [<topic>]   a topic is a command name, like 'man wifi'\n"
                          "       man install     download the pages from GitHub\n");
         return;

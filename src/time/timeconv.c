@@ -60,6 +60,17 @@ bool timeconv_from_cal(const timeconv_cal_t *cal, int64_t *t) {
     return true;
 }
 
+int64_t timeconv_from_tm(int year, int mon, int mday, int hour, int min, int sec) {
+    int y = year + 1900 + mon / 12, m = mon % 12;
+    if (m < 0) {
+        m += 12;
+        y--;
+    }
+    // From the first of the month, so a day outside the month carries into the next or the last.
+    return (timeconv_days_from_civil(y, m + 1, 1) + (mday - 1)) * 86400 +
+           (int64_t)hour * 3600 + (int64_t)min * 60 + sec;
+}
+
 // BCD byte (only the bits in mask) -> value, or -1 if a digit is over 9.
 static int bcd_decode(uint8_t b, uint8_t mask) {
     b &= mask;
