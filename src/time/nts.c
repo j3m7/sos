@@ -81,8 +81,18 @@ static struct {
     volatile size_t rx_len;
 } q;
 
-static uint8_t q_rx[NTS_NTP_PACKET_MAX];   // the reply, copied in lwIP context
-static uint8_t q_tx[NTS_NTP_PACKET_MAX];
+// The request and the reply, NTS_NTP_PACKET_MAX bytes each, in one heap block (HEAP_TIME) that
+// exists only during a query: q_begin() allocates it and q_finish() frees it. q_rx is written
+// by q_udp_recv() in lwIP context, which can only run while the query's pcb exists, and
+// q_finish() removes the pcb before it frees the block. Once the request is sent, q_tx is the
+// scratch space the reply is decrypted into.
+static uint8_t *q_rx;                       // the reply, copied in lwIP context
+static uint8_t *q_tx;
+
+static void q_free_buffers(void) {
+    heap_release(HEAP_TIME, q_rx);          // one block: q_tx is its second half
+    q_rx = q_tx = NULL;
+}
 
 // --- AES-SIV-CMAC-256 for nts_ntp.c --------------------------------------------------------------
 
@@ -287,7 +297,7 @@ static void q_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_
     (void)arg;
     (void)pcb;
     if (!q.got && q.state == Q_WAITING && port == q.port && ip_addr_cmp(addr, &q.addr) &&
-        p->tot_len <= sizeof(q_rx)) {
+        p->tot_len <= NTS_NTP_PACKET_MAX) {
         q.rx_len = pbuf_copy_partial(p, q_rx, p->tot_len, 0);
         q.rx_boot_us = time_us_64();
         q.got = true;
@@ -305,7 +315,8 @@ static void q_close_pcb(void) {
 }
 
 static void q_finish(bool ok, const char *why) {
-    q_close_pcb();
+    q_close_pcb();                          // no callback after this: the buffers can go
+    q_free_buffers();
     q.finished_us = time_us_64();
     q.state = ok ? Q_DONE : Q_FAILED;
     if (!ok) {
@@ -321,6 +332,11 @@ static const char *q_begin(void) {
         return "no NTS keys: run 'nts ke' first";
     if (result.cookie_count == 0)
         return "no cookies left: run 'nts ke' again";
+    q_free_buffers();                       // none: the last query freed them when it finished
+    q_rx = heap_alloc(HEAP_TIME, 2 * NTS_NTP_PACKET_MAX);
+    if (!q_rx)
+        return "out of memory";
+    q_tx = q_rx + NTS_NTP_PACKET_MAX;
     memset(&q, 0, sizeof(q));
     snprintf(q.server, sizeof(q.server), "%s", result.server[0] ? result.server : ke.host);
     q.port = result.port ? result.port : NTS_NTP_PORT;
@@ -351,7 +367,7 @@ static void q_send(void) {
     random_bytes(q.uid, sizeof(q.uid));
     random_bytes(nonce, sizeof(nonce));
     random_bytes(q.xmt, sizeof(q.xmt));         // the real send time stays here (RFC 9109)
-    size_t len = nts_ntp_build_request(q_tx, sizeof(q_tx), q.xmt, q.uid, result.cookies[i],
+    size_t len = nts_ntp_build_request(q_tx, NTS_NTP_PACKET_MAX, q.xmt, q.uid, result.cookies[i],
                                        result.cookie_len[i], placeholders, nonce, &aead_c2s);
     memset(result.cookies[i], 0, sizeof(result.cookies[i]));   // a cookie is used only once
     if (!len) {
@@ -386,7 +402,9 @@ static void q_check_reply(void) {
         return;
     }
     const char *why = NULL;
-    nts_ntp_status_t st = nts_ntp_parse_reply(q_rx, q.rx_len, q.xmt, q.uid, &aead_s2c, r, &why);
+    // The request has been sent: its buffer is free to decrypt the reply into.
+    nts_ntp_status_t st = nts_ntp_parse_reply(q_rx, q.rx_len, q.xmt, q.uid, &aead_s2c, q_tx,
+                                              NTS_NTP_PACKET_MAX, r, &why);
     if (st == NTS_NTP_INVALID) {
         // Not ours or not authentic: ignore it and keep waiting, so a forged packet can't
         // end the query.

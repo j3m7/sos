@@ -455,22 +455,12 @@ static void test_line(uint32_t n, char *line) {
     line[TEST_LINE - 1] = '\n';
 }
 
-static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
-    static uint8_t buf[4096];
-    const uint32_t lines_per_block = sizeof(buf) / TEST_LINE;
-    int blocks = size_kb ? atoi(size_kb) / 4 : 64;     // default 256 KB
-    if (blocks < 1 || blocks > 16384 || (keep && strcmp(keep, "keep"))) {
-        shell_printf(sh, "usage: sd test [KB [keep]], 4 to 65536 KB; keep leaves /sos-test.txt\n");
-        return;
-    }
-    // One long call: SSH sessions and the console wait until it's done (up to minutes).
-    if (!sh->io->admin) {
-        shell_printf(sh, "the card test can only be run on the serial console\n");
-        return;
-    }
+#define TEST_BLOCK 4096                 // written and read back at a time
+
+// The test itself, with `buf` (TEST_BLOCK bytes) from cmd_test().
+static void test_run(shell_t *sh, int blocks, const char *keep, uint8_t *buf) {
+    const uint32_t lines_per_block = TEST_BLOCK / TEST_LINE;
     const char *name = "/sos-test.txt";
-    if (!mount(sh))
-        return;
     FIL f;
     FRESULT fr = f_open(&f, name, FA_CREATE_ALWAYS | FA_WRITE);
     if (fr != FR_OK) {
@@ -483,10 +473,10 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
             test_line(i * lines_per_block + l, (char *)buf + l * TEST_LINE);
         UINT bw;
         uint64_t b0 = time_us_64();
-        fr = f_write(&f, buf, sizeof(buf), &bw);
+        fr = f_write(&f, buf, TEST_BLOCK, &bw);
         if (time_us_64() - b0 > worst)
             worst = time_us_64() - b0;
-        if (fr == FR_OK && bw != sizeof(buf))
+        if (fr == FR_OK && bw != TEST_BLOCK)
             fr = FR_DENIED;                 // volume full
         wdog_feed();
     }
@@ -503,7 +493,7 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
     bool ok = fr == FR_OK;
     for (int i = 0; i < blocks && ok; i++) {
         UINT br;
-        ok = f_read(&f, buf, sizeof(buf), &br) == FR_OK && br == sizeof(buf);
+        ok = f_read(&f, buf, TEST_BLOCK, &br) == FR_OK && br == TEST_BLOCK;
         char line[TEST_LINE];
         for (uint32_t l = 0; ok && l < lines_per_block; l++) {
             test_line(i * lines_per_block + l, line);
@@ -521,11 +511,34 @@ static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
         shell_printf(sh, "kept %s\n", name);
     else
         f_unlink(name);
-    unsigned kb = (unsigned)(blocks * sizeof(buf) / 1024);
+    unsigned kb = (unsigned)(blocks * TEST_BLOCK / 1024);
     shell_printf(sh, "write %u KB: %llu ms (%llu KB/s), slowest 4 KB write %llu ms\n", kb,
                  wus / 1000, kb * 1000000ull / wus, worst / 1000);
     shell_printf(sh, "read  %u KB: %llu ms (%llu KB/s), data %s\n", kb, rus / 1000,
                  kb * 1000000ull / rus, ok ? "verified" : "MISMATCH");
+}
+
+static void cmd_test(shell_t *sh, const char *size_kb, const char *keep) {
+    int blocks = size_kb ? atoi(size_kb) / 4 : 64;     // default 256 KB
+    if (blocks < 1 || blocks > 16384 || (keep && strcmp(keep, "keep"))) {
+        shell_printf(sh, "usage: sd test [KB [keep]], 4 to 65536 KB; keep leaves /sos-test.txt\n");
+        return;
+    }
+    // One long call: SSH sessions and the console wait until it's done (up to minutes).
+    if (!sh->io->admin) {
+        shell_printf(sh, "the card test can only be run on the serial console\n");
+        return;
+    }
+    if (!mount(sh))
+        return;
+    // The block is only needed while the test runs, so it isn't kept as a static buffer.
+    uint8_t *buf = heap_alloc(HEAP_FILES, TEST_BLOCK);
+    if (!buf) {
+        shell_printf(sh, "sd test: out of memory\n");
+        return;
+    }
+    test_run(sh, blocks, keep, buf);
+    heap_release(HEAP_FILES, buf);
 }
 
 // Formatting, unmounting or reinitializing the card would break file commands with open files.

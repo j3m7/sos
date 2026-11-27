@@ -73,9 +73,13 @@ typedef enum {
 // Check a reply against the request that was sent (its transmit timestamp and Unique
 // Identifier) and authenticate it with the server-to-client AEAD. Only an NTS_NTP_OK result's
 // fields can be trusted; the caller still checks leap, stratum and the timestamps make sense.
+// `plain` is working space the encrypted part of the reply is opened into, `plain_size` bytes
+// (NTS_NTP_PACKET_MAX holds any reply; a reply whose encrypted part is longer is invalid). It
+// must not overlap `pkt`. What it holds afterwards is of no use to the caller.
 nts_ntp_status_t nts_ntp_parse_reply(const uint8_t *pkt, size_t len, const uint8_t xmt[8],
                                      const uint8_t uid[NTS_NTP_UID_LEN], const nts_aead_t *s2c,
-                                     nts_ntp_reply_t *out, const char **reason);
+                                     uint8_t *plain, size_t plain_size, nts_ntp_reply_t *out,
+                                     const char **reason);
 
 // NTP timestamp (era 0 until 2036, then era 1) <-> microseconds since 1970.
 int64_t nts_ntp_to_unix_us(uint64_t ntp);
