@@ -156,7 +156,8 @@ static health_step_t check_flash(void **state, bool cancel, health_result_t *out
 //     Neumann corrector bypassed is 17; larger is better), the shortest inverter chain;
 //   - the corrector bypassed, so the bits are the oscillator's own; the TRNG's own CRNGT and
 //     autocorrelation tests left on, and their errors counted (hwtest_judge_trng);
-//   - 16 blocks of 192 bits: about 1.3 ms at 150 MHz.
+//   - 16 blocks of 192 bits: about 1.3 ms at 150 MHz; interrupts are off for at most
+//     TRNG_TIMEOUT_US (10 ms), the bound if the TRNG stalls.
 // pico_rand reads the same block (on either core, under PICO_SPINLOCK_ID_RAND, with all checks
 // bypassed and one sample per cycle): this takes the same lock, which also keeps interrupts off,
 // resets the block before and after, and so leaves it as pico_rand finds it after a reset. Its

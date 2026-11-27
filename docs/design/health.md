@@ -409,7 +409,13 @@ test of its output would test the mixing. The check reads the TRNG block itself:
   CRNGT (two equal 16-bit blocks in a row) and autocorrelation tests stay on.
 - **How much:** 16 blocks of 192 bits, 3072 samples: about 1.3 ms at 150 MHz, with interrupts
   off (it holds pico_rand's spin lock, `PICO_SPINLOCK_ID_RAND`, since Lua on core 1 may read
-  the TRNG through pico_rand at the same time). A timeout of 10 ms ends a TRNG that stopped.
+  the TRNG through pico_rand at the same time). A timeout of 10 ms ends a TRNG that stopped,
+  so interrupts are off for at most 10 ms.
+- **A false FAIL** (one in 2^30 per test at the stated H) on a fresh open board's first boot
+  leaves it without a root secret, on the rescue console where `health run` is refused.
+  `reboot` runs the boot tier again and makes the secret once `trng` passes, so it is
+  recoverable. A board that already has its secret is only refused new keys until the next
+  pass.
 - **The tests:** SP 800-90B §4.4 as a startup test, assuming H = 0.5 bit of min-entropy per
   sample and alpha = 2^-30 per test. Repetition Count: cutoff C = 1 + ceil(30 / H) = 61, so a
   run of 61 identical samples fails. Adaptive Proportion over non-overlapping windows of
