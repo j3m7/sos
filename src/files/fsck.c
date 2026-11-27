@@ -657,7 +657,8 @@ static int st_bpb(fsck_t *f) {
     f->res.clusters = f->count;
     f->res.cluster_bytes = f->cbytes;
     f->res.passes = (f->count - 1) / f->win_bits + 1;
-    fsck_fix_volume(f->fix, f->fat_lba, f->fsize, f->nfats, f->nrsv, &f->res.passes);
+    fsck_fix_volume(f->fix, FSCK_KIND_FAT32, f->fat_lba, f->fsize, f->nfats, f->nrsv,
+                    &f->res.passes);
     f->state = ST_BACKUP;
     return R_OK;
 }
@@ -1487,11 +1488,12 @@ static int wk_entry(fsck_t *f) {
     }
 }
 
-// Repair, pass 1: a file's chain longer than the file gets an end mark at the last cluster the
-// file needs (fsck_repair.h).
-static int fix_trim(fsck_t *f) {
-    uint32_t need = f->ent_size ? (f->ent_size - 1) / f->cbytes + 1 : 0, v;
-    int rc = fsck_fix_trim(f->fix, need, f->ch.n);
+// Repair, pass 1: a file's chain longer than the file (of `size` bytes) gets an end mark at the
+// last cluster the file needs (fsck_repair.h).
+static int fix_trim(fsck_t *f, uint64_t size) {
+    uint64_t need = size ? (size - 1) / f->cbytes + 1 : 0;
+    uint32_t v;
+    int rc = fsck_fix_trim(f->fix, need < f->ch.n ? (uint32_t)need : f->ch.n, f->ch.n);
     if (rc != FSCK_FIX_LOAD)
         return fixed(f, rc);
     int r = fat_get(f, f->ch.keep, &v);
@@ -1509,7 +1511,7 @@ static int wk_filechain(fsck_t *f) {
         return R_OK;
     }
     if (f->pass == 1 && f->ent_kind == ENT_FILE && f->ch.status == CH_EOC
-            && (r = fix_trim(f)) != R_OK)
+            && (r = fix_trim(f, f->ent_size)) != R_OK)
         return r;
     if (f->pass == 1) {
         report_chain(f);
@@ -1823,6 +1825,8 @@ static bool xenter_dir(fsck_t *f, const fsck_exfat_set_t *s) {
         return false;
     }
     bool deep = f->depth >= FSCK_DEPTH_MAX;
+    if (deep)
+        fsck_fix_unread(f->fix);
     if (deep && f->pass == 1)
         emit(f, false, "%s: nested more than %d levels deep: not read", path(f),
              FSCK_DEPTH_MAX - 1);
@@ -1903,6 +1907,14 @@ static int wk_xchain(fsck_t *f) {
         stop_walk(f);
         return R_OK;
     }
+    // FatFs reads the cluster a chain breaks on, which isn't counted: its bit mustn't be freed.
+    if (ch->status == CH_FREE || ch->status == CH_BAD || (f->x_enter && ch->status == CH_LOOP))
+        fsck_fix_unread(f->fix);
+    // Repair trims a file's FAT chain (the set being followed is still in the reader).
+    if (f->pass == 1 && ch->status == CH_EOC && f->depth && f->x_sized
+            && f->xd.set.kind == FSCK_EXFAT_FILE && !f->xd.set.dir
+            && (r = fix_trim(f, f->x_len)) != R_OK)
+        return r;
     if (f->pass == 1) {
         report_chain(f);
         if (ch->status == CH_EOC && f->depth && f->x_sized)
@@ -2106,6 +2118,7 @@ static int st_xbpb(fsck_t *f) {
     f->res.clusters = f->count;
     f->res.cluster_bytes = f->cbytes;
     f->res.passes = (f->count - 1) / f->win_bits + 1;
+    fsck_fix_volume(f->fix, FSCK_KIND_EXFAT, f->fat_lba, g->fat_sectors, 1, 0, &f->res.passes);
     // VolumeFlags: as FAT32's entry 1, only what another system left behind.
     if (g->volume_flags & FSCK_EXFAT_FLAG_DIRTY) {
         f->res.dirty = true;
@@ -2257,6 +2270,11 @@ static int st_xcompare(fsck_t *f) {
                           hi - lo);
         while ((kind = fsck_bitcmp_next(&f->cmp, &run)))
             xrun_line(f, kind, &run);
+        r = fixed(f, fsck_fix_bitmap(f->fix, clus_lba(f, f->bm_first) + f->x_k, f->aux,
+                                     (lo - (uint32_t)first) / 8, f->win + (lo - f->win_lo) / 8,
+                                     hi - lo));
+        if (r != R_OK)
+            return r;
         f->x_k++;
     }
     if (f->pass < f->res.passes) {

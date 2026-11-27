@@ -17,6 +17,7 @@ working directory:
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
 | `sd check` | console only, on an unmounted card: check its file system (exFAT or FAT32), reporting problems without writing |
+| `sd check fix` | console only, on an unmounted card: check, show what it would repair, and after `yes` repair what loses no data (FAT32 for now) |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -52,8 +53,8 @@ is open. While it runs, nothing else reaches the card: file commands, SFTP and L
 there's no card, an `http` request works only if the TLS roots were already loaded (they stay
 in memory once read), the log writer keeps its lines in memory,
 and the other `sd` commands say `the card is being checked (sd check)`. It prints one line per
-problem and a summary, which also goes to the log (`sd: check: ...`). It reads only; repair is
-a later command. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
+problem and a summary, which also goes to the log (`sd: check: ...`). It reads only;
+`sd check fix` (below) repairs. Ctrl-C stops it. When it ends the card is left as `sd unmount` leaves it: the
 next file command mounts it again, and the log writer's once-a-minute retry doesn't. The report
 can't be written to a file on the card: `sd check > file` opens the file first, which mounts the
 card, so the check refuses and its "the card is mounted" line is what lands in the file.
@@ -99,6 +100,63 @@ A card has about a million clusters, too many to track at once beside Wi-Fi, TLS
 the clusters are checked a window at a time, one pass over the directory tree per window: 16 KB
 of memory gives 8 passes on a 32 GB card, and less memory more passes (it needs about 11 KB at
 least).
+
+## Repairing the card
+
+`sd check fix` runs the same check, under the same rules (console only, unmounted card, nothing
+else reaches the card until it ends), then shows what it would repair and asks for `yes`, as
+`sd format` does. It repairs only what can't cost data a file still reaches (design:
+[§10 of the design note](design/sd-check.md#10-repair)):
+
+- **lost clusters** are freed;
+- **chains longer than their file** are cut to the file's size, and the rest freed;
+- **a second FAT** that differs from the first gets the first's sectors;
+- **FSInfo's free count** is set to unknown, so the next mount counts free space again.
+
+It never changes cross-linked files, broken or short chains, damaged entries or names, the boot
+sector or the partition table: each needs a choice of whose data wins, which is for a PC and a
+backup. With cross-links anywhere it cuts no chain (`trims skipped: cross-linked files, fix those
+on a PC first`), and when part of the directory tree couldn't be read it frees and cuts nothing,
+as what that part holds would look lost. An empty file that still has clusters is left alone.
+On exFAT the allocation bitmap is what changes: lost clusters' bits are cleared, and clusters a
+file uses but the bitmap calls free are marked in use; a chain that breaks on a free or bad FAT
+entry means nothing is freed or cut, since the cluster it breaks on would look lost.
+
+```
+sd unmount
+sd check fix
+checking FAT32, 7.5 GB, 244096 clusters of 32 KB, encrypted (2 passes)
+pass 1/2
+note: /var/log/messages: 2 clusters for 40000 bytes, chain has 3
+pass 2/2
+lost: clusters 9000-9003 (128 KB)
+1 problem; 128 KB lost, 0 cross-linked
+to repair:
+  free 4 lost clusters (128 KB)
+  trim 1 chain longer than its file, freeing 1 cluster (32 KB)
+  set FSInfo's free count to unknown (counted again at the next mount)
+Cross-links, broken or short chains and damaged entries are only reported.
+Ctrl-C stops the repair: wherever it stops, the card is no worse than before.
+Repair the card? Type 'yes': yes
+repairing (2 passes)
+pass 1/2
+pass 2/2
+checking again (2 passes)
+pass 1/2
+pass 2/2
+repaired: freed 5 clusters (160 KB), trimmed 1 chain, FSInfo's free count set to unknown; 4 sectors written
+after repair: no problems
+```
+
+Anything but `yes` ends it with `not repaired`; a plan with nothing to write ends with
+`nothing to repair`. Repair writes one sector at a time, in an order that keeps the card no
+worse than before wherever it stops (Ctrl-C, a write error, a power cut): files read the same
+bytes, and a check finds what it found before or less, plus at most a "FAT copies differ" note
+and lost clusters at the end of a chain being cut, which `sd check fix` frees when run again. A
+write error stops it at once: `stopped: write error at sector <n>; the card is no worse than
+before (sd check shows what is left)`. A power cut can still leave a half-written sector, which
+no order of writes prevents, so check a card again after one. The plan, what was written and
+the final summary go to the log as `sd: check fix: ...`.
 
 ## Encrypted cards
 
