@@ -16,7 +16,8 @@ write (`grep`, `head`, `tail`, `wc`) are functions of a byte stream and need no 
 own; the only consumer that must run *while* the producer runs is the pager, and it is a raw-mode
 job already. So: filters are plain functions, and the pager steps the producer itself.
 
-Status: design. Nothing here is built. Issues: #182 (this note), one per phase below.
+Status: design. Nothing here is built. Issues: #182 (the investigation), #184 (phase 1),
+#185 (phase 2), #186 (phase 3), #187 (phase 4).
 
 ## 1. What exists today
 
@@ -246,7 +247,7 @@ same capture for `more`.
 
 Each phase is one PR, host tested, then checked on dev-1. Phase 1 stands on its own.
 
-### Phase 1: filters and the parser (issue: "Shell: `grep`, `head`, `tail`, `wc` as pipeline stages")
+### Phase 1: filters and the parser (#184)
 
 Scope:
 - `src/shell/pipe.c`, `pipe.h` as in §3; the four filters.
@@ -273,7 +274,7 @@ Scope:
 Acceptance: `dmesg | grep wifi`, `cat /log/<file> | grep error | more`, `help | wc`, `ls | tail 3`
 work on dev-1 over SSH and on the console; `cat <2 MB file> | head 3` returns at once.
 
-### Phase 2: the pager over a growing text (issue: "Pager: a source that grows")
+### Phase 2: the pager over a growing text (#185)
 
 - `pager_source_t.size` stays, and `pager_grow(pager_t *p, size_t size)` raises it: resets
   `end_top`, `end_top_line`, `lines` (or extends the count if it was finished), marks the frame
@@ -288,7 +289,7 @@ work on dev-1 over SSH and on the console; `cat <2 MB file> | head 3` returns at
 
 No shell changes. Also wanted for tailing log files later.
 
-### Phase 3: streaming `| more` (issue: "Shell: `| more` pages while the command runs")
+### Phase 3: streaming `| more` (#186)
 
 Depends on phases 1 and 2.
 
@@ -311,7 +312,7 @@ Depends on phases 1 and 2.
   signature, or a second entry point `shell_page_growing()`); the chain `job | more` now pages
   before the job ends; `q` cancels the job silently; Ctrl-C stops it and the pager stays.
 
-### Phase 4, decided separately: `> <path>` and `>> <path>` as a sink (issue: "Shell: redirect any command's output to a file")
+### Phase 4, decided separately: `> <path>` and `>> <path>` as a sink (#187)
 
 Today only `echo` has a redirect, parsed in `cmd_echo()` and known to Tab through
 `SHELL_REDIRECT`. The general form is a sink: a `FIL` opened with `files_hold()`, `f_write()`
