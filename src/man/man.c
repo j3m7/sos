@@ -15,7 +15,8 @@
 // firmware was built from, so the pages match the running firmware, or from main if the build
 // isn't a pushed commit (or the commit has no pages yet). Each page is written to
 // /man/<topic>.~new and renamed into place when it is complete, so a download that fails
-// midway leaves the pages before it whole.
+// midway leaves the pages before it whole and drops the one it was on; /man is made at the
+// first page, so a download that fails before any leaves nothing behind.
 
 #include "man/man.h"
 
@@ -43,7 +44,9 @@
 #define MAN_PAGES_MAX   96              // pages the listing can sort
 #define MAN_HEAD_BYTES  256             // the start of a page: NAME and its description line
 #define MAN_DESC_MAX    64              // description shown in the listing
-#define MAN_LIST_LINE   (MAN_TOPIC_MAX + MAN_DESC_MAX + 8)
+// A listing line: 2 spaces, the name, a space, the description (the filter may grow it by a
+// few bytes), CRLF.
+#define MAN_LIST_LINE   (MAN_TOPIC_MAX + MAN_DESC_MAX + 16)
 #define MAN_PER_PASS    4               // pages opened per job step
 #define MAN_REPO        "j3m7/sos"
 #define MAN_URL_FMT     "https://raw.githubusercontent.com/" MAN_REPO "/%s/man/pages.bundle"
@@ -72,13 +75,21 @@ static void page_path(char *out, size_t cap, const char *topic, const char *ext)
     snprintf(out, cap, MAN_DIR "/%s%s", topic, ext);
 }
 
-// Is there a /man directory at all?
-static bool have_dir(void) {
+// Is there at least one page on the card? (A /man directory left empty by a failed download
+// counts as no pages, so the offer to download comes again.)
+static bool have_pages(void) {
     DIR d;
     if (f_opendir(&d, MAN_DIR) != FR_OK)
         return false;
+    FILINFO fi;
+    bool found = false;
+    while (!found && f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
+        size_t n = strlen(fi.fname);
+        found = !(fi.fattrib & AM_DIR) && n > strlen(MAN_EXT) &&
+                !strcmp(fi.fname + n - strlen(MAN_EXT), MAN_EXT);
+    }
     f_closedir(&d);
-    return true;
+    return found;
 }
 
 // --- installing ----------------------------------------------------------------------------------
@@ -95,6 +106,8 @@ typedef struct {
     char hdr[MAN_TOPIC_MAX + 8];            // a line that may be a header, while it comes in
     size_t hdr_len;
     bool in_hdr;
+    bool skip_line;                         // a '@' line too long for hdr: not a page, dropped
+    bool dir_made;                          // /man exists (made at the first page)
     FIL f;
     bool f_open;
     char topic[MAN_TOPIC_MAX + 1];          // the page being written
@@ -102,15 +115,16 @@ typedef struct {
     bool failed;
 } install_job_t;
 
-static void install_ref(install_job_t *j) {
-    // The commit this firmware was built from, if it is one: 12 hex digits.
+// Where the bundle is fetched from: the commit this firmware was built from, if it is one (12
+// hex digits), else main. True if it is the commit.
+static bool bundle_url(char *ref, size_t ref_cap, char *url, size_t url_cap) {
     const char *v = sos_version;
     bool commit = strlen(v) == 12;
     for (const char *p = v; commit && *p; p++)
         commit = isxdigit((unsigned char)*p);
-    snprintf(j->ref, sizeof(j->ref), "%s", commit ? v : "main");
-    j->from_commit = commit;
-    snprintf(j->url, sizeof(j->url), MAN_URL_FMT, j->ref);
+    snprintf(ref, ref_cap, "%s", commit ? v : "main");
+    snprintf(url, url_cap, MAN_URL_FMT, ref);
+    return commit;
 }
 
 static bool install_start(shell_t *sh, install_job_t *j) {
@@ -123,6 +137,17 @@ static bool install_start(shell_t *sh, install_job_t *j) {
     }
     j->shown = false;
     return true;
+}
+
+// The page being written is cut short (the download failed or was stopped): dropped.
+static void drop_page(install_job_t *j) {
+    if (!j->f_open)
+        return;
+    f_close(&j->f);
+    j->f_open = false;
+    char tmp[sizeof(MAN_DIR) + MAN_TOPIC_MAX + sizeof(MAN_NEW_EXT)];
+    page_path(tmp, sizeof(tmp), j->topic, MAN_NEW_EXT);
+    f_unlink(tmp);
 }
 
 // The page being written is complete: into place.
@@ -152,6 +177,7 @@ static void finish_page(shell_t *sh, install_job_t *j) {
 }
 
 // A header line came in: start its page (an unusable topic is skipped: its text goes nowhere).
+// The directory is made at the first page, so a download that fails before any leaves none.
 static void start_page(shell_t *sh, install_job_t *j, char *topic) {
     finish_page(sh, j);
     if (!topic_ok(topic)) {
@@ -159,8 +185,24 @@ static void start_page(shell_t *sh, install_job_t *j, char *topic) {
         return;
     }
     char tmp[sizeof(MAN_DIR) + MAN_TOPIC_MAX + sizeof(MAN_NEW_EXT)];
+    char final[sizeof(MAN_DIR) + MAN_TOPIC_MAX + sizeof(MAN_EXT)];
     snprintf(j->topic, sizeof(j->topic), "%s", topic);
     page_path(tmp, sizeof(tmp), topic, MAN_NEW_EXT);
+    page_path(final, sizeof(final), topic, MAN_EXT);
+    if (!files_write_allowed(sh, tmp) || !files_write_allowed(sh, final)) {
+        shell_printf(sh, "man install: %s: this path can only be changed on the console\n", final);
+        j->skipped++;
+        return;
+    }
+    if (!j->dir_made) {
+        FRESULT fr = f_mkdir(MAN_DIR);
+        if (fr != FR_OK && fr != FR_EXIST) {
+            shell_printf(sh, "man install: %s: %s\n", MAN_DIR, files_error(fr));
+            j->failed = true;
+            return;
+        }
+        j->dir_made = true;
+    }
     FRESULT fr = f_open(&j->f, tmp, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK) {
         shell_printf(sh, "man install: %s: %s\n", tmp, files_error(fr));
@@ -178,11 +220,7 @@ static void write_text(shell_t *sh, install_job_t *j, const char *s, size_t n) {
     if (fr != FR_OK || wrote != n) {
         shell_printf(sh, "man install: writing %s: %s\n", j->topic,
                      fr != FR_OK ? files_error(fr) : "card full");
-        f_close(&j->f);
-        j->f_open = false;
-        char tmp[sizeof(MAN_DIR) + MAN_TOPIC_MAX + sizeof(MAN_NEW_EXT)];
-        page_path(tmp, sizeof(tmp), j->topic, MAN_NEW_EXT);
-        f_unlink(tmp);
+        drop_page(j);
         j->skipped++;
         j->failed = true;
     }
@@ -194,6 +232,14 @@ static void take(shell_t *sh, install_job_t *j, const char *s, size_t n) {
     size_t from = 0;                        // text not written yet starts here
     for (size_t i = 0; i < n && !j->failed; i++) {
         char c = s[i];
+        if (j->skip_line) {                 // the rest of a '@' line too long to be a header
+            if (c == '\n') {
+                j->skip_line = false;
+                j->at_line_start = true;
+                from = i + 1;
+            }
+            continue;
+        }
         if (j->in_hdr) {
             if (c != '\n' && j->hdr_len < sizeof(j->hdr) - 1) {
                 j->hdr[j->hdr_len++] = c;
@@ -201,7 +247,13 @@ static void take(shell_t *sh, install_job_t *j, const char *s, size_t n) {
             }
             j->in_hdr = false;
             j->hdr[j->hdr_len] = '\0';
-            if (c == '\n' && !strncmp(j->hdr, "@@ ", 3)) {
+            if (c != '\n') {               // too long for a topic: not a page of ours
+                finish_page(sh, j);        // whatever follows isn't the previous page's either
+                j->skipped++;
+                j->skip_line = true;
+                continue;
+            }
+            if (!strncmp(j->hdr, "@@ ", 3)) {
                 start_page(sh, j, j->hdr + 3);
                 j->at_line_start = true;
                 from = i + 1;
@@ -220,12 +272,15 @@ static void take(shell_t *sh, install_job_t *j, const char *s, size_t n) {
         }
         j->at_line_start = c == '\n';
     }
-    if (!j->in_hdr && from < n && !j->failed)
+    if (!j->in_hdr && !j->skip_line && from < n && !j->failed)
         write_text(sh, j, s + from, n - from);
 }
 
 static bool install_end(shell_t *sh, install_job_t *j, bool ok) {
-    finish_page(sh, j);
+    if (ok)
+        finish_page(sh, j);
+    else
+        drop_page(j);                       // cut short: the pages before it stay whole
     http_close(j->req);
     if (ok) {
         shell_printf(sh, "man install: %u page%s installed in " MAN_DIR "%s\n", j->pages,
@@ -240,16 +295,8 @@ static bool install_end(shell_t *sh, install_job_t *j, bool ok) {
 
 static bool install_step(shell_t *sh, void *arg, bool cancel) {
     install_job_t *j = arg;
-    if (cancel) {
-        if (j->f_open) {
-            f_close(&j->f);
-            char tmp[sizeof(MAN_DIR) + MAN_TOPIC_MAX + sizeof(MAN_NEW_EXT)];
-            page_path(tmp, sizeof(tmp), j->topic, MAN_NEW_EXT);
-            f_unlink(tmp);
-            j->f_open = false;
-        }
+    if (cancel)
         return install_end(sh, j, false);
-    }
     uint64_t t0 = time_us_64();
     while (time_us_64() - t0 < MAN_STEP_US) {
         http_state_t s = http_poll(j->req);
@@ -304,9 +351,8 @@ static bool install_step(shell_t *sh, void *arg, bool cancel) {
 static void install(shell_t *sh) {
     if (!sdcard_mount(sh))
         return;
-    FRESULT fr = f_mkdir(MAN_DIR);
-    if (fr != FR_OK && fr != FR_EXIST) {
-        shell_printf(sh, "man install: %s: %s\n", MAN_DIR, files_error(fr));
+    if (!files_write_allowed(sh, MAN_DIR)) {
+        shell_printf(sh, "man install: %s can only be changed on the console\n", MAN_DIR);
         return;
     }
     install_job_t *j = heap_zalloc(HEAP_FILES, sizeof(*j));
@@ -314,7 +360,7 @@ static void install(shell_t *sh) {
         shell_printf(sh, "man install: out of memory\n");
         return;
     }
-    install_ref(j);
+    j->from_commit = bundle_url(j->ref, sizeof(j->ref), j->url, sizeof(j->url));
     j->at_line_start = true;
     if (!install_start(sh, j)) {
         heap_release(HEAP_FILES, j);
@@ -334,11 +380,8 @@ static void on_install_answer(shell_t *sh, char *answer, void *arg) {
 }
 
 static void offer_install(shell_t *sh) {
-    char url[128], ref[16] = "main";
-    install_job_t probe;
-    install_ref(&probe);
-    snprintf(ref, sizeof(ref), "%s", probe.ref);
-    snprintf(url, sizeof(url), MAN_URL_FMT, ref);
+    char url[128], ref[16];
+    bundle_url(ref, sizeof(ref), url, sizeof(url));
     shell_printf(sh, "No manual pages on the card. Download them from GitHub?\n  %s\n", url);
     shell_ask(sh, "Download now? [y/N] ", false, on_install_answer, NULL);
 }
@@ -413,7 +456,7 @@ static bool list_step(shell_t *sh, void *arg, bool cancel) {
             if (!fi.fname[0]) {
                 f_closedir(&j->dir);
                 j->dir_open = false;
-                if (!j->count) {
+                if (!j->count) {            // (have_pages() saw some: gone meanwhile)
                     shell_printf(sh, MAN_HOW_TO_INSTALL);
                     return list_done(sh, j);
                 }
@@ -461,7 +504,7 @@ static bool list_step(shell_t *sh, void *arg, bool cancel) {
 static void list_pages(shell_t *sh) {
     if (!sdcard_mount(sh))
         return;
-    if (!have_dir()) {
+    if (!have_pages()) {
         offer_install(sh);
         return;
     }
@@ -491,7 +534,7 @@ static void show_page(shell_t *sh, const char *topic) {
     FILINFO fi;
     FRESULT fr = f_stat(path, &fi);
     if (fr == FR_NO_FILE || fr == FR_NO_PATH) {
-        if (!have_dir()) {
+        if (!have_pages()) {
             offer_install(sh);
             return;
         }

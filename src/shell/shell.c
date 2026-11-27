@@ -253,7 +253,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
-    shell_printf(sh, "man [<topic>]     the manual: list the pages, or read one (man install fetches them)\n");
+    shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
