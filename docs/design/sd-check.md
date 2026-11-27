@@ -13,7 +13,9 @@ This note sets the rules so that the phases (§9) can be built without deciding 
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design only; the phases below are still to be built. Tracking issue: #213.
+Status (2026-11-27): phase 1 (the FAT32 checker) and phase 4's FAT32 part (the fault harness
+and the FAT32 repairs, `src/files/fsck_repair.c`) are built, host tested; the other phases are
+still to be built. Tracking issue: #213.
 Revised after Reviewer's review of #212: §2, §4, §5 and §10.2.
 
 ## 1. What exists today
@@ -356,7 +358,9 @@ pass 8/8
 
 4. **Repair on the host:** the fault-injection harness of §10.4 (write counting, cut and failure
    after N writes, the random damage generator) comes first, in the same PR or one before it.
-   Then the repairs of §10.1 with the write order of §10.2. Host only.
+   Then the repairs of §10.1 with the write order of §10.2. Host only. *Built for FAT32*
+   (`src/files/fsck_repair.c`, `tests/test_fsck_repair.c`; the rules it settles are in
+   `fsck_repair.h`). The exFAT repairs follow phase 2, through the same hooks.
 5. **`sd check fix` on the device:** §10.3's command, the test-build-only fault commands of
    §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults.
 

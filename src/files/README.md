@@ -130,3 +130,29 @@ firmware yet: phase 3 adds the command, which runs it only while the card is unm
   with `f_mkfs` as `sd format` does (MBR, no partition table, two FATs, a 128 GB GPT image held
   sparse), then breaks one thing per case and expects the exact lines. `tests/fuzz/fuzz_fsck.c`
   checks mutated images twice with different windows and requires the same answer.
+
+## `fsck_repair.c`: repairing the card (pure C, host tested)
+
+The repairs behind the coming `sd check fix` ([design](../../docs/design/sd-check.md) §10), on
+top of `fsck.c`. Not in the firmware yet: phase 5 adds the command.
+
+- **Shape:** a job of checker runs over the same memory (`fsck_repair_state_size()` plus the
+  window): a check whose findings are the plan, a wait for the caller's yes
+  (`fsck_repair_confirm()`), a repair run that writes at the checker's hook points, and a final
+  check. `fsck_repair_step()` takes the same budget as `fsck_step()`, writes counted in it.
+  The hooks reach `fsck.c` through a table, so a plain check links without this file.
+- **What it repairs (FAT32; exFAT is left alone until its checker is in):** lost clusters are
+  freed, chains longer than their file are ended at the file's last cluster (their tail is then
+  freed as lost), FSInfo's free count is set to unknown before anything else, and the second FAT
+  gets every change after the first (and the first's bytes where it differs). Nothing else is
+  changed. Trims are skipped when anything is cross-linked; nothing is freed or trimmed when
+  part of the tree couldn't be walked. `fsck_repair.h` lists the rules.
+- **Writes:** one sector each, ordered so that stopping after any of them leaves every file
+  reading the same bytes and the volume no worse; a failed read or write stops it at once.
+- **Tests:** `tests/test_fsck_repair.c` repairs FatFs-made images damaged by
+  `tests/fsck_damage.c`, one kind at a time and in seeded random mixes, and runs the fault
+  harness (`tests/fsck_faults.c`) over them: a power cut after every write, every write failing,
+  and reads failing. It checks the plan against the damage, what the volume and its files look
+  like after every fault and after a full repair, and that a tiny window gives the same result.
+  `tests/fuzz/fuzz_fsck.c` repairs mutated images on a copy-on-write disk when the selector's top
+  bit is set.
