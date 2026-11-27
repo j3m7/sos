@@ -577,6 +577,9 @@ unsigned long get_rand_32(void);
 
 #define WOLFSSL_KEY_GEN /* For RSA Key gen only */
 // #define KEEP_PEER_CERT
+// SOS: the verify callback also sees the accepted leaf certificate (src/tls/tls.c note_leaf():
+// its names and dates for sos.http's tls.cert); the verdict stays wolfSSL's.
+#define WOLFSSL_ALWAYS_VERIFY_CB
 // #define HAVE_COMP_KEY
 
 /* TLS Session Cache */

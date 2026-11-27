@@ -149,8 +149,18 @@ The response also says how long the request took, for scripts that check a serve
 | `tls.longest_step_us` | the longest single wolfSSL call, in microseconds: how long the main loop was held up at most |
 | `tls.heap_peak` | the most heap wolfSSL used at once, in bytes |
 | `tls.dates_unchecked` | `true` if the certificate dates weren't checked because the clock wasn't set |
+| `tls.cert` | the server's own certificate, once the handshake accepted it: `{subject=, issuer=, not_before=, not_after=}`: its common name, the issuer's name as wolfSSL writes it (`/C=US/O=Let's Encrypt/CN=R11`, cut at 127 characters), and when it's valid from and until, in seconds since 1970 (UTC). Missing if it couldn't be read |
 
 A request that fails returns `nil` and a message, without timings.
+
+```lua
+-- warn two weeks before a server's certificate expires
+local r = sos.http.head("https://example.org/")
+local cert = r and r.tls and r.tls.cert
+if cert and cert.not_after and cert.not_after - sos.time() < 14 * 86400 then
+  sos.log("certificate of example.org expires " .. sos.date("%F", cert.not_after), "warning")
+end
+```
 
 ```lua
 local r, err = sos.http.get("https://letsencrypt.org/")

@@ -13,6 +13,7 @@
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "shell/termtext.h"
+#include "time/timeconv.h"
 
 #define RX_SIZE 1024            // decrypted bytes waiting for the parser
 
@@ -361,6 +362,13 @@ static bool http_job_end(shell_t *sh, http_job_t *j) {
                      (unsigned)http_elapsed_ms(r), (unsigned)http_headers_ms(r),
                      ts ? (unsigned)(ts->handshake_us / 1000) : 0,
                      ts ? (unsigned)((ts->heap_peak + 1023) / 1024) : 0);
+        if (ts && ts->cert_known) {
+            char until[24] = "?";
+            if (ts->cert_not_after)
+                timeconv_format(ts->cert_not_after, until, sizeof(until));
+            shell_printf(sh, "--- certificate: %s, from %s, valid until %s UTC\n",
+                         ts->cert_subject, ts->cert_issuer, until);
+        }
     }
     http_close(r);
     heap_release(HEAP_HTTP, j);
