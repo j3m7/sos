@@ -138,6 +138,8 @@ set(SOS_SOURCES
     src/core/heaptag.c
     src/core/glitchdet.c
     src/core/chipinfo.c
+    src/core/chiptemp.c
+    src/core/chiptemp_board.c
     src/core/bootkey.c
     src/core/otpread.c
     src/core/consoleonly.c
@@ -256,6 +258,7 @@ target_link_libraries(sos
     hardware_flash
     hardware_i2c
     hardware_watchdog
+    hardware_adc            # the chip's temperature sensor (core/chiptemp.h)
     sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)

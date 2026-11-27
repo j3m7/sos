@@ -9,14 +9,16 @@
 #include "hardware/structs/watchdog.h"
 #include "pico/stdlib.h"
 
+#include "core/chiptemp.h"
 #include "core/log.h"
 
-// POWMAN scratch registers 0 to 2 (general purpose; the boot ROM uses POWMAN's BOOT0-3, not
-// these). The upper half of each is a marker, so that whatever was there at power-on isn't
-// taken for a value.
+// POWMAN scratch registers 0 to 3 (general purpose; the boot ROM uses POWMAN's BOOT0-3, not
+// these, and the SDK's pico_low_power, which SOS doesn't link, uses 6 and 7). The upper half
+// of each is a marker, so that whatever was there at power-on isn't taken for a value.
 #define REG_COUNT   (powman_hw->scratch[0])     // detector resets since power-on
 #define REG_STREAK  (powman_hw->scratch[1])     // ... in a row, each soon after boot
 #define REG_UPTIME  (powman_hw->scratch[2])     // seconds up, written about once a second
+#define REG_TEMP    (powman_hw->scratch[3])     // the latest chip temperature (chiptemp_pack)
 #define MAGIC_COUNT  0x474c0000u                // "GL"
 #define MAGIC_STREAK 0x47530000u                // "GS"
 #define MAGIC_UPTIME 0x47000000u                // "G", 24 bits of seconds
@@ -31,9 +33,11 @@
 
 static bool caused_reset, guard_tripped, stable_marked;
 static uint32_t triggers, last_uptime;
+static int last_temp = CHIPTEMP_NONE;   // the chip's temperature before the detector reset
 static int armed = -1, watching = -1;
 static uint32_t watch_seen;             // detectors seen triggering while watching, this boot
 static uint32_t watch_first_s;          // uptime of the first of them
+static int watch_first_temp = CHIPTEMP_NONE;    // the chip's temperature then
 static uint64_t next_uptime_us;
 
 static uint32_t get16(uint32_t reg, uint32_t magic) {
@@ -53,6 +57,7 @@ void glitchdet_boot(void) {
     if (caused_reset) {
         if ((REG_UPTIME & ~LOW24) == MAGIC_UPTIME)
             last_uptime = REG_UPTIME & LOW24;
+        last_temp = chiptemp_unpack(REG_TEMP);
         count = (count + 1) & LOW16;
         // In a row: the run before this one ended in a detector reset before it was stable
         // (a stable run clears the streak, see glitchdet_poll).
@@ -63,6 +68,12 @@ void glitchdet_boot(void) {
     REG_COUNT = MAGIC_COUNT | count;
     REG_STREAK = MAGIC_STREAK | streak;
     REG_UPTIME = MAGIC_UPTIME;
+    REG_TEMP = chiptemp_pack(CHIPTEMP_NONE);    // until this run has a reading
+}
+
+// Keep the latest reading where a detector reset doesn't clear it.
+static void record_temp(void) {
+    REG_TEMP = chiptemp_pack(chiptemp_last());
 }
 
 static void disarm(void) {
@@ -74,6 +85,7 @@ bool glitchdet_apply(unsigned setting) {
     bool arm = setting >= 1 && setting <= 4, watch = setting >= 5 && setting <= 8;
     armed = watching = -1;
     watch_seen = 0;
+    watch_first_temp = CHIPTEMP_NONE;
     if (!arm && !watch) {
         disarm();
         glitch_detector_hw->sensitivity = 0;
@@ -99,12 +111,23 @@ bool glitchdet_apply(unsigned setting) {
 }
 
 void glitchdet_start(unsigned setting) {
-    if (caused_reset)
+    record_temp();                      // before the detector can be armed
+    if (caused_reset) {
         log_msg(SOS_LOG_ERR, "last reset: glitch detector (detectors 0x%x fired, after %lu s up; "
                              "%lu such reset%s since power-on). The fault record doesn't survive "
                              "that reset",
                 (unsigned)triggers, (unsigned long)last_uptime, (unsigned long)glitchdet_resets(),
                 glitchdet_resets() == 1 ? "" : "s");
+        char t[CHIPTEMP_TEXT_MAX];
+        chiptemp_format(t, sizeof(t), last_temp);
+        if (last_temp != CHIPTEMP_NONE)
+            log_msg(SOS_LOG_ERR, "last reset: the chip's temperature before the glitch detector "
+                                 "reset: %s (the last reading; one is taken every %u s)",
+                    t, CHIPTEMP_SAMPLE_S);
+        else
+            log_msg(SOS_LOG_ERR, "last reset: no chip temperature was kept from before the glitch "
+                                 "detector reset");
+    }
     if (setting == 0 || setting > 8)
         return;
     if (setting >= 5) {                 // watching resets nothing, so it needs no guard
@@ -134,6 +157,7 @@ void glitchdet_start(unsigned setting) {
 }
 
 void glitchdet_poll(void) {
+    record_temp();                      // every pass (a register write), so it's never behind
     uint64_t now = time_us_64();
     if (now < next_uptime_us)
         return;
@@ -149,12 +173,18 @@ void glitchdet_poll(void) {
         // reported once per boot: "it would have reset the board at this point".
         uint32_t now_set = glitch_detector_hw->trig_status & 0xf, fresh = now_set & ~watch_seen;
         if (fresh) {
-            if (!watch_seen)
+            int temp = chiptemp_read();
+            if (!watch_seen) {
                 watch_first_s = up;
+                watch_first_temp = temp;
+            }
             watch_seen |= fresh;
+            char t[CHIPTEMP_TEXT_MAX];
+            chiptemp_format(t, sizeof(t), temp);
             log_msg(SOS_LOG_WARNING, "glitch detector (watching, sensitivity %d): detectors 0x%x "
-                                     "triggered after %lu s up; armed, this would have reset the "
-                                     "board", watching, (unsigned)fresh, (unsigned long)up);
+                                     "triggered after %lu s up, chip at %s; armed, this would have "
+                                     "reset the board", watching, (unsigned)fresh,
+                    (unsigned long)up, t);
             glitch_detector_hw->trig_status = fresh;
         }
     }
@@ -163,11 +193,13 @@ void glitchdet_poll(void) {
 bool glitchdet_caused_reset(void) { return caused_reset; }
 uint32_t glitchdet_last_triggers(void) { return triggers; }
 uint32_t glitchdet_last_uptime_s(void) { return last_uptime; }
+int glitchdet_last_temp(void) { return last_temp; }
 uint32_t glitchdet_resets(void) { return get16(REG_COUNT, MAGIC_COUNT); }
 int glitchdet_armed_sensitivity(void) { return armed; }
 int glitchdet_watching_sensitivity(void) { return watching; }
 uint32_t glitchdet_watch_triggers(void) { return watch_seen; }
 uint32_t glitchdet_watch_first_s(void) { return watch_first_s; }
+int glitchdet_watch_first_temp(void) { return watch_first_temp; }
 bool glitchdet_guard_tripped(void) { return guard_tripped; }
 
 void glitchdet_simulate(void) {
