@@ -68,11 +68,13 @@ static bool job_partial;
 static int job_arg_token;
 static int job_ask_step;                    // the step that asks a question (0: none)
 static int job_silent;                      // steps from the first that print nothing
+static int piped_seen = -1;                 // shell_output_piped() in the last "probe" or job step
 static int job_space;                       // shell_write_space() its last step saw
 static void fake_answer(shell_t *sh, char *answer, void *arg);
 
 static bool fake_job(shell_t *sh, void *arg, bool cancel) {
     CHECK(arg == &job_arg_token);
+    piped_seen = shell_output_piped(sh);
     job_calls++;
     if (cancel) {
         job_cancels++;
@@ -230,6 +232,10 @@ void shell_execute(shell_t *sh, char *cmd) {
     n_executed++;
     if (!strcmp(cmd, "quiet"))
         return;
+    if (!strcmp(cmd, "probe")) {            // records whether its output is piped
+        piped_seen = shell_output_piped(sh);
+        return;
+    }
     if (!strcmp(cmd, "bye")) {              // ends the session, as logout does on SSH
         shell_printf(sh, "bye\n");
         shell_end(sh);
@@ -1235,6 +1241,32 @@ TEST(pipe_to_more_ends_with_the_session) {
 }
 
 // --- filters: `| grep`, `| head`, `| tail`, `| wc` --------------------------------------------
+
+TEST(output_piped_is_true_only_while_a_line_has_stages) {
+    start(&io_plain);
+    CHECK(!shell_output_piped(&sh));            // idle
+    piped_seen = -1;
+    type("probe\r");
+    CHECK_EQ(piped_seen, 0);                    // no stages
+    type("probe | wc\r");
+    CHECK_EQ(piped_seen, 1);                    // a filter
+    type("probe | more\r");
+    CHECK_EQ(piped_seen, 1);                    // the capture for the pager
+    type("probe | grep x | more\r");
+    CHECK_EQ(piped_seen, 1);
+    CHECK(!shell_output_piped(&sh));            // the line ended
+    type("ls | morex\r");                      // not a stage: nothing piped
+    piped_seen = -1;
+    type("probe\r");
+    CHECK_EQ(piped_seen, 0);
+    job_steps = 2;                              // a job's steps ask too
+    piped_seen = -1;
+    type("job | wc\r");
+    type("");
+    type("");
+    CHECK_EQ(piped_seen, 1);
+    CHECK(!shell_output_piped(&sh));
+}
 
 TEST(pipe_to_grep_streams_to_the_terminal) {
     start(&io_crlf);
@@ -2728,6 +2760,7 @@ TEST_MAIN(
     RUN(tab_completes_a_question_from_its_completer);
     RUN(tab_question_answers_hold_spaces);
     RUN(tab_question_list_still_growing);
+    RUN(output_piped_is_true_only_while_a_line_has_stages);
     RUN(tab_never_completes_a_secret_question);
     RUN(tab_question_completes_the_last_word_when_asked_to);
     RUN(tab_question_word_of_given_characters);
