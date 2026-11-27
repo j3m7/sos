@@ -1,7 +1,8 @@
 # man: the manual pages
 
 One plain-text page per command, `man/<topic>.txt`, read on the board with `man <topic>`
-(`man` alone lists them). The firmware holds no page: they live on the SD card in `/man`, put
+(`man` alone lists them), and rendered into [`docs/commands.md`](../docs/commands.md) as the
+command reference, so each command is documented once. The firmware holds no page: they live on the SD card in `/man`, put
 there by `man install` on the board, which downloads `man/pages.bundle` from this repository
 on GitHub (the commit the firmware was built from, or `main`), or by `tools/man-install.sh
 <host>` over SFTP.
@@ -32,11 +33,14 @@ SEE ALSO
   columns, no tabs, and no line starting with `@@` (the bundle's page marker). The pager shows
   the page as it is: no markup is interpreted.
 - Say what the command does, its forms, which are console only, what it changes and where that
-  is saved, and the pitfalls; point to related pages under SEE ALSO. `docs/commands.md` is the
-  reference the pages are written from: a change to a command updates both.
+  is saved, and the pitfalls; point to related pages under SEE ALSO. The pages are the one place
+  a command is documented: `docs/commands.md` is generated from them.
+- SYNOPSIS lists the command's forms, one per line, each marked `(console only)` or `(change:
+  console only)` where that applies; `docs/commands.md` takes its *Where* column from the marks.
+- A new page goes into `man/index.txt`, under the section of `docs/commands.md` it belongs to.
 - After adding or changing a page, run `tools/man-bundle.sh`: it checks the pages and rebuilds
-  `man/pages.bundle`, which is committed. The host tests (`just test`) fail while the bundle is
-  out of date or a page breaks a rule above.
+  `man/pages.bundle` and `docs/commands.md` (`tools/man-docs.py`), both committed. The host tests
+  (`just test`) fail while either is out of date or a page breaks a rule above.
 
 ## On the board
 
