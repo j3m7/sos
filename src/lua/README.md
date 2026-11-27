@@ -140,6 +140,14 @@ entries as fit (`log_history_entry()`, which also says whether entries after the
 overwritten), with the cursor after the last one and `more`; core 1 asks again from that cursor
 while `more` is set (at most 8 pages) and joins the pages into one list.
 
+## Dates: `lua_date.c`
+
+`sos.date` and `sos.time(table)` are computed on core 1 (`lua_date.c`, on `time/timeconv.c`);
+only the time now comes from core 0 (`LR_TIME`). The formatter is SOS's own, with the C locale's
+conversions, so core 1 needs neither newlib's `strftime` nor its time zone code. It's tested
+against the host's `strftime()` over years 1 to 9999 (`tests/test_lua_date.c`). `sos.clock` is a
+health table (`LH_CLOCK`) from `timesync_info()`.
+
 ## `lua_port.h`
 
 `lua_port.h` is force-included into the Lua sources (see `CMakeLists.txt`).
