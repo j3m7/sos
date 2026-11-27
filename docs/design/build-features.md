@@ -12,7 +12,8 @@ holds several subsystems' commands), the boot sequence and main loop in `main.c`
 dozen direct calls from one subsystem into another. Once those go through a small number of
 seams, the CMake side is a list of options and a source list per feature.
 
-Status (2026-11-27): design only. The code is changing quickly, so this note sets the rules and
+Status (2026-11-27): design only. Revised after Reviewer's review of #250 (§1, §3, §4.1,
+§4.3, §4.5). The code is changing quickly, so this note sets the rules and
 the order of work; it does not ask for the refactor now. Where this note and the code differ in
 detail, the code is the reference.
 
@@ -44,14 +45,15 @@ Includes between subsystem directories, `core` excluded as a target (everyone us
 | `time` | shell, tls (NTS) |
 | `net` | shell, tls (HTTPS) |
 | `chat`, `files` | shell |
-| `core` | files and time (`logfile_board.c`), lua (`health_board.c`: core 1's stack peak; `health.c`: the Lua table) |
+| `core` | files and time (`logfile_board.c`), lua (`health_board.c`: core 1's stack peak; `health.h` and `health.c`: the Lua table) |
 
 Everything depending on `shell` is fine: the shell is the base. The arrows that matter are the
 ones **out of** `shell`, `main.c` and `core`, because they make the base depend on the features.
 
 ### Where the bytes are
 
-From the map of the last dev build (2026-11-26, 1150 KB of flash, 148 KB static RAM). The
+From the map of the dev build of 2026-11-26 (1150 KB of flash, 148 KB static RAM; main's
+debug image was 1,122 KB on 2026-11-27, and these figures will keep moving). The
 string literals of the whole image (about 96 KB) are merged into one section and not counted
 per subsystem below, so every figure is a lower bound.
 
@@ -118,7 +120,7 @@ air), **boot and audit scope**, and **boards without the Wi-Fi chip**.
 | `PAGER` | `more`, `\| more` (`edit/pager.c`, `view.c`, `screen.c`) | |
 | `EDITOR` | `edit` (`edit/editor.c`, `edit.c`) | PAGER (shares the screen code), FILES |
 | `MAN` | `man/`, man pages on the card | PAGER, FILES |
-| `FSCK` | `sd check` and its repair (`files/fsck*`, about 3,100 lines) | FILES |
+| `FSCK` | `sd check` and its repair (`files/fsck*`, about 3,700 lines of C) | FILES |
 | `FILES` | SD card, FatFs, file commands, `/var/log`, encrypted cards | later: see §4.6 |
 
 Glue that follows its parents (decision 3): SFTP (SSH + FILES), approved roots on the card
@@ -134,7 +136,7 @@ trimming wolfSSL, §5, and the 75 KB of lwIP buffers).
 ### 4.1 Commands
 
 Today `shell/shell.c` (2,500 lines) holds one `commands[]` table naming every command, and the
-bodies of many that belong elsewhere: `cmd_wifi` (180 lines), `cmd_time`, `cmd_tls`, `cmd_nts`,
+bodies of many that belong elsewhere: `cmd_wifi` (85 lines, 185 with its helpers), `cmd_time`, `cmd_tls`, `cmd_nts`,
 the Wi-Fi and SSH steps of `setup`, `run_ssh`. The change:
 
 - Move each subsystem's command bodies and word lists into that subsystem
@@ -213,8 +215,11 @@ Anything larger than a stand-in belongs inside the feature. Two specific inversi
 - **`config reset` calls `sdcard_owner_gone()` and `hostkey_owner_gone()` by name**
   (`shell.c`). It becomes a list of "owner gone" hooks that the features add themselves to at
   init, like `health_add()` does for checks.
-- **`core/health.c` writes a Lua table** (`health_lua_table()`). It moves to
-  `lua/lua_health.c`, which already exists, so `core` no longer includes from `lua`.
+- **`core/health.c` writes a Lua table** (`health_lua_table()`), and `core/health.h` includes
+  `lua/lua_info.h` for its writer type, so every file that includes `health.h` pulls in a Lua
+  header. The function moves to `lua/lua_health.c`, which already exists, reading the results
+  through a plain iterator in `health.h`; `lua_info_t` leaves `health.h` with it, and `core`
+  no longer includes from `lua`.
 
 ### 4.4 Lua
 
@@ -248,8 +253,11 @@ It defines `option(SOS_FEATURE_<X> ... ON)`, checks the `NEEDS` list (decision 2
 "the image is signed with..." line.
 
 Subsystem lists are `include()`d, not `add_subdirectory()`'d: source file properties (the
-per-file warnings) are scoped to the directory that sets them, and with
-`cmake_minimum_required(3.13)` they can't be set across directories. Libraries follow their
+per-file warnings) are scoped to the directory that sets them, and under the current
+`cmake_minimum_required(3.13)` (also the Pico SDK's minimum) they can't be set across
+directories. CMake 3.18 added `DIRECTORY` and `TARGET_DIRECTORY` to
+`set_source_files_properties()`, so a later minimum would allow `add_subdirectory()`;
+`include()` stays the simpler choice either way. Libraries follow their
 features: wolfSSH, `sos-ssh` and SFTP with SSH; `pico_cyw43_arch_lwip_threadsafe_background` and
 `pico_lwip_sntp` with NET (`pico_cyw43_arch_none` or nothing without it); Lua's sources and
 `pico_multicore` with LUA.
