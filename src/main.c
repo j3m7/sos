@@ -26,6 +26,9 @@
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/wdog.h"
+#ifdef SOS_TEST_COMMANDS
+#include "core/memhold.h"
+#endif
 #include "files/cardkey.h"
 #include "lua/lua_host.h"
 #include "net/wifi.h"
@@ -243,6 +246,9 @@ int main(void) {
         lua_host_poll(true);            // requests from a Lua script on core 1
         log_flush();                    // messages logged in interrupt context
         logfile_poll();                 // new messages to the log files
+#ifdef SOS_TEST_COMMANDS
+        memhold_poll();                 // a delayed `mem release first <s>`
+#endif
         if (time_reached(next_blink)) {
             led = !led;
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led);

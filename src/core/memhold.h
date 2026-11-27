@@ -25,8 +25,16 @@ size_t memhold_leave(size_t keep);
 // number of holes made (fewer than count if the heap or the block list ran out).
 int memhold_holes(int count, size_t size);
 
-// Free everything held. Returns the bytes freed.
+// Free everything held. Returns the bytes freed (and cancels a pending memhold_release_first).
 size_t memhold_release(void);
+
+// Free the block held first (the oldest), now, or `delay_ms` later from memhold_poll(): to free
+// memory while a command waits for an answer on the console. Returns its size (0: none held).
+size_t memhold_release_first(unsigned delay_ms);
+
+// From the main loop: does a delayed memhold_release_first() when it's due. Not from an
+// interrupt (it calls free).
+void memhold_poll(void);
 
 size_t memhold_bytes(void);     // held now
 int memhold_count(void);        // blocks held now

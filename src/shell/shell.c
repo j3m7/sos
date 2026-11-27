@@ -475,7 +475,7 @@ static void cmd_mem(shell_t *sh) {
 static bool kb_arg(const char *s, size_t *bytes) {
     char *end;
     double kb = s ? strtod(s, &end) : -1;
-    if (!s || end == s || *end || kb < 0 || kb > 1024)
+    if (!s || end == s || *end || !(kb >= 0 && kb <= 1024))     // rejects NaN too
         return false;
     *bytes = (size_t)(kb * 1024);
     return true;
@@ -498,6 +498,22 @@ static void cmd_mem_test(shell_t *sh, char *args) {
         size_t freed = memhold_release();
         shell_printf(sh, "released %u bytes; %u unallocated, largest block that fits: %u\n",
                      (unsigned)freed, (unsigned)heap_free(), (unsigned)memhold_largest());
+        return;
+    }
+    if (!strcmp(w1, "release") && w2 && !strcmp(w2, "first") && !w4) {
+        int secs = w3 ? atoi(w3) : 0;
+        if (secs < 0 || secs > 3600 || (w3 && strspn(w3, "0123456789") != strlen(w3))) {
+            shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
+            return;
+        }
+        size_t n = memhold_release_first((unsigned)secs * 1000);
+        if (!n)
+            shell_printf(sh, "nothing held\n");
+        else if (secs)
+            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)n,
+                         secs);
+        else
+            mem_held_summary(sh);
         return;
     }
     if (!strcmp(w1, "hold") && w2 && !strcmp(w2, "leave") && kb_arg(w3, &n) && !w4) {
@@ -524,7 +540,7 @@ static void cmd_mem_test(shell_t *sh, char *args) {
         return;
     }
     shell_printf(sh, "usage: mem hold <KB> | mem hold leave <KB> | mem hold holes <count> <KB> "
-                     "| mem release\n");
+                     "| mem release [first [<seconds>]]\n");
 }
 #endif
 
@@ -2213,6 +2229,12 @@ static const shell_word_t lua_words[] = {
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+#ifdef SOS_TEST_COMMANDS
+static const shell_word_t mem_hold_words[] = {W("leave"), W("holes"), END};
+static const shell_word_t mem_release_words[] = {W("first"), END};
+static const shell_word_t mem_words[] = {
+    {"hold", mem_hold_words, SHELL_ADMIN}, {"release", mem_release_words, SHELL_ADMIN}, END};
+#endif
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {
@@ -2226,9 +2248,7 @@ static const shell_cmd_t commands[] = {
     {"tls", cmd_tls, tls_words, 0},
     {"nts", cmd_nts, nts_words, 0},
 #ifdef SOS_TEST_COMMANDS
-    {"mem", run_mem, (const shell_word_t[]){
-        {"hold", (const shell_word_t[]){W("leave"), W("holes"), END}, SHELL_ADMIN},
-        {"release", NULL, SHELL_ADMIN}, END}, 0},
+    {"mem", run_mem, mem_words, 0},
 #else
     {"mem", run_mem, NULL, 0},
 #endif
