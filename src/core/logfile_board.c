@@ -8,14 +8,17 @@
 #include "core/logfile.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 
 #include "ff.h"
 #include "pico/stdlib.h"
 
+#include "core/config.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
+#include "core/settings.h"
 #include "core/version.h"
 #include "core/wdog.h"
 #include "files/files.h"
@@ -72,6 +75,69 @@ static bool append(const char *path, const char *data, size_t n, const char **wh
     return true;
 }
 
+static bool rotate_file(const char *path, const char **why) {
+    char old[48];
+    snprintf(old, sizeof(old), "%s.1", path);
+    FILINFO fi;
+    FRESULT fr = f_stat(path, &fi);
+    if (fr == FR_NO_FILE || fr == FR_NO_PATH)
+        return true;                        // nothing since the last rotation: keep its .1
+    if (fr == FR_OK)
+        fr = f_unlink(old);
+    if (fr == FR_OK || fr == FR_NO_FILE)
+        fr = f_rename(path, old);
+    if (fr != FR_OK && fr != FR_NO_FILE) {     // no file to rotate is fine
+        *why = files_error(fr);
+        return false;
+    }
+    return true;
+}
+
+#define ROTATED_PATH LOGFILE_DIR "/.rotated"
+
+// The time of the last rotation: Unix seconds in decimal, one line.
+static bool load_rotated(int64_t *unix_s) {
+    FIL f;
+    char buf[24];
+    UINT n = 0;
+    if (f_open(&f, ROTATED_PATH, FA_READ) != FR_OK)
+        return false;
+    FRESULT fr = f_read(&f, buf, sizeof(buf) - 1, &n);
+    f_close(&f);
+    if (fr != FR_OK)
+        return false;
+    buf[n] = '\0';
+    char *end;
+    long long v = strtoll(buf, &end, 10);
+    if (end == buf || (*end && *end != '\n') || v <= 0)
+        return false;                       // damaged: the count starts again
+    *unix_s = v;
+    return true;
+}
+
+static bool save_rotated(int64_t unix_s, const char **why) {
+    FIL f;
+    char buf[24];
+    int len = snprintf(buf, sizeof(buf), "%lld\n", (long long)unix_s);
+    FRESULT fr = f_open(&f, ROTATED_PATH, FA_CREATE_ALWAYS | FA_WRITE);
+    if (fr == FR_NO_PATH && (fr = make_dirs(ROTATED_PATH)) == FR_OK)
+        fr = f_open(&f, ROTATED_PATH, FA_CREATE_ALWAYS | FA_WRITE);
+    if (fr == FR_OK) {
+        UINT done = 0;
+        fr = f_write(&f, buf, (UINT)len, &done);
+        FRESULT cr = f_close(&f);
+        if (fr == FR_OK && done != (UINT)len)
+            fr = FR_DENIED;
+        if (fr == FR_OK)
+            fr = cr;
+    }
+    if (fr != FR_OK) {
+        *why = files_error(fr);
+        return false;
+    }
+    return true;
+}
+
 static void boot_text(char *buf, size_t len) {
     const char *why = fault_last() ? fault_last()
                       : glitchdet_caused_reset() ? "glitch detector"
@@ -84,12 +150,21 @@ static void retry_mount(void) { sdcard_mount_retry(); }
 
 static const logfile_hooks_t hooks = {
     now_us, wall_us, sdcard_mounted, sdcard_generation, append, boot_text, retry_mount,
+    rotate_file, load_rotated, save_rotated,
 };
+
+void logfile_apply_settings(void) {
+    const sos_config_t *cfg = settings();
+    logfile_set_rotation(cfg->log_rotate_days ? cfg->log_rotate_days
+                                              : CONFIG_LOG_ROTATE_DAYS_DEFAULT,
+                         cfg->log_rotate_minute);
+}
 
 // Start writing, and mount the card for it once now: the configuration is loaded, so an
 // encrypted card opens. Without a card that's one "mount failed" line; the writer then retries
 // quietly every minute (sdcard_mount_retry), and any other mount starts the files too.
 void logfile_start(void) {
     logfile_init(&hooks);
+    logfile_apply_settings();
     sdcard_mount(NULL);
 }

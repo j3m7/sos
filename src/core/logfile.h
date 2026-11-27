@@ -22,6 +22,14 @@
 // so. A mount is tried quietly every LOGFILE_RETRY_MS meanwhile (not after `sd unmount`), so a
 // card put back in is written to without anyone typing a command. After a failed write the writer stops, says so once in the log, and starts again at the
 // next mount. Platform access goes through hooks, so the module runs in host tests.
+//
+// Rotation: every `days` days at a time of day (UTC; default every 7 days at 00:00), each file
+// is renamed to <name>.1, replacing the one before, and a new one is started. The next rotation
+// is `days` days after the day of the last one, at that time: rotating by hand on a Tuesday
+// afternoon, with a week at 00:00, makes the next one the following Tuesday at 00:00. The time
+// of the last rotation is kept on the card (LOGFILE_DIR "/.rotated"), so a reboot doesn't
+// restart the count, and a rotation that fell while the board was off or had no card happens at
+// the first chance after. Without the clock set nothing rotates by itself.
 
 #ifndef SOS_LOGFILE_H
 #define SOS_LOGFILE_H
@@ -49,6 +57,13 @@ typedef struct {
     void (*boot_text)(char *buf, size_t len);
     // Try to mount a card, quietly (called every LOGFILE_RETRY_MS while none is mounted).
     void (*retry_mount)(void);
+    // Rename `path` to `path`.1, replacing that. With no `path` (nothing logged to it since the
+    // last rotation) leave `path`.1 as it is. False and *why on failure.
+    bool (*rotate_file)(const char *path, const char **why);
+    // The time of the last rotation (Unix seconds) kept on the card: read (false if there's
+    // none) and write.
+    bool (*load_rotated)(int64_t *unix_s);
+    bool (*save_rotated)(int64_t unix_s, const char **why);
 } logfile_hooks_t;
 
 typedef enum {
@@ -66,11 +81,17 @@ typedef struct {
     uint32_t lines;
     uint32_t lost;              // messages dropped from the history before they were written
     size_t buffered;            // bytes waiting in the buffers
+    unsigned rotate_days, rotate_minute;
+    bool rotated_known;         // the time of the last rotation is known (read from the card)
+    int64_t rotated;            // ... and is this (Unix seconds)
+    int64_t next_rotation;      // when rotated_known
 } logfile_status_t;
 
 void logfile_init(const logfile_hooks_t *hooks);
 // On the board (logfile_board.c): logfile_init() with the SD card's hooks, and a first mount.
 void logfile_start(void);
+// On the board: the rotation settings from the configuration (after a change, and at start).
+void logfile_apply_settings(void);
 void logfile_poll(void);
 void logfile_status(logfile_status_t *st);
 
@@ -81,6 +102,11 @@ void logfile_flush(void);
 // first: a message it doesn't keep never reaches the files.
 void logfile_set_level(int level);
 int logfile_level(void);
+
+// Rotate every `days` days (1 or more) at `minute` minutes after midnight UTC.
+void logfile_set_rotation(unsigned days, unsigned minute);
+// Rotate now. NULL if done, or why not ("no card mounted", the error of a failed rename...).
+const char *logfile_rotate(void);
 
 // The file a facility's messages go to (SOS_LOG_AUTH etc.), or NULL.
 const char *logfile_path(int facility);
