@@ -522,8 +522,11 @@ static void line_tab(shell_t *sh, bool again) {
     // Two names can share the first bytes of different characters: stop before those.
     while (m.common > typed && ((unsigned char)m.first[m.common] & 0xc0) == 0x80)
         m.common--;
-    bool whole = n == 1 && !partial;    // a directory cut short may hold more matches
-    if (m.common > typed || whole) {
+    // A directory cut short may hold more matches, which needn't share what these do (dev-1:
+    // "f29" in 300 files read 256 of them and would have become "f29.txt", with f290.txt to
+    // f299.txt unread): then don't add to the line at all, only list.
+    bool whole = n == 1 && !partial;
+    if ((m.common > typed && !partial) || whole) {
         size_t add = m.common - typed + whole;       // a single match ends with ' ' or '/'
         if (sh->line_len + add > SHELL_LINE_MAX) {
             write_out(sh, "\a", 1);

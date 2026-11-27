@@ -1485,13 +1485,10 @@ TEST(tab_utf8_names) {
 TEST(tab_in_a_directory_cut_short) {
     start(&io_plain);
     type("cat big/z\t");                             // zz, but there may be more z names
-    CHECK_OUT("cat big/zz");                         // extended, but not ended
+    CHECK_OUT("cat big/z\a");                        // not even extended: they may not share it
     clear_out();
     type("\t");
-    CHECK_OUT("\a");
-    clear_out();
-    type("\t");
-    CHECK_OUT("\nzz\n(more: the directory is too large to list here)\nsos> cat big/zz");
+    CHECK_OUT("\nzz\n(more: the directory is too large to list here)\nsos> cat big/z");
 }
 
 TEST(tab_no_card_or_no_such_directory) {
