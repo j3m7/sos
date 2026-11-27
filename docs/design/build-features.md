@@ -93,7 +93,7 @@ air), **boot and audit scope**, and **boards without the Wi-Fi chip**.
    `config show` leaves them out. A board can move between a full and a stripped image without
    losing or reformatting its configuration, and there is one format to test, seal and
    provision. The cost is a few hundred bytes of an already-fixed 4 KB slot.
-6. **The security core is not optional:** the root secret and key provider, sealed
+6. **The security core is not optional** (decided by the user, 2026-11-27): the root secret and key provider, sealed
    configuration, the console password, health gates, the watchdog, the fault record. These
    are what SOS is. A project that wants less security should fork; making it a switch invites
    shipping the wrong one. (`SOS_FORCE_CONSOLE_ONLY` and `SOS_BURN_IMAGE` stay as they are.)
@@ -300,7 +300,21 @@ measured, not predicted: some curve code is shared with the core's boot key chec
   bundling every page (the bundle is the card's, not the image's), and `man <cmd>` for a
   command the image lacks says "not in this build" before the page.
 - `docs/commands.md` keeps describing the full build and shows each command's feature.
-- `version` shows the features list, so a board's capabilities can be read off its console.
+- **The build's features are visible on the board.** `version` gets one line after the commit
+  line, listing what is in and what is out, so a stripped image never looks like a full one
+  with commands missing:
+
+  ```
+  SOS 4968639
+  features: NET TLS HTTP NTS SSH CHAT PAGER FSCK (off: LUA EDITOR MAN)
+  build: test commands
+  ```
+
+  The `build:` line names the existing switches that are on (`test commands`, `console-only
+  forced`), and is left out when none is; the burn image keeps its own warning line. Lua scripts
+  read the same with `sos.features()` (§4.4), and the `health` command's output starts with the
+  features line too, since a health report is what gets pasted into an issue. One generated
+  table (`SOS_FEATURE_LIST`, from `features.cmake`) feeds all three, so they can't disagree.
 - `docs/building.md` gets a section on the options and presets.
 
 ## 8. Testing
@@ -344,8 +358,7 @@ Each phase leaves the default image the same and is useful on its own.
 
 ## 11. Questions for the user
 
-1. **Is the security core really fixed (decision 6)?** The alternative is options for the
-   console password and sealing, for projects that don't need them. This note recommends no.
+1. ~~Is the security core really fixed (decision 6)?~~ Yes (the user, 2026-11-27).
 2. **Is a board without the Wi-Fi chip (plain Pico 2) a goal?** If so, `PICO_BOARD` and NET
    need to be tied together, and phase 3 includes the LED change. If not, NET off still works on
    the Pico 2 W, with the LED off.
