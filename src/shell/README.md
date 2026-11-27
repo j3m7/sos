@@ -30,8 +30,10 @@ translation (`crlf`), and `admin` (true for the console only).
   (`shell_ask_complete()`, refused for a secret one): the whole answer, spaces included, from
   that function (`complete_answer()`); the SSID questions use the names a scan hears.
   `shell_ask_complete_words()` completes only the last word instead (single-word values, a space
-  after one): the chat prompt, with `/who`, `/quit` and the names in the room. Nothing at a
-  password.
+  after one): the chat prompt, with `/who`, `/quit` and the names in the room.
+  `shell_ask_complete_chars()` takes the word as a run of given characters instead (nothing
+  added after it): the Lua prompt, whose names core 1 lists between lines (`lua/lua_complete.c`,
+  raw table access only, so no script code runs). Nothing at a password.
   After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
   `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
   main loop waits) for the directory named up to the last `/`, and offers its entries that start

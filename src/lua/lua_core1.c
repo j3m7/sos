@@ -22,6 +22,7 @@
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "lua/lua_bridge.h"
+#include "lua/lua_complete.h"
 #include "lua/lua_core1.h"
 #include "net/http.h"
 
@@ -973,6 +974,17 @@ run:
     return false;
 }
 
+// Tab at the prompt, under lua_pcall (run_repl): the names that could finish repl_line.
+static int l_repl_complete(lua_State *L) {
+    size_t used;
+    bool more;
+    unsigned n = lua_complete(L, lua_job.repl_line, (char *)lua_req.data, LUA_REQ_DATA, &used,
+                              &more);
+    lua_job.repl_names_len = (uint32_t)used;
+    lua_job.repl_names = n;
+    return 0;
+}
+
 static void run_repl(lua_State *L) {
     lua_pushliteral(L, "");                         // 2: unfinished statement
     for (;;) {
@@ -981,6 +993,20 @@ static void run_repl(lua_State *L) {
         __dmb();
         if (lua_job.repl_quit)
             break;
+        if (lua_job.repl_complete) {                // Tab: names, not a line (no code runs)
+            // Protected: the walk allocates (the path's strings), and a failed allocation
+            // raises an error, which mustn't end the session.
+            lua_job.repl_names = 0;
+            lua_job.repl_names_len = 0;
+            lua_pushcfunction(L, l_repl_complete);
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK)
+                lua_job.repl_names = lua_job.repl_names_len = 0;
+            lua_settop(L, 2);
+            __dmb();
+            lua_job.repl_cmd = false;
+            __sev();
+            continue;
+        }
         // A Ctrl-C during the last line left the hook running every instruction (interrupt()).
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         if (lua_job.repl_reset) {

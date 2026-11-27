@@ -72,18 +72,26 @@ void shell_ask(shell_t *sh, const char *ask_prompt, bool secret, shell_answer_fn
     sh->answer_arg = arg;
 }
 
-void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete) {
+// The three ways a question's answer is completed (shell.h); never for a secret question.
+static void ask_complete(shell_t *sh, shell_ask_complete_fn complete, bool words,
+                         const char *chars) {
     if (sh->answer && !sh->secret) {
         sh->ask_complete = complete;
-        sh->ask_words = false;
+        sh->ask_words = words;
+        sh->ask_chars = chars;
     }
 }
 
+void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete) {
+    ask_complete(sh, complete, false, NULL);
+}
+
 void shell_ask_complete_words(shell_t *sh, shell_ask_complete_fn complete) {
-    if (sh->answer && !sh->secret) {
-        sh->ask_complete = complete;
-        sh->ask_words = true;
-    }
+    ask_complete(sh, complete, true, NULL);
+}
+
+void shell_ask_complete_chars(shell_t *sh, shell_ask_complete_fn complete, const char *chars) {
+    ask_complete(sh, complete, true, chars);
 }
 
 char shell_eof[] = "";
@@ -558,8 +566,8 @@ static bool tab_source(shell_t *sh, size_t *start, size_t *n, complete_fn fn, vo
     if (sh->answer) {
         if (!sh->ask_complete || sh->secret)
             return false;
-        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, sh->ask_words, start,
-                             fn, arg, partial);
+        *n = complete_answer(sh, sh->ask_complete, sh->line, sh->line_len, sh->ask_words,
+                             sh->ask_chars, start, fn, arg, partial);
         return true;
     }
     const shell_cmd_t *const *tables = shell_command_tables(sh);

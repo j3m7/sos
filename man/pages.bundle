@@ -394,8 +394,9 @@ DESCRIPTION
     starts when the question is asked and takes about half a second; until it
     ends Tab only lists what it has heard so far. Names with characters that
     can't be shown as they are aren't offered. At the chat prompt it completes
-    /who, /quit and the names in the room. Tab does nothing at a password or
-    any other question.
+    /who, /quit and the names in the room. At the Lua prompt it completes
+    names of globals and table fields ('string.fo'). Tab does nothing at a
+    password or any other question.
 
     The console asks for its password before taking any command, once one is
     set, and locks itself again on logout, when the USB terminal disconnects
@@ -564,9 +565,11 @@ DESCRIPTION
     (a relative path starts at the working directory); 'lua -e <code>' runs
     the code given; 'lua' opens a prompt where each line runs as entered, in
     one state for the session (an expression's value is printed; Ctrl-C
-    interrupts a line; Ctrl-D on an empty line or 'exit' leaves). The output
-    goes to the shell that started the script, and Ctrl-C stops it, as does
-    ending the session. One script runs at a time.
+    interrupts a line; Ctrl-D on an empty line or 'exit' leaves; Tab completes
+    the name being typed, 'string.fo' to 'string.format', looking into tables
+    without running any of the script's code). The output goes to the shell
+    that started the script, and Ctrl-C stops it, as does ending the session.
+    One script runs at a time.
 
     'lua -b <file>' runs a script in the background with no shell: its output
     goes to the log, a line at a time (dmesg; at most 10 lines a second, the
