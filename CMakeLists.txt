@@ -324,8 +324,8 @@ else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
 endif()
 
-# The burn image (docs/securing-a-board.md, step 3): the one build that can write a board's
-# root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
+# The burn image (docs/security/design.md, "Writing it"): the one build that can write a
+# board's root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that
 # job and replaced by the everyday firmware afterwards. Everyday firmware has no code that
 # programs OTP: the two files below are compiled only here.
 option(SOS_BURN_IMAGE "Build the image that writes the root secret into OTP (permanent)" OFF)

@@ -7,7 +7,7 @@
 // in OTP (rows BOOTKEY0_0 onwards, four slots) and marked valid there. Turning secure boot on
 // with the wrong hash in OTP leaves a board that runs nothing, for good. So before that bit is
 // written, the firmware that is on the board says whether it would still start: the `bootkey`
-// command, a step of docs/securing-a-board.md.
+// command, a step of the runbooks in docs/security/.
 //
 // This file is the part with no hardware in it, unit tested on the host: finding the public
 // key in an image, the votes OTP flag rows are read with, and the comparison. It reads nothing

@@ -5,7 +5,7 @@
 // cannot write: the chip's memory-mapped read aliases (datasheet section 13, "read data
 // region"), to which a write is a bus fault, and one read-only status register (CRITICAL).
 // Nothing here calls the boot ROM's otp_access function, which is the one that can program
-// OTP. Everyday firmware carries no code that writes OTP (docs/securing-a-board.md).
+// OTP. Everyday firmware carries no code that writes OTP (docs/security/decisions.md, decision 12).
 //
 // otpread_raw() and otpread_ecc() use the unguarded aliases: a row this code isn't allowed to
 // read comes back as all ones instead of a fault, which suits a status display and deciding
