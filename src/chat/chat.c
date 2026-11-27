@@ -448,3 +448,38 @@ void chat_cmd_who(shell_t *sh, char *args) {
         }
     }
 }
+
+int chat_wall_from(const char *name, const char *text) {
+    unsigned shells = 0;
+    for (unsigned i = 0; i < CHAT_MAX_PEERS; i++)
+        if (peers[i].sh)
+            shells++;
+    if (!shells)
+        return 0;
+    if (ring_full())
+        return -1;
+    static peer_t script;                       // a sender that is no peer: id 0, never registered
+    script.id = 0;
+    clean(script.name, CHAT_NAME_MAX, name);
+    post(&script, MSG_WALL, text);
+    return (int)shells;
+}
+
+unsigned chat_peers(chat_peer_t *out, unsigned max) {
+    uint64_t now = now_us();
+    unsigned n = 0;
+    for (unsigned slot = 0; slot <= 255 && n < max; slot++) {
+        for (unsigned i = 0; i < CHAT_MAX_PEERS && n < max; i++) {
+            const peer_t *p = &peers[i];
+            if (!p->sh || p->slot != slot)
+                continue;
+            chat_peer_t *o = &out[n++];
+            o->slot = p->slot;
+            snprintf(o->name, sizeof(o->name), "%s", p->name);
+            snprintf(o->from, sizeof(o->from), "%s", p->from);
+            o->since_s = (uint32_t)((now - p->since_us) / 1000000);
+            o->in_chat = p->in_room;
+        }
+    }
+    return n;
+}

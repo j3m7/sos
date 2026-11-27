@@ -24,6 +24,7 @@
 
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "files/path.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_complete.h"
 #include "lua/lua_codec.h"
@@ -131,16 +132,21 @@ static int traceback(lua_State *L) {
 // --- the sos library -------------------------------------------------------------------------
 
 // Put `p` into the request, resolved against the job's working directory (core 0 normalizes).
-static void set_req_path(lua_State *L, const char *p) {
-    // Absolute: as given. Relative: cwd + "/" + path (cwd "/" needs no extra separator).
+// A script's path as core 0 takes it, into out (LUA_PATH_MAX bytes). Absolute: as given.
+// Relative: cwd + "/" + path (cwd "/" needs no extra separator). Core 0 normalizes "." and "..".
+static void resolve_path(lua_State *L, const char *p, char *out) {
     const char *dir = p[0] == '/' ? "" : lua_job.cwd;
     const char *sep = (p[0] == '/' || !strcmp(dir, "/")) ? "" : "/";
     size_t need = strlen(dir) + strlen(sep) + strlen(p) + 1;
-    if (need > sizeof(lua_req.path))
+    if (need > LUA_PATH_MAX)
         luaL_error(L, "path too long: %s", p);
-    memcpy(lua_req.path, dir, strlen(dir));
-    memcpy(lua_req.path + strlen(dir), sep, strlen(sep));
-    memcpy(lua_req.path + strlen(dir) + strlen(sep), p, strlen(p) + 1);
+    memcpy(out, dir, strlen(dir));
+    memcpy(out + strlen(dir), sep, strlen(sep));
+    memcpy(out + strlen(dir) + strlen(sep), p, strlen(p) + 1);
+}
+
+static void set_req_path(lua_State *L, const char *p) {
+    resolve_path(L, p, lua_req.path);
 }
 
 // The same for a script's path argument.
@@ -295,6 +301,124 @@ static int write_file(lua_State *L, bool append) {
             return fail(L);
         done += n;
     } while (done < len);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sos.rename(from, to [, replace]): to must not exist, unless replace is true and it's a file.
+static bool rename_to(const char *from, const char *to, bool replace) {
+    memcpy(lua_req.path, from, strlen(from) + 1);
+    memcpy(lua_req.data, to, strlen(to) + 1);
+    lua_req.type = LR_RENAME;
+    lua_req.offset = replace ? 1 : 0;
+    request();
+    return lua_req.result >= 0;
+}
+
+static int l_rename(lua_State *L) {
+    char from[LUA_PATH_MAX], to[LUA_PATH_MAX];
+    resolve_path(L, luaL_checkstring(L, 1), from);
+    resolve_path(L, luaL_checkstring(L, 2), to);
+    if (!rename_to(from, to, lua_toboolean(L, 3)))
+        return fail(L);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// One request to remove `path`, its result ignored (cleaning up after a failure).
+static void remove_quietly(const char *path) {
+    memcpy(lua_req.path, path, strlen(path) + 1);
+    lua_req.type = LR_REMOVE;
+    request();
+}
+
+// sos.copy(from, to): the file's bytes copied, 4 KB a request each way; returns the size. to is
+// created or replaced. A failure after part of it was written removes the copy.
+static int l_copy(lua_State *L) {
+    char from[LUA_PATH_MAX], to[LUA_PATH_MAX], err[LUA_PATH_MAX + sizeof(lua_req.error) + 2] = "";
+    resolve_path(L, luaL_checkstring(L, 1), from);
+    resolve_path(L, luaL_checkstring(L, 2), to);
+    // The same file under another spelling ("/a/../x" and "/x", or another case) would be
+    // truncated by the first write: compare them as core 0 will resolve them.
+    char nfrom[LUA_PATH_MAX], nto[LUA_PATH_MAX];
+    if (!path_resolve("/", from, nfrom, sizeof(nfrom)) || !path_resolve("/", to, nto, sizeof(nto)))
+        return luaL_error(L, "path too long");
+    if (!strcasecmp(nfrom, nto))                // the card's names ignore case
+        return luaL_error(L, "source and destination are the same");
+    uint64_t done = 0;
+    for (;;) {
+        if (lua_job.cancel)
+            return interrupt(L);                // Ctrl-C: what was copied stays
+        memcpy(lua_req.path, from, strlen(from) + 1);
+        lua_req.type = LR_READ;
+        lua_req.offset = (uint32_t)done;
+        request();
+        if (lua_req.result < 0) {
+            snprintf(err, sizeof(err), "%s: %s", luaL_checkstring(L, 1), lua_req.error);
+            break;
+        }
+        if (lua_req.len == 0 && done > 0)
+            break;                              // the end (an empty file still gets a write)
+        memcpy(lua_req.path, to, strlen(to) + 1);
+        lua_req.type = LR_WRITE;
+        lua_req.offset = done ? 1 : 0;
+        uint32_t n = lua_req.len;
+        request();
+        if (lua_req.result < 0) {
+            snprintf(err, sizeof(err), "%s: %s", luaL_checkstring(L, 2), lua_req.error);
+            break;
+        }
+        done += n;
+        if (n == 0)
+            break;                              // an empty file: copied
+        if (done > 0xffffffffu - LUA_REQ_DATA) {
+            snprintf(err, sizeof(err), "file too large to copy (4 GB)");
+            break;
+        }
+    }
+    if (lua_req.result < 0 || err[0]) {
+        if (done > 0)
+            remove_quietly(to);
+        lua_pushnil(L);
+        lua_pushstring(L, err);
+        return 2;
+    }
+    lua_pushinteger(L, (lua_Integer)done);
+    return 1;
+}
+
+// sos.stat(path): {size=, dir=, time=}, or nil and why ("no such file" if nothing is there).
+static int l_stat(lua_State *L) {
+    set_path(L, 1);
+    lua_req.type = LR_STAT;
+    request();
+    if (lua_req.result < 0)
+        return fail(L);
+    lua_stat_t st;
+    memcpy(&st, lua_req.data, sizeof(st));
+    lua_createtable(L, 0, 3);
+    lua_pushinteger(L, (lua_Integer)st.size);
+    lua_setfield(L, -2, "size");
+    lua_pushboolean(L, st.dir);
+    lua_setfield(L, -2, "dir");
+    if (st.time) {
+        lua_pushinteger(L, (lua_Integer)st.time);
+        lua_setfield(L, -2, "time");
+    }
+    return 1;
+}
+
+// sos.exists(path): true or false; nil and why if it can't tell (no card).
+static int l_exists(lua_State *L) {
+    set_path(L, 1);
+    lua_req.type = LR_STAT;
+    request();
+    if (lua_req.result == LUA_REQ_NOT_FOUND) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (lua_req.result < 0)
+        return fail(L);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -672,12 +796,30 @@ static int l_http_head(lua_State *L) {
 }
 
 // sos.http.download(url, path [, opts]): a GET whose 2xx body goes to the file at path.
+// The body goes to "<path>.part", renamed over path once it's all there, so a download that
+// fails (or is stopped) never touches a file already at path.
 static int l_http_download(lua_State *L) {
     luaL_checkstring(L, 1);
-    set_path(L, 2);                             // resolved now: the answers reuse lua_req.path
-    char file[LUA_PATH_MAX];
-    memcpy(file, lua_req.path, sizeof(file));
-    return http_request(L, with_options(L, 3, "GET", 1), file);
+    char file[LUA_PATH_MAX], part[LUA_PATH_MAX];
+    resolve_path(L, luaL_checkstring(L, 2), file);  // now: the answers reuse lua_req.path
+    if (strlen(file) + sizeof(".part") > sizeof(part))
+        return luaL_error(L, "path too long: %s", file);
+    memcpy(part, file, strlen(file));
+    memcpy(part + strlen(file), ".part", sizeof(".part"));
+    int n = http_request(L, with_options(L, 3, "GET", 1), part);
+    if (n != 1)
+        return n;                               // nil and why
+    bool written = lua_getfield(L, -1, "size") != LUA_TNIL;     // a 2xx went to the file
+    lua_pop(L, 1);
+    if (written && !rename_to(part, file, true)) {
+        char err[sizeof(lua_req.error)];
+        memcpy(err, lua_req.error, sizeof(err));
+        remove_quietly(part);
+        lua_pushnil(L);
+        lua_pushstring(L, err);
+        return 2;
+    }
+    return 1;
 }
 
 static const luaL_Reg http_lib[] = {
@@ -926,6 +1068,56 @@ static int l_version(lua_State *L) { return info(L, LH_VERSION); }
 static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
+static int l_sd_info(lua_State *L) { return info(L, LH_SD); }
+static int l_who(lua_State *L) { return info(L, LH_WHO); }
+static int l_ssh_status(lua_State *L) { return info(L, LH_SSH); }
+static int l_tls_roots(lua_State *L) { return info(L, LH_TLS); }
+
+// sos.wall(msg): to every shell; returns how many (0: nobody is logged in), or nil and why.
+static int l_wall(lua_State *L) {
+    size_t len;
+    const char *s = luaL_checklstring(L, 1, &len);
+    if (len >= LUA_REQ_DATA)
+        len = LUA_REQ_DATA - 1;
+    lua_req.type = LR_WALL;
+    memcpy(lua_req.data, s, len);
+    lua_req.data[len] = '\0';
+    request();
+    if (lua_req.result < 0)
+        return fail(L);
+    lua_pushinteger(L, (lua_Integer)lua_req.result);
+    return 1;
+}
+
+// sos.clock_sync(): start an NTS sync, as `time sync` does; true, or nil and why. The result shows
+// in sos.clock() once the sync is done.
+static int l_clock_sync(lua_State *L) {
+    lua_req.type = LR_TIMESYNC;
+    request();
+    if (lua_req.result < 0)
+        return fail(L);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sos.random(n): n random bytes (from core 0's DRBG, 4 KB per request).
+static int l_random(lua_State *L) {
+    lua_Integer n = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, n >= 0 && n <= 128 * 1024, 1, "from 0 to 131072 bytes (a script's memory)");
+    luaL_Buffer b;
+    char *out = luaL_buffinitsize(L, &b, (size_t)n);
+    for (lua_Integer at = 0; at < n; at += LUA_REQ_DATA) {
+        lua_Integer k = n - at < LUA_REQ_DATA ? n - at : LUA_REQ_DATA;
+        lua_req.type = LR_RANDOM;
+        lua_req.offset = (uint32_t)k;
+        request();
+        if (lua_req.result < 0)
+            return fail(L);
+        memcpy(out + at, lua_req.data, (size_t)k);
+    }
+    luaL_pushresultsize(&b, (size_t)n);
+    return 1;
+}
 static int l_clock(lua_State *L) { return info(L, LH_CLOCK); }
 static int l_health(lua_State *L) { return info(L, LH_HEALTH); }
 
@@ -985,6 +1177,18 @@ static int l_dmesg(lua_State *L) {
     return 3;
 }
 
+static const luaL_Reg sd_lib[] = {
+    {"info", l_sd_info}, {NULL, NULL},
+};
+
+static const luaL_Reg ssh_lib[] = {
+    {"status", l_ssh_status}, {NULL, NULL},
+};
+
+static const luaL_Reg tls_lib[] = {
+    {"roots", l_tls_roots}, {NULL, NULL},
+};
+
 // --- sos.wifi.scan, sos.net.resolve, sos.ping (on core 0: lua_net.c) -------------------------
 
 // One of the slow network requests; its answer (lua_info.h records) pushed as a table.
@@ -1043,7 +1247,10 @@ static const luaL_Reg sos_lib[] = {
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
-    {"hmac", l_hmac},     {"health", l_health}, {"ping", l_ping},     {NULL, NULL},
+    {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
+    {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
+    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},
+    {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
@@ -1198,6 +1405,12 @@ static int open_sos(lua_State *L) {
     lua_setfield(L, -2, "http");
     luaL_newlib(L, wifi_lib);
     lua_setfield(L, -2, "wifi");
+    luaL_newlib(L, sd_lib);
+    lua_setfield(L, -2, "sd");
+    luaL_newlib(L, ssh_lib);
+    lua_setfield(L, -2, "ssh");
+    luaL_newlib(L, tls_lib);
+    lua_setfield(L, -2, "tls");
     luaL_newlib(L, net_lib);
     lua_setfield(L, -2, "net");
     luaL_newlib(L, base64_lib);

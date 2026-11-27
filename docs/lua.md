@@ -60,9 +60,19 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.write(path, s)`, `sos.append(path, s)` | write / append (through `files_write_allowed()`) |
 | `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
+| `sos.rename(from, to [, replace])` | rename or move a file or directory. `to` mustn't exist, unless `replace` is true and it's a file, which is then replaced (there's a moment when only `from` exists). The same path, or one differing only in case, is refused |
+| `sos.copy(from, to)` | copy a file (4 KB per request each way); `to` is created or replaced; returns the size. Copying a file onto itself (however it's spelled) is refused. A failure after part of it was written removes the copy |
+| `sos.stat(path)`, `sos.exists(path)` | `{size=, dir=, time=}` (`time` in seconds since 1970, from the card's timestamp) or `nil` and `"no such file"`; `true` or `false` |
+| `sos.sd.info()` | what `sd info` shows: `{mounted=, card=, card_bytes=, encrypted=, fs=, total=, free=, cluster=}` (bytes; `mounted` false and nothing else without a card). On a FAT32 card the first call counts the free space, which can take seconds on a large card (later ones are quick; exFAT is always quick) |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but always in UTC (see [Dates and the clock](#dates-and-the-clock)) |
 | `sos.clock()` | the clock's state: set or not, the last sync, the RTC (the same section) |
+| `sos.clock_sync()` | start an NTS sync, as `time sync` does: `true`, or `nil` and why (one is already running, or a script started one less than 5 minutes ago). `sos.clock()` shows the result |
+| `sos.who()` | who is logged in, as `who` lists them: `{ {slot=, name=, from=, seconds=, chat=}, ... }` |
+| `sos.ssh.status()` | what `ssh` shows: `{running=, key_type=, fingerprint=, max_sessions=, logins=, refused_busy=, refused_penalty=, dropped_stale=, sessions = { {slot=, login=, address=, state=, sftp=, seconds=}, ... }}` |
+| `sos.tls.roots()` | the roots TLS trusts, as `tls roots` shows them: `{builtin = {names...}, file = {path=, state=, used=, count=, why=}}` |
+| `sos.wall(msg)` | send `msg` to every shell, with the script's path as the sender; returns how many (0 if nobody is logged in), or `nil` and why: other shells haven't read the last 16 messages yet (try again shortly), or more than 10 a second (the limit `sos.log` shares) |
+| `sos.random(n)` | `n` random bytes (up to 128 KB, a script's memory) from the chip's random number generator, through wolfCrypt's DRBG on core 0 |
 | `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
@@ -127,9 +137,10 @@ does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script
 other status leaves the file alone and comes back with its `body` as `get` would (an error page,
 say). With no `max_body`, a download has no size limit (the error page still stops at 32 KB). If
 the transfer fails (the connection, the card, a body over `max_body`), the call returns `nil` and
-the message: a failure before the first piece of the body leaves a file already at `path` as it
-was, while one after it removes the half-written file. The first piece replaces an existing file,
-so a refresh that fails part way (or at its first piece, say with the card full) loses the old copy. Ctrl-C leaves what was written.
+the message. The body is written to `<path>.part` and renamed over `path` only once it's all
+there, so a failed download never touches a file already at `path` (except for the instant of the
+replace itself): refreshing a file is safe.
+A failure removes the `.part` file once anything was written to it; Ctrl-C leaves it.
 
 ```lua
 local r, err = sos.http.download("https://example.org/firmware-notes.txt", "/notes.txt")

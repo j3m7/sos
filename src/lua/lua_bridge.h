@@ -26,6 +26,7 @@
 #define LUA_LINE_MAX   256          // one line at the interactive prompt (SHELL_LINE_MAX)
 #define LUA_REBOOT_MIN_S 600        // sos.reboot() is refused before the board has been up this long
 #define LUA_REBOOT_WHY_MAX 100      // the most of sos.reboot()'s reason that's logged
+#define LUA_TIMESYNC_MIN_S 300      // sos.time.sync(): at most one sync started per 5 minutes
 
 // --- one script at a time -------------------------------------------------------------------
 
@@ -75,10 +76,16 @@ typedef enum {
     LR_LIST,                        // path, offset (entries to skip) -> data: entries, count
     LR_REMOVE,                      // path
     LR_MKDIR,                       // path
+    LR_RENAME,                      // path: from, data: to (NUL-terminated), offset 1: replace a
+                                    // file already at `to`
+    LR_STAT,                        // path -> data: lua_stat_t (result LUA_REQ_NOT_FOUND: none)
     LR_HASH,                        // offset: step, arg: algorithm (lua_hash.h), data/len: key or
                                     // message -> after the last step, data/len: the digest
     LR_REBOOT,                      // data: why (may be empty) -> restarts the board, or an
                                     // error (up for less than LUA_REBOOT_MIN_S)
+    LR_WALL,                        // data: the message -> result: the shells it went to
+    LR_TIMESYNC,                    // start an NTS sync (at most one per LUA_TIMESYNC_MIN_S)
+    LR_RANDOM,                      // offset: bytes wanted (up to LUA_REQ_DATA) -> data/len
     // Like LR_HTTP_*, these take a while and are answered from the main loop once done:
     LR_SCAN,                        // -> data: lua_info.h records, a list of {ssid, rssi}
     LR_RESOLVE,                     // path: the name -> data: records {address}
@@ -113,6 +120,13 @@ extern lua_req_t lua_req;
 // LR_READ result when the file or a directory on its path doesn't exist (require tries the next
 // path; any other failure, such as no SD card, stops the search).
 #define LUA_REQ_NOT_FOUND (-2)
+
+// LR_STAT's answer. time: seconds since 1970 (the card's timestamps are UTC), 0 if unknown.
+typedef struct {
+    uint64_t size;
+    int64_t time;
+    bool dir;
+} lua_stat_t;
 
 // LR_LIST packs entries into data as: uint32 size, uint8 is_dir, name, NUL; result = count,
 // len = bytes used. A listing that doesn't fit continues with offset = entries already returned.

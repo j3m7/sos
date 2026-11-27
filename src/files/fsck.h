@@ -113,7 +113,8 @@ typedef struct {
     // One problem or note, already formatted, without a newline. Called at most
     // FSCK_REPORT_MAX times; later lines are only counted.
     void (*report)(void *ctx, const char *line);
-    // Write sectors: NULL for a check. Only repair (design note §10) will pass one.
+    // Write sectors: NULL for a check. Only repair (fsck_repair.h) passes one, and only for
+    // single sectors.
     bool (*write)(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
     void *ctx;
     uint64_t sectors;           // size of the device as the layer shows it
