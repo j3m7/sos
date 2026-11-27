@@ -228,8 +228,9 @@ typed the console shows nothing: no greeting, no log lines, no messages from oth
     is logged at `debug` level (`log history debug` keeps it), to see what a terminal does.
   - On the UART console there is no connection to watch, so only the idle lock applies.
   - Tools that open the port for each command (test scripts) are locked out at every close
-    once a password is set: use a board without a console password for those, or log in each
-    time.
+    that lasts a second or more, once a password is set: use a board without a console
+    password for those, or log in each time. A tool that reopens the port within a second
+    stays logged in.
 - **What is stored** is not the password but a verifier in the sealed configuration: PBKDF2
   of the password, then keyed with a key from the board's root secret. A copy of the flash
   isn't enough to try passwords against.

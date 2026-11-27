@@ -128,6 +128,7 @@ void login_start(shell_t *console, const login_hooks_t *h) {
     have_pending = checking = false;
     last_activity = hooks->now_ms();
     was_connected = false;
+    dropping = false;
     const char *why = hooks->no_keys();
     if (why) {
         locked = true;
