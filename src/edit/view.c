@@ -4,6 +4,10 @@
 // `more <file>` and edit_view(): the pager (pager.c) on a shell, over a file on the card (read
 // through a window, so the file can be larger than RAM) or over a text in RAM (a copy, for the
 // manual pages). A raw-mode shell job, like the editor; the terminal side is fsterm.c.
+//
+// `<command> | more` with a command that still runs (edit_view_growing()): the text is the
+// shell's capture, and each pass steps the command once through shell_pipe_feed() before
+// drawing, so its output grows the text while the pager shows it.
 
 #include "edit/edit.h"
 
@@ -26,8 +30,11 @@ typedef struct {
     fsterm_t term;
     FIL file;
     bool file_open;                 // reading the card: files_hold() until it's closed
-    char *text;                     // or a copy of a text in RAM
+    char *text;                     // or a copy of a text in RAM (ours to free)
     bool quit;
+    bool live;                      // the command under the pager still runs: the text is the
+                                    // shell's capture until shell_pipe_feed() hands it over
+    bool stop;                      // Ctrl-C: end that command, keep the text
 } view_t;
 
 static size_t read_file(void *ctx, size_t off, char *buf, size_t n) {
@@ -48,6 +55,10 @@ static void view_key(shell_t *sh, int key, void *arg) {
             pager_resize(&v->pg, rows, cols);
         return;
     }
+    if (v->live && key == 0x03 && !v->pg.finding) {  // Ctrl-C stops the command, not the pager
+        v->stop = true;
+        return;
+    }
     switch (pager_key(&v->pg, key)) {
     case PAGER_QUIT:
         v->quit = true;
@@ -60,17 +71,55 @@ static void view_key(shell_t *sh, int key, void *arg) {
     }
 }
 
+// The free part of leaving.
+static void view_free(view_t *v) {
+    if (v->file_open) {
+        f_close(&v->file);
+        files_release();
+    }
+    pager_free(&v->pg);
+    heap_release(HEAP_EDIT, v->text);
+    heap_release(HEAP_EDIT, v);
+}
+
+// The command under the pager, once a pass: a step (or its end), then the pager follows the text,
+// which may have moved (the shell's block is reallocated as it grows). False when the pager must
+// leave at once (the command asked a question: the shell shows the text and asks it).
+static bool view_feed(shell_t *sh, view_t *v) {
+    char *text;
+    size_t len;
+    bool stop = v->stop;
+    shell_fed_t r = shell_pipe_feed(sh, stop ? SHELL_FEED_STOP : SHELL_FEED_STEP, &text, &len);
+    if (r == SHELL_FED_GONE) {
+        v->live = false;
+        return false;
+    }
+    v->pg.src.ctx = text;           // first: pager_grow() reads the text's last byte
+    if (len > v->pg.src.size)
+        pager_grow(&v->pg, len);
+    if (r == SHELL_FED_DONE) {
+        v->live = false;
+        v->text = text;             // ours from here on
+        pager_set_growing(&v->pg, false);
+        if (stop)
+            pager_message(&v->pg, "stopped");
+    }
+    return true;
+}
+
 static bool view_step(shell_t *sh, void *arg, bool cancel) {
     view_t *v = arg;
+    if (v->live && (cancel || v->quit)) {   // the command goes first, silently, with its text
+        char *text;
+        size_t len;
+        shell_pipe_feed(sh, SHELL_FEED_CANCEL, &text, &len);
+        v->live = false;
+    }
+    if (!cancel && !v->quit && v->live && !view_feed(sh, v))
+        v->quit = true;
     if (cancel || v->quit) {
         fsterm_leave(sh, &v->pg.scr, cancel);
-        if (v->file_open) {
-            f_close(&v->file);
-            files_release();
-        }
-        pager_free(&v->pg);
-        heap_release(HEAP_EDIT, v->text);
-        heap_release(HEAP_EDIT, v);
+        view_free(v);
         return false;
     }
     int waiting = v->pg.log_waiting;
@@ -81,20 +130,17 @@ static bool view_step(shell_t *sh, void *arg, bool cancel) {
     return true;
 }
 
-// Start the job on a source that is ready. Frees `v` if the pager can't start.
-static void run(shell_t *sh, view_t *v, const char *name, pager_source_t src) {
+// Start the job on a source that is ready. Frees `v` (and its text, not the shell's) and says so
+// if the pager can't start.
+static bool run(shell_t *sh, view_t *v, const char *name, pager_source_t src) {
     if (!pager_init(&v->pg, name, src, 0)) {
         shell_printf(sh, "%s: out of memory\n", name);
-        if (v->file_open) {
-            f_close(&v->file);
-            files_release();
-        }
-        heap_release(HEAP_EDIT, v->text);
-        heap_release(HEAP_EDIT, v);
-        return;
+        view_free(v);
+        return false;
     }
     fsterm_enter(sh, &v->term);
     shell_run_raw(sh, view_step, view_key, v);
+    return true;
 }
 
 void edit_view_file(shell_t *sh, const char *path, const char *name) {
@@ -151,6 +197,19 @@ void edit_view_take(shell_t *sh, const char *name, char *text, size_t len) {
     v->text = text;
     pager_source_t src = { .read = pager_read_mem, .ctx = text, .size = len };
     run(sh, v, name, src);
+}
+
+bool edit_view_growing(shell_t *sh, const char *name, const char *text, size_t len) {
+    view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
+    if (!v) {
+        shell_printf(sh, "%s: out of memory\n", name);
+        return false;
+    }
+    v->live = true;
+    // Growing: the window is allocated whole now, as the size says nothing about the end.
+    pager_source_t src = { .read = pager_read_mem, .ctx = (void *)text, .size = len,
+                           .growing = true };
+    return run(sh, v, name, src);
 }
 
 void edit_view(shell_t *sh, const char *name, const char *text, size_t len) {

@@ -2314,8 +2314,7 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
 }
 
 bool shell_page_growing(shell_t *sh, const char *name, const char *text, size_t len) {
-    (void)sh; (void)name; (void)text; (void)len;
-    return false;                               // the pager doesn't page a growing text yet
+    return edit_view_growing(sh, name, text, len);
 }
 
 void shell_execute(shell_t *sh, char *cmd) {

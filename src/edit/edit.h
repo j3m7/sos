@@ -24,5 +24,11 @@ void edit_view(shell_t *sh, const char *name, const char *text, size_t len);
 // The same on a HEAP_EDIT block the pager owns from here on (freed when it quits, or at once if
 // it can't start): a command's captured output (`<command> | more`, shell_page()).
 void edit_view_take(shell_t *sh, const char *name, char *text, size_t len);
+// The pager on a command's output while the command still runs (`<command> | more`,
+// shell_page_growing()): `text` is the shell's capture so far, which the pager follows and steps
+// the command for (shell_pipe_feed()) until the command ends and the block becomes the pager's.
+// Ctrl-C stops the command and keeps the text; q ends it and leaves. False (after saying so) if
+// the pager can't start.
+bool edit_view_growing(shell_t *sh, const char *name, const char *text, size_t len);
 
 #endif
