@@ -347,3 +347,43 @@ void sshd_status(shell_t *sh) {
                      secs / 60, secs % 60);
     }
 }
+
+bool sshd_info(sshd_info_t *info) {
+    *info = (sshd_info_t){0};
+    if (!server)
+        return false;
+    for (unsigned i = 0; i < server->max_sessions; i++)
+        if (ssh_server_session(server, i)->cstate != CS_NONE)
+            info->sessions++;
+    info->fingerprint = hostkey_fingerprint;
+    info->key_type = SSH_KEY_TYPE;
+    info->max_sessions = server->max_sessions;
+    info->refused_busy = server->rejected_busy;
+    info->refused_penalty = server->rejected_penalty;
+    info->dropped_stale = server->dropped_stale;
+    info->logins = server->logins;
+    return true;
+}
+
+bool sshd_session(unsigned i, sshd_session_info_t *info) {
+    *info = (sshd_session_info_t){0};
+    if (!server || i >= server->max_sessions)
+        return false;
+    ssh_session_t *ss = ssh_server_session(server, i);
+    if (ss->cstate == CS_NONE)
+        return false;
+    ip_addr_t ip;
+    uint16_t port;
+    if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK) {
+        char ipstr[IPADDR_STRLEN_MAX];
+        ipaddr_ntoa_r(&ip, ipstr, sizeof(ipstr));
+        snprintf(info->address, sizeof(info->address), "%s:%u", ipstr, port);
+    }
+    char login[sizeof(ss->login)];
+    printable_name(login, ss->login);
+    snprintf(info->login, sizeof(info->login), "%s", login);
+    info->state = ssh_server_connection_state_name(ss->cstate);
+    info->sftp = ss->sftp;
+    info->seconds = (uint32_t)((time_us_64() - ss->accept_start_us) / 1000000);
+    return true;
+}

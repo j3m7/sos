@@ -486,6 +486,10 @@ bool wifi_names_each(void (*fn)(const char *ssid, int rssi, void *arg), void *ar
     return names_scanning && cyw43_wifi_scan_active(&cyw43_state);
 }
 
+bool wifi_names_active(void) {
+    return names != NULL;
+}
+
 void wifi_names_stop(void) {
     cyw43_arch_lwip_begin();
     wifi_name_t *n = names;
