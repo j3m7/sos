@@ -13,6 +13,7 @@ import os
 import struct
 import subprocess
 import tempfile
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -155,5 +156,138 @@ def terminal():
     write("terminal", "text", b"\x05caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80 \xc3 \x1b]0;title\x07\r\n\xed\xa0\x80")
 
 
-for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal):
+# --- fsck: [selector] then a sparse image (fsck_image.h): [sectors] then [lba][offset][len][bytes] --
+
+def lfn_entries(name, sfn):
+    """The long-name entries for `name`, in the order they are stored (last part first)."""
+    s = 0
+    for b in sfn:
+        s = (((s >> 1) | (s << 7)) + b) & 0xFF
+    units = [ord(c) for c in name] + [0]
+    units += [0xFFFF] * (-len(units) % 13)
+    parts = [units[i:i + 13] for i in range(0, len(units), 13)]
+    if len(name) % 13 == 0:
+        parts = parts[:-1]                         # a full last part needs no terminator
+    out = []
+    for i in reversed(range(len(parts))):
+        u = parts[i]
+        e = bytearray(32)
+        e[0] = (i + 1) | (0x40 if i == len(parts) - 1 else 0)
+        e[11], e[13] = 0x0F, s
+        for k, off in enumerate((1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30)):
+            e[off:off + 2] = struct.pack("<H", u[k])
+        out.append(bytes(e))
+    return out
+
+
+def dirent(sfn, attr, clus, size, nt=0):
+    return sfn + struct.pack("<BBBHHHHHHHI", attr, nt, 0, 0, 0, 0, clus >> 16, 0, 0,
+                             clus & 0xFFFF, size)
+
+
+def fat32_image(sectors, part_lba, nfats=1, spc=1, layout="mbr"):
+    """A small FAT32 volume laid out as f_mkfs lays one out: files, a long name and a
+    subdirectory. Returns {lba: bytearray(512)} for the sectors that aren't all zeros."""
+    sec = {}
+
+    def put(lba, off, data):
+        s = sec.setdefault(lba, bytearray(512))
+        s[off:off + len(data)] = data
+
+    end = sectors - (33 if layout == "gpt" else 0)    # GPT's backup table at the end
+    vol, rsv = end - part_lba, 32
+    fatsz = 1
+    while True:
+        clusters = (vol - rsv - nfats * fatsz) // spc
+        need = ((clusters + 2) * 4 + 511) // 512
+        if need <= fatsz:
+            break
+        fatsz = need
+    assert clusters > 65525
+    bpb = bytearray(512)
+    bpb[0:11] = b"\xEB\xFE\x90MSDOS5.0"
+    struct.pack_into("<HBHBHHBHHHII", bpb, 11, 512, spc, rsv, nfats, 0, 0, 0xF8, 0, 63, 255,
+                     part_lba, vol)
+    struct.pack_into("<IHHIHH", bpb, 36, fatsz, 0, 0, 2, 1, 6)
+    bpb[64], bpb[66] = 0x80, 0x29
+    struct.pack_into("<I", bpb, 67, 0x12345678)
+    bpb[71:90] = b"NO NAME    FAT32   "
+    bpb[510:512] = b"\x55\xAA"
+    # Clusters: 2 root, 3 README.TXT, 4-5 the long name, 6 DIR, 7-9 DIR/SUB.BIN.
+    chains = {2: [2], 3: [3], 4: [4, 5], 6: [6], 7: [7, 8, 9]}
+    used = sum(len(c) for c in chains.values())
+    fsi = bytearray(512)
+    struct.pack_into("<I", fsi, 0, 0x41615252)
+    struct.pack_into("<III", fsi, 484, 0x61417272, clusters - used, 10)
+    fsi[510:512] = b"\x55\xAA"
+    for off, data in ((0, bpb), (1, fsi), (6, bpb), (7, fsi)):
+        put(part_lba + off, 0, data)
+    fat = {0: 0x0FFFFFF8, 1: 0x0FFFFFFF}
+    for chain in chains.values():
+        for a, b in zip(chain, chain[1:] + [0x0FFFFFFF]):
+            fat[a] = b
+    for copy in range(nfats):
+        for c, v in fat.items():
+            put(part_lba + rsv + copy * fatsz + c // 128, c % 128 * 4, struct.pack("<I", v))
+    data = part_lba + rsv + nfats * fatsz
+
+    def clus(c):
+        return data + (c - 2) * spc
+
+    sfn = b"ALONGF~1TXT"
+    root = (dirent(b"README  TXT", 0x20, 3, 100) + b"".join(lfn_entries("A long file name.txt", sfn))
+            + dirent(sfn, 0x20, 4, 600) + dirent(b"DIR        ", 0x10, 6, 0)
+            + dirent(b"NOTES   TXT", 0x20, 0, 0, nt=0x18))
+    put(clus(2), 0, root)
+    put(clus(6), 0, dirent(b".          ", 0x10, 6, 0) + dirent(b"..         ", 0x10, 0, 0)
+        + dirent(b"SUB     BIN", 0x20, 7, 1500))
+    for c in (3, 4, 5, 7, 8, 9):
+        put(clus(c), 0, b"x")
+    if layout == "mbr":
+        put(0, 446, struct.pack("<B3sB3sII", 0, b"\0\1\0", 0x0C, b"\xFE\xFF\xFF", part_lba, vol))
+        put(0, 510, b"\x55\xAA")
+    elif layout == "gpt":
+        put(0, 446, struct.pack("<B3sB3sII", 0, b"\0\2\0", 0xEE, b"\xFE\xFF\xFF", 1, sectors - 1))
+        put(0, 510, b"\x55\xAA")
+        table = bytearray(128 * 128)
+        table[0:16] = bytes([0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
+                             0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7])
+        table[16:32] = bytes(range(1, 17))
+        struct.pack_into("<QQ", table, 32, part_lba, end - 1)
+        for i in range(0, len(table), 512):
+            if any(table[i:i + 512]):
+                put(2 + i // 512, 0, table[i:i + 512])
+        hdr = bytearray(92)
+        hdr[0:16] = b"EFI PART\0\0\1\0\x5C\0\0\0"
+        struct.pack_into("<QQQQ", hdr, 24, 1, sectors - 1, 34, end - 1)
+        hdr[56:72] = bytes(range(0x20, 0x30))
+        struct.pack_into("<QIII", hdr, 72, 2, 128, 128, zlib.crc32(table))
+        struct.pack_into("<I", hdr, 16, zlib.crc32(hdr))
+        put(1, 0, hdr)
+    return sec
+
+
+def sparse(sectors, sec):
+    """An image as fsck_image.h reads it: only the non-zero bytes of each sector."""
+    out = bytearray(struct.pack("<I", sectors))
+    for lba in sorted(sec):
+        s = sec[lba]
+        nz = [i for i, b in enumerate(s) if b]
+        if nz:
+            a, b = nz[0], nz[-1] + 1
+            out += struct.pack("<IHH", lba, a, b - a) + s[a:b]
+    return bytes(out)
+
+
+def fsck():
+    write("fsck", "mbr", b"\0" + sparse(70000, fat32_image(70000, 2048)))
+    write("fsck", "sfd-2fat", b"\x25" + sparse(70000, fat32_image(70000, 0, nfats=2, layout="sfd")))
+    write("fsck", "gpt", b"\x4a" + sparse(72000, fat32_image(72000, 2048, layout="gpt")))
+    exfat = bytearray(512)
+    exfat[0:11] = b"\xEB\x76\x90EXFAT   "
+    exfat[510:512] = b"\x55\xAA"
+    write("fsck", "exfat", b"\0" + sparse(70000, {0: exfat}))
+
+
+for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, fsck):
     f()

@@ -339,3 +339,4 @@ sos_fuzz(certbundle ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/heapta
 sos_fuzz(config)                                    # includes config.c itself
 sos_fuzz(ping ${SOS_ROOT}/src/net/ping_msg.c)
 sos_fuzz(terminal ${SOS_ROOT}/src/shell/keys.c ${SOS_ROOT}/src/shell/termtext.c)
+sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c)
