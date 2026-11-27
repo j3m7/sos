@@ -32,10 +32,11 @@ translation (`crlf`), and `admin` (true for the console only).
   main loop waits) for the directory named up to the last `/`, and offers its entries that start
   with the rest in any ASCII case, as FAT matches names (the typed part is then rewritten in the
   name's case; commands and words stay exact); a directory ends with `/` instead of a space, and
-  `SHELL_DIR` keeps to directories. Names that aren't valid UTF-8 from U+0021 up (spaces of
-  any kind, controls, C1 controls) or hold what `termtext_hidden()` names (bidi controls,
-  invisible characters) are never offered: a file name can't send the terminal an escape
-  sequence, nor look like another.
+  `SHELL_DIR` keeps to directories. `SHELL_REDIRECT` (echo) makes only the text after the line's
+  last `>` a path, and a `SHELL_NOSPACE` word (`https://`) ends with nothing instead of a space.
+  Names that aren't valid UTF-8 from U+0021 up (spaces of any kind, controls, C1 controls) or
+  hold what `termtext_hidden()` names (bidi controls, invisible characters) are never offered: a
+  file name can't send the terminal an escape sequence, nor look like another.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop

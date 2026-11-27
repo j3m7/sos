@@ -1910,7 +1910,9 @@ static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},
                                      END}, 0},
     END};
-static const shell_word_t nts_words[] = {W("ke"), W("query"), END};
+// Another host than the default is console only (cmd_nts); the default's name, to start from.
+static const shell_word_t nts_ke_words[] = {{NTS_DEFAULT_SERVER, NULL, SHELL_ADMIN}, END};
+static const shell_word_t nts_words[] = {{"ke", nts_ke_words, 0}, W("query"), END};
 static const shell_word_t dmesg_words[] = {{"-f", facilities, 0}, END};
 static const shell_word_t logger_words[] = {{"-p", levels, 0}, END};
 static const shell_word_t rotate_words[] = {W("every"), W("at"), END};
@@ -1918,8 +1920,10 @@ static const shell_word_t log_words[] = {
     {"console", levels, SHELL_ADMIN}, {"history", levels, SHELL_ADMIN},
     {"file", levels, SHELL_ADMIN}, {"rotate", rotate_words, SHELL_ADMIN}, END};
 static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
+static const shell_word_t sensitivities[] = {W("0"), W("1"), W("2"), W("3"), END};
 static const shell_word_t glitch_words[] = {
-    {"watch", NULL, SHELL_ADMIN}, {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN},
+    {"watch", sensitivities, SHELL_ADMIN}, {"on", sensitivities, SHELL_ADMIN},
+    {"off", NULL, SHELL_ADMIN},
     {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
 static const shell_word_t rootsecret_words[] = {
     {"forget", NULL, SHELL_ADMIN},
@@ -1948,7 +1952,9 @@ static const shell_word_t sd_words[] = {
     END};
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
-static const shell_word_t http_words[] = {W("get"), W("head"), W("post"), END};
+static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
+static const shell_word_t http_words[] = {
+    {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
 static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
 
 static const shell_cmd_t commands[] = {

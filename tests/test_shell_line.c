@@ -131,14 +131,17 @@ static const shell_word_t t_time[] = {
     W("stats"),
     W("status"),
     {0}};
+static const shell_word_t t_url[] = {{"https://", NULL, SHELL_NOSPACE}, {0}};
+static const shell_word_t t_http[] = {{"get", t_url, 0}, {0}};
 static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
 static const shell_cmd_t t_commands[] = {
     C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
-    {"?", NULL, NULL, SHELL_HIDDEN}, {0}};
+    {"?", NULL, NULL, SHELL_HIDDEN}, {"web", NULL, t_http, 0}, {0}};
 static const shell_word_t t_lua[] = {{"-b", NULL, SHELL_PATH}, W("ps"), {0}};
 static const shell_cmd_t t_files[] = {
     C("ls"), {"lua", NULL, t_lua, SHELL_PATH}, {"log", NULL, t_log, 0},
-    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR}, {0}};
+    {"cat", NULL, NULL, SHELL_PATH}, {"cd", NULL, NULL, SHELL_PATH | SHELL_DIR},
+    {"echo", NULL, NULL, SHELL_REDIRECT}, {0}};
 static const shell_cmd_t *const t_tables[] = {t_commands, t_files, NULL};
 static bool no_tables;          // as on a locked console
 
@@ -1236,10 +1239,12 @@ TEST(tab_on_an_empty_line_lists_the_commands) {
     start(&io_plain);
     type("\t\t");
     // Not setup (admin only), not ? (hidden).
-    CHECK_OUT("\a\nhelp      hostname  time      ls        lua       log       cat       cd\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      web       ls        lua       log       cat\n"
+              "cd        echo\nsos> ");
     start(&io_admin);
     type("\t\t");
-    CHECK_OUT("\a\nhelp      hostname  time      setup     ls        lua       log       cat\ncd\nsos> ");
+    CHECK_OUT("\a\nhelp      hostname  time      setup     web       ls        lua       log\n"
+              "cat       cd        echo\nsos> ");
 }
 
 TEST(tab_list_wraps_rows_on_a_crlf_channel) {
@@ -1469,6 +1474,57 @@ TEST(tab_commands_stay_case_sensitive) {
     CHECK_OUT("time SY\a");
 }
 
+TEST(tab_completes_the_file_after_echo_redirect) {
+    start(&io_plain);
+    type("echo hi > r\t");
+    CHECK(line_is("echo hi > readme.txt "));
+    start(&io_plain);
+    type("echo hi >> do\t");
+    CHECK(line_is("echo hi >> docs/"));
+    start(&io_plain);
+    type("echo hi>r\t");                             // no spaces: echo still writes to it
+    CHECK(line_is("echo hi>readme.txt "));
+    start(&io_plain);
+    type("echo a > b >r\t");                         // the last '>' is the one echo uses
+    CHECK(line_is("echo a > b >readme.txt "));
+    start(&io_plain);
+    type("echo hi > case/read\t");                   // any case, as for other paths
+    CHECK(line_is("echo hi > case/README."));
+    start(&io_plain);
+    type("echo a>b\t");                              // a '>' inside the text, no spaces at all
+    CHECK(line_is("echo a>big/"));
+    start(&io_plain);
+    type("echo a >> r\t");                           // append: the name after the last '>'
+    CHECK(line_is("echo a >> readme.txt "));
+    start(&io_plain);
+    type("echo > \t\t");                             // nothing typed yet: the working directory
+    CHECK(strstr(fake.out, "readme.txt") != NULL);
+}
+
+TEST(tab_echo_text_is_free) {
+    start(&io_plain);
+    type("echo r\t");                                // no '>': text, not a path
+    CHECK_OUT("echo r\a");
+    start(&io_plain);
+    type("echo hi > my f\t");                        // a name with a space: never offered
+    CHECK_OUT("echo hi > my f\a");
+    start(&io_plain);
+    type("echo hi > readme.txt and\t");
+    CHECK_OUT("echo hi > readme.txt and\a");
+}
+
+TEST(tab_a_word_that_ends_with_nothing) {
+    start(&io_plain);
+    type("web g\t");
+    CHECK(line_is("web get "));
+    type("h\t");
+    CHECK_OUT("web get https://");                   // no space: the URL goes on
+    CHECK(line_is("web get https://"));
+    clear_out();
+    type("\t");                                      // complete already: nothing to add
+    CHECK_OUT("");
+}
+
 TEST(tab_utf8_names) {
     start(&io_plain);
     type("cat u/M\t");
@@ -1621,6 +1677,9 @@ TEST_MAIN(
     RUN(tab_file_names_match_in_any_ascii_case);
     RUN(tab_case_folds_ascii_only);
     RUN(tab_commands_stay_case_sensitive);
+    RUN(tab_completes_the_file_after_echo_redirect);
+    RUN(tab_echo_text_is_free);
+    RUN(tab_a_word_that_ends_with_nothing);
     RUN(tab_utf8_names);
     RUN(tab_in_a_directory_cut_short);
     RUN(tab_no_card_or_no_such_directory);

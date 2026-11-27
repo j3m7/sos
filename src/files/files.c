@@ -502,7 +502,7 @@ const shell_cmd_t files_commands[] = {
     {"mv", cmd_mv, NULL, SHELL_PATH},
     {"rm", run_rm, NULL, SHELL_PATH},
     {"mkdir", run_mkdir, NULL, SHELL_PATH | SHELL_DIR},
-    {"echo", cmd_echo, NULL, 0},
+    {"echo", cmd_echo, NULL, SHELL_REDIRECT},
     {0},
 };
 

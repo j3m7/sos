@@ -460,7 +460,7 @@ static char ascii_lower(char c) {
 typedef struct {
     char first[SHELL_LINE_MAX + 1];     // the first match: a copy (a file name's buffer is reused)
     bool have;
-    char first_end;             // what follows it: ' ' or '/'
+    char first_end;             // what follows it: ' ', '/' or nothing ('\0')
     size_t common;              // bytes all matches have in common
     size_t widest;              // columns of the widest, with its '/'
 } tab_matches_t;
@@ -527,7 +527,8 @@ static void line_tab(shell_t *sh, bool again) {
     // f299.txt unread): then don't add to the line at all, only list.
     bool whole = n == 1 && !partial;
     if ((m.common > typed && !partial) || whole) {
-        size_t add = m.common - typed + whole;       // a single match ends with ' ' or '/'
+        bool end = whole && m.first_end;            // a single match ends with ' ' or '/'
+        size_t add = m.common - typed + end;
         if (sh->line_len + add > SHELL_LINE_MAX) {
             write_out(sh, "\a", 1);
             return;
@@ -543,7 +544,7 @@ static void line_tab(shell_t *sh, bool again) {
             write_out(sh, sh->line + start, typed);
         }
         memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
-        if (whole)
+        if (end)
             sh->line[sh->line_len + add - 1] = m.first_end;
         write_out(sh, sh->line + sh->line_len, add);
         sh->line_len += add;
