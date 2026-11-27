@@ -3,7 +3,7 @@
 //
 // The root secret in one-time-programmable (OTP) memory: where it is, how a page is told to
 // hold one, and which source a board takes its root secret from (issue #64,
-// docs/securing-a-board.md). This firmware only READS it. Writing it is the job of a separate
+// docs/security/design.md). This firmware only READS it. Writing it is the job of a separate
 // image used once per board (the burn image); the format here is what that image must write.
 //
 // The page list. The firmware knows three OTP pages, tried in order: pages 4, 5 and 6 (page 3
