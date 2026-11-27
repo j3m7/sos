@@ -71,8 +71,9 @@ mkdir -p "$work"
 
 ${HOSTCC:-cc} -std=c11 -O1 -Wall -Wextra -I"$root/src" -I"$root/tools/host" \
     -o "$work/sos-mkconfig" "$root/tools/host/mkconfig.c" "$root/src/core/config.c" \
-    "$root/src/time/timeconv.c" "$root/src/core/sensors.c"
-"$work/sos-mkconfig" "$conf" "$work/config.bin"
+    "$root/src/time/timeconv.c" "$root/src/core/sensors.c" "$root/src/time/tzbundle.c" \
+    "$root/src/time/tzrule.c"
+"$work/sos-mkconfig" "$conf" "$work/config.bin" "$root/tz/zones.bundle"
 
 # The configuration slots are the two 4 KB sectors below the last one (the key sector: the SSH
 # host key); see src/core/settings.c. The sector below them holds the board's root secret

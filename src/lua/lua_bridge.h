@@ -40,6 +40,11 @@ typedef struct {
     size_t code_len;
     char path[LUA_PATH_MAX];        // script file (absolute)
     char cwd[LUA_PATH_MAX];         // working directory for relative paths in the script
+    // The time zone when the script started (sos.localdate, sos.localtime, sos.zone; #240):
+    // copied from the configuration here, so a change on core 0 meanwhile can't tear the rule
+    // core 1 is reading. Empty: UTC.
+    char tz_name[40];
+    char tz_rule[64];
     uint32_t mem_limit;             // bytes the script may allocate
     bool repl;                      // interactive prompt (`lua` alone) instead of code or path
     // Interactive prompt, one line at a time: core 0 fills repl_line and repl_reset, then sets
