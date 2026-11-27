@@ -435,7 +435,7 @@ extern time_t ssh_server_my_time(time_t *);
 #define DEBUG_WOLFSSH
 #define DEBUG_MLKEM
 #else
-/* wolfSSL's table of error texts stays out (about 6 KB). src/tls/tls.c has its own wording
+/* wolfSSL's table of error texts stays out (about 20 KB). src/tls/tls.c has its own wording
  * for the errors a person meets and reports the rest by number. A debug build keeps the
  * table, since wolfSSL's own log lines use it. */
 #define NO_ERROR_STRINGS

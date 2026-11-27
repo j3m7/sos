@@ -125,7 +125,7 @@ static void fail(tls_conn_t *c, const char *fmt, ...) {
 }
 
 // What a wolfSSL error means, for the ones a person meets and can act on. wolfSSL's own table
-// of error texts is not built (NO_ERROR_STRINGS in config/user_settings.h: about 6 KB for
+// of error texts is not built (NO_ERROR_STRINGS in config/user_settings.h: about 20 KB for
 // some hundreds of messages, nearly all about things this firmware doesn't do). Any other
 // error is reported by its number, which wolfSSL's documentation lists.
 static const char *error_text(int err) {
@@ -144,10 +144,10 @@ static const char *error_text(int err) {
     case ASN_SELF_SIGNED_E:
         return "the server's certificate is self-signed";
     case FATAL_ERROR:
-        return "the server refused the connection (TLS alert)";
+        return "the server sent a fatal TLS alert";
     case SOCKET_ERROR_E:
     case SOCKET_PEER_CLOSED_E:
-        return "the connection was closed";
+        return "the connection failed or was closed";
     case VERSION_ERROR:
     case UNSUPPORTED_PROTO_VERSION:
         return "the server doesn't offer TLS 1.3";

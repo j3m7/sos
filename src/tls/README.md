@@ -31,8 +31,8 @@ The timeout covers DNS, connect and handshake together. When ready, `tls_read()`
 timings and heap use.
 
 When wolfSSL reports an error, `tls_error()` gives SOS's own wording for the ones a person
-meets and can act on (an untrusted or expired certificate, a wrong host name, a refused or
-closed connection, no TLS 1.3, no memory), followed by wolfSSL's number; any other error is
+meets and can act on (an untrusted or expired certificate, a wrong host name, a fatal alert from
+the server, a failed or closed connection, no TLS 1.3, no memory), followed by wolfSSL's number; any other error is
 "wolfSSL error N". wolfSSL's own table of error texts is not built (`NO_ERROR_STRINGS`),
 which saves about 20 KB of flash. A build with `SOS_WOLF_DEBUG` keeps it.
 
