@@ -926,6 +926,7 @@ typedef struct {
     uint32_t pass_shown;        // last pass told to the shell
     fsck_phase_t phase_shown;   // sd check fix: the run whose passes are shown
     fsck_phase_t ran;           // sd check fix: the phase the last step ran in
+    uint32_t written;           // sd check fix: sectors written (a failed write isn't)
     size_t mem_len;             // bytes in `mem`: the checker's state and the cluster window
     uint8_t mem[];
 } check_job_t;
@@ -950,10 +951,11 @@ static bool check_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf) {
 
 // Repair's writes, one sector each (fsck_repair.h). Anything but RES_OK stops the repair.
 static bool check_write(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf) {
-    (void)ctx;
-    if (count != 1 || lba > UINT32_MAX - count)
+    check_job_t *j = ctx;
+    if (count != 1 || lba > UINT32_MAX - count || disk_write(0, buf, (LBA_t)lba, 1) != RES_OK)
         return false;
-    return disk_write(0, buf, (LBA_t)lba, 1) == RES_OK;
+    j->written++;
+    return true;
 }
 
 // One problem or note. Names come from the card: control characters (escape sequences) don't
@@ -1027,7 +1029,7 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
     if (j) {
         // The driver can leave a multi-block write open between calls: finish it before the
         // card may be taken out.
-        if (j->r && fsck_repair_writes(j->r) && !(card.state.m_Status & STA_NOINIT))
+        if (j->written && !(card.state.m_Status & STA_NOINIT))
             card.sync(&card);
         size_t len = sizeof(*j) + j->mem_len;
         sdcrypt_wipe(j, len);               // sectors of the decrypted volume
@@ -1055,7 +1057,7 @@ static bool check_end(shell_t *sh, check_job_t *j, const char *fmt, ...) {
 // written decides what is said.
 static bool fix_stop(shell_t *sh, check_job_t *j, const char *why) {
     fsck_phase_t phase = fsck_repair_phase(j->r);
-    unsigned long w = fsck_repair_writes(j->r);
+    unsigned long w = j->written;
     if (phase == FSCK_PHASE_CHECK || phase == FSCK_PHASE_PLAN)
         return check_end(sh, j, "%s; nothing written", why);
     if (phase == FSCK_PHASE_FINAL)
@@ -1095,7 +1097,7 @@ static bool fix_plan(shell_t *sh, check_job_t *j) {
     sdcrypt_wipe(sh->ahead, sh->ahead_len);
     sh->ahead_len = 0;
     fix_asking = j;
-    shell_ask(sh,"Repair the card? Type 'yes': ", false, on_fix_confirm, j);
+    shell_ask(sh, "Repair the card? Type 'yes': ", false, on_fix_confirm, j);
     return false;
 }
 
@@ -1103,7 +1105,7 @@ static bool fix_plan(shell_t *sh, check_job_t *j) {
 static bool fix_next(shell_t *sh, check_job_t *j, int r) {
     if (r == FSCK_PLAN)
         return fix_plan(sh, j);
-    unsigned long w = fsck_repair_writes(j->r);
+    unsigned long w = j->written;
     if (r == FSCK_FAILED) {
         const char *why = fsck_repair_why(j->r) ? fsck_repair_why(j->r) : "?";
         if (j->ran == FSCK_PHASE_CHECK)     // as sd check's
@@ -1113,6 +1115,8 @@ static bool fix_next(shell_t *sh, check_job_t *j, int r) {
             return check_end(sh, j, "the repair is done (%lu sector%s written), but the final "
                              "check failed: %s", w, w == 1 ? "" : "s", why);
         shell_printf(sh, "%lu sector%s written before it stopped\n", w, w == 1 ? "" : "s");
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: check fix: %lu sector%s written before it "
+                "stopped", w, w == 1 ? "" : "s");
         return check_end(sh, j, "stopped: %s; " CHECK_NO_WORSE, why);
     }
     // FSCK_DONE: what was written, anything left to repair (there shouldn't be), the final check.
