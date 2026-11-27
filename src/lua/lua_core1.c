@@ -181,6 +181,22 @@ static int l_log(lua_State *L) {
     return 0;
 }
 
+// sos.reboot([why]): restart the board (refused in the first LUA_REBOOT_MIN_S after boot). Returns
+// only when refused: nil and why.
+static int l_reboot(lua_State *L) {
+    size_t len = 0;
+    const char *why = luaL_optlstring(L, 1, "", &len);
+    if (len > LUA_REBOOT_WHY_MAX)
+        len = LUA_REBOOT_WHY_MAX;
+    lua_req.type = LR_REBOOT;
+    memcpy(lua_req.data, why, len);
+    lua_req.data[len] = '\0';
+    request();
+    if (lua_job.cancel)
+        return interrupt(L);
+    return fail(L);
+}
+
 static int l_time(lua_State *L) {
     lua_req.type = LR_TIME;
     request();
@@ -770,7 +786,7 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
-    {NULL, NULL},
+    {"reboot", l_reboot},  {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
