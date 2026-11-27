@@ -264,6 +264,26 @@ buffer); failing that, put `// NOLINT(<check>): <why>` on the line.
 The host tests also build with clang (`CC=clang cmake -S tests -B build-tests-clang`), which
 warns about a few things GCC doesn't.
 
+## Fuzzing
+
+`tests/fuzz/` holds libFuzzer targets for the parsers of what reaches the board from outside:
+`http` (an HTTP server's response, and URLs), `nts_ke` and `nts_ntp` (a time server's replies;
+the NTP target's stand-in AEAD accepts any tag, so the encrypted fields are fuzzed too),
+`certbundle` (`/certs/roots.pem`), `config` (the configuration record in flash, which USB
+provisioning can write; the target writes a valid CRC around the fuzzed bytes), `ping` (ICMP
+replies and errors) and `terminal` (key sequences and text for display).
+
+```sh
+just fuzz nts_ntp 300        # five minutes; needs clang
+```
+
+New interesting inputs collect in `build-fuzz/corpus/<target>/`; a crash is written to
+`build-fuzz/crashes/<target>/` and the run stops. To keep a crash fixed, fix the code and add
+the input to `tests/fuzz/corpus/<target>/` as `crash-<what>`: every target runs over its corpus
+in the ordinary host tests (`fuzz_<target>` in `ctest`, through `tests/fuzz/replay.c`), with that
+build's sanitizers. The `seed-*` files there come from `python3 -B tests/fuzz/seeds.py`, which
+writes a few valid inputs per target; run it again after changing a format.
+
 ## Developing in a VM
 
 With the source on a host folder shared into a libvirt VM (for example virtiofs), the Pico's
