@@ -152,8 +152,12 @@ extern time_t ssh_server_my_time(time_t *);
     // #define WOLFSSL_SP_DIV_32 /* do not use 64-bit divides */
 
 #ifdef TARGET_EMBEDDED
-/* use smaller version of code */
-//#define WOLFSSL_SP_SMALL
+/* The smaller version of the SP code: 16-entry base-point tables for P-256 and P-384 in place
+ * of 256-entry ones (40 KB) and more compact arithmetic. About 48 KB of flash. P-256 is used
+ * for TLS key exchange when a server doesn't take X25519, and both curves to check
+ * certificate chains (P-384: time.cloudflare.com's). The handshake time it costs was measured
+ * on dev-1; see issue #119. */
+#define WOLFSSL_SP_SMALL
 #else
 /* SP Assembly Speedups - specific to chip type */
 #define WOLFSSL_SP_ASM
