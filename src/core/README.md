@@ -324,6 +324,11 @@ week-long glitch detector test (issue #92) and for `temp`. Nothing else uses the
 
 - **A reading every 10 s** from the main loop: 64 conversions averaged (about 130 us), in tenths
   of a degree. The lowest and highest since boot are kept with their uptimes, for `temp`.
+- **The first reading waits 10 ms** after the sensor is switched on. Read at once it is about
+  4 degrees high, settling within 2 ms (measured on dev-1). That first reading, taken before
+  Wi-Fi starts, is kept for the glitch detector until the main loop's first, but isn't counted
+  in the lowest and highest: on dev-1 it reads 0.6 to 0.8 degree above every reading after
+  the Wi-Fi chip starts (most likely its load on the 3.3 V supply, the ADC's reference).
 - **The log** gets a line at boot, then whenever the reading has moved a degree from the last
   line (at most one a minute), and at least one an hour: `chip temperature 31.2 C (since boot:
   lowest 29.8 C, highest 33.1 C)`. At notice level, so a serial logger on the console records

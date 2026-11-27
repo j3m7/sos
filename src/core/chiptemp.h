@@ -30,6 +30,9 @@
 #define CHIPTEMP_VREF_UV  3300000u      // ADC reference on the Pico 2 W: its 3.3 V supply
 #define CHIPTEMP_SAMPLES  64            // ADC conversions averaged per reading (2 us each)
 #define CHIPTEMP_SAMPLE_S 10            // a reading every 10 s from the main loop
+// Wait after switching the sensor on before the first reading. Measured on dev-1 (RP2350 A2):
+// 30.4 degrees at once, 28.9 after 100 us, 26.8 after 1 ms, and steady at 26.6-26.7 from 2 ms.
+#define CHIPTEMP_SETTLE_US 10000
 
 // The periodic log line: one at the first reading after boot, then whenever the reading has
 // moved CHIPTEMP_LOG_STEP or more from the last one logged (at most one a minute), and at least
@@ -81,7 +84,9 @@ int chiptemp_unpack(uint32_t reg);
 
 // --- the sensor (chiptemp_board.c) ---------------------------------------------------------------
 
-// Early in boot: the ADC and the sensor on, and the first reading.
+// Early in boot: the ADC and the sensor on, and a first reading for chiptemp_last(). That one
+// doesn't count in the lowest and highest: it's taken before Wi-Fi starts, which shifts the
+// readings (chiptemp_board.c).
 void chiptemp_init(void);
 
 // From the main loop: a reading every CHIPTEMP_SAMPLE_S, logged when chiptemp_log_due() says.
@@ -90,8 +95,8 @@ void chiptemp_poll(void);
 // A reading now (it counts in the lowest and highest too).
 int chiptemp_read(void);
 
-// The latest reading (at most CHIPTEMP_SAMPLE_S old once the main loop runs), or
-// CHIPTEMP_NONE before the first.
+// The latest reading (at most CHIPTEMP_SAMPLE_S old once the main loop runs; chiptemp_init's
+// before that), or CHIPTEMP_NONE before chiptemp_init.
 int chiptemp_last(void);
 
 // The readings since boot.
