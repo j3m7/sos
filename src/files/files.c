@@ -30,7 +30,7 @@
 #define COPY_CHUNK   4096
 #define LS_LINE_MAX  (PATH_LEN + 48)
 #define TAB_DIR_MAX  256        // directory entries Tab reads at most (it blocks the main loop)
-#define SYNC_US      1000000    // a file being written is synced at most this often
+#define SYNC_US      1000000    // a file being written is synced at most this often (files.h)
 
 static int holders;             // jobs and SFTP handles with open files or directories
 
@@ -140,12 +140,7 @@ static const char *printable(char *name) {
     return name;
 }
 
-// FatFs writes a file's directory entry (its size and date) only at f_sync() or f_close(), so
-// until then `ls` sees a new file at size 0 and date zero, and a reset loses what was written
-// (#218). tee and cp sync the file they write when `*synced_at` (the open, or the last sync) is
-// a second old: a fast producer is unaffected until then, a slow one costs one sync a second.
-// Called after a write, so there are unsynced bytes.
-static FRESULT sync_if_due(FIL *f, uint64_t *synced_at) {
+FRESULT files_sync_if_due(FIL *f, uint64_t *synced_at) {
     uint64_t now = time_us_64();
     if (now - *synced_at < SYNC_US)
         return FR_OK;
@@ -178,7 +173,7 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
             break;
         }
         char date[20];
-        if (!fi.fdate)      // month 0: an entry not yet written out (above sync_if_due())
+        if (!fi.fdate)      // month 0: an entry not yet written out (files_sync_if_due())
             snprintf(date, sizeof(date), "%-16s", fi.fattrib & AM_DIR ? "" : "being written");
         else
             snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u", (fi.fdate >> 9) + 1980,
@@ -293,7 +288,7 @@ static void cmd_echo(shell_t *sh, char *args) {
 
 struct pipe_file {
     FIL f;
-    uint64_t synced_at;         // opened or last synced (sync_if_due())
+    uint64_t synced_at;         // opened or last synced (files_sync_if_due())
 };
 
 bool pipe_file_check(shell_t *sh, const char *name, char *path, size_t size) {
@@ -333,7 +328,7 @@ const char *pipe_file_write(pipe_file_t *pf, const char *buf, size_t len) {
     if (fr == FR_OK && bw != len)
         fr = FR_DENIED;                 // card full
     if (fr == FR_OK && len)
-        fr = sync_if_due(&pf->f, &pf->synced_at);
+        fr = files_sync_if_due(&pf->f, &pf->synced_at);
     return fr == FR_OK ? NULL : files_error(fr);
 }
 
@@ -399,7 +394,7 @@ typedef struct {
     FIL src, dst;
     char dst_path[PATH_LEN];
     uint64_t done, size, t0;
-    uint64_t synced_at;             // opened or last synced (sync_if_due())
+    uint64_t synced_at;             // opened or last synced (files_sync_if_due())
     uint8_t buf[COPY_CHUNK];
 } cp_job_t;
 
@@ -426,7 +421,7 @@ static bool cp_step(shell_t *sh, void *arg, bool cancel) {
         j->done += br;
     }
     if (!cancel && !finished && fr == FR_OK && j->done != done0)   // wrote, more to come
-        fr = sync_if_due(&j->dst, &j->synced_at);
+        fr = files_sync_if_due(&j->dst, &j->synced_at);
     if (!cancel && !finished && fr == FR_OK)
         return true;
 

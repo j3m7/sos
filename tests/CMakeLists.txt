@@ -43,6 +43,14 @@ add_executable(test_files test_files.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}
 target_include_directories(test_files PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
 add_test(NAME files COMMAND test_files)
 
+# src/ssh/sftp_fs.c: the SFTP server's file functions (when an upload's file is synced, #224),
+# with the real src/files/files.c behind them, over the same stand-ins as test_files.
+add_executable(test_sftp_fs test_sftp_fs.c ${SOS_ROOT}/src/ssh/sftp_fs.c ${SOS_ROOT}/src/files/files.c
+    ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_sftp_fs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs/sftp ${SOS_ROOT}/src)
+add_test(NAME sftp_fs COMMAND test_sftp_fs)
+
 # src/shell/words.c: the shell's tokenizer (quotes, backslashes, operators) and the join.
 add_executable(test_words test_words.c ${SOS_ROOT}/src/shell/words.c)
 target_include_directories(test_words PRIVATE ${SOS_ROOT}/src)
@@ -318,6 +326,11 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_include_directories(test_lua_info PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_info PRIVATE lua_host)
     add_test(NAME lua_info COMMAND test_lua_info)
+    add_executable(test_lua_date test_lua_date.c ${SOS_ROOT}/src/lua/lua_date.c
+                   ${SOS_ROOT}/src/time/timeconv.c)
+    target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
+    target_link_libraries(test_lua_date PRIVATE lua_host)
+    add_test(NAME lua_date COMMAND test_lua_date)
 else()
     message(WARNING "LUA_ROOT (${LUA_ROOT}) has no lua.h: test_lua_complete is skipped")
 endif()
