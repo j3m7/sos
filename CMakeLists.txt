@@ -152,6 +152,10 @@ set(SOS_SOURCES
     src/shell/charwidth.c
     src/edit/edit.c
     src/edit/editor.c
+    src/edit/fsterm.c
+    src/edit/pager.c
+    src/edit/screen.c
+    src/edit/view.c
     src/chat/chat.c
     src/net/wifi.c
     src/net/wifi_pick.c
