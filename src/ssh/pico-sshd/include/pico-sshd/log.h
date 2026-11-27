@@ -44,8 +44,6 @@ extern "C"
    passed to log_cb. The others carry no facility (the application picks one). */
 #define LOG_AUTH      (4 << 3)
 
-void ssh_server_log_level(int priority);
-
 
 #ifdef __cplusplus
 }

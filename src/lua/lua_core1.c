@@ -15,6 +15,9 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 
+// First: the Lua headers keep the definitions it makes for them (as for the Lua sources).
+#include "lua/lua_port.h"
+
 #include "lauxlib.h"
 #include "lua.h"
 #include "lualib.h"
@@ -429,7 +432,7 @@ static int http_request(lua_State *L, int t) {
     size_t body_len = 0;
     const char *body = opt_string(L, t, "body");
     if (body)
-        body_len = lua_rawlen(L, -1);
+        lua_tolstring(L, -1, &body_len);
     const char *method = opt_string(L, t, "method");
     if (!method)
         method = body ? "POST" : "GET";

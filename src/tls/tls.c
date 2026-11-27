@@ -489,7 +489,7 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     }
     cyw43_arch_lwip_end();
     if (slot == TLS_MAX_CONNS)
-        fail(c, refused ? refused : "too many TLS connections open");
+        fail(c, "%s", refused ? refused : "too many TLS connections open");
     return c;
 }
 
