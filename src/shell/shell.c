@@ -23,7 +23,6 @@
 #include "chat/chat.h"
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
-#include "core/chiptemp.h"
 #include "core/config.h"
 #include "core/failflash.h"
 #include "core/fault.h"
@@ -38,6 +37,7 @@
 #include "core/rootsecret.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
+#include "core/sensors.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -228,6 +228,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
+    shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
@@ -311,25 +312,49 @@ static void cmd_uptime(shell_t *sh) {
                      (unsigned long)(f.max_us / 100 % 10));
 }
 
-// `temp`: the chip's temperature now, and the lowest and highest since boot (core/chiptemp.h).
+// "since boot: lowest ... (... ago), highest ... (... ago), read every 10 s", from a reading's
+// stats and its text function (core/sensors.h).
+static void print_since_boot(shell_t *sh, const sensors_stats_t *st,
+                             void (*format)(char *, size_t, int)) {
+    if (!st->count)
+        return;
+    char lo[SENSORS_TEXT_MAX], hi[SENSORS_TEXT_MAX], lo_age[24], hi_age[24];
+    format(lo, sizeof(lo), st->min);
+    format(hi, sizeof(hi), st->max);
+    sensors_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
+    sensors_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
+    shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
+                 lo, lo_age, hi, hi_age, SENSORS_SAMPLE_S);
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
 static void cmd_temp(shell_t *sh) {
-    int now = chiptemp_read();
-    const chiptemp_stats_t *st = chiptemp_stats();
-    char t[CHIPTEMP_TEXT_MAX], lo[CHIPTEMP_TEXT_MAX], hi[CHIPTEMP_TEXT_MAX];
-    char lo_age[24], hi_age[24];
-    chiptemp_format(t, sizeof(t), now);
+    char t[SENSORS_TEXT_MAX];
+    sensors_format_temp(t, sizeof(t), sensors_read_temp());
     shell_printf(sh, "chip temperature: %s\n", t);
-    if (st->count) {
-        chiptemp_format(lo, sizeof(lo), st->min);
-        chiptemp_format(hi, sizeof(hi), st->max);
-        chiptemp_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
-        chiptemp_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
-        shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
-                     lo, lo_age, hi, hi_age, CHIPTEMP_SAMPLE_S);
-    }
+    print_since_boot(sh, sensors_temp_stats(), sensors_format_temp);
     shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
                      "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
                      "time on this board.\n");
+}
+
+// `power`: the supply voltage (VSYS) now, the lowest and highest since boot, and USB power.
+static void cmd_power(shell_t *sh) {
+    int mv = sensors_read_vsys();
+    if (mv == SENSORS_NONE) {
+        shell_printf(sh, "this board has no supply voltage reading\n");
+        return;
+    }
+    char v[SENSORS_TEXT_MAX];
+    sensors_format_mv(v, sizeof(v), mv);
+    int usb = sensors_usb_power();
+    shell_printf(sh, "supply (VSYS): %s, %s\n", v,
+                 usb > 0 ? "USB power present" : usb == 0 ? "no USB power" : "USB power unknown");
+    print_since_boot(sh, sensors_vsys_stats(), sensors_format_mv);
+    shell_printf(sh, "VSYS is the board's input: USB power through a diode (about 0.35 V below it), "
+                     "or what feeds\nthe VSYS pin. Within a few percent; a reading taken during a "
+                     "Wi-Fi transmission shows\nits dip (about 0.13 V on USB), so the lowest can "
+                     "be a brief one.\n");
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -946,12 +971,13 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
                          "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
         if (glitchdet_watch_triggers()) {
-            char t[CHIPTEMP_TEXT_MAX];
-            chiptemp_format(t, sizeof(t), glitchdet_watch_first_temp());
-            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up, chip at "
-                             "%s. Armed, it would have reset the board\n",
+            char both[SENSORS_BOTH_MAX];
+            sensors_format_both(both, sizeof(both), glitchdet_watch_first_temp(),
+                                glitchdet_watch_first_vsys());
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up (%s). "
+                             "Armed, it would have reset the board\n",
                          (unsigned)glitchdet_watch_triggers(),
-                         (unsigned long)glitchdet_watch_first_s(), t);
+                         (unsigned long)glitchdet_watch_first_s(), both);
         } else
             shell_printf(sh, "no trigger since boot\n");
     } else
@@ -968,13 +994,14 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
                      (unsigned)glitchdet_last_triggers(),
                      (unsigned long)glitchdet_last_uptime_s());
-        char t[CHIPTEMP_TEXT_MAX];
-        chiptemp_format(t, sizeof(t), glitchdet_last_temp());
-        if (glitchdet_last_temp() != CHIPTEMP_NONE)
-            shell_printf(sh, "chip at %s before that reset (last reading, taken every %u s)\n",
-                         t, CHIPTEMP_SAMPLE_S);
+        char both[SENSORS_BOTH_MAX];
+        sensors_format_both(both, sizeof(both), glitchdet_last_temp(), glitchdet_last_vsys());
+        if (glitchdet_last_temp() != SENSORS_NONE || glitchdet_last_vsys() != SENSORS_NONE)
+            shell_printf(sh, "before that reset: %s (last readings, taken every %u s)\n", both,
+                         SENSORS_SAMPLE_S);
         else
-            shell_printf(sh, "no chip temperature was kept from before that reset\n");
+            shell_printf(sh, "no chip temperature or supply reading was kept from before that "
+                             "reset\n");
     }
 }
 
@@ -1835,6 +1862,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_uptime(sh);
     else if (!strcmp(cmd, "temp"))
         cmd_temp(sh);
+    else if (!strcmp(cmd, "power"))
+        cmd_power(sh);
     else if (!strcmp(cmd, "version"))
         cmd_version(sh);
     else if (!strcmp(cmd, "time"))
