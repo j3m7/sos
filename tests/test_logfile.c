@@ -71,6 +71,17 @@ static bool f_append(const char *path, const char *data, size_t n, const char **
 
 static void f_boot(char *buf, size_t len) { snprintf(buf, len, "SOS test, last reset: power-on"); }
 
+static int retries;
+static bool card_inserted;              // a retry finds a card
+static void f_retry(void) {
+    retries++;
+    if (card_inserted && !card) {
+        card = true;
+        generation++;
+    }
+}
+
+
 static bool fail_renames;
 static bool have_rotated;               // the card has a /var/log/.rotated
 static int64_t card_rotated;
@@ -105,8 +116,8 @@ static bool f_save_rotated(int64_t s, const char **why) {
 }
 
 static const logfile_hooks_t file_hooks = {
-    f_now, f_wall, f_ready, f_generation, f_append, f_boot, f_rotate_file, f_load_rotated,
-    f_save_rotated,
+    f_now, f_wall, f_ready, f_generation, f_append, f_boot, f_retry, f_rotate_file,
+    f_load_rotated, f_save_rotated,
 };
 
 static void reset(void) {
@@ -121,6 +132,8 @@ static void reset(void) {
     have_rotated = false;
     card_rotated = 0;
     renames = 0;
+    retries = 0;
+    card_inserted = false;
     memset(files, 0, sizeof(files));
     log_init(&log_hooks);
     log_set_deferred(true);
@@ -471,6 +484,42 @@ TEST(rotation_time_read_again_after_a_mount) {
     CHECK_EQ(renames, SOS_LOG_FACILITIES);
 }
 
+// With no card, a mount is tried every LOGFILE_RETRY_MS, not more often; one that finds a card
+// starts the files.
+TEST(no_card_retries_every_minute) {
+    reset();
+    card = false;
+    logfile_init(&file_hooks);          // as logfile_start(): it has just tried
+    log_msg(SOS_LOG_AUTH | SOS_LOG_WARNING, "waiting for a card");
+    for (int i = 0; i < 100; i++) {
+        now += 500000;                  // 50 s in all
+        logfile_poll();
+    }
+    CHECK_EQ(retries, 0);
+    now += 10000000;
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+    card_inserted = true;
+    now += LOGFILE_RETRY_MS * 1000ull;
+    logfile_poll();
+    CHECK_EQ(retries, 2);
+    CHECK(strstr(file("/var/log/auth.log"), "waiting for a card"));
+    // Mounted: no more tries.
+    now += 10 * LOGFILE_RETRY_MS * 1000ull;
+    logfile_poll();
+    CHECK_EQ(retries, 2);
+}
+
+TEST(boot_marker_has_the_boot_time) {
+    reset();
+    now = 30000000;                     // written 30 s after boot
+    log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "x");
+    logfile_poll();
+    CHECK(strstr(file("/var/log/kern.log"), "2025-11-26T14:03:12.000Z --- boot:"));
+}
+
 TEST(not_started) {
     logfile_init(NULL);
     logfile_status_t st;
@@ -506,6 +555,8 @@ TEST_MAIN(
     RUN(a_failed_rename_stops_the_files);
     RUN(rotation_time_in_the_future_is_reset);
     RUN(rotation_time_read_again_after_a_mount);
+    RUN(no_card_retries_every_minute);
+    RUN(boot_marker_has_the_boot_time);
     RUN(not_started);
     RUN(paths);
 )

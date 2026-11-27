@@ -34,6 +34,7 @@ static unsigned rotate_days = 7, rotate_minute;
 static bool rotated_known;              // `rotated` was read from the card (or set)
 static int64_t rotated;
 static uint32_t rotated_generation;     // the mount it was read on
+static uint64_t last_retry_us;
 
 void logfile_init(const logfile_hooks_t *h) {
     hooks = h;
@@ -42,6 +43,7 @@ void logfile_init(const logfile_hooks_t *h) {
     error = error_path = NULL;
     bytes = lines = lost = 0;
     rotated_once = rotated_known = false;
+    last_retry_us = h ? h->now_us() : 0;    // logfile_start() has just tried
 }
 
 void logfile_set_rotation(unsigned days, unsigned minute) {
@@ -124,7 +126,8 @@ static void put_line(int f, uint64_t uptime_ms, const char *level, const char *t
     if (!bufs[f].started) {
         char boot[96];
         hooks->boot_text(boot, sizeof(boot));
-        stamp(when, sizeof(when), hooks->now_us() / 1000);
+        // The boot's own time; a rotation's marker, when it's written.
+        stamp(when, sizeof(when), rotated_once ? hooks->now_us() / 1000 : 0);
         int n = snprintf(line, sizeof(line), rotated_once ? "%s --- rotated; this boot: %s ---\n"
                                                           : "%s --- boot: %s ---\n", when, boot);
         put(f, line, n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
@@ -196,8 +199,15 @@ void logfile_poll(void) {
         error = error_path = NULL;          // mounted again since: try again
     }
     if (!hooks->card_ready()) {
-        state = LOGFILE_NO_CARD;
-        return;
+        uint64_t now = hooks->now_us();
+        if (hooks->retry_mount && now - last_retry_us >= (uint64_t)LOGFILE_RETRY_MS * 1000) {
+            last_retry_us = now;
+            hooks->retry_mount();
+        }
+        if (!hooks->card_ready()) {
+            state = LOGFILE_NO_CARD;
+            return;
+        }
     }
     state = LOGFILE_WRITING;
 
