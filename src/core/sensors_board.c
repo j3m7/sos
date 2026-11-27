@@ -22,6 +22,7 @@
 #include "pico/stdlib.h"
 
 #include "core/log.h"
+#include "core/settings.h"
 
 static sensors_stats_t temp_stats, vsys_stats;
 static sensors_logged_t logged;
@@ -40,11 +41,28 @@ static uint32_t sum_conversions(void) {
     return sum;
 }
 
-static int sample_temp(void) {
+static int sample_temp_uncalibrated(void) {
     // The sensor's own channel needs no settling after another channel: on dev-1 the first
     // conversion after a VSYS reading matched the settled ones.
     adc_select_input(ADC_TEMPERATURE_CHANNEL_NUM);
     return sensors_temp_tenths(sum_conversions(), SENSORS_SAMPLES, SENSORS_VREF_UV);
+}
+
+static int sample_temp(void) {
+    return sample_temp_uncalibrated() + settings()->temp_offset;
+}
+
+int sensors_read_temp_uncalibrated(void) {
+    return sample_temp_uncalibrated();
+}
+
+void sensors_temp_offset_changed(int old_offset) {
+    int delta = settings()->temp_offset - old_offset;
+    sensors_stats_shift(&temp_stats, delta);
+    if (boot_temp != SENSORS_NONE)
+        boot_temp += delta;
+    if (logged.any && logged.temp != SENSORS_NONE)
+        logged.temp += delta;
 }
 
 int sensors_read_temp(void) {

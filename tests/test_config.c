@@ -1489,6 +1489,41 @@ TEST(glitch_detector_setting) {
     CHECK_EQ(b.glitch_detector, 2);
 }
 
+// --- the chip temperature's calibration ----------------------------------------------------------
+
+// It takes the two bytes that were padding before wifi_extra: the record's size doesn't change,
+// records saved before load as uncalibrated, and a value out of range is that too.
+TEST(temp_offset_setting) {
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, temp_offset), 1794);
+    CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);     // still where it was
+    CHECK_EQ(sizeof(sos_config_t), 2188);
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK_EQ(a.temp_offset, 0);
+    const int16_t values[] = {0, 18, -18, CONFIG_TEMP_OFFSET_MAX, -CONFIG_TEMP_OFFSET_MAX};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        a.temp_offset = values[i];
+        CHECK(config_save(&sealed_store, &a));
+        CHECK(config_load(&sealed_store, &b, NULL));
+        CHECK_EQ(b.temp_offset, values[i]);
+    }
+    a.temp_offset = CONFIG_TEMP_OFFSET_MAX + 1;         // can only be a leftover
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_EQ(b.temp_offset, 0);
+    a.temp_offset = -32768;
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK_EQ(b.temp_offset, 0);
+    CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
+    blank_flash();                                      // a plain record carries it too
+    a.temp_offset = -7;
+    CHECK(config_save(&store, &a));
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.temp_offset, -7);
+}
+
 // --- saved Wi-Fi networks ----------------------------------------------------------------------------
 
 static void check_net(const sos_config_t *c, unsigned i, const char *ssid, const char *password) {
@@ -1707,6 +1742,7 @@ TEST_MAIN(
     RUN(key_list_capacity);
     RUN(crc32_known_value);
     RUN(glitch_detector_setting);
+    RUN(temp_offset_setting);
     RUN(console_password_fields_are_appended);
     RUN(console_password_checks);
     RUN(verifier_round_trips_sealed_and_the_password_is_not_stored);

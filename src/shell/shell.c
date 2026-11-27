@@ -228,6 +228,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
+    shell_printf(sh, "temp cal          chip temperature calibration\n");
     shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
@@ -327,15 +328,86 @@ static void print_since_boot(shell_t *sh, const sensors_stats_t *st,
                  lo, lo_age, hi, hi_age, SENSORS_SAMPLE_S);
 }
 
-// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
-static void cmd_temp(shell_t *sh) {
+// A temperature difference with its sign: "+1.8 C", "-0.4 C", "0.0 C".
+static void format_temp_delta(char *out, size_t size, int tenths) {
     char t[SENSORS_TEXT_MAX];
+    sensors_format_temp(t, sizeof(t), tenths);
+    snprintf(out, size, "%s%s", tenths > 0 ? "+" : "", t);
+}
+
+// `temp cal [off | <degrees>]`: the chip temperature's calibration (a setting, so console only
+// to change). <degrees> is what a reference thermometer beside the board reads now; the
+// difference from the sensor's own reading is stored and added to every reading after.
+static void cmd_temp_cal(shell_t *sh, const char *value) {
+    char d[SENSORS_TEXT_MAX + 1], r[SENSORS_TEXT_MAX], ref_t[SENSORS_TEXT_MAX];
+    int old = settings()->temp_offset;
+    while (*value == ' ')
+        value++;
+    if (!*value) {
+        format_temp_delta(d, sizeof(d), old);
+        if (old)
+            shell_printf(sh, "chip temperature calibration: %s added to the sensor's reading\n", d);
+        else
+            shell_printf(sh, "chip temperature calibration: none (uncalibrated)\n");
+        return;
+    }
+    if (!require_admin(sh))
+        return;
+    int ref = 0, raw = 0, offset = 0;
+    if (strcmp(value, "off")) {
+        if (!sensors_parse_temp(value, &ref)) {
+            shell_printf(sh, "not changed: give 'off', or what a thermometer beside the board "
+                             "reads now, in degrees C\n(e.g. 23.5)\n");
+            return;
+        }
+        raw = sensors_read_temp_uncalibrated();
+        offset = ref - raw;
+        sensors_format_temp(r, sizeof(r), raw);
+        sensors_format_temp(ref_t, sizeof(ref_t), ref);
+        if (offset < -CONFIG_TEMP_OFFSET_MAX || offset > CONFIG_TEMP_OFFSET_MAX) {
+            shell_printf(sh, "not changed: the sensor reads %s, and %s is more than %d degrees "
+                             "from it.\nCheck the reference, and that the board has cooled to "
+                             "room temperature.\n", r, ref_t, CONFIG_TEMP_OFFSET_MAX / 10);
+            return;
+        }
+    }
+    settings()->temp_offset = (int16_t)offset;
+    save(sh);
+    sensors_temp_offset_changed(old);
+    format_temp_delta(d, sizeof(d), offset);
+    if (!offset && !strcmp(value, "off")) {
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: chip temperature calibration off");
+        shell_printf(sh, "chip temperature calibration: none (uncalibrated)\n");
+        return;
+    }
+    log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: chip temperature calibration %s (sensor %s, "
+                                           "reference %s)", d, r, ref_t);
+    shell_printf(sh, "the sensor reads %s and the reference %s: %s is now added to every "
+                     "reading\n", r, ref_t, d);
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
+static void cmd_temp(shell_t *sh, char *args) {
+    if (args) {
+        if (!strncmp(args, "cal", 3) && (args[3] == ' ' || !args[3]))
+            cmd_temp_cal(sh, args + 3);
+        else
+            shell_printf(sh, "usage: temp [cal [off | <degrees>]]\n");
+        return;
+    }
+    char t[SENSORS_TEXT_MAX], d[SENSORS_TEXT_MAX + 1];
     sensors_format_temp(t, sizeof(t), sensors_read_temp());
     shell_printf(sh, "chip temperature: %s\n", t);
     print_since_boot(sh, sensors_temp_stats(), sensors_format_temp);
     shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
-                     "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
-                     "time on this board.\n");
+                     "under Wi-Fi load).\n");
+    int offset = settings()->temp_offset;
+    format_temp_delta(d, sizeof(d), offset);
+    if (offset)
+        shell_printf(sh, "Calibrated (`temp cal`): %s added to the sensor's reading.\n", d);
+    else
+        shell_printf(sh, "Uncalibrated: a few degrees off, good for change over time on this "
+                         "board (`temp cal`).\n");
 }
 
 // `power`: the supply voltage (VSYS) now, the lowest and highest since boot, and USB power.
@@ -939,6 +1011,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "not reset\n");
         return;
     }
+    int old_temp_offset = settings()->temp_offset;
     bool erased = settings_reset();
     // The live configuration is gone either way, the owner secret with it: an encrypted card
     // doesn't stay open under it, and the SSH host key was that owner's. SSH stops now (it
@@ -956,6 +1029,7 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
                          "back at the next boot.\n");
     wifi_apply_power();
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
+    sensors_temp_offset_changed(old_temp_offset);   // and the chip temperature
     wifi_reconnect();
 }
 
@@ -1359,6 +1433,9 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    char tcal[SENSORS_TEXT_MAX + 1];
+    format_temp_delta(tcal, sizeof(tcal), c->temp_offset);
+    shell_printf(sh, "temp cal:      %s\n", c->temp_offset ? tcal : "off");
     unsigned days = c->log_rotate_days ? c->log_rotate_days : CONFIG_LOG_ROTATE_DAYS_DEFAULT;
     shell_printf(sh, "log rotation:  every %u day%s at %02u:%02u UTC%s\n", days,
                  days == 1 ? "" : "s", c->log_rotate_minute / 60u, c->log_rotate_minute % 60u,
@@ -1861,7 +1938,7 @@ void shell_execute(shell_t *sh, char *cmd) {
     else if (!strcmp(cmd, "uptime"))
         cmd_uptime(sh);
     else if (!strcmp(cmd, "temp"))
-        cmd_temp(sh);
+        cmd_temp(sh, args);
     else if (!strcmp(cmd, "power"))
         cmd_power(sh);
     else if (!strcmp(cmd, "version"))

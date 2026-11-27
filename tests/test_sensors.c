@@ -161,6 +161,50 @@ TEST(lowest_and_highest) {
     CHECK_EQ(st.min, -15);
 }
 
+TEST(stats_shift) {
+    sensors_stats_t st = {0};
+    sensors_stats_shift(&st, 18);                  // nothing read yet: stays empty
+    CHECK_EQ(st.count, 0);
+    sensors_stats_add(&st, 250, 10);
+    sensors_stats_add(&st, 270, 20);
+    sensors_stats_add(&st, 260, 30);
+    sensors_stats_shift(&st, 18);
+    CHECK_EQ(st.min, 268);
+    CHECK_EQ(st.max, 288);
+    CHECK_EQ(st.last, 278);
+    CHECK_EQ(st.min_s, 10);                        // the times stay
+    CHECK_EQ(st.max_s, 20);
+    sensors_stats_shift(&st, -18);
+    CHECK_EQ(st.min, 250);
+}
+
+TEST(parse_temp) {
+    int t = 999;
+    CHECK(sensors_parse_temp("23", &t));
+    CHECK_EQ(t, 230);
+    CHECK(sensors_parse_temp("23.5", &t));
+    CHECK_EQ(t, 235);
+    CHECK(sensors_parse_temp("-4.2", &t));
+    CHECK_EQ(t, -42);
+    CHECK(sensors_parse_temp("+31.0", &t));
+    CHECK_EQ(t, 310);
+    CHECK(sensors_parse_temp("0", &t));
+    CHECK_EQ(t, 0);
+    CHECK(sensors_parse_temp("-0.5", &t));
+    CHECK_EQ(t, -5);
+    CHECK(sensors_parse_temp("-40", &t));
+    CHECK_EQ(t, SENSORS_CAL_MIN);
+    CHECK(sensors_parse_temp("125.0", &t));
+    CHECK_EQ(t, SENSORS_CAL_MAX);
+    t = 999;
+    // Out of range, more than one decimal, junk: refused, and the value is untouched.
+    const char *bad[] = {"", "-", "+", ".5", "23.", "23.45", "23,5", "23C", "23 ", " 23",
+                         "125.1", "-40.1", "1e2", "99999999999", "abc", "--3"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(!sensors_parse_temp(bad[i], &t));
+    CHECK_EQ(t, 999);
+}
+
 TEST(log_policy_temperature) {
     sensors_logged_t lg = {0};
     CHECK(!sensors_log_due(&lg, SENSORS_NONE, 4556, 1, 2));    // nothing without a temperature
@@ -241,6 +285,8 @@ TEST_MAIN(
     RUN(format_both);
     RUN(format_age);
     RUN(lowest_and_highest);
+    RUN(stats_shift);
+    RUN(parse_temp);
     RUN(log_policy_temperature);
     RUN(log_policy_supply);
     RUN(scratch_register_form);
