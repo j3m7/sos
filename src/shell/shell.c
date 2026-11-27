@@ -10,7 +10,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
@@ -2109,9 +2108,7 @@ static void run_reboot(shell_t *sh, char *args) {
     log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
             who && strcmp(who, sh->io->name) ? " " : "",
             who && strcmp(who, sh->io->name) ? who : "");
-    logfile_flush();                    // what the log files haven't written yet
-    sleep_ms(100);
-    watchdog_reboot(0, 0, 0);
+    wdog_reboot();
 }
 
 // --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
