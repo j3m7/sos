@@ -16,7 +16,7 @@ working directory:
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
 | `sd unmount` | console only: unmount the card, to remove it |
-| `sd check` | console only, on an unmounted card: check its file system, reporting problems without writing (FAT32 only for now) |
+| `sd check` | console only, on an unmounted card: check its file system (exFAT or FAT32), reporting problems without writing |
 
 - **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
   loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
@@ -60,23 +60,43 @@ card, so the check refuses and its "the card is mounted" line is what lands in t
 The output looks like this (design: [docs/design/sd-check.md](design/sd-check.md)):
 
 ```
-checking FAT32, 29.7 GB, 970752 clusters of 32 KB, encrypted (8 passes)
+checking exFAT, 29.7 GB, 970752 clusters of 32 KB, encrypted (8 passes)
 pass 1/8
 /var/log/messages: 3 clusters for 70000 bytes, chain has 2
 pass 2/8
 ...
+lost: clusters 81920-81935 (512 KB)
 pass 8/8
-1 problem; 0 bytes lost, 0 cross-linked
+2 problems; 512 KB lost, 0 cross-linked
 ```
 
-Lines starting `note:` (a stale FSInfo free count, a chain longer than its file, the volume's
-dirty flag) are notes, not problems.
+The lines, path first when there is one:
+
+- **Entries:** a chain that loops, breaks or reaches a free or bad cluster; a size that needs
+  more clusters than the chain has; names FatFs refuses or repeats; on FAT32 long-name and
+  `.`/`..` entries, on exFAT entry sets (their checksum, name hash, counts, lengths) and
+  NoFatChain files that run past the last cluster; directories that loop or nest too deep.
+- **Clusters:** `lost: clusters <a>-<b> (<size>)`: in use (FAT32: in the FAT; exFAT: in the
+  allocation bitmap) but reached by no file. `reached but free: ...` (exFAT): used by a file
+  but free in the bitmap. `<path>: cross-linked with an earlier entry ...`: clusters another
+  file uses too. On exFAT, where a contiguous file can share any part of another, a file is
+  named when its last cluster is shared; otherwise one line says `<n> clusters used by more
+  than one entry`.
+- **The volume:** the backup boot sector or exFAT's backup boot region differing, exFAT's
+  boot checksum, the FSInfo sector, the two FATs differing, `up-case table checksum ...`, and
+  `the allocation bitmap's chain isn't contiguous ...` (FatFs won't mount such a card).
+
+Lines starting `note:` are not problems: a chain longer than its file (wasted clusters), a
+stale FSInfo free count, the volume flagged dirty or as having had a disk error (left by a PC
+or camera; `volume flagged dirty` is added to the summary), FAT entry 0 not matching the media
+byte, and an exFAT up-case table that maps characters unlike FatFs. A card that can't be checked
+at all ends with `not checked: <why>`: no card, no FAT32 or exFAT volume, or a boot sector FatFs
+would refuse.
 
 A card has about a million clusters, too many to track at once beside Wi-Fi, TLS and SSH, so
 the clusters are checked a window at a time, one pass over the directory tree per window: 16 KB
-of memory gives 8 passes on a 32 GB card, and less memory more passes (it needs about 10 KB at
-least). Only FAT32 is checked so far: an exFAT card (what `sd format` makes by default) ends with
-`not checked: exFAT is not checked yet`.
+of memory gives 8 passes on a 32 GB card, and less memory more passes (it needs about 11 KB at
+least).
 
 ## Encrypted cards
 
