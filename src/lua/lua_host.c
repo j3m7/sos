@@ -328,6 +328,24 @@ static void serve(bool main_loop) {
 static bool repl;                       // the owner is at the Lua prompt (`lua` alone)
 static void repl_answer(shell_t *sh, char *answer, void *arg);
 
+// The request payload and the output ring: one block, there from start_job() until finish().
+// Core 1 uses them only between LJ_START and LJ_DONE.
+static bool alloc_buffers(void) {
+    uint8_t *block = heap_alloc(HEAP_LUA, LUA_REQ_DATA + LUA_OUT_SIZE);
+    if (!block)
+        return false;
+    lua_req.data = block;
+    lua_out.buf = (char *)block + LUA_REQ_DATA;
+    return true;
+}
+
+static void free_buffers(void) {
+    lua_out.head = lua_out.tail = 0;    // nothing left to drain from a buffer that is going
+    heap_release(HEAP_LUA, lua_req.data);
+    lua_req.data = NULL;
+    lua_out.buf = NULL;
+}
+
 static void finish(void) {
     script_log_dropped();
     http_drop();
@@ -335,6 +353,7 @@ static void finish(void) {
     heap_release(HEAP_LUA, owner_code);
     owner_code = NULL;
     lua_job.code = NULL;
+    free_buffers();                     // core 1 is done with them: the job is LJ_DONE
     owner = NULL;
     repl = false;
     background = false;
@@ -619,11 +638,15 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
         return "a script is already running (one at a time; see 'lua ps')";
     if (!lua_core1_start())
         return "out of memory starting core 1";
+    if (!alloc_buffers())
+        return "out of memory";
     memset(&lua_job, 0, sizeof(lua_job));
     if (code) {
         owner_code = heap_strdup(HEAP_LUA, code);
-        if (!owner_code)
+        if (!owner_code) {
+            free_buffers();
             return "out of memory";
+        }
         lua_job.code = owner_code;
         lua_job.code_len = strlen(owner_code);
         snprintf(job_desc, sizeof(job_desc), "lua -e %s", code);

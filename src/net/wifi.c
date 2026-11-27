@@ -563,17 +563,13 @@ bool wifi_radio(wifi_radio_t *r) {
            ((r->channel = ch[0]), true);
 }
 
-unsigned wifi_chip_counters(uint32_t *out, unsigned max) {
-    static uint8_t buf[1024];       // too big for the stack
-    memset(buf, 0, sizeof(buf));
-    strcpy((char *)buf, "counters");
-    if (cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, sizeof(buf), buf, CYW43_ITF_STA) != 0)
+unsigned wifi_chip_counters(uint32_t out[WIFI_CHIP_COUNTER_WORDS]) {
+    const size_t bytes = WIFI_CHIP_COUNTER_WORDS * sizeof(uint32_t);
+    memset(out, 0, bytes);
+    strcpy((char *)out, "counters");            // the request goes in the buffer the answer uses
+    if (cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, bytes, (uint8_t *)out, CYW43_ITF_STA) != 0)
         return 0;
-    unsigned n = sizeof(buf) / 4;
-    if (n > max)
-        n = max;
-    memcpy(out, buf, n * 4);
-    return n;
+    return WIFI_CHIP_COUNTER_WORDS;
 }
 
 int wifi_iovar_get(const char *name, uint32_t *value) {

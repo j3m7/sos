@@ -103,6 +103,39 @@ TEST(protected_dir_fatfs_aliases) {
     CHECK(!path_is_protected("/cert\xc5\xbf"));     // U+017F isn't case-folded to 's' by FatFs
 }
 
+TEST(log_dir_is_protected) {
+    CHECK(path_is_protected("/var/log"));
+    CHECK(path_is_protected("/var/log/"));
+    CHECK(path_is_protected("/var/log/auth.log"));
+    CHECK(path_is_protected("/var/log/auth.log.1"));
+    CHECK(path_is_protected("/var/log/.rotated"));
+    CHECK(path_is_protected("/var"));               // renaming /var would take /var/log along
+    CHECK(path_is_protected("/var/"));
+    CHECK(!path_is_protected("/var/tmp"));          // the rest of /var isn't
+    CHECK(!path_is_protected("/var/tmp/x"));
+    CHECK(!path_is_protected("/var/logs"));
+    CHECK(!path_is_protected("/var/lo"));
+    CHECK(!path_is_protected("/docs/var/log/x"));   // only at the top
+    CHECK(!path_is_protected("/variant"));
+    CHECK(!path_is_protected("/log"));
+}
+
+TEST(log_dir_fatfs_aliases) {
+    CHECK(path_is_protected("/VAR/LOG/auth.log"));
+    CHECK(path_is_protected("/Var/Log"));
+    CHECK(path_is_protected("/var./log./x"));
+    CHECK(path_is_protected("/var /log /x"));
+    CHECK(path_is_protected("\\var\\log\\auth.log"));
+    CHECK(path_is_protected("/var//log"));
+    CHECK(path_is_protected("/var/./log/x"));
+    CHECK(path_is_protected("/var/tmp/../log/x"));
+    CHECK(path_is_protected("/docs/../var/log"));
+    CHECK(path_is_protected("/var/log/../log/x"));
+    CHECK(!path_is_protected("/var/log/../tmp"));   // leaves it
+    CHECK(path_is_protected("/VAR."));
+    CHECK(path_is_protected("/var/log\x01"));      // fails closed like /certs
+}
+
 TEST(protected_dir_fails_closed) {
     CHECK(path_is_protected("0:/certs"));           // drive prefix
     CHECK(path_is_protected("/0:/docs"));           // any ':' at all
@@ -127,6 +160,8 @@ TEST_MAIN(
     RUN(basename);
     RUN(join);
     RUN(protected_dir);
+    RUN(log_dir_is_protected);
+    RUN(log_dir_fatfs_aliases);
     RUN(protected_dir_fatfs_aliases);
     RUN(protected_dir_fails_closed);
 )
