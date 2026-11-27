@@ -37,6 +37,12 @@ enum {
     KEY_DELETE,
     KEY_PGUP,
     KEY_PGDN,
+    // A word left or right: Ctrl+Left/Right or Alt+Left/Right (xterm "ESC [ 1 ; 5 D" and
+    // "; 3", rxvt "ESC O d"), or Alt+B/Alt+F, which is what macOS terminals send for Option+arrow.
+    KEY_WORD_LEFT,
+    KEY_WORD_RIGHT,
+    KEY_CTRL_HOME,              // Ctrl+Home/End: xterm "ESC [ 1 ; 5 H", "ESC [ 1 ; 5 ~", rxvt "ESC [ 7 ^"
+    KEY_CTRL_END,
     // Answer to "ESC [ 6 n" (where is the cursor?): "ESC [ row ; col R". keys_t.param[0] is the
     // row and param[1] the column, both from 1. The same bytes are Ctrl/Shift+F3 on some
     // terminals ("ESC [ 1 ; 5 R"), so treat it as an answer only after asking.
@@ -45,8 +51,9 @@ enum {
 
 // Decode one byte. A control character (below 0x20) in the middle of a sequence abandons the
 // sequence and is returned as itself, so a stray ESC can't swallow Enter or Ctrl-C. Unknown
-// sequences, modifier variants included, give KEYS_NONE (Ctrl+Right is just Right). Alt+key is
-// dropped whole, a UTF-8 character included. A lone Esc can't be told from the start of a
+// sequences give KEYS_NONE. A modifier on a known key is ignored (Shift+Up is Up), except the
+// ones that make KEY_WORD_* and KEY_CTRL_HOME/END. Alt+key is dropped whole, a UTF-8 character
+// included, except Alt+B and Alt+F (KEY_WORD_*). A lone Esc can't be told from the start of a
 // sequence, so it swallows the next key: full-screen programs shouldn't rely on Esc.
 int keys_feed(keys_t *k, unsigned char c);
 

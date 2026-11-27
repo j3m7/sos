@@ -1,11 +1,12 @@
 # edit: the full-screen text editor
 
 `edit <file>` (see [docs/commands.md](../../docs/commands.md#editor) for the keys) edits a file
-of up to 32 KB on the console or over SSH.
+of up to 128 KB on the console or over SSH, less while the heap has less to spare.
 
 ## `editor.c`: text, keys and screen (pure C, host tested)
 
-- **Text** is bytes in a gap buffer that grows as needed up to `EDITOR_MAX_TEXT`. The cursor
+- **Text** is bytes in a gap buffer that grows as needed up to the editor's limit: what edit.c
+  found the heap could spare when the file was opened, at most `EDITOR_MAX_TEXT`. The cursor
   moves a UTF-8 character at a time. A file with CRLF line ends is edited with LF and saved with
   CRLF again (`editor_export()`).
 - **Keys** come from `keys.h`; `editor_key()` returns what the caller must do: save, quit, or ask
@@ -15,19 +16,29 @@ of up to 32 KB on the console or over SSH.
   (up to `EDITOR_MAX_MARKS`, 2) move and delete as one, and a mark beyond that or with no letter
   to go on shows as `?`. A wide character cut by either edge of the screen shows as spaces. All of
   this is one function, `unit_bytes()`, so layout, cursor and drawing agree; and since each column
-  holds one unit of at most 12 bytes, a row's output is bounded (`EDITOR_ROW_BYTES`, 1936 bytes at
-  the 160-column limit) whatever the file holds, and fits one SSH write. Controls, invalid
+  holds one unit of at most 12 bytes, a row's output is bounded (`EDITOR_ROW_BYTES`, 4816 bytes at
+  the 400-column limit) whatever the file holds. Controls, invalid
   UTF-8 and the code points `termtext_hidden()` names show as `?`, so nothing in a file can send
   the terminal a sequence or hide what its bytes are. Lines don't wrap; the view scrolls
   sideways.
-- **Drawing** (`editor_draw()`) only sends rows that changed (a hash of what each row shows), in
-  whole rows, as many as the caller has room for, and restarts the frame if something changes
-  in between. Typing a character sends one text row, the status bar and the cursor.
+- **Drawing** (`editor_draw()`) only sends rows that changed (a hash of what each row shows), a
+  row at a time, as many as the caller has room for, in pieces when the caller has less room
+  than a row (SSH takes 2048 bytes a pass, a 400-column row of emoji can be more), and restarts
+  the frame if something changes in between (a row cut short goes out again whole). Typing a
+  character sends one text row, the status bar and the cursor.
 
 ## `edit.c`: the command
 
-- Reads the file whole, then runs the editor as a raw-mode shell job (`shell_run_raw()`), sending
-  screen updates as the channel's free space allows (`shell_write_space()`).
+- Reads the file whole, straight into the editor's buffer (`editor_open()`, so there's never a
+  second copy), then runs the editor as a raw-mode shell job (`shell_run_raw()`), sending screen
+  updates as the channel's free space allows (`shell_write_space()`).
+- **Memory:** the buffer is allocated whole when the file is opened, for the file plus 32 KB of
+  typing room (`GROWTH`), so it never has to grow while typing (a realloc would hold the old and
+  the new block together) and a small file costs little while an editor sits open. The room is
+  less when the heap has less to spare: 64 KB stays free (`HEAP_RESERVE`, what a TLS handshake
+  needs), and if no block of that size can be had the room is halved, down to 1 KB. Typing past
+  the room says so; save and open again for more. A file that leaves less than 1 KB of room, or
+  more than `EDITOR_MAX_TEXT`, is refused with the sizes.
 - **Screen size:** on start and Ctrl-L it moves the cursor to row and column 999 and asks where it
   is (`ESC [ 6 n`); the answer is the size. The first frame waits up to 0.5 s for it.
 - **Terminal:** the alternate screen, with autowrap off so a wide character can't push a row onto
