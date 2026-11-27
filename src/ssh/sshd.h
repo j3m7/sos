@@ -37,4 +37,24 @@ void sshd_poll(void);
 // (the caller's own session is marked with '*').
 void sshd_status(shell_t *sh);
 
+// What `ssh` shows, as values (for Lua's sos.ssh.status()). False if the server isn't running.
+typedef struct {
+    const char *fingerprint;    // "SHA256:..."
+    const char *key_type;       // "ssh-ed25519"
+    unsigned sessions, max_sessions;
+    uint32_t refused_busy, refused_penalty, dropped_stale, logins;
+} sshd_info_t;
+bool sshd_info(sshd_info_t *info);
+
+// Session `i` (0 .. max_sessions - 1), if one is open there: who and from where, its state, and
+// for how long. False for a free slot.
+typedef struct {
+    char login[40];             // room for pico-sshd's 32 characters
+    char address[48];           // "192.168.1.79:50362"
+    const char *state;
+    bool sftp;
+    uint32_t seconds;
+} sshd_session_info_t;
+bool sshd_session(unsigned i, sshd_session_info_t *info);
+
 #endif

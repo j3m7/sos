@@ -123,6 +123,14 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   are for what the person types there, not for code they run. Once the script's shell is gone,
   its requests change nothing.
 
+## Files
+
+`sos.rename` and `sos.stat` are requests of their own (`LR_RENAME`, `LR_STAT`); a rename checks
+both paths with `files_write_allowed()`. `sos.copy` is core 1 alternating `LR_READ` and `LR_WRITE`,
+4 KB each. `sos.http.download` writes to `<path>.part` and renames it over `path` (`LR_RENAME`
+with replace) once the body is complete. `sos.sd.info` is a health table (`LH_SD`) from
+`sdcard_info()`.
+
 ## Board health: `lua_info.c`, `lua_health.c`
 
 `sos.sensors`, `sos.mem`, `sos.version`, `sos.reset_reason`, `sos.glitch` and `sos.wifi.status`
@@ -171,6 +179,15 @@ so the collector frees it however the encoding ends (core 1 has no `__gc`). Both
 levels, for core 1's C stack. Object keys are sorted (`qsort` over the keys, kept alive in a
 table). Tested on the host (`tests/test_lua_json.c`) and fuzzed (`tests/fuzz/fuzz_json.c`: any
 input decodes or is refused, and encoding what decodes is stable).
+
+## Network: `lua_net.c`
+
+`sos.wifi.scan`, `sos.net.resolve` and `sos.ping` take a while, so like `sos.http` they stay
+pending (`LR_SCAN`, `LR_RESOLVE`, `LR_PING`) and are served from the main loop only, a step per
+pass; Ctrl-C answers "interrupted", and `finish()` drops whatever is left. The scan uses the Wi-Fi
+name collection Tab uses (`wifi_names_*`) and stops it only if it started it. A lookup's late answer
+is told apart by an id. A ping is a run of `net/ping.c` without a shell (`ping_begin()`,
+`ping_advance()`): the same requests and statistics as the command, nothing printed.
 
 ## `lua_port.h`
 

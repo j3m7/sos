@@ -66,7 +66,7 @@ DESCRIPTION
     Joins the chat room: shows the last few lines and who is there, then each
     line typed at the 'chat> ' prompt goes to everyone else in the room, as
 
-        [14:03] alice@laptop: hi
+        [14:03 UTC] alice@laptop: hi
 
     Lines typed in the room are sent as they are: unlike a command line
     (QUOTING in 'man intro'), quotes, '|' and '>' in them are plain text.
@@ -453,11 +453,12 @@ SYNOPSIS
 
 DESCRIPTION
     Makes one HTTPS request and prints the response: 'get' the status line and
-    the body, then its size and timings; 'head' the status line and headers;
-    'post' sends the text as text/plain (UTF-8) and prints the response as
-    'get' does. A job: Ctrl-C stops it. Quote a text that holds quotes, a
-    '|' or '>' or repeated spaces, such as a JSON body: http post <url>
-    '{"a":1}' (QUOTING in 'man intro').
+    the body, then its size and timings and the server's certificate (its
+    name, who issued it, and when it expires); 'head' the status line and
+    headers; 'post' sends the text as text/plain (UTF-8) and prints the
+    response as 'get' does. A job: Ctrl-C stops it. Quote a text that holds
+    quotes, a '|' or '>' or repeated spaces, such as a JSON body: http post
+    <url> '{"a":1}' (QUOTING in 'man intro').
 
     URLs must start with https:// and the path must already be
     percent-encoded (no spaces). The server's certificate must chain to a
@@ -765,10 +766,13 @@ DESCRIPTION
 
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
-    and the 'sos' library: sos.read/write/append/list/remove/mkdir for files;
+    and the 'sos' library: sos.read/write/append/list/remove/mkdir,
+    rename/copy/stat/exists and sos.sd.info for files;
     sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
-    sos.sleep, sos.log; timers sos.every/after/cancel (a background script
-    keeps going while timers are left); sos.http.get/post/head/request and
+    sos.clock_sync, sos.who, sos.ssh.status, sos.tls.roots, sos.wall,
+    sos.random, sos.sleep, sos.log; timers sos.every/after/cancel (a
+    background script keeps going while timers are left); sos.wifi.scan,
+    sos.net.resolve and sos.ping; sos.http.get/post/head/request and
     sos.http.download (into a file) for HTTPS (the response includes how
     long the request took); tables about the board: sos.sensors, sos.mem,
     sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
@@ -1587,13 +1591,14 @@ SYNOPSIS
 DESCRIPTION
     Shows the message in every other shell at once, as
 
-        [wall 14:02 alice@laptop] message
+        [wall 14:02 UTC alice@laptop] message
 
-    and says how many shells it was sent to. Times are UTC, or time since boot
-    ('+1h02m') until the clock is set. A message arrives between the reader's
-    keystrokes: their line is cleared, the message printed, and the prompt and
-    their typing redrawn; during a running command it appears on its own line.
-    A full-screen program (edit, more, man) holds messages until it quits.
+    and says how many shells it was sent to. Times are UTC and say so, or time
+    since boot ('+1h02m') until the clock is set. A message arrives between the
+    reader's keystrokes: their line is cleared, the message printed, and the
+    prompt and their typing redrawn; during a running command it appears on its
+    own line. A full-screen program (edit, more, man) holds messages until it
+    quits.
 
     Messages are kept only in memory (the last 16), never in the log or on the
     card. A reader whose client has stopped reading doesn't hold the sender up

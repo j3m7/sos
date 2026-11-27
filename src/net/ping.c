@@ -25,8 +25,9 @@
 #include "net/ping_msg.h"
 #include "net/wifi.h"
 
-#define PING_MAX_RUNS   4           // a shell each: the console and 3 SSH sessions. lwIP has
-                                    // MEMP_NUM_RAW_PCB (4) raw PCBs, and nothing else uses them
+#define PING_MAX_RUNS   5           // a shell each (the console and 3 SSH sessions) and a Lua
+                                    // script. lwipopts.h has MEMP_NUM_RAW_PCB 5 raw PCBs for
+                                    // them, and nothing else uses raw PCBs
 #define INTERVAL_US     1000000     // between requests, and so how long a reply is waited for
 #define DNS_TIMEOUT_US  20000000    // lwIP's own retries give up sooner; this is a backstop
 
@@ -42,7 +43,7 @@ typedef enum {
     ANSWER_ERROR,   // an ICMP error about the request
 } ping_answer_t;
 
-typedef struct {
+struct ping_run {
     uint32_t id;                    // for the DNS callback, which can come after the run ended
     struct raw_pcb *pcb;
     uint16_t icmp_id;               // the requests' identifier: this run's replies carry it
@@ -63,7 +64,8 @@ typedef struct {
     uint8_t error_type, error_code; //   an error's
     ip_addr_t reply_from;           //   who sent it
     char host[PING_HOST_MAX + 1];
-} ping_run_t;
+    const char *failure;            // why it ended without pinging (DNS), or NULL
+};
 
 // Runs in progress, for the DNS callback to find its run by id. Changed under the lwIP lock.
 static ping_run_t *runs[PING_MAX_RUNS];
@@ -183,6 +185,8 @@ static void send_next(shell_t *sh, ping_run_t *r) {
         return;
     }
     r->stats.not_sent++;
+    if (!sh)
+        return;
     const char *why = send_error(err);
     if (why)
         shell_printf(sh, "seq=%u not sent: %s\n", seq, why);
@@ -211,28 +215,27 @@ static void check_reply(shell_t *sh, ping_run_t *r, uint64_t now) {
         ipaddr_ntoa_r(&from, ip, sizeof(ip));
     if (answer == ANSWER_REPLY) {
         uint32_t rtt = (uint32_t)(reply_us - r->sent_us);
-        char ms[16];
-        ping_ms_text(rtt, ms);
         ping_stats_reply(&r->stats, rtt);
-        shell_printf(sh, "reply from %s: seq=%u ttl=%u time=%s ms\n", ip, r->seq, ttl, ms);
+        if (sh) {
+            char ms[16];
+            ping_ms_text(rtt, ms);
+            shell_printf(sh, "reply from %s: seq=%u ttl=%u time=%s ms\n", ip, r->seq, ttl, ms);
+        }
     } else if (answer == ANSWER_ERROR) {
-        char what[40];
-        ping_error_text(type, code, what);
         r->stats.icmp_errors++;
-        shell_printf(sh, "error from %s: seq=%u %s\n", ip, r->seq, what);
-    } else if (r->state == P_SETTLED) {
+        if (sh) {
+            char what[40];
+            ping_error_text(type, code, what);
+            shell_printf(sh, "error from %s: seq=%u %s\n", ip, r->seq, what);
+        }
+    } else if (r->state == P_SETTLED && sh) {
         shell_printf(sh, "seq=%u timeout\n", r->seq);
     }
 }
 
-static bool ping_step(shell_t *sh, void *arg, bool cancel) {
-    ping_run_t *r = arg;
-    if (cancel) {               // Ctrl-C, or the session ended (output then goes nowhere)
-        if (r->state != P_RESOLVING)
-            summary(sh, r);
-        run_free(r);
-        return false;
-    }
+// Move the run on; output to sh if there is one. False once it has finished: all requests
+// done, or DNS failed (r->failure, also printed).
+static bool advance(shell_t *sh, ping_run_t *r) {
     uint64_t now = time_us_64();
     if (r->state == P_RESOLVING) {
         bool done, ok;
@@ -245,18 +248,22 @@ static bool ping_step(shell_t *sh, void *arg, bool cancel) {
         if (!done && now - r->start_us < DNS_TIMEOUT_US)
             return true;
         if (!done || !ok) {
-            shell_printf(sh, "ping: DNS lookup of %s %s\n", r->host, done ? "failed" : "timed out");
-            run_free(r);
+            r->failure = done ? "DNS lookup failed" : "DNS lookup timed out";
+            if (sh)
+                shell_printf(sh, "ping: DNS lookup of %s %s\n", r->host,
+                             done ? "failed" : "timed out");
             return false;
         }
-        char ip[IPADDR_STRLEN_MAX];
-        ipaddr_ntoa_r(&addr, ip, sizeof(ip));
-        if (r->literal)
-            shell_printf(sh, "ping %s: ", r->host);
-        else
-            shell_printf(sh, "ping %s (%s): ", r->host, ip);
-        shell_printf(sh, "%u request%s of %u data bytes, one a second\n", r->count,
-                     r->count == 1 ? "" : "s", PING_DATA_SIZE);
+        if (sh) {
+            char ip[IPADDR_STRLEN_MAX];
+            ipaddr_ntoa_r(&addr, ip, sizeof(ip));
+            if (r->literal)
+                shell_printf(sh, "ping %s: ", r->host);
+            else
+                shell_printf(sh, "ping %s (%s): ", r->host, ip);
+            shell_printf(sh, "%u request%s of %u data bytes, one a second\n", r->count,
+                         r->count == 1 ? "" : "s", PING_DATA_SIZE);
+        }
         send_next(sh, r);
         return true;
     }
@@ -266,36 +273,46 @@ static bool ping_step(shell_t *sh, void *arg, bool cancel) {
             return true;
     }
     // P_SETTLED: request `seq` is done with.
-    if (r->seq >= r->count) {
-        summary(sh, r);
-        run_free(r);
+    if (r->seq >= r->count)
         return false;
-    }
     if (time_us_64() - r->sent_us >= INTERVAL_US)
         send_next(sh, r);
     return true;
 }
 
-void ping_command(shell_t *sh, char *args) {
-    char *host;
-    unsigned count;
-    const char *bad = ping_parse_args(args, &host, &count);
-    if (bad) {
-        shell_printf(sh, "%s\n", bad);
-        return;
+static bool ping_step(shell_t *sh, void *arg, bool cancel) {
+    ping_run_t *r = arg;
+    if (cancel) {               // Ctrl-C, or the session ended (output then goes nowhere)
+        if (r->state != P_RESOLVING)
+            summary(sh, r);
+        run_free(r);
+        return false;
     }
+    if (advance(sh, r))
+        return true;
+    if (!r->failure)
+        summary(sh, r);
+    run_free(r);
+    return false;
+}
+
+ping_run_t *ping_begin(const char *host, unsigned count, const char **err) {
     // Any shell, SSH included: SSH users are the device's trusted owners, and `http` already
-    // connects to any host they name.
+    // connects to any host they name. Scripts too, for the same reason.
     if (!wifi_up()) {
-        shell_printf(sh, "ping: Wi-Fi is not connected\n");
-        return;
+        *err = "Wi-Fi is not connected";
+        return NULL;
+    }
+    if (!host[0] || strlen(host) > PING_HOST_MAX || count < 1 || count > PING_COUNT_MAX) {
+        *err = "bad host or count";
+        return NULL;
     }
     ping_run_t *r = heap_zalloc(HEAP_PING, sizeof(*r));
     if (!r) {
-        shell_printf(sh, "ping: out of memory\n");
-        return;
+        *err = "out of memory";
+        return NULL;
     }
-    strcpy(r->host, host);                      // ping_parse_args() checked the length
+    strcpy(r->host, host);
     r->count = (uint16_t)count;
     r->start_us = time_us_64();
     ip_addr_t literal;
@@ -308,7 +325,7 @@ void ping_command(shell_t *sh, char *args) {
     while (slot < PING_MAX_RUNS && runs[slot])
         slot++;
     if (slot == PING_MAX_RUNS || !(r->pcb = raw_new(IP_PROTO_ICMP))) {
-        refused = "ping: too many pings at once";
+        refused = "too many pings at once";
     } else {
         if (!icmp_id_seeded) {                  // not the same identifiers after every boot
             next_icmp_id = (uint16_t)LWIP_RAND();
@@ -318,16 +335,56 @@ void ping_command(shell_t *sh, char *args) {
         r->icmp_id = next_icmp_id++;
         raw_recv(r->pcb, recv_cb, r);
         runs[slot] = r;
-        err_t err = dns_gethostbyname(r->host, &r->addr, dns_found, (void *)(uintptr_t)r->id);
-        if (err == ERR_OK)
+        err_t e = dns_gethostbyname(r->host, &r->addr, dns_found, (void *)(uintptr_t)r->id);
+        if (e == ERR_OK)
             r->dns_ok = r->dns_done = true;     // an address, or a name in lwIP's cache
-        else if (err != ERR_INPROGRESS)
+        else if (e != ERR_INPROGRESS)
             r->dns_done = true;                 // dns_ok stays false
     }
     cyw43_arch_lwip_end();
     if (refused) {
-        shell_printf(sh, "%s\n", refused);
+        *err = refused;
         run_free(r);
+        return NULL;
+    }
+    return r;
+}
+
+bool ping_advance(ping_run_t *r) {
+    return advance(NULL, r);
+}
+
+const char *ping_failure(const ping_run_t *r) {
+    return r->failure;
+}
+
+const ping_stats_t *ping_run_stats(const ping_run_t *r) {
+    return &r->stats;
+}
+
+void ping_run_address(const ping_run_t *r, char *out, size_t n) {
+    out[0] = '\0';
+    if (r->state != P_RESOLVING && n >= IPADDR_STRLEN_MAX)
+        ipaddr_ntoa_r(&r->addr, out, (int)n);
+}
+
+void ping_end(ping_run_t *r) {
+    if (r)
+        run_free(r);
+}
+
+void ping_command(shell_t *sh, char *args) {
+    char *host;
+    unsigned count;
+    const char *bad = ping_parse_args(args, &host, &count);
+    if (bad) {
+        shell_printf(sh, "%s\n", bad);
+        return;
+    }
+    const char *err;
+    ping_run_t *r = ping_begin(host, count, &err);
+    if (!r) {
+        shell_printf(sh, "ping: %s\n", err);
         return;
     }
     shell_run_job(sh, ping_step, r);

@@ -35,6 +35,14 @@ typedef struct {
     uint32_t longest_step_us;   // longest single wolfSSL call (main loop blocked that long)
     size_t heap_peak;           // most wolfSSL heap in use at once since tls_open()
     bool dates_unchecked;       // certificate dates skipped (clock not set)
+    // The server's own certificate (the chain's leaf), once the handshake accepted it. cert_known
+    // is false if it couldn't be read; then the rest is empty.
+    bool cert_known;
+    int64_t cert_not_before;    // valid from, seconds since 1970 (UTC); 0 if unreadable
+    int64_t cert_not_after;     // valid until
+    char cert_subject[64];      // its common name ("letsencrypt.org")
+    char cert_issuer[128];      // the issuer's name, as wolfSSL writes it ("/C=US/O=.../CN=R11"),
+                                // cut at 127 characters (a long name may end mid-component)
 } tls_stats_t;
 
 typedef struct tls_conn tls_conn_t;
