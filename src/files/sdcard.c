@@ -59,9 +59,17 @@ static sd_card_t card = {
 size_t sd_get_num(void) { return 1; }
 sd_card_t *sd_get_by_num(size_t num) { return num == 0 ? &card : NULL; }
 
-// The library's messages (weak hooks, silent by default) go to the system log.
-void put_out_error_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: %s", s); }
-void put_out_info_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s); }
+// The library's messages (weak hooks, silent by default) go to the system log, except during a
+// quiet mount (sdcard_mount_retry()): a missing card would otherwise say so every minute.
+static bool quiet;
+void put_out_error_message(const char *s) {
+    if (!quiet)
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: %s", s);
+}
+void put_out_info_message(const char *s) {
+    if (!quiet)
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s);
+}
 
 // While formatting (one long FatFs call), feed the watchdog from each block write: the main loop
 // doesn't run until it returns, but every completed write is progress.
@@ -126,14 +134,37 @@ static enum {
     KIND_LOCKED,            // encrypted, but this board's card key doesn't open it (or there is none)
     KIND_UNSUPPORTED,       // encrypted in a format this firmware doesn't know
 } card_kind;
-static sdcrypt_t crypt;
 static uint8_t card_id[SDCRYPT_ID_LEN];
-static uint8_t crypt_buf[8 * SDCRYPT_SECTOR];     // sectors encrypted before writing
+
+// The layer's working memory, 7.5 KB, on the heap (HEAP_FILES) only while it's needed: for the
+// moment it takes to look at a card's header, and from then on if the card is encrypted, until
+// it is unmounted, taken out or reformatted. A board with a plain card, or none, doesn't hold
+// it. KIND_ENCRYPTED implies it is there.
+typedef struct {
+    sdcrypt_t crypt;
+    uint8_t buf[8 * SDCRYPT_SECTOR];        // sectors encrypted before writing; header sectors
+} crypt_state_t;
+static crypt_state_t *cs;
+
+static bool crypt_alloc(void) {
+    if (!cs)
+        cs = heap_zalloc(HEAP_FILES, sizeof(*cs));
+    return cs != NULL;
+}
+
+static void crypt_free(void) {
+    if (!cs)
+        return;
+    sdcrypt_stop(&cs->crypt);
+    sdcrypt_wipe(cs, sizeof(*cs));          // it held the card's key
+    heap_release(HEAP_FILES, cs);
+    cs = NULL;
+}
 
 static bool repair_header;      // opened from the backup: rewrite sector 0 once the volume mounts
 
 static void crypt_off(void) {
-    sdcrypt_stop(&crypt);
+    crypt_free();
     card_kind = KIND_UNKNOWN;
     repair_header = false;
 }
@@ -145,7 +176,7 @@ static block_dev_err_t read_blocks_layer(sd_card_t *c, uint8_t *buf, uint32_t se
     if (card_kind != KIND_ENCRYPTED)
         return read_blocks_logged(c, buf, sector, count);
     block_dev_err_t r = read_blocks_logged(c, buf, sector + SDCRYPT_OFFSET, count);
-    if (r == SD_BLOCK_DEVICE_ERROR_NONE && !sdcrypt_decrypt(&crypt, buf, sector, count))
+    if (r == SD_BLOCK_DEVICE_ERROR_NONE && !sdcrypt_decrypt(&cs->crypt, buf, sector, count))
         r = SD_BLOCK_DEVICE_ERROR_UNSUPPORTED;
     return r;
 }
@@ -157,13 +188,13 @@ static block_dev_err_t write_blocks_layer(sd_card_t *c, const uint8_t *buf, uint
     if (card_kind != KIND_ENCRYPTED)
         return write_blocks_fed(c, buf, sector, count);
     // The caller's buffer (FatFs's window, or the caller's data) must not change: encrypt into
-    // crypt_buf, a chunk at a time.
-    const uint32_t chunk = sizeof(crypt_buf) / SDCRYPT_SECTOR;
+    // cs->buf, a chunk at a time.
+    const uint32_t chunk = sizeof(cs->buf) / SDCRYPT_SECTOR;
     while (count) {
         uint32_t n = count < chunk ? count : chunk;
-        if (!sdcrypt_encrypt(&crypt, crypt_buf, buf, sector, n))
+        if (!sdcrypt_encrypt(&cs->crypt, cs->buf, buf, sector, n))
             return SD_BLOCK_DEVICE_ERROR_UNSUPPORTED;
-        block_dev_err_t r = write_blocks_fed(c, crypt_buf, sector + SDCRYPT_OFFSET, n);
+        block_dev_err_t r = write_blocks_fed(c, cs->buf, sector + SDCRYPT_OFFSET, n);
         if (r != SD_BLOCK_DEVICE_ERROR_NONE)
             return r;
         buf += n * SDCRYPT_SECTOR;
@@ -189,12 +220,14 @@ static const char *kind_why;    // why a locked or unsupported card can't be use
 // The card is locked because the board had no card key when it was looked at (no owner secret
 // yet). That can change without the card changing: mount() looks again once there is one.
 static bool locked_without_key;
+// The card couldn't be looked at for lack of memory (crypt_alloc): mount() looks again.
+static bool locked_no_memory;
 
-// Read the card's sector 0 and backup header (into crypt_buf, which isn't in use outside a
-// write) and open them with this board's card key (sdcrypt_card_open has the rules). The card must be
+// Read the card's sector 0 and backup header (into cs->buf, which isn't in use outside a
+// write; the caller has allocated it) and open them with this board's card key (sdcrypt_card_open has the rules). The card must be
 // initialized. Fills `info` on SDCRYPT_OK; *from_backup says the backup opened it.
 static int open_card(sdcrypt_info_t *info, bool *from_backup) {
-    uint8_t *primary = crypt_buf, *backup = crypt_buf + SDCRYPT_SECTOR;
+    uint8_t *primary = cs->buf, *backup = cs->buf + SDCRYPT_SECTOR;
     if (read_blocks_logged(&card, primary, 0, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
         memset(info, 0, sizeof(*info));
         return SDCRYPT_PLAIN;   // unreadable: FatFs will say so
@@ -217,9 +250,10 @@ static void repair_after_mount(void) {
     if (!repair_header)
         return;
     repair_header = false;
-    bool fixed = read_blocks_logged(&card, crypt_buf, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
-                 sdcrypt_is_header(crypt_buf) &&
-                 write_blocks_fed(&card, crypt_buf, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
+    // Only after a mount through the layer, so the card is encrypted and cs is there.
+    bool fixed = read_blocks_logged(&card, cs->buf, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
+                 sdcrypt_is_header(cs->buf) &&
+                 write_blocks_fed(&card, cs->buf, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
     log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
             "sd: the card's header was damaged; %s from its backup copy",
             fixed ? "rewrote it" : "using it (rewriting sector 0 failed)");
@@ -233,12 +267,28 @@ static void detect(void) {
     kind_why = NULL;
     repair_header = false;
     locked_without_key = false;
+    locked_no_memory = false;
+    // Logged when it starts, not at every try: a mount is tried again while memory is short
+    // (by hand, or by anything that remounts on a timer).
+    static bool no_memory_logged;
+    if (!crypt_alloc()) {
+        // Not known to be plain, so not usable as one: an encrypted card read without the
+        // layer looks like a card with no filesystem.
+        card_kind = KIND_LOCKED;
+        locked_no_memory = true;
+        kind_why = "not enough memory to look at the card (7.5 KB): free some and try again";
+        if (!no_memory_logged)
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: %s", kind_why);
+        no_memory_logged = true;
+        return;
+    }
+    no_memory_logged = false;
     sdcrypt_info_t info;
     bool from_backup;
     int r = open_card(&info, &from_backup);
     if (r == SDCRYPT_PLAIN) {
         card_kind = KIND_PLAIN;
-    } else if (r == SDCRYPT_OK && sdcrypt_start(&crypt, info.data_key)) {
+    } else if (r == SDCRYPT_OK && sdcrypt_start(&cs->crypt, info.data_key)) {
         memcpy(card_id, info.card_id, sizeof(card_id));
         card_kind = KIND_ENCRYPTED;
         repair_header = from_backup;
@@ -260,6 +310,8 @@ static void detect(void) {
               "was erased since it was formatted (or both header copies are damaged)";
     }
     sdcrypt_wipe(&info, sizeof(info));
+    if (card_kind != KIND_ENCRYPTED)
+        crypt_free();                       // only an open encrypted card keeps the memory
     if (kind_why)
         log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: %s", kind_why);
 }
@@ -318,6 +370,8 @@ static const char *fs_type(BYTE t) {
     }
 }
 
+static uint32_t mount_generation;   // counts mounts, for sdcard_generation()
+
 static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
@@ -331,10 +385,14 @@ static bool mount(shell_t *sh) {
                 card_kind = KIND_UNKNOWN;
             sdcrypt_wipe(key, sizeof(key));
         }
+        if (card_kind == KIND_LOCKED && locked_no_memory)
+            card_kind = KIND_UNKNOWN;           // there may be memory now
         if (card_kind == KIND_UNKNOWN)          // initialized earlier, kind forgotten since
             detect();
         if (card_kind == KIND_LOCKED || card_kind == KIND_UNSUPPORTED) {
-            if (sh)
+            if (sh && locked_no_memory)
+                shell_printf(sh, "sd: %s\n", kind_why);
+            else if (sh)
                 shell_printf(sh, "sd: %s; `sd format` erases it for use here\n", kind_why);
             return false;
         }
@@ -345,12 +403,13 @@ static bool mount(shell_t *sh) {
         if (sh)
             shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
                          (unsigned long)ms);
-        else
+        else if (!quiet)
             log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
                     "sd: mount failed: %s (%d)", FRESULT_str(fr), fr);
         return false;
     }
     card.state.mounted = true;
+    mount_generation++;
     if (card_kind == KIND_ENCRYPTED)
         repair_after_mount();
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
@@ -477,11 +536,28 @@ static bool files_in_use(shell_t *sh) {
     return true;
 }
 
+// Set by `sd unmount` (the card is about to come out), cleared by the next mount asked for.
+static bool unmounted_by_hand;
+
+bool sdcard_mount_retry(void) {
+    if (unmounted_by_hand || card.state.mounted)
+        return card.state.mounted;
+    quiet = true;
+    bool ok = driver_init() && mount(NULL);
+    quiet = false;
+    return ok;
+}
+
 bool sdcard_mounted(void) {
     return card.state.mounted;
 }
 
+uint32_t sdcard_generation(void) {
+    return mount_generation;
+}
+
 bool sdcard_mount(shell_t *sh) {
+    unmounted_by_hand = false;
     if (!driver_init()) {
         if (sh)
             shell_printf(sh, "sd: driver init failed\n");
@@ -555,11 +631,18 @@ static bool start_encrypted(shell_t *sh) {
              wc_RNG_GenerateBlock(&rng, key, sizeof(key)) == 0;
         wc_FreeRng(&rng);
     }
-    uint8_t *header = crypt_buf;            // free: the layer is off while formatting
+    // The layer is off while formatting (crypt_off() in on_format_confirm): get its memory.
+    if (ok && !crypt_alloc()) {
+        sdcrypt_wipe(key, sizeof(key));
+        sdcrypt_wipe(wrap, sizeof(wrap));
+        shell_printf(sh, "format failed: out of memory\n");
+        return false;
+    }
+    uint8_t *header = ok ? cs->buf : NULL;
     ok = ok && sdcrypt_header_build(header, wrap, id, nonce, key) &&
          write_blocks_fed(&card, header, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
          write_blocks_fed(&card, header, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
-         sdcrypt_start(&crypt, key);
+         sdcrypt_start(&cs->crypt, key);
     if (ok)
         memcpy(new_key, key, sizeof(new_key));
     sdcrypt_wipe(key, sizeof(key));
@@ -576,8 +659,11 @@ static bool start_encrypted(shell_t *sh) {
 // A plain card: no layer, and no header copy left behind (f_mkfs overwrites sector 0, not the
 // backup at 4096, which would otherwise make the card look encrypted again).
 static bool start_plain(shell_t *sh) {
-    memset(crypt_buf, 0, SDCRYPT_SECTOR);
-    if (write_blocks_fed(&card, crypt_buf, SDCRYPT_BACKUP, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
+    // The card was looked at before the format, which turns the layer on for an encrypted
+    // one: turn it off and forget that card's key now (KIND_ENCRYPTED must not outlive it).
+    crypt_off();
+    uint8_t zero[SDCRYPT_SECTOR] = {0};
+    if (write_blocks_fed(&card, zero, SDCRYPT_BACKUP, 1) != SD_BLOCK_DEVICE_ERROR_NONE) {
         shell_printf(sh, "format failed: couldn't write the card\n");
         return false;
     }
@@ -771,6 +857,7 @@ void sdcard_command(shell_t *sh, char *args) {
         }
         f_unmount(sd_get_drive_prefix(&card));
         card.state.mounted = false;
+        unmounted_by_hand = true;           // no quiet remount (sdcard_mount_retry) under the hand
         crypt_off();                        // forget the card's key
         card.state.m_Status |= STA_NOINIT;  // a swapped card is initialized afresh
         shell_printf(sh, "unmounted; safe to remove the card\n");

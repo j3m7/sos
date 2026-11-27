@@ -29,6 +29,9 @@
 #define CONFIG_KEY_BLOB_MAX  128    // SSH wire-format public key (Ed25519 51, ECDSA P-256 104)
 #define CONFIG_KEY_COMMENT_MAX 40
 #define CONFIG_NTP_SYNC_HOURS_MAX 720       // 30 days
+#define CONFIG_LOG_ROTATE_DAYS_DEFAULT 7     // a week
+#define CONFIG_LOG_ROTATE_DAYS_MAX 365
+#define CONFIG_LOG_ROTATE_MINUTE_MAX 1439   // 23:59
 #define CONFIG_NTP_SERVER_MAX 63
 #define CONFIG_CERTS_HASH_LEN 32    // SHA-256
 #define CONFIG_RTC_OFFSET_MIN (-64)
@@ -119,6 +122,11 @@ typedef struct {
     // entries come first; all are unused while wifi_ssid is empty. Edit them with the
     // config_wifi_*() functions, which keep that so.
     config_wifi_net_t wifi_extra[CONFIG_WIFI_EXTRA];
+    // Log file rotation (core/logfile.h): every log_rotate_days days (0 = the default,
+    // CONFIG_LOG_ROTATE_DAYS_DEFAULT), at log_rotate_minute minutes after midnight UTC (0 to
+    // 1439; 0 = 00:00, the default).
+    uint16_t log_rotate_days;
+    uint16_t log_rotate_minute;
 } sos_config_t;
 
 // The stored setting as glitchdet_start() and glitchdet_apply() take it: 0 = off, 1..4 = armed

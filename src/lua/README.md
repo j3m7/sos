@@ -18,6 +18,10 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   `LR_HTTP_READ`, `LR_HTTP_CLOSE` for `sos.http`), sets a flag, and waits. Core 0 answers, then
   clears the flag.
 - **A 2 KB output ring buffer** for the script's output.
+- **Memory:** the mailbox's 4 KB payload and the output ring are one heap block (`lua` in
+  `mem`), allocated by core 0 when a script starts and freed when it has ended. Core 0 sets the
+  pointers before it starts the job and clears them only after core 1 has reported it done, so
+  core 1 never sees them change. With no script running they cost nothing.
 - **A cancel flag** that core 0 sets on Ctrl-C, or when the session ends.
 - **Hand-over:** one side writes the data, then sets the flag after a memory barrier
   (`__dmb`); the other side sees the flag, then reads the data. `__sev`/`__wfe` wake the
