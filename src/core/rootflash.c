@@ -6,12 +6,12 @@
 #include <string.h>
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/flashop.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/rootsecret.h"
@@ -50,13 +50,13 @@ static bool store_program(void *ctx, unsigned page, const uint8_t *data) {
     (void)ctx;
     flash_job_t job = { page, data };
     return usable && page < FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE &&
-           flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
+           flashop_run(do_flash, &job);
 }
 
 static bool store_erase(void *ctx) {
     (void)ctx;
     flash_job_t job = { 0, NULL };
-    return usable && flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
+    return usable && flashop_run(do_flash, &job);
 }
 
 static bool store_random(void *ctx, uint8_t *out, size_t len) {

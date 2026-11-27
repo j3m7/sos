@@ -6,10 +6,10 @@
 #include "core/failflash.h"
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
 #include "core/failcount.h"
+#include "core/flashop.h"
 #include "core/log.h"
 
 // The fifth sector from the end: below the root secret's (core/rootflash.c).
@@ -46,13 +46,13 @@ static bool store_program(void *ctx, unsigned page, const uint8_t *data) {
     (void)ctx;
     flash_job_t job = { page, data };
     return usable && page < FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE &&
-           flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
+           flashop_run(do_flash, &job);
 }
 
 static bool store_erase(void *ctx) {
     (void)ctx;
     flash_job_t job = { 0, NULL };
-    return usable && flash_safe_execute(do_flash, &job, 1000) == PICO_OK;
+    return usable && flashop_run(do_flash, &job);
 }
 
 static const failcount_store_t store = { NULL, store_read, store_program, store_erase };
