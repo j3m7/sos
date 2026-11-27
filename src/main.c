@@ -18,6 +18,7 @@
 #include "core/glitchdet.h"
 #include "core/keyprov.h"
 #include "core/log.h"
+#include "core/logfile.h"
 #include "core/failflash.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
@@ -198,6 +199,7 @@ int main(void) {
     chat_register(&console_shell, 0, "console", "console");
     // From here on, log lines are printed by log_flush() in the loop, between commands.
     log_set_deferred(true);
+    logfile_start();                    // and written to /var/log on the SD card, when there's one
 
     bool sshd_failed = false;
     absolute_time_t next_blink = get_absolute_time();
@@ -231,6 +233,7 @@ int main(void) {
         sshd_poll();
         lua_host_poll(true);            // requests from a Lua script on core 1
         log_flush();                    // messages logged in interrupt context
+        logfile_poll();                 // new messages to the log files
         if (time_reached(next_blink)) {
             led = !led;
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led);

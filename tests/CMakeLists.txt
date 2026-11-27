@@ -119,6 +119,12 @@ add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
 add_test(NAME log COMMAND test_log)
 
+# src/core/logfile.c (with log.c): log files on the SD card.
+add_executable(test_logfile test_logfile.c ${SOS_ROOT}/src/core/logfile.c
+    ${SOS_ROOT}/src/core/log.c)
+target_include_directories(test_logfile PRIVATE ${SOS_ROOT}/src)
+add_test(NAME logfile COMMAND test_logfile)
+
 # src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
 add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)
 target_include_directories(test_timeconv PRIVATE ${SOS_ROOT}/src)

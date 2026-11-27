@@ -44,9 +44,11 @@ void files_release(void) {
         holders--;
 }
 
-// /certs holds the TLS trust anchors: only the console (physical access, the same boundary as
-// the configuration) may change it. SSH shells and SFTP (sh NULL) may read it but not change it.
-// TLS also checks the contents against a hash approved on the console, so this is a second line.
+// Protected paths (path_is_protected()): /certs holds the TLS trust anchors, /var/log the log
+// files. Only the console (physical access, the same boundary as the configuration) may change
+// them. SSH shells, SFTP and Lua (sh NULL) may read them but not change them: a session that
+// gets in can't erase its own traces from the log. For /certs, TLS also checks the contents
+// against a hash approved on the console, so this is a second line.
 bool files_write_allowed(const shell_t *sh, const char *path) {
     if (!path_is_protected(path))
         return true;
