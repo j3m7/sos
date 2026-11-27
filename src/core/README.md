@@ -4,10 +4,31 @@ The services every other subsystem uses.
 
 ## Log (`log.c`)
 
-`log_msg(level, fmt, ...)` stores each message in a 4 KB RAM ring, which `dmesg` shows in any
+`log_msg(priority, fmt, ...)` stores each message in a 4 KB RAM ring, which `dmesg` shows in any
 shell. If the message is important enough it's also printed on the console. Levels are the
 syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for the console
 (default notice) and the history (default info). Lines are cut at 160 characters.
+
+- **Facilities:** the priority is a facility OR-ed with a level, as in syslog:
+  `log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, ...)`. The facility is which log the message belongs
+  to (#104), and each message belongs to exactly one:
+
+  | Facility | What |
+  |---|---|
+  | `SOS_LOG_KERN` | boot, resets, faults, glitch detector, root secret / OTP, key sector, heap |
+  | `SOS_LOG_AUTH` | console and SSH logins and connections, passwords, **every configuration change** (anything a person sets: `config:` messages, `log` levels, Wi-Fi keepalive), host key |
+  | `SOS_LOG_DAEMON` | Wi-Fi, SSH server, NTS / SNTP / RTC, HTTPS / TLS, SD card, chat |
+  | `SOS_LOG_USER` | Lua scripts, `logger` |
+  | `SOS_LOG_NONE` (0) | not tagged yet: the last resort, ideally never used |
+
+  Every caller names one; the text prefix (`wifi:`, `sd:`) names the subsystem and stays. The
+  ring keeps it in each entry's first byte (`0x80 | facility | level`: text is printable ASCII,
+  so the byte can't be mistaken for text or a newline), `log_history_next()` returns it, and
+  `dmesg -f` filters on it. pico-sshd marks its login and connection messages with syslog's
+  `LOG_AUTH`, which `ssh/sshd.c` maps to `SOS_LOG_AUTH`; the rest of its messages are daemon.
+- **Rate limit for outside text:** `log_quota_t` lets at most N messages a second through and
+  counts the rest, for sources a loop can drive: Lua scripts (`sos.log` and background output
+  share one) and `logger`.
 
 - **Input-line redraw:** before printing, the log hides the console's input line, and redraws
   it afterwards (`log_hooks_t.hide_input`/`show_input`), so a message never mangles what's
@@ -15,7 +36,9 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
 - **Held console:** while a full-screen program (the editor) runs on the console,
   `log_hooks_t.hold` returns true and `log_flush()` prints nothing. Messages wait in the history
   and are printed once it ends; if they overflowed the history meanwhile, the console says some
-  were dropped. `log_pending()` counts the messages waiting, so the program can say so.
+  were dropped. `log_pending()` says how many messages are waiting, so the program can say so. It
+  reads a count per level kept as messages are added, dropped and shown: the lock is the
+  interrupt disable, so it doesn't walk the history under it.
 - **Interrupt context:** a message logged from an interrupt (lwIP, CYW43) is only stored;
   `log_flush()` in the main loop prints it. What is done in the interrupt is kept small: a
   message above the history level returns before it is formatted, and the others are formatted

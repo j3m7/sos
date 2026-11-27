@@ -300,7 +300,14 @@ Boot, Wi-Fi, configuration and SSH server messages go to the system log:
 - The serial console prints them as they happen. A message arriving while you type clears your
   input line, prints, and redraws the prompt and what you typed (a hidden password isn't
   redrawn).
-- `dmesg` shows the last 4 KB of messages in any shell, SSH sessions included.
+- `dmesg` shows the last 4 KB of messages in any shell, SSH sessions included; `dmesg -f
+  <facility>` only one facility's.
+- Each message has a facility, which says which log it belongs to (#104): `kern` (boot, resets,
+  faults, glitch detector, root secret), `auth` (console and SSH logins, passwords, and every
+  configuration change), `daemon` (Wi-Fi, SSH server, time, HTTPS, SD card, chat) or `user`
+  (Lua scripts and `logger`).
+- `logger [-p <level>] <message>` adds a line to the log from any shell (facility `user`, at
+  `notice` unless `-p` says otherwise), tagged with the shell it came from. At most 10 a second.
 - `log console <level>` sets what the console prints (default `notice`); `log history <level>`
   what's kept for `dmesg` (default `info`). Levels: err, warning, notice, info, debug. Console
   only to change; `log` shows the levels in any shell.
@@ -640,9 +647,9 @@ session. One script runs at a time.
 **Background scripts and autorun:** `lua -b <file>` runs a script with no shell: its output goes to
 the log, a line at a time (`dmesg`; INFO, so not on the console), and its end is logged
 (finished, stopped, or failed with the error). `lua ps` shows the running script, and `lua stop`
-stops it, wherever it runs. At most 10 lines a second of a background script's output reach the
-log; the rest are counted ("... N lines dropped"), so a chatty script can't push everything else
-out of the log history. If the card has `/autorun.lua`, it starts in the background a few seconds
+stops it, wherever it runs. At most 10 lines a second of a script's log lines (a background
+script's output and `sos.log`, together) reach the log; the rest are counted ("... N lines
+dropped"), so a chatty script can't push everything else out of the log history. If the card has `/autorun.lua`, it starts in the background a few seconds
 after boot. After a crash or watchdog reset it's skipped (and that's logged), so a script that
 brings the device down can't do it at every boot. It stays off until the next normal boot
 (`reboot`, or power), even if the reset had nothing to do with it: on an unattended board, check
@@ -668,7 +675,7 @@ coroutine libraries, `require` (see below), and `sos`:
 | `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
-| `sos.sleep(ms)`, `sos.log(msg)` | wait (Ctrl-C still works), write to the system log |
+| `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script, at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
 | `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=}` (see below) |

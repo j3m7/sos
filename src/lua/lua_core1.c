@@ -20,6 +20,7 @@
 #include "lualib.h"
 
 #include "core/heaptag.h"
+#include "core/log.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_core1.h"
 #include "net/http.h"
@@ -157,12 +158,17 @@ static int l_print(lua_State *L) {
     return 0;
 }
 
+// sos.log(message [, level]): a line in the log (the user facility, tagged with the script), at
+// "notice" unless a level ("err", "warning", "notice", "info", "debug") is given.
 static int l_log(lua_State *L) {
+    static const char *const levels[] = {"err", "warning", "notice", "info", "debug", NULL};
     size_t len;
     const char *s = luaL_checklstring(L, 1, &len);
+    int level = SOS_LOG_ERR + luaL_checkoption(L, 2, "notice", levels);
     if (len >= LUA_REQ_DATA)
         len = LUA_REQ_DATA - 1;
     lua_req.type = LR_LOG;
+    lua_req.offset = (uint32_t)level;
     memcpy(lua_req.data, s, len);
     lua_req.data[len] = '\0';
     request();

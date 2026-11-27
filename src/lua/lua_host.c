@@ -41,6 +41,28 @@ static shell_t *owner;                  // shell that started the script; NULL o
 static char *owner_code;                // `lua -e` source, freed when the script ends
 static bool background;                 // started with `lua -b` or at boot: output to the log
 static char job_desc[48];               // what's running, for `lua ps` and the log
+
+// What a script puts in the log (sos.log, and a background script's output) goes in at most
+// SCRIPT_LOG_PER_SEC lines a second; beyond that lines are counted and dropped, so a script
+// logging in a loop doesn't push everything else (failed logins, warnings) out of the log
+// history. Always the user facility, tagged with the script.
+#define SCRIPT_LOG_PER_SEC 10
+static log_quota_t script_quota;
+
+static void script_log_dropped(void) {
+    unsigned n = log_quota_dropped(&script_quota);
+    if (n)
+        log_msg(SOS_LOG_USER | SOS_LOG_INFO, "%s: ... %u lines dropped (more than %d a second)",
+                job_desc, n, SCRIPT_LOG_PER_SEC);
+}
+
+// One line from the script, if the rate limit lets it through.
+static void script_log(int level, const char *text) {
+    if (!log_quota_take(&script_quota, SCRIPT_LOG_PER_SEC))
+        return;
+    script_log_dropped();
+    log_msg(SOS_LOG_USER | level, "%s: %s", job_desc, text);
+}
 static uint64_t job_start_us;
 
 // The script may still act: its shell is there, or it runs in the background. A script whose
@@ -272,9 +294,13 @@ static void serve(bool main_loop) {
         lua_req.result = 0;
         lua_req.error[0] = '\0';
         switch (lua_req.type) {
-        case LR_LOG:
-            log_msg(SOS_LOG_NOTICE, "lua: %s", (const char *)lua_req.data);
+        case LR_LOG: {
+            int level = (int)lua_req.offset;    // checked by sos.log on core 1; checked again
+            if (level < SOS_LOG_ERR || level > SOS_LOG_DEBUG)
+                level = SOS_LOG_NOTICE;
+            script_log(level, (const char *)lua_req.data);
             break;
+        }
         case LR_TIME: {
             struct timeval tv;
             gettimeofday(&tv, NULL);
@@ -303,6 +329,7 @@ static bool repl;                       // the owner is at the Lua prompt (`lua`
 static void repl_answer(shell_t *sh, char *answer, void *arg);
 
 static void finish(void) {
+    script_log_dropped();
     http_drop();
     http_started = false;
     heap_release(HEAP_LUA, owner_code);
@@ -320,15 +347,10 @@ static void finish(void) {
 // `lua -b <file>`, or /autorun.lua at boot: no shell, so the output goes to the log, a line at a
 // time (INFO, so it's in `dmesg` but not on the console), and the end is logged too.
 
-// At most BG_LINES_PER_SEC lines a second reach the log; beyond that they're counted and dropped,
-// so a script printing in a loop doesn't push everything else (failed logins, warnings) out of
-// the log history.
-#define BG_LINES_PER_SEC 10
+// Lines reach the log through script_log(), so they share sos.log's rate limit.
 
 static char bg_line[LOG_LINE_MAX + 1];
 static size_t bg_len;
-static uint64_t bg_window_us;           // start of the current second
-static unsigned bg_window_lines, bg_dropped;
 
 // Room for a line's text in one log message, after the "<script>: " prefix.
 static size_t bg_room(void) {
@@ -336,29 +358,11 @@ static size_t bg_room(void) {
     return prefix + 40 < LOG_LINE_MAX ? LOG_LINE_MAX - prefix : 40;
 }
 
-static void bg_report_dropped(void) {
-    if (bg_dropped)
-        log_msg(SOS_LOG_INFO, "%s: ... %u lines dropped (more than %d a second)", job_desc,
-                bg_dropped, BG_LINES_PER_SEC);
-    bg_dropped = 0;
-}
-
 static void bg_flush_line(void) {
     if (!bg_len)
         return;
-    uint64_t now = time_us_64();
-    if (now - bg_window_us >= 1000000) {
-        bg_report_dropped();
-        bg_window_us = now;
-        bg_window_lines = 0;
-    }
-    if (bg_window_lines < BG_LINES_PER_SEC) {
-        bg_line[bg_len] = '\0';
-        log_msg(SOS_LOG_INFO, "%s: %s", job_desc, bg_line);
-        bg_window_lines++;
-    } else {
-        bg_dropped++;
-    }
+    bg_line[bg_len] = '\0';
+    script_log(SOS_LOG_INFO, bg_line);
     bg_len = 0;
 }
 
@@ -385,7 +389,7 @@ static void bg_drain(void) {
 // The error on its own line (WARNING); its traceback, if any, a line at a time (INFO).
 static void bg_log_error(unsigned secs) {
     const char *e = lua_job.error, *nl = strchr(e, '\n');
-    log_msg(SOS_LOG_WARNING, "lua: %s failed after %u s: %.*s", job_desc, secs,
+    log_msg(SOS_LOG_USER | SOS_LOG_WARNING, "lua: %s failed after %u s: %.*s", job_desc, secs,
             nl ? (int)(nl - e) : (int)strlen(e), e);
     while (nl) {
         e = nl + 1;
@@ -394,7 +398,7 @@ static void bg_log_error(unsigned secs) {
         while (len && (*e == '\t' || *e == ' '))
             e++, len--;
         if (len)
-            log_msg(SOS_LOG_INFO, "%s:   %.*s", job_desc, len, e);
+            log_msg(SOS_LOG_USER | SOS_LOG_INFO, "%s:   %.*s", job_desc, len, e);
     }
 }
 
@@ -403,12 +407,12 @@ static void bg_poll(void) {
     if (lua_job.state != LJ_DONE || lua_out.head != lua_out.tail)
         return;
     bg_flush_line();
-    bg_report_dropped();
+    script_log_dropped();
     unsigned s = (unsigned)((time_us_64() - job_start_us) / 1000000);
     if (lua_job.ok)
-        log_msg(SOS_LOG_NOTICE, "lua: %s finished after %u s", job_desc, s);
+        log_msg(SOS_LOG_USER | SOS_LOG_NOTICE, "lua: %s finished after %u s", job_desc, s);
     else if (lua_job.cancel)
-        log_msg(SOS_LOG_NOTICE, "lua: %s stopped after %u s", job_desc, s);
+        log_msg(SOS_LOG_USER | SOS_LOG_NOTICE, "lua: %s stopped after %u s", job_desc, s);
     else
         bg_log_error(s);
     finish();
@@ -637,8 +641,7 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
     owner = bg ? NULL : sh;
     background = bg;
     bg_len = 0;
-    bg_window_us = 0;
-    bg_window_lines = bg_dropped = 0;
+    script_quota = (log_quota_t){0};
     job_start_us = time_us_64();
     __dmb();
     lua_job.state = LJ_START;
@@ -666,14 +669,15 @@ static void autorun_check(void) {
         return;
     const char *why = fault_last() ? fault_last() : wdog_caused_reset() ? "watchdog timeout" : NULL;
     if (why) {
-        log_msg(SOS_LOG_WARNING, "lua: %s not started: the last reset was a %s", AUTORUN_PATH, why);
+        log_msg(SOS_LOG_USER | SOS_LOG_WARNING,
+                "lua: %s not started: the last reset was a %s", AUTORUN_PATH, why);
         return;
     }
     const char *err = start_job(NULL, NULL, AUTORUN_PATH, "/", true);
     if (err)
-        log_msg(SOS_LOG_WARNING, "lua: %s not started: %s", AUTORUN_PATH, err);
+        log_msg(SOS_LOG_USER | SOS_LOG_WARNING, "lua: %s not started: %s", AUTORUN_PATH, err);
     else
-        log_msg(SOS_LOG_NOTICE, "lua: running %s in the background", AUTORUN_PATH);
+        log_msg(SOS_LOG_USER | SOS_LOG_NOTICE, "lua: running %s in the background", AUTORUN_PATH);
 }
 
 // --- the lua command ---------------------------------------------------------------------------

@@ -60,8 +60,8 @@ size_t sd_get_num(void) { return 1; }
 sd_card_t *sd_get_by_num(size_t num) { return num == 0 ? &card : NULL; }
 
 // The library's messages (weak hooks, silent by default) go to the system log.
-void put_out_error_message(const char *s) { log_msg(SOS_LOG_ERR, "sd: %s", s); }
-void put_out_info_message(const char *s) { log_msg(SOS_LOG_INFO, "sd: %s", s); }
+void put_out_error_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR, "sd: %s", s); }
+void put_out_info_message(const char *s) { log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s); }
 
 // While formatting (one long FatFs call), feed the watchdog from each block write: the main loop
 // doesn't run until it returns, but every completed write is progress.
@@ -77,7 +77,7 @@ static uint32_t (*lib_get_num_sectors)(sd_card_t *);
 static uint32_t get_num_sectors_cached(sd_card_t *c) {
     uint32_t n = lib_get_num_sectors(c);
     if (!n && c->state.sectors) {
-        log_msg(SOS_LOG_INFO, "sd: size query failed, using %lu sectors from init",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: size query failed, using %lu sectors from init",
                 (unsigned long)c->state.sectors);
         n = c->state.sectors;
     }
@@ -91,7 +91,8 @@ static block_dev_err_t read_blocks_logged(sd_card_t *c, uint8_t *buf, uint32_t s
     block_dev_err_t r = lib_read_blocks(c, buf, sector, count);
     io_stats.reads++;
     if (r != SD_BLOCK_DEVICE_ERROR_NONE)
-        log_msg(SOS_LOG_ERR, "sd: reading %lu sectors at %lu failed (%d)", (unsigned long)count,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
+                "sd: reading %lu sectors at %lu failed (%d)", (unsigned long)count,
                 (unsigned long)sector, (int)r);
     return r;
 }
@@ -106,7 +107,8 @@ static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32
     if (formatting)
         wdog_feed();
     if (r != SD_BLOCK_DEVICE_ERROR_NONE)
-        log_msg(SOS_LOG_ERR, "sd: writing %lu sectors at %lu failed (%d)", (unsigned long)count,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
+                "sd: writing %lu sectors at %lu failed (%d)", (unsigned long)count,
                 (unsigned long)sector, (int)r);
     return r;
 }
@@ -218,7 +220,8 @@ static void repair_after_mount(void) {
     bool fixed = read_blocks_logged(&card, crypt_buf, SDCRYPT_BACKUP, 1) == SD_BLOCK_DEVICE_ERROR_NONE &&
                  sdcrypt_is_header(crypt_buf) &&
                  write_blocks_fed(&card, crypt_buf, 0, 1) == SD_BLOCK_DEVICE_ERROR_NONE;
-    log_msg(SOS_LOG_WARNING, "sd: the card's header was damaged; %s from its backup copy",
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+            "sd: the card's header was damaged; %s from its backup copy",
             fixed ? "rewrote it" : "using it (rewriting sector 0 failed)");
 }
 
@@ -258,7 +261,7 @@ static void detect(void) {
     }
     sdcrypt_wipe(&info, sizeof(info));
     if (kind_why)
-        log_msg(SOS_LOG_WARNING, "sd: %s", kind_why);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: %s", kind_why);
 }
 
 // Every card initialization finds the card's kind again, so the layer always matches the card
@@ -343,13 +346,15 @@ static bool mount(shell_t *sh) {
             shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
                          (unsigned long)ms);
         else
-            log_msg(SOS_LOG_WARNING, "sd: mount failed: %s (%d)", FRESULT_str(fr), fr);
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                    "sd: mount failed: %s (%d)", FRESULT_str(fr), fr);
         return false;
     }
     card.state.mounted = true;
     if (card_kind == KIND_ENCRYPTED)
         repair_after_mount();
-    log_msg(SOS_LOG_NOTICE, "sd: mounted %s%s in %lu ms", fs_type(card.state.fatfs.fs_type),
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+            "sd: mounted %s%s in %lu ms", fs_type(card.state.fatfs.fs_type),
             card_kind == KIND_ENCRYPTED ? " (encrypted)" : "", (unsigned long)ms);
     return true;
 }
@@ -596,7 +601,7 @@ static void show_new_key(shell_t *sh) {
     shell_write(sh, line, n);
     sdcrypt_wipe(line, sizeof(line));
     sdcrypt_wipe(new_key, sizeof(new_key));
-    log_msg(SOS_LOG_NOTICE, "sd: the new card's key was shown on the console");
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: the new card's key was shown on the console");
 }
 
 static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
@@ -625,7 +630,7 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
         heap_release(HEAP_FILES, work);
         return;
     }
-    log_msg(SOS_LOG_NOTICE, "sd: formatting the card as %s%s", name,
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: formatting the card as %s%s", name,
             format_plain ? "" : ", encrypted");
 
     MKFS_PARM opt = { .fmt = format_type, .n_fat = 1, .align = FORMAT_ALIGN_SECTORS };
@@ -637,19 +642,22 @@ static void on_format_confirm(shell_t *sh, char *answer, void *arg) {
     formatting = false;
     uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
     heap_release(HEAP_FILES, work);
-    log_msg(SOS_LOG_INFO, "sd: format did %lu reads, %lu writes (%lu sectors), last write %lu+%lu",
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO,
+            "sd: format did %lu reads, %lu writes (%lu sectors), last write %lu+%lu",
             (unsigned long)io_stats.reads, (unsigned long)io_stats.writes,
             (unsigned long)io_stats.sectors, (unsigned long)io_stats.last_sector,
             (unsigned long)io_stats.last_count);
     crypt_off();                            // mount() finds the card's kind again
     if (fr != FR_OK) {
         sdcrypt_wipe(new_key, sizeof(new_key));
-        log_msg(SOS_LOG_ERR, "sd: format failed: %s (%d) after %lu ms", FRESULT_str(fr), fr,
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
+                "sd: format failed: %s (%d) after %lu ms", FRESULT_str(fr), fr,
                 (unsigned long)ms);
         shell_printf(sh, "format failed: %s\n", FRESULT_str(fr));
         return;
     }
-    log_msg(SOS_LOG_NOTICE, "sd: formatted as %s in %lu ms", name, (unsigned long)ms);
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE,
+            "sd: formatted as %s in %lu ms", name, (unsigned long)ms);
     if (mount(sh)) {
         shell_printf(sh, "formatted in %lu.%lu s\n", (unsigned long)(ms / 1000),
                      (unsigned long)(ms % 1000 / 100));
