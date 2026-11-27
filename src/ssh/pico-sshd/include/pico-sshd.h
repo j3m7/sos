@@ -115,6 +115,9 @@ typedef struct ssh_session_t {
 	uint32_t handshake_us;             /* accept to logged-in */
 } ssh_session_t;
 
+/* Room for the "all sessions are in use" reply: version string plus disconnect packet. */
+#define SSH_BUSY_MSG_MAX 224
+
 /* SSH Server Instance */
 struct ssh_server_t {
 	struct tcp_pcb *listen;            /* lwIP listening socket */
@@ -126,8 +129,19 @@ struct ssh_server_t {
 
 	/* Statistics */
 	uint32_t logins;                   /* successful logins */
-	uint32_t rejected_busy;            /* connections refused because all slots were in use */
+	volatile uint32_t rejected_busy;   /* (irq) connections refused because all slots were in use */
 	uint8_t busy_pending;              /* refused connections still being closed (irq only) */
+	/* What a refused client is sent: our version string and an SSH disconnect message.
+	   Built once by ssh_server_start(), so the accept callback (interrupt context) only
+	   queues it. */
+	uint8_t busy_msg[SSH_BUSY_MSG_MAX];
+	uint16_t busy_msg_len;             /* 0: none (refused connections are reset) */
+	/* The last refusal, for ssh_server_service() to report: logging it is left to thread
+	   context, a line per interval however many there were. */
+	ip_addr_t busy_last_ip;            /* (irq) */
+	uint16_t busy_last_port;           /* (irq) */
+	uint32_t busy_logged;              /* rejected_busy when the log last said so */
+	uint64_t busy_log_next_us;         /* no line about refusals before this time */
 	uint32_t rejected_penalty;         /* connections refused from a penalized address */
 	uint32_t dropped_stale;            /* unauthenticated connections dropped to free a slot */
 	ssh_penalty_t penalties[SSH_PENALTY_SLOTS];  /* (irq) changed only under the lwIP lock */
@@ -147,7 +161,8 @@ struct ssh_server_t {
 	int (*auth_cb)(void* ctx, const byte *login, word32 login_len,
 		const byte *auth, word32 auth_len, int auth_type);
 	void *auth_cb_ctx;
-	void (*log_cb)(int priority, const char *format, ...);
+	void (*log_cb)(int priority, const char *format, ...)
+		__attribute__((format(printf, 2, 3)));
 	/* Call back to determine if incoming connection should be allowed */
 	int (*allow_connect_cb)(ip_addr_t *src_ip);
 };

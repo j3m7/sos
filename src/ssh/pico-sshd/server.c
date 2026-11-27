@@ -64,6 +64,9 @@
      full) and ssh_session_send_output() sends it once the shell has run, so a burst of small
      writes becomes a few large packets. ssh_session_write_space() reports the free room.
    - Nagle's algorithm is disabled on client connections (like TCP_NODELAY elsewhere).
+   - The reply to a client refused because every slot is busy is built once at start, and the
+     refusal is logged from ssh_server_service() (counted, a line per interval): the accept
+     callback, in interrupt context, only queues the reply.
    - tcp_poll() intervals are given in milliseconds (SSH_POLL_TICKS), so they don't change with
      lwIP's TCP_TMR_INTERVAL.
    - Connections that don't log in can't hold the server: when every slot is in use, ones
@@ -140,6 +143,8 @@
    disconnect message (beyond that they are reset), each for at most about 2 s. */
 #define SSH_BUSY_MAX_PENDING 2
 #define SSH_BUSY_POLL_TIME SSH_POLL_TICKS(2000)
+/* Refusals are reported in the log at most this often, counted, whatever their rate. */
+#define SSH_BUSY_LOG_INTERVAL_US (10 * 1000000ull)
 #define SSH_MSG_DISCONNECT_ID 1                     /* RFC 4253 section 11.1 */
 #define SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE 4
 
@@ -173,7 +178,7 @@ static void ssh_server_log_msg(int priority, const char *format, ...)
 	int len;
 	uint core = get_core_num();
 
-	if (priority > global_log_level)
+	if ((priority & LOG_PRIMASK) > global_log_level)
 		return;
 
 	if (!(buf = heap_alloc(HEAP_NET, LOG_MAX_MSG_LEN)))
@@ -284,7 +289,7 @@ static err_t ssh_server_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err
 
 	if (!p) {
 		/* Connection closed by client: tear down in ssh_server_service(). */
-		LOG_MSG(LOG_NOTICE, "SSH client closed connection from %s:%u",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH client closed connection from %s:%u",
 			ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port);
 		ss->peer_closed = true;
 		return ERR_OK;
@@ -473,7 +478,7 @@ static err_t ssh_close_session(ssh_session_t *ss)
 	if (penalized) {
 		char ip[IPADDR_STRLEN_MAX];
 		ipaddr_ntoa_r(&ss->remote_ip, ip, sizeof(ip));
-		LOG_MSG(LOG_NOTICE, "SSH: %u connections from %s without a login; refusing it until"
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH: %u connections from %s without a login; refusing it until"
 			" it has been quiet for %u s", SSH_PENALTY_FAILS, ip,
 			(unsigned)(SSH_PENALTY_WINDOW_US / 1000000));
 	}
@@ -586,27 +591,39 @@ static void busy_err(void *arg, err_t err)
 		st->busy_pending--;
 }
 
-/* Tell the client all sessions are in use: send our version string and an SSH disconnect
-   message, then close once the client hangs up. Returns ERR_OK if handled; anything else makes
-   lwIP reset the connection. */
-static err_t ssh_server_reject_busy(ssh_server_t *st, struct tcp_pcb *pcb)
+/* The reply to a client when all sessions are in use: our version string and an SSH disconnect
+   message. Built once, in thread context (ssh_server_open), into st->busy_msg. */
+static void build_busy_msg(ssh_server_t *st)
 {
 	char desc[96];
-	uint8_t pkt[160];
-	size_t len;
+	size_t id_len = strlen(SSH_PROTO_ID_STR);
+	size_t len = 0;
 
-	if (st->busy_pending >= SSH_BUSY_MAX_PENDING)
-		return ERR_MEM;
-
+	st->busy_msg_len = 0;
 	snprintf(desc, sizeof(desc),
 		"Too many connections: all %u SSH sessions are in use, try again later",
 		st->max_sessions);
-	if (!(len = build_disconnect_packet(pkt, sizeof(pkt),
-				SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE, desc)))
+	if (id_len < sizeof(st->busy_msg))
+		len = build_disconnect_packet(st->busy_msg + id_len, sizeof(st->busy_msg) - id_len,
+					SSH_DISCONNECT_TOO_MANY_CONNECTIONS_CODE, desc);
+	if (!len) {
+		LOG_MSG(LOG_ERR, "ssh_server_open: no room for the 'sessions in use' reply");
+		return;
+	}
+	memcpy(st->busy_msg, SSH_PROTO_ID_STR, id_len);
+	st->busy_msg_len = (uint16_t)(id_len + len);
+}
+
+/* Tell the client all sessions are in use: queue the reply built by build_busy_msg(), then
+   close once the client hangs up. Interrupt context, and anyone who can reach the port can
+   cause it as often as they like, so it formats and logs nothing (ssh_busy_log_service()
+   reports it). Returns ERR_OK if handled; anything else makes lwIP reset the connection. */
+static err_t ssh_server_reject_busy(ssh_server_t *st, struct tcp_pcb *pcb)
+{
+	if (st->busy_pending >= SSH_BUSY_MAX_PENDING || !st->busy_msg_len)
 		return ERR_MEM;
 
-	if (tcp_write(pcb, SSH_PROTO_ID_STR, strlen(SSH_PROTO_ID_STR), TCP_WRITE_FLAG_COPY) != ERR_OK ||
-	    tcp_write(pcb, pkt, len, TCP_WRITE_FLAG_COPY) != ERR_OK)
+	if (tcp_write(pcb, st->busy_msg, st->busy_msg_len, TCP_WRITE_FLAG_COPY) != ERR_OK)
 		return ERR_MEM;
 
 	tcp_arg(pcb, st);
@@ -631,7 +648,7 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 
 	if (st->allow_connect_cb) {
 		if (st->allow_connect_cb(&pcb->remote_ip) <= 0) {
-			LOG_MSG(LOG_ERR, "SSH connection rejected from %s",
+			LOG_MSG(LOG_AUTH | LOG_ERR, "SSH connection rejected from %s",
 				ip4addr_ntoa(&pcb->remote_ip));
 			return ERR_MEM;
 		}
@@ -644,12 +661,12 @@ static err_t ssh_server_accept(void *arg, struct tcp_pcb *pcb, err_t err)
 
 	if (!(ss = find_free_session(st))) {
 		st->rejected_busy++;
-		LOG_MSG(LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
-			ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port, st->max_sessions);
+		ip_addr_set(&st->busy_last_ip, &pcb->remote_ip);
+		st->busy_last_port = pcb->remote_port;
 		return ssh_server_reject_busy(st, pcb);
 	}
 
-	LOG_MSG(LOG_NOTICE, "SSH accepted connection from %s:%u (session %u)",
+	LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH accepted connection from %s:%u (session %u)",
 		ip4addr_ntoa(&pcb->remote_ip), pcb->remote_port, ss->index + 1);
 
 	/* The wolfSSH session is created by ssh_session_setup() in thread context: wolfSSH_new()
@@ -820,21 +837,25 @@ static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 		ssh_server_get_pubkey_hash(auth_data->sf.publicKey.publicKey,
 					auth_data->sf.publicKey.publicKeySz,
 					hash, sizeof(hash));
+		/* Where from, so a line in the auth log stands on its own. */
+		char ip[IPADDR_STRLEN_MAX];
+		ipaddr_ntoa_r(&ss->remote_ip, ip, sizeof(ip));
 		if (ret == WOLFSSH_USERAUTH_SUCCESS) {
 			if (auth_data->sf.publicKey.hasSignature)
-				LOG_MSG(LOG_NOTICE, "SSH accepted publickey for %s (SHA256:%s) (session %u)",
-					auth_data->username, hash, ss->index + 1);
+				LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH accepted publickey for %s"
+					" (SHA256:%s) from %s (session %u)",
+					auth_data->username, hash, ip, ss->index + 1);
 		} else if (ret == WOLFSSH_USERAUTH_INVALID_USER) {
-			LOG_MSG(LOG_INFO, "SSH failed publickey authentication for invalid user"
-				" %s (SHA256:%s)", auth_data->username, hash);
+			LOG_MSG(LOG_AUTH | LOG_INFO, "SSH failed publickey authentication for invalid user"
+				" %s (SHA256:%s) from %s", auth_data->username, hash, ip);
 		} else {
-			LOG_MSG(LOG_INFO, "SSH failed publickey authentication for user"
-				" %s (SHA256:%s)", auth_data->username, hash);
+			LOG_MSG(LOG_AUTH | LOG_INFO, "SSH failed publickey authentication for user"
+				" %s (SHA256:%s) from %s", auth_data->username, hash, ip);
 		}
 	}
 	else if (auth_type == WOLFSSH_USERAUTH_NONE && !st->auth_enabled) {
 		ret = WOLFSSH_USERAUTH_SUCCESS;
-		LOG_MSG(LOG_NOTICE, "SSH unauthenticated connection accepted for user %s",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH unauthenticated connection accepted for user %s",
 			auth_data->username);
 	}
 	else {
@@ -846,7 +867,7 @@ static int user_auth_cb(byte auth_type, WS_UserAuthData* auth_data, void *ctx)
 	if (ret != WOLFSSH_USERAUTH_SUCCESS && ret != WOLFSSH_USERAUTH_INVALID_AUTHTYPE) {
 		ss->auth_tries++;
 		if (st->max_auth_tries > 0 && ss->auth_tries >= st->max_auth_tries) {
-			LOG_MSG(LOG_NOTICE, "SSH too many failed authentication attempts for %s",
+			LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH too many failed authentication attempts for %s",
 				auth_data->username);
 			ret = WOLFSSH_USERAUTH_REJECTED;
 		}
@@ -1245,7 +1266,7 @@ static void ssh_session_service(ssh_session_t *ss)
 			ip_addr_t ip;
 			uint16_t port;
 			if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-				LOG_MSG(LOG_NOTICE, "SSH login timed out for %s:%u (session %u)",
+				LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH login timed out for %s:%u (session %u)",
 					ip4addr_ntoa(&ip), port, ss->index + 1);
 			ssh_close_session(ss);
 			return;
@@ -1300,7 +1321,7 @@ static void ssh_session_service(ssh_session_t *ss)
 				ip_addr_t ip;
 				uint16_t port;
 				if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-					LOG_MSG(LOG_NOTICE, "SSH connection rejected from %s:%u",
+					LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH connection rejected from %s:%u",
 						ip4addr_ntoa(&ip), port);
 			} else {
 				LOG_MSG(LOG_INFO, "wolfSSH_accept(): failed: %d (%d)", err, res);
@@ -1323,10 +1344,44 @@ static void ssh_session_service(ssh_session_t *ss)
 }
 
 
+/* Report connections refused because all sessions were in use (counted by ssh_server_accept()
+   in interrupt context): the first at once, then one line per SSH_BUSY_LOG_INTERVAL_US saying
+   how many there were since and where the last came from. */
+static void ssh_busy_log_service(ssh_server_t *st)
+{
+	char ip[IPADDR_STRLEN_MAX];
+	uint64_t now = time_us_64();
+	uint32_t count;
+	uint16_t port;
+
+	/* The usual case, without the lock: nothing refused since the last line (a count that
+	   changes just now is seen on the next pass). */
+	if (st->rejected_busy == st->busy_logged || now < st->busy_log_next_us)
+		return;
+	cyw43_arch_lwip_begin();
+	count = st->rejected_busy - st->busy_logged;
+	st->busy_logged = st->rejected_busy;
+	ipaddr_ntoa_r(&st->busy_last_ip, ip, sizeof(ip));
+	port = st->busy_last_port;
+	cyw43_arch_lwip_end();
+	if (!count)
+		return;
+	st->busy_log_next_us = now + SSH_BUSY_LOG_INTERVAL_US;
+	if (count == 1) {
+		LOG_MSG(LOG_AUTH | LOG_ERR, "SSH connection from %s:%u rejected: all %u sessions in use",
+			ip, port, st->max_sessions);
+	} else {
+		LOG_MSG(LOG_AUTH | LOG_ERR, "%lu SSH connections rejected, the last from %s:%u: all %u"
+			" sessions in use", (unsigned long)count, ip, port, st->max_sessions);
+	}
+}
+
+
 void ssh_server_service(ssh_server_t *st)
 {
 	if (!st)
 		return;
+	ssh_busy_log_service(st);
 	for (unsigned i = 0; i < st->max_sessions; i++)
 		ssh_session_service(&st->sessions[i]);
 }
@@ -1389,6 +1444,7 @@ static bool ssh_server_open(ssh_server_t *st) {
 	}
 
 	st->ssh_ctx = ctx;
+	build_busy_msg(st);        /* before the first connection can be refused */
 	tcp_arg(st->listen, st);
 	tcp_accept(st->listen, ssh_server_accept);
 
@@ -1599,7 +1655,7 @@ err_t ssh_session_disconnect(ssh_session_t *ss)
 		return ERR_OK;
 
 	if (ssh_session_get_client_ip(ss, &ip, &port) == ERR_OK)
-		LOG_MSG(LOG_NOTICE, "SSH user (%s) disconnected from %s:%u (session %u)",
+		LOG_MSG(LOG_AUTH | LOG_NOTICE, "SSH user (%s) disconnected from %s:%u (session %u)",
 			ss->login[0] ? ss->login : "<unknown>", ip4addr_ntoa(&ip), port,
 			ss->index + 1);
 

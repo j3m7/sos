@@ -112,6 +112,10 @@ target_sources(sos-ssh INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
 )
 target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+# The server's log formats go to the log module's vsnprintf as they are (#105): have the
+# compiler check each LOG_MSG() against its arguments. (The copied code isn't built with -Wall.)
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
+    PROPERTIES COMPILE_OPTIONS "-Wformat")
 
 # --- SOS firmware ------------------------------------------------------------
 # One directory per subsystem; see src/README.md.
@@ -329,7 +333,9 @@ endif()
 # For trying the console-only behaviour (src/core/consoleonly.h) on a development board without
 # writing its OTP marker: -DSOS_FORCE_CONSOLE_ONLY=ON makes this image treat every board as
 # console-only. It can only add the restriction; an image without it reads the board's marker.
-if (DEFINED SOS_FORCE_SEALED_ONLY)
+# The option's old name: stop only if it is ON. CMake's option() left it cached as OFF in every
+# build directory configured before #102, and that must not stop a build.
+if (SOS_FORCE_SEALED_ONLY)
     message(FATAL_ERROR "SOS_FORCE_SEALED_ONLY was renamed to SOS_FORCE_CONSOLE_ONLY (#91)")
 endif()
 option(SOS_FORCE_CONSOLE_ONLY "Treat every board as console-only (testing)" OFF)
