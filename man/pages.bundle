@@ -131,7 +131,8 @@ DESCRIPTION
     it and removes the partial copy, as does the console locking itself. About
     580 KB/s on an unencrypted card, roughly half on an encrypted one. Files a
     running command has open can't be deleted or renamed meanwhile, and the
-    card can't be unmounted or formatted.
+    card can't be unmounted or formatted. A long copy is synced to the card
+    about once a second, so 'ls' shows how far it has got.
 
 SEE ALSO
     mv, rm, ls
@@ -657,7 +658,11 @@ DESCRIPTION
     Lists the directory (the working directory without a path): each entry
     with its size and date. A job: it does a little work per pass of the main
     loop, so the console, SSH and the watchdog keep going, and Ctrl-C stops it.
-    Files are dated with the system clock (UTC).
+    Files are dated with the system clock (UTC). A file that a command is
+    still writing ('tee', '>', 'cp') and that hasn't been synced yet shows
+    size 0, with 'being written' in place of the date (on an exFAT card) or
+    the time it was opened (FAT32 stores that at once); after a sync, the
+    size and date as of that sync.
 
     Cards over 2 GB with exFAT or FAT32 work; the card is mounted when first
     used. Paths are relative to the shell's working directory unless they
@@ -1235,6 +1240,9 @@ DESCRIPTION
     The file is written as the output comes, and a command stopped with Ctrl-C
     leaves what it had written, as on Unix. Stages before tee decide what it
     sees: 'dmesg | grep wifi | tee /w.txt' saves only the matching lines.
+    While a long command runs, the file is synced to the card about once a
+    second (at the first output after each second mark), so 'ls' shows its
+    size meanwhile and a reset loses at most the output since the last sync.
     If the card refuses a write (it is full, say) tee says so once and stops
     the command, as head does.
 

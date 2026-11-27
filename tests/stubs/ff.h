@@ -48,6 +48,7 @@ FRESULT f_open(FIL *fp, const char *path, uint8_t mode);
 FRESULT f_close(FIL *fp);
 FRESULT f_read(FIL *fp, void *buf, UINT btr, UINT *br);
 FRESULT f_write(FIL *fp, const void *buf, UINT btw, UINT *bw);
+FRESULT f_sync(FIL *fp);
 FRESULT f_stat(const char *path, FILINFO *fno);
 FRESULT f_opendir(DIR *dp, const char *path);
 FRESULT f_readdir(DIR *dp, FILINFO *fno);
