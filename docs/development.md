@@ -271,7 +271,8 @@ warns about a few things GCC doesn't.
 the NTP target's stand-in AEAD accepts any tag, so the encrypted fields are fuzzed too),
 `certbundle` (`/certs/roots.pem`), `config` (the configuration record in flash, which USB
 provisioning can write; the target writes a valid CRC around the fuzzed bytes), `ping` (ICMP
-replies and errors) and `terminal` (key sequences and text for display).
+replies and errors), `terminal` (key sequences and text for display) and `words` (the shell's
+tokenizer: a typed line split into words, quotes removed in place).
 
 ```sh
 just fuzz nts_ntp 300        # five minutes; needs clang

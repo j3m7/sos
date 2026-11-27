@@ -29,12 +29,11 @@ key numbers after 'key del', the saved networks' numbers after 'wifi remove|pref
 servers after 'nts ke' and 'time server', those and the gateway after 'ping', and the pages on the
 card after 'man'.
 
-After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and after the '>' or '>>' of
-echo, Tab completes file names on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on
-inside it); cd and mkdir offer directories only. Upper and lower case don't matter, as on the card
-itself (ASCII letters only); names with spaces or control characters aren't offered, and Tab
-doesn't mount the card. In a directory of more than 256 entries it lists what it read and says
-there is more.
+After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and after a '>' or '>>', Tab
+completes file names on the SD card ('cat do' Tab gives 'cat docs/', the next Tab goes on inside
+it); cd and mkdir offer directories only. Upper and lower case don't matter, as on the card itself
+(ASCII letters only); names with spaces or control characters aren't offered, and Tab doesn't mount
+the card. In a directory of more than 256 entries it lists what it read and says there is more.
 
 At the question for a Wi-Fi network's name ('wifi set', 'wifi add', setup), Tab completes the names
 of the networks around, strongest first, and a second Tab lists them with their signal. They come
@@ -49,7 +48,8 @@ again on logout, when the USB terminal disconnects and after 10 minutes with not
 whatever it was running is ended.
 
 Paths given to the file commands are relative to the shell's working directory ('cd', 'pwd') unless
-they start with '/'. File names with spaces aren't supported yet.
+they start with '/'. The file commands don't take names with spaces yet, but tee and a '>' do,
+quoted.
 
 Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a screen at a time, and
 'man <topic>' shows a page in the same viewer. Any command's output can be read that way too: end
@@ -57,7 +57,8 @@ the line with '| more' ('dmesg | more', 'wifi stats | more'); the pager takes up
 
 Pipes: a command's output can go through grep, head, tail and wc on its way, each after a '|'
 ('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep error | more'). They work only after a '|'; 'man
-more' says how.
+more' says how. A '>' and a path at the end of a line write the command's output to that file
+instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 
 ## System
 
@@ -132,7 +133,7 @@ more' says how.
 | `mv <from> <to>` | any | move or rename a file or directory ([page](../man/mv.txt)) |
 | `rm <path>` | any | delete a file or an empty directory ([page](../man/rm.txt)) |
 | `mkdir <dir>` | any | create a directory ([page](../man/mkdir.txt)) |
-| `echo <text>`<br>`echo <text> > <file>`<br>`echo <text> >> <file>` | any | print text, or write or append it to a file ([page](../man/echo.txt)) |
+| `echo <text>` | any | print text ([page](../man/echo.txt)) |
 | `sd`<br>`sd info`<br>`sd speed [<MHz>]` *(console only to change)*<br>`sd unmount` *(console only)*<br>`sd test [<KB> [keep]]` *(console only)*<br>`sd format [exfat \| fat32] [plain]` *(console only)* | any (marked forms: console only) | the SD card: information, speed, unmounting, benchmark and format ([page](../man/sd.txt)) |
 
 ## Editor

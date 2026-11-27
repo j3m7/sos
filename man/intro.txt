@@ -29,7 +29,7 @@ DESCRIPTION
     card after 'man'.
 
     After a file command (ls, cd, cat, cp, mv, rm, mkdir, edit, more, lua) and
-    after the '>' or '>>' of echo, Tab completes file names on the SD card
+    after a '>' or '>>', Tab completes file names on the SD card
     ('cat do' Tab gives 'cat docs/', the next Tab goes on inside it); cd and
     mkdir offer directories only. Upper and lower case don't matter, as on the
     card itself (ASCII letters only); names with spaces or control characters
@@ -51,8 +51,8 @@ DESCRIPTION
     and after 10 minutes with nothing typed; whatever it was running is ended.
 
     Paths given to the file commands are relative to the shell's working
-    directory ('cd', 'pwd') unless they start with '/'. File names with spaces
-    aren't supported yet.
+    directory ('cd', 'pwd') unless they start with '/'. The file commands
+    don't take names with spaces yet, but tee and a '>' do, quoted.
 
     Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
     a screen at a time, and 'man <topic>' shows a page in the same viewer.
@@ -61,7 +61,31 @@ DESCRIPTION
 
     Pipes: a command's output can go through grep, head, tail and wc on its
     way, each after a '|' ('dmesg | grep wifi', 'ls | tail 3', 'cat x | grep
-    error | more'). They work only after a '|'; 'man more' says how.
+    error | more'). They work only after a '|'; 'man more' says how. A '>'
+    and a path at the end of a line write the command's output to that file
+    instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
+
+QUOTING
+    A line is split into words at spaces, as a Unix shell does it, and the
+    words go to the command with single spaces between them: 'echo a   b'
+    prints "a b". Quotes make one word of what they hold, spaces included:
+    in '...' everything is taken as it is; in "..." too, except that \" is a
+    " and \\ is a \. Outside quotes a backslash takes the next character as
+    it is ('a\ b' is one word). The quotes themselves don't reach the
+    command: 'echo "a   b"' prints "a   b".
+
+    '|', '>' and '>>' are always the shell's (a pipe, a redirect) unless they
+    are quoted or after a backslash. So quote text that holds them, or an
+    apostrophe, or repeated spaces:
+
+        lua -e 'print("hi")'
+        wall "don't panic"
+        logger 'temp -> 40'
+        echo 'a|b' > /x.txt
+
+    Unquoted, 'wall don't' says "unmatched quote" and runs nothing, and a '>'
+    in Lua code or an '->' in a message would write a file. Nothing else is
+    special: no variables, wildcards, ~, ;, & or #.
 
 SEE ALSO
     help, man, logout, passwd, setup, edit, more, grep

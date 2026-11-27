@@ -8,8 +8,9 @@ DESCRIPTION
     Passes on the lines of the command's output that hold the text, and drops
     the others ('dmesg | grep wifi', 'cat /log/sos.log | grep error | more').
     The text is a fixed string, not a pattern: no regular expressions and no
-    wildcards. It is everything after the options, spaces inside it kept
-    ('grep no route' looks for "no route"), at most 64 bytes.
+    wildcards. It is one word after the options, at most 64 bytes: quote a
+    text with spaces ('grep "no route"' looks for "no route"; 'grep no route'
+    prints the usage).
 
     -v    the lines without the text instead
     -i    upper and lower case alike (ASCII letters only)
@@ -24,9 +25,8 @@ DESCRIPTION
     the pieces share the line's number.
 
 NOTES
-    grep works only after a '|': typed on its own it says so. A '|' starts a
-    stage only when a stage name follows it (grep, head, tail, wc, more), so
-    the text may hold a '|' that doesn't ('grep a|b'). Error messages of the
+    grep works only after a '|': typed on its own it says so. A text that
+    holds a '|' or '>' is quoted too ('grep "a|b"'). Error messages of the
     command go through grep like its other output. More about pipes in
     'man more'.
 

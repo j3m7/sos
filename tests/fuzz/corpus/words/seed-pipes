@@ -1,0 +1,1 @@
+dmesg|grep -i 'no route'|head 3 >> /log/d.txt

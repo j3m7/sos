@@ -41,7 +41,6 @@ typedef struct shell shell_t;
 #define SHELL_HIDDEN 0x02      // never offered by Tab (an alias, a testing command)
 #define SHELL_PATH   0x04      // the words after it are paths on the SD card: Tab completes them
 #define SHELL_DIR    0x08      // with SHELL_PATH: paths of directories (Tab offers only those)
-#define SHELL_REDIRECT 0x10    // a command: the text after the line's last '>' is a path (echo)
 #define SHELL_NOSPACE  0x20    // a word Tab ends with nothing, not a space ("https://")
 #define SHELL_VALUES   0x40    // marks a shell_values_t (below); not for other entries
 
@@ -76,13 +75,14 @@ _Static_assert(offsetof(shell_values_t, mark) == 0, "SHELL_VALUES_OF() is cast b
 // may still grow (a scan still running, say).
 typedef bool (*shell_ask_complete_fn)(shell_t *sh, shell_value_fn fn, void *arg);
 
-// A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
-// end with an entry whose name is NULL.
+// A command: `run` gets the words after the name joined with single spaces (quoted spaces kept:
+// `echo "a  b"` passes "a  b"), or NULL without any. Tables end with an entry whose name is
+// NULL.
 typedef struct {
     const char *name;
     void (*run)(shell_t *sh, char *args);
     const shell_word_t *words; // words that may follow the name, for Tab
-    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR, SHELL_REDIRECT
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN, SHELL_PATH, SHELL_DIR
 } shell_cmd_t;
 
 // Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the
@@ -164,9 +164,13 @@ void shell_write(shell_t *sh, const char *buf, size_t len);
 // End the session through io->logout, or say that this channel can't be ended.
 void shell_logout(shell_t *sh);
 
-// Run one command line (spaces trimmed, never empty). Implemented by the command module
-// (shell.c); shell_core.c (line editing) calls it.
-void shell_execute(shell_t *sh, char *cmd);
+// Run one command: its words (argc >= 1, argv[0] the name, argv[argc] NULL), as words_split()
+// left them in the line buffer (words.h), in line order and without operators; the line's
+// stages, if any, are set up already. The words are clobbered (joined in place). False, with
+// nothing printed, when there is no command of that name: the caller tears the line's stages
+// down and says so on the terminal. Implemented by the command module (shell.c); shell_core.c
+// (line editing) calls it.
+bool shell_execute(shell_t *sh, int argc, char **argv);
 
 // Show `len` bytes of `text`, a HEAP_EDIT block that the callee owns from here on, in the pager
 // under `name` (`<command> | more`). Implemented by the command module (shell.c); shell_core.c

@@ -18,5 +18,10 @@ DESCRIPTION
     paste. 'key del <n>' stops trusting key n. Changes apply at once: a new
     key works for the next login.
 
+    A line given after 'key add' goes through the shell's QUOTING ('man
+    intro'): a quote, backslash, '|' or '>' in the key's comment must be
+    escaped with a backslash. A line pasted at the question is taken as it
+    is.
+
 SEE ALSO
     ssh, setup, who, config

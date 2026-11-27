@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/shell/pipe.c: the stage parser and the filters grep, head, tail, wc and tee.
+// Unit tests for src/shell/pipe.c: the line's grammar after the command, the filters grep, head,
+// tail, wc and tee, and the redirect (a quiet tee).
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -104,17 +105,28 @@ static void card_reset(void) {
 
 static pipeline_t p;
 
-static bool open_stages(const char *stages) {
+// Open what follows a command: `rest` starts with its first operator ("| grep x", "> f"), split
+// into words as the shell splits a line.
+static bool open_rest(const char *rest) {
     static char text[256];
-    snprintf(text, sizeof(text), "%s", stages);
+    static words_t w;
+    snprintf(text, sizeof(text), "%s", rest);
     said[0] = '\0';
     out_len = 0;
     out[0] = '\0';
     memset(&p, 0, sizeof(p));
-    if (!pipe_open(&sh, &p, text))
+    CHECK(words_split(text, &w) == NULL);
+    if (!pipe_open(&sh, &p, &w, 0))
         return false;
     p.out = sink;
     return true;
+}
+
+// The stages after a command's first '|' ("grep x | more").
+static bool open_stages(const char *stages) {
+    char rest[256];
+    snprintf(rest, sizeof(rest), "| %s", stages);
+    return open_rest(rest);
 }
 
 // Run `stages` over in[0..len): in two writes split at `cut` (0 or len: one write), or one byte
@@ -187,12 +199,19 @@ TEST(grep_passes_matching_lines) {
     CHECK_STR(run("grep -i fOX", "x\nFOX\n"), "FOX\n");
 }
 
-TEST(grep_text_keeps_its_spaces_and_may_start_with_a_dash) {
-    CHECK_STR(run("grep  last fox ", text), "the last fox\n");
-    CHECK_STR(run("grep a  fox", text), "");                        // two spaces: not "a fox"
+TEST(grep_text_is_one_word_and_may_start_with_a_dash) {
+    CHECK_STR(run("grep 'last fox'", text), "the last fox\n");      // spaces: quoted
+    CHECK_STR(run("grep \"a  fox\"", text), "");                    // two spaces: not "a fox"
+    CHECK_STR(run("grep a\\ fox", text), "a fox\n");
     CHECK_STR(run("grep -x", "a-x\nb\n"), "a-x\n");                 // not an option: the text
     CHECK_STR(run("grep -v -", "a-x\nb\n"), "b\n");
-    CHECK_STR(run("grep a|b", "a|b\nab\n"), "a|b\n");               // a '|' before no stage name
+    CHECK_STR(run("grep -i '-N'", "a-n\nb\n"), "a-n\n");           // quoted, still a word of '-'
+    CHECK_STR(run("grep 'a|b'", "a|b\nab\n"), "a|b\n");             // a quoted '|' is text
+    // More than one word (sh would take the rest for files): the usage, nothing opened.
+    CHECK(!open_stages("grep last fox"));
+    CHECK_STR(said, "usage: <command> | grep [-v] [-i] [-n] <text>\n");
+    CHECK(!open_stages("grep ''"));                                 // an empty text
+    CHECK_STR(said, "usage: <command> | grep [-v] [-i] [-n] <text>\n");
 }
 
 TEST(grep_cuts_long_lines_into_pieces) {
@@ -275,8 +294,9 @@ TEST(tee_parses_its_arguments) {
     CHECK(!open_stages("tee"));
     CHECK(strstr(said, "usage: <command> | tee [-a] <path>") != NULL);
     CHECK(!open_stages("tee -a"));
-    CHECK(!open_stages("tee a b"));
+    CHECK(!open_stages("tee a b"));                 // one path: a name with spaces is quoted
     CHECK(!open_stages("tee -a a b"));
+    CHECK(!open_stages("tee ''"));
     CHECK(card_opens == 0);
     CHECK(open_stages("tee -ax"));                  // a path that starts with a dash
     CHECK(card_opens == 0);                         // nothing opened until output arrives
@@ -317,8 +337,6 @@ TEST(tee_parses_its_arguments) {
     CHECK(p.done);
     CHECK_STR(out, "tee: /f: card full\n");
     pipe_end(&p);
-    CHECK(pipe_is_stage("tee /f") && pipe_is_stage("tee"));
-    CHECK(!pipe_is_stage("teepee"));
     // A refused path stops the line before the command runs, with the permission's message.
     card_refuse = true;
     CHECK(!open_stages("grep a | tee /certs/x"));
@@ -451,32 +469,110 @@ TEST(stages_that_do_not_parse_say_why) {
     pipe_close(&p);
 }
 
-TEST(split_finds_the_stages) {
-    char line[64];
-    strcpy(line, "ls | morex");                 // no stage: as typed
-    CHECK(pipe_split(line) == NULL);
-    CHECK_STR(line, "ls | morex");
-    strcpy(line, "lua -e print(1|2)");
-    CHECK(pipe_split(line) == NULL);
-    strcpy(line, "help|more");
-    CHECK_STR(pipe_split(line), "more");
-    CHECK_STR(line, "help");
-    strcpy(line, "dmesg  |  grep a|b | head");
-    CHECK_STR(pipe_split(line), "  grep a|b | head");
-    CHECK_STR(line, "dmesg");
-    strcpy(line, "a | b | wc");                 // the first '|' before a stage name
-    CHECK_STR(pipe_split(line), " wc");
-    CHECK_STR(line, "a | b");
-    strcpy(line, "x |grepx | head|wc");
-    CHECK_STR(pipe_split(line), " head|wc");
-    CHECK_STR(line, "x |grepx");
-    strcpy(line, "| grep x");
-    CHECK_STR(pipe_split(line), " grep x");
-    CHECK_STR(line, "");
-    CHECK(pipe_is_stage("wc") && pipe_is_stage("tail 3") && pipe_is_stage("more|"));
-    CHECK(!pipe_is_stage("wcx") && !pipe_is_stage("") && !pipe_is_stage("Grep"));
-    // "head|wc": two stages.
-    CHECK(open_stages(" head 1|wc"));
+TEST(tee_takes_a_quoted_path_with_spaces) {
+    card_reset();
+    CHECK(open_stages("tee 'my notes.txt'"));
+    pipe_write(&p, "x\n", 2);
+    pipe_end(&p);
+    CHECK_STR(card_path, "my notes.txt");
+    CHECK(open_stages("tee -a \"a b\""));
+    pipe_close(&p);
+    char longer[SHELL_PATH_MAX + 16];               // the length check stays
+    memset(longer, 'x', SHELL_PATH_MAX + 1);
+    strcpy(longer + SHELL_PATH_MAX + 1, "");
+    char line[SHELL_PATH_MAX + 32];
+    snprintf(line, sizeof(line), "tee %s", longer);
+    CHECK(!open_stages(line));
+    CHECK_STR(said, "usage: <command> | tee [-a] <path>\n");
+}
+
+TEST(redirect_is_a_quiet_tee) {
+    card_reset();
+    CHECK(open_rest("> /f"));
+    CHECK(p.first != NULL && p.sink == PIPE_SINK_TERMINAL);
+    CHECK(card_opens == 0);                         // opened on the first output
+    pipe_write(&p, "one\n", 4);
+    pipe_end(&p);
+    CHECK_STR(out, "");                             // nothing passed on
+    CHECK(card_len == 4 && !memcmp(card, "one\n", 4) && !card_open);
+    CHECK_STR(card_path, "/f");
+    CHECK(open_rest(">> /f"));                      // appended
+    pipe_write(&p, "two\n", 4);
+    pipe_end(&p);
+    CHECK(card_len == 8 && !memcmp(card, "one\ntwo\n", 8));
+    CHECK(open_rest(">/f"));                        // replaced; no space needed
+    pipe_end(&p);                                   // an empty output still makes the file
+    CHECK(card_len == 0 && card_opens == 3);
+    // After filters: the file gets what they let through.
+    CHECK(open_rest("| grep a | head 1 > '/my file'"));
+    pipe_write(&p, "b\na1\na2\n", 9);
+    pipe_end(&p);
+    CHECK_STR(out, "");
+    CHECK(card_len == 3 && !memcmp(card, "a1\n", 3));
+    CHECK_STR(card_path, "/my file");
+    // Its errors reach the terminal, once.
+    card_reset();
+    card_fail_at = 2;
+    CHECK(open_rest("> /f"));
+    pipe_write(&p, "abc\n", 4);
+    CHECK(p.done);
+    pipe_end(&p);
+    CHECK_STR(out, "tee: /f: card full\n");
+    card_reset();
+    card_refuse = true;                             // a refused path: before the command runs
+    CHECK(!open_rest("> /certs/x"));
+    CHECK_STR(said, "tee: /certs/x: not allowed to change this path\n");
+    // A redirect isn't one of the four filters.
+    card_reset();
+    CHECK(open_rest("| head 9 | tail 9 | grep x | wc > /f"));
+    pipe_close(&p);
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), 0);
+}
+
+TEST(the_line_after_the_command_follows_the_grammar) {
+    static const struct {
+        const char *rest, *says;
+    } bad[] = {
+        {"| nosuch", "nosuch: not a filter (grep, head, tail, wc, tee, more)\n"},
+        {"| morex", "morex: not a filter (grep, head, tail, wc, tee, more)\n"},
+        {"| 'grep x'", "grep x: not a filter (grep, head, tail, wc, tee, more)\n"},
+        {"| grep x | ", "|: a filter must follow (grep, head, tail, wc, tee, more)\n"},
+        {"| | wc", "|: a filter must follow"},
+        {"| > f", "|: a filter must follow"},
+        {">", "usage: <command> > <path>\n"},
+        {">>", "usage: <command> >> <path>\n"},
+        {"> | wc", "usage: <command> > <path>\n"},
+        {"> f | grep x", ">: only at the end of the line\n"},
+        {"> f > g", ">: one in a line at most\n"},
+        {">> f >> g", ">>: one in a line at most\n"},
+        {"> f g", ">: one path (quote a name that has spaces)\n"},
+        {"| more > f", "more: only at the end of the line\n"},
+        {"| more | wc", "more: only at the end of the line\n"},
+        {"| grep x > f | more", ">: only at the end of the line\n"},
+    };
+    card_reset();
+    size_t used = heap_tag_used(HEAP_EDIT);
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        if (open_rest(bad[i].rest)) {
+            fprintf(stderr, "  \"%s\" parsed\n", bad[i].rest);
+            CHECK(false);
+            pipe_close(&p);
+            continue;
+        }
+        if (strncmp(said, bad[i].says, strlen(bad[i].says)))
+            fprintf(stderr, "  \"%s\" said \"%s\"\n", bad[i].rest, said);
+        CHECK(!strncmp(said, bad[i].says, strlen(bad[i].says)));
+        CHECK(p.first == NULL && p.sink == PIPE_SINK_TERMINAL);
+    }
+    CHECK(card_opens == 0);                         // no file touched by a line that failed
+    CHECK_EQ(heap_tag_used(HEAP_EDIT), used);
+    // The grammar is checked before any stage opens: a refused tee path doesn't hide it.
+    card_refuse = true;
+    CHECK(!open_rest("| tee /certs/x | nosuch"));
+    CHECK_STR(said, "nosuch: not a filter (grep, head, tail, wc, tee, more)\n");
+    card_refuse = false;
+    // No spaces needed around '|'.
+    CHECK(open_rest("|head 1|wc"));
     pipe_write(&p, "a\nb\n", 4);
     pipe_end(&p);
     CHECK_STR(out, "1 1 2\n");
@@ -484,7 +580,7 @@ TEST(split_finds_the_stages) {
 
 TEST_MAIN(
     RUN(grep_passes_matching_lines);
-    RUN(grep_text_keeps_its_spaces_and_may_start_with_a_dash);
+    RUN(grep_text_is_one_word_and_may_start_with_a_dash);
     RUN(grep_cuts_long_lines_into_pieces);
     RUN(head_passes_the_first_lines_then_shuts);
     RUN(tee_writes_the_file_and_passes_the_bytes_on);
@@ -498,5 +594,7 @@ TEST_MAIN(
     RUN(stages_chain);
     RUN(close_drops_what_is_held);
     RUN(stages_that_do_not_parse_say_why);
-    RUN(split_finds_the_stages);
+    RUN(tee_takes_a_quoted_path_with_spaces);
+    RUN(redirect_is_a_quiet_tee);
+    RUN(the_line_after_the_command_follows_the_grammar);
 )
