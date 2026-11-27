@@ -400,6 +400,16 @@ if (SOS_FORCE_CONSOLE_ONLY)
     message(STATUS "SOS: this image treats every board as console-only (SOS_FORCE_CONSOLE_ONLY)")
 endif()
 
+# Test commands (issue #188): -DSOS_TEST_COMMANDS=ON adds `mem hold` and `mem release` on the
+# console, which take heap memory and keep it so the out-of-memory paths can be made to happen
+# on a board. Off by default; not for a board in use.
+option(SOS_TEST_COMMANDS "Add console commands for testing (mem hold, mem release)" OFF)
+if (SOS_TEST_COMMANDS)
+    target_sources(sos PRIVATE src/core/memhold.c)
+    target_compile_definitions(sos PRIVATE SOS_TEST_COMMANDS=1)
+    message(STATUS "SOS: this image has the test commands (SOS_TEST_COMMANDS)")
+endif()
+
 pico_add_extra_outputs(sos)   # .uf2, .hex, .bin, .dis, .map
 
 # `ninja -C build provision` : write the board's configuration from provision.conf (or
