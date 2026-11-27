@@ -171,9 +171,9 @@ static void clear(shell_t *sh) {
 
 typedef struct {
     FIL f;
+    tzbundle_lines_t lines;
     char prefix[TZBUNDLE_NAME_MAX + 1];
-    char line[TZBUNDLE_LINE_MAX + 1];
-    bool partial;                           // the last line read goes on in the next read
+    char line[TZBUNDLE_READ_MAX];
     unsigned shown;
 } list_job_t;
 
@@ -191,16 +191,14 @@ static bool list_step(shell_t *sh, void *arg, bool cancel) {
     for (int i = 0; i < 16; i++) {
         if (shell_write_space(sh) < TZZONE_LIST_LINE)
             return true;                    // wait for the client to read
-        if (!f_gets(j->line, sizeof(j->line), &j->f)) {
+        bool too_long;
+        if (!tzbundle_next_line(&j->lines, j->line, &too_long)) {
             if (!j->shown)
                 shell_printf(sh, "no zone starts with %s\n", j->prefix);
             return list_end(j);
         }
-        bool whole = !j->partial;
-        size_t n = strlen(j->line);
-        j->partial = n == sizeof(j->line) - 1 && j->line[n - 1] != '\n';
         char *name, *rule;
-        if (whole && !j->partial && tzbundle_split(j->line, &name, &rule) &&
+        if (!too_long && tzbundle_split(j->line, &name, &rule) &&
             tzbundle_has_prefix(name, j->prefix)) {
             shell_printf(sh, "  %-32s %s\n", name, rule);
             j->shown++;
@@ -224,14 +222,15 @@ static void list(shell_t *sh, const char *prefix) {
     strcpy(j->prefix, prefix);
     FRESULT fr = f_open(&j->f, TZZONE_BUNDLE, FA_READ);
     char version[TZBUNDLE_VERSION_MAX + 1];
+    bool too_long = false;
+    j->lines = (tzbundle_lines_t){.read = read_fil, .ctx = &j->f};
     if (fr != FR_OK) {
         shell_printf(sh, "no zone bundle on the card ('time zone install' downloads it)\n");
-    } else if (!f_gets(j->line, sizeof(j->line), &j->f) || !tzbundle_version(j->line, version)) {
+    } else if (!tzbundle_next_line(&j->lines, j->line, &too_long) || too_long ||
+               !tzbundle_version(j->line, version)) {
         shell_printf(sh, TZZONE_BUNDLE " isn't a zone bundle ('time zone install' replaces it)\n");
         f_close(&j->f);
     } else {
-        size_t n = strlen(j->line);
-        j->partial = n == sizeof(j->line) - 1 && j->line[n - 1] != '\n';
         shell_printf(sh, "zones in tzdata %s ('time zone <name>' sets one):\n", version);
         files_hold();
         shell_run_job(sh, list_step, j);

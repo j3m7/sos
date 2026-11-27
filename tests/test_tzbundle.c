@@ -10,8 +10,12 @@
 #include "test.h"
 #include "time/tzbundle.h"
 
+// How many bytes short of the buffer the readers stop: 0 as fgets(), 4 as FatFs's f_gets() with
+// the UTF-8 API the board's build has (its line buffer is given 4 less room than it says).
+static size_t short_by;
+
 static bool read_file(void *ctx, char *buf, size_t cap) {
-    return fgets(buf, (int)cap, ctx) != NULL;
+    return fgets(buf, (int)(cap - short_by), ctx) != NULL;
 }
 
 // A bundle in memory, read as fgets() would.
@@ -24,7 +28,7 @@ static bool read_text(void *ctx, char *buf, size_t cap) {
     if (!*t->p)
         return false;
     size_t n = 0;
-    while (n + 1 < cap && t->p[n]) {
+    while (n + 1 + short_by < cap && t->p[n]) {
         n++;
         if (t->p[n - 1] == '\n')
             break;
@@ -84,7 +88,7 @@ TEST(split_lines) {
     CHECK(tzbundle_split(line, &n, &r));
 }
 
-TEST(find_in_the_real_bundle) {
+static void find_in_the_real_bundle(void) {
     tzbundle_find_t f;
     CHECK_EQ(find_real("Europe/Madrid", &f), TZBUNDLE_FOUND);
     CHECK(!strcmp(f.name, "Europe/Madrid"));
@@ -118,7 +122,7 @@ TEST(find_in_the_real_bundle) {
 
 // What's on the card may be anything: no header, long lines, lines that aren't zones, rules
 // that don't parse, no newline at the end.
-TEST(find_in_bundles_not_well_formed) {
+static void find_in_bundles_not_well_formed(void) {
     tzbundle_find_t f;
     CHECK_EQ(find_in("", "UTC", &f), TZBUNDLE_NOT_A_BUNDLE);
     CHECK_EQ(find_in("UTC UTC0\n", "UTC", &f), TZBUNDLE_NOT_A_BUNDLE);
@@ -135,9 +139,35 @@ TEST(find_in_bundles_not_well_formed) {
     CHECK_EQ(find_in(text, "Fake/Zone", &f), TZBUNDLE_NOT_FOUND);
     CHECK_EQ(find_in(text, "UTC", &f), TZBUNDLE_FOUND);
     CHECK_EQ(f.skipped, 1);
-    // So is a long header's rest.
+    // A header too long to read in one piece isn't one: its rest can't pass for zones.
     snprintf(text, sizeof(text), "# tzdata 2026f: %0*d\nFake/Zone UTC0\nUTC UTC0\n", 200, 0);
+    CHECK_EQ(find_in(text, "UTC", &f), TZBUNDLE_NOT_A_BUNDLE);
+}
+
+// The longest line a zone can have (a 39-character name, a 63-character rule) is found, with the
+// reader as on the board.
+static void longest_lines(void) {
+    char text[256];
+    snprintf(text, sizeof(text), "# tzdata 2026f: each zone's rule from zic -b slim, built by "
+             "tools/tz-bundle.sh from IANA's signed release\n"
+             "A23456789012345678901234567890123456789 "
+             "<A23456789012345>-23:59:59<B23456789012345>,M10.5.0/-1,M3.5.0/1\n"
+             "UTC UTC0\n");
+    tzbundle_find_t f;
     CHECK_EQ(find_in(text, "UTC", &f), TZBUNDLE_FOUND);
+    CHECK_EQ(f.zones, 2);
+    CHECK_EQ(f.skipped, 0);
+    CHECK_EQ(find_in(text, "A23456789012345678901234567890123456789", &f), TZBUNDLE_FOUND);
+    CHECK_EQ(strlen(f.rule), 63);
+}
+
+TEST(with_fgets_and_with_f_gets) {
+    for (short_by = 0; short_by <= 4; short_by += 4) {
+        find_in_the_real_bundle();
+        find_in_bundles_not_well_formed();
+        longest_lines();
+    }
+    short_by = 0;
 }
 
 TEST(distance) {
@@ -156,7 +186,6 @@ TEST(distance) {
 TEST_MAIN(
     RUN(version_from_header);
     RUN(split_lines);
-    RUN(find_in_the_real_bundle);
-    RUN(find_in_bundles_not_well_formed);
+    RUN(with_fgets_and_with_f_gets);
     RUN(distance);
 )

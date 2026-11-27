@@ -150,30 +150,43 @@ static void consider(tzbundle_find_t *out, unsigned dist[TZBUNDLE_NEAR], const c
         out->near_count++;
 }
 
-// A line that filled buf without its newline goes on in the next read. (One shorter than that
-// without a newline is the file's last.)
-static bool cut_short(const char *line, size_t cap) {
-    size_t n = strlen(line);
-    return n == cap - 1 && line[n - 1] != '\n';
+bool tzbundle_next_line(tzbundle_lines_t *l, char line[TZBUNDLE_READ_MAX], bool *too_long) {
+    *too_long = false;
+    if (l->have_next) {
+        memcpy(line, l->next, TZBUNDLE_READ_MAX);
+        l->have_next = false;
+    } else if (!l->read(l->ctx, line, TZBUNDLE_READ_MAX)) {
+        return false;
+    }
+    char *nl = strchr(line, '\n');
+    if (nl) {
+        *nl = '\0';
+        return true;
+    }
+    // No newline: the file's last line, or the start of one longer than the reader gives at once.
+    if (!l->read(l->ctx, l->next, TZBUNDLE_READ_MAX))
+        return true;
+    *too_long = true;
+    while (!strchr(l->next, '\n'))             // the rest of it, up to its newline
+        if (!l->read(l->ctx, l->next, TZBUNDLE_READ_MAX))
+            break;
+    return true;
 }
 
 tzbundle_result_t tzbundle_find(tzbundle_read_fn read, void *ctx, const char *name,
                                 tzbundle_find_t *out) {
-    char line[TZBUNDLE_LINE_MAX + 1];
+    tzbundle_lines_t lines = {.read = read, .ctx = ctx};
+    char line[TZBUNDLE_READ_MAX];
     unsigned dist[TZBUNDLE_NEAR] = {0};
-    bool partial = false;                       // the line read is the rest of a long one
+    bool too_long;
     memset(out, 0, sizeof(*out));
-    if (!read(ctx, line, sizeof(line)) || !tzbundle_version(line, out->version))
+    if (!tzbundle_next_line(&lines, line, &too_long) || too_long ||
+        !tzbundle_version(line, out->version))
         return TZBUNDLE_NOT_A_BUNDLE;
-    partial = cut_short(line, sizeof(line));
-    while (read(ctx, line, sizeof(line))) {
-        bool whole = !partial;
-        partial = cut_short(line, sizeof(line));
+    while (tzbundle_next_line(&lines, line, &too_long)) {
         char *n, *r;
         tzrule_t rule;
-        if (!whole)
-            continue;                           // the rest of a long line, counted already
-        if (partial || !tzbundle_split(line, &n, &r) || !tzrule_parse(r, &rule, NULL)) {
+        if (too_long || !tzbundle_split(line, &n, &r) || !tzrule_parse(r, &rule, NULL)) {
             out->skipped++;                     // too long, not a zone, or a rule not taken
             continue;
         }
