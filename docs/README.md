@@ -8,6 +8,9 @@ datasheets and manuals.
 For development environment options (dependencies outside the repository, developing in a VM,
 SWD debugging), see [development.md](development.md).
 
+Design notes for work that is decided but not yet built live in [design/](design/)
+(e.g. [shell-pipes.md](design/shell-pipes.md), #182).
+
 Datasheets and manuals for the SOS hardware (Raspberry Pi Pico 2 W + Adafruit PiCowbell Adalogger).
 Downloaded 2026-11-23.
 
