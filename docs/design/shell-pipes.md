@@ -325,8 +325,9 @@ works as before. A `>` on every command would need either a per-command free-tex
 quoting, which is its own change (#199). `tee` is a filter in pipe.c; the card side (resolve,
 the `echo` write check, open, write, close, `files_hold()`) is behind three functions that
 files.c defines and the host tests stub (`pipe_file_open/write/close`, weak defaults in pipe.c
-that refuse). A write error prints `tee: <path>: <error>` once on the terminal and ends the
-producer as `head` does. The text below is the design as first written, kept for the reasoning
+that refuse). A write error closes the file, sends `tee: <path>: <error>` down the line once (so
+it reaches the terminal or the pager's text, never the file) and ends the producer as `head`
+does. The text below is the design as first written, kept for the reasoning
 on `>`.
 
 #### The `>` sink as first considered
