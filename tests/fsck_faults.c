@@ -115,8 +115,8 @@ void fault_arm(fault_disk_t *f, fault_mode_t mode, uint32_t n) {
     count_clear(f->counts);
 }
 
-fault_io_t fault_io(fault_disk_t *f) {
-    return (fault_io_t){.read = fault_read, .write = fault_write, .ctx = f,
+fsck_io_t fault_io(fault_disk_t *f) {
+    return (fsck_io_t){.read = fault_read, .write = fault_write, .ctx = f,
                         .sectors = fsck_disk_sectors(f->disk)};
 }
 
@@ -144,8 +144,8 @@ static void log_write(fault_disk_t *f, uint64_t lba, bool applied, bool after) {
         f->log_cap = f->log_cap ? 2 * f->log_cap : 64;
         f->log = xrealloc(f->log, f->log_cap * sizeof(fault_write_t));
     }
-    f->log[f->log_len++] = (fault_write_t){.lba = lba, .seq = f->writes, .applied = applied,
-                                           .after_failure = after};
+    f->log[f->log_len++] = (fault_write_t){.lba = lba, .seq = f->writes, .reads = f->reads,
+                                           .applied = applied, .after_failure = after};
 }
 
 bool fault_write(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf) {
@@ -240,7 +240,7 @@ static void report_case(const fault_run_t *r, const fault_disk_t *f, fault_mode_
 static const char *dry(const fault_run_t *r, fault_disk_t *f, FILE *out) {
     fsck_disk_restore(r->disk);
     fault_arm(f, FAULT_OFF, 0);
-    fault_io_t io = fault_io(f);
+    fsck_io_t io = fault_io(f);
     if (r->repair(&io, r->repair_ctx) != 0)
         return "the dry run's repair failed";
     if (r->clean && !r->clean(r->disk, r->prop_ctx, out))
@@ -281,7 +281,7 @@ static const char *one_case(const fault_run_t *r, fault_disk_t *f, const fault_d
                             fault_mode_t mode, uint32_t n, FILE *out) {
     fsck_disk_restore(r->disk);
     fault_arm(f, mode, n);
-    fault_io_t io = fault_io(f);
+    fsck_io_t io = fault_io(f);
     int rc = r->repair(&io, r->repair_ctx);
     if (!same_prefix(f, ref, mode))
         return "the writes before the fault differ from the dry run's (repair isn't deterministic)";
@@ -299,7 +299,7 @@ static const char *one_case(const fault_run_t *r, fault_disk_t *f, const fault_d
     fault_disk_t again;
     fault_init(&again, r->disk);
     fault_arm(&again, FAULT_OFF, 0);
-    fault_io_t io2 = fault_io(&again);
+    fsck_io_t io2 = fault_io(&again);
     int rc2 = r->repair(&io2, r->repair_ctx);
     fault_free(&again);
     if (rc2 != 0)
@@ -307,6 +307,16 @@ static const char *one_case(const fault_run_t *r, fault_disk_t *f, const fault_d
     if (r->clean && !r->clean(r->disk, r->prop_ctx, out))
         return "the image after repair is run again isn't clean";
     return NULL;
+}
+
+// Fail read N is tried (read_stride).
+static bool read_sampled(const fault_run_t *r, const fault_disk_t *ref, uint32_t n) {
+    if (!r->read_stride || (n - 1) % r->read_stride == 0 || n == ref->reads)
+        return true;
+    for (size_t i = 0; i < ref->log_len; i++)
+        if (n == ref->log[i].reads || n == ref->log[i].reads + 1)
+            return true;
+    return false;
 }
 
 uint32_t fault_run(const fault_run_t *r, fault_mode_t mode, fault_result_t *res) {
@@ -326,6 +336,8 @@ uint32_t fault_run(const fault_run_t *r, fault_mode_t mode, fault_result_t *res)
     } else if (mode != FAULT_OFF) {
         uint32_t total = mode == FAULT_FAIL_READ ? ref.reads : ref.writes;
         for (uint32_t n = mode == FAULT_CUT ? 0 : 1; n <= total; n++) {
+            if (mode == FAULT_FAIL_READ && !read_sampled(r, &ref, n))
+                continue;
             FILE *out = res->failures < max_reports ? out_of(r) : NULL;
             why = one_case(r, &f, &ref, mode, n, out);
             res->cases++;

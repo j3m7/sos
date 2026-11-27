@@ -321,7 +321,7 @@ static bool overlong(damage_ctx_t *c, damage_fault_t *f) {
     link_run(c, first, k, f);
     f->value[0] = len;
     f->value[1] = k;
-    snprintf(f->what, sizeof(f->what), "%s: chain of %" PRIu32 " grown by %" PRIu32
+    snprintf(f->what, sizeof(f->what), "%.60s: chain of %" PRIu32 " grown by %" PRIu32
              " (clusters %" PRIu32 "-%" PRIu32 ")", path_of(c, a), len, k, first, first + k - 1);
     return true;
 }
@@ -383,9 +383,9 @@ static bool cross_link(damage_ctx_t *c, damage_fault_t *f) {
     fsinfo_adjust(c, (int32_t)(la - 1 - i));
     f->value[0] = i + 1 + lb - j;
     f->value[1] = la;
-    snprintf(f->what, sizeof(f->what), "%s: cluster %" PRIu32 " now points into %s at %" PRIu32
-             " (chain %" PRIu32 ", needs %" PRIu32 ")", path_of(c, a), ca[i], path_of(c, b), cb[j],
-             f->value[0], la);
+    snprintf(f->what, sizeof(f->what), "%.60s: cluster %" PRIu32 " now points into %.60s at %"
+             PRIu32 " (chain %" PRIu32 ", needs %" PRIu32 ")", path_of(c, a), ca[i], path_of(c, b),
+             cb[j], f->value[0], la);
     return true;
 }
 
@@ -403,7 +403,7 @@ static bool broken_chain(damage_ctx_t *c, damage_fault_t *f) {
     for (uint32_t k = i; k < la; k++)
         add_cluster(f, ca[k]);
     f->value[0] = la - 1 - i;
-    snprintf(f->what, sizeof(f->what), "%s: cluster %" PRIu32 " (%" PRIu32 " of %" PRIu32
+    snprintf(f->what, sizeof(f->what), "%.60s: cluster %" PRIu32 " (%" PRIu32 " of %" PRIu32
              ") marked free, %" PRIu32 " after it lost", path_of(c, a), ca[i], i + 1, la,
              f->value[0]);
     return true;
@@ -429,7 +429,7 @@ static bool size_larger(damage_ctx_t *c, damage_fault_t *f) {
     fsck_disk_put(c->disk, e->dir_lba, s);
     f->value[0] = (uint32_t)e->size;
     f->value[1] = (uint32_t)size;
-    snprintf(f->what, sizeof(f->what), "%s: size %" PRIu64 " written as %" PRIu64
+    snprintf(f->what, sizeof(f->what), "%.60s: size %" PRIu64 " written as %" PRIu64
              " (chain holds %" PRIu64 ")", path_of(c, a), e->size, size, (uint64_t)la * cs);
     return true;
 }
@@ -456,7 +456,7 @@ static bool overlong_xlink(damage_ctx_t *c, damage_fault_t *f) {
     add_cluster(f, cb[j]);
     f->value[0] = la;
     f->value[1] = lb - j;
-    snprintf(f->what, sizeof(f->what), "%s: last cluster %" PRIu32 " now runs into %s at %"
+    snprintf(f->what, sizeof(f->what), "%.60s: last cluster %" PRIu32 " now runs into %.60s at %"
              PRIu32 " (%" PRIu32 " extra)", path_of(c, a), ca[la - 1], path_of(c, b), cb[j],
              lb - j);
     return true;

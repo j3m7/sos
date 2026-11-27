@@ -23,17 +23,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "files/fsck.h"
 #include "fsck_disk.h"
 
-// The shape of fsck_io_t (src/files/fsck.h, design note §3), copied so the harness builds
-// without fsck.h. Swap it for fsck_io_t when repair lands: the fields are the same.
-typedef struct {
-    bool (*read)(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf);
-    void (*report)(void *ctx, const char *line);
-    bool (*write)(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
-    void *ctx;
-    uint64_t sectors;
-} fault_io_t;
 
 // --- the fault layer ------------------------------------------------------------------------
 
@@ -47,6 +39,7 @@ typedef enum {
 typedef struct {
     uint64_t lba;
     uint32_t seq;           // the write's number, from 1
+    uint32_t reads;         // sectors read before it
     bool applied;           // reached the disk
     bool after_failure;     // written after a failed read or write
 } fault_write_t;
@@ -73,8 +66,8 @@ void fault_init(fault_disk_t *f, fsck_disk_t *disk);
 void fault_free(fault_disk_t *f);
 // Arm a fault (FAULT_OFF: none) and clear the counters, the log and the per-sector counts.
 void fault_arm(fault_disk_t *f, fault_mode_t mode, uint32_t n);
-// fault_read and fault_write as an fault_io_t (report NULL), ctx `f`.
-fault_io_t fault_io(fault_disk_t *f);
+// fault_read and fault_write as an fsck_io_t (report NULL), ctx `f`.
+fsck_io_t fault_io(fault_disk_t *f);
 bool fault_read(void *ctx, uint64_t lba, uint32_t count, uint8_t *buf);
 bool fault_write(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
 // Reads and writes of one sector since fault_arm().
@@ -87,7 +80,7 @@ void fault_print_log(const fault_disk_t *f, FILE *out);
 
 // The repair under test: 0 when it finished, anything else when it stopped (it must stop on a
 // failed read or write). It reads and writes only through `io`.
-typedef int (*fault_repair_fn)(const fault_io_t *io, void *ctx);
+typedef int (*fault_repair_fn)(const fsck_io_t *io, void *ctx);
 // A property of the image after a run; false fails the case. It may print why to `out`, which
 // is NULL once the run has reported enough failures. The image is unmounted; the property may
 // mount it (fsck_disk_mount()), and must unmount it. `after` must not change the image (the
@@ -110,6 +103,10 @@ typedef struct {
     void *prop_ctx;
     FILE *out;                  // failure reports; NULL: stderr
     unsigned max_reports;       // failing cases reported in full (0: 3)
+    // Fail read: only every read_stride-th N (from 1), the last, and the reads just before and
+    // just after each of the dry run's writes. 0: every N. A repair reads every sector of the
+    // FAT in each check, so every N is thousands of full repairs.
+    uint32_t read_stride;
 } fault_run_t;
 
 typedef struct {
@@ -125,7 +122,8 @@ typedef struct {
 bool fault_dry_run(const fault_run_t *r, fault_result_t *res);
 
 // For every N (cut: 0 … total writes; fail write: 1 … total writes; fail read: 1 … total
-// reads): restore, arm, repair, check, then disarm, repair again to the end and check `clean`.
+// reads, or a sample of them: read_stride): restore, arm, repair, check, then disarm, repair
+// again to the end and check `clean`.
 // The rules, beside the two properties:
 // - a faulted run's writes before the fault go to the same sectors, in the same order, as the
 //   dry run's (repair is deterministic, so "after N writes" means the same thing every time);

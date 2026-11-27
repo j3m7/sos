@@ -345,6 +345,7 @@ if (EXISTS ${FATFS_DIR}/ff.c)
     # layer that cuts or fails writes and reads, a runner, file fingerprints and a seeded damage
     # generator.
     add_executable(test_fsck_faults test_fsck_faults.c fsck_disk.c fsck_faults.c fsck_damage.c)
+    target_include_directories(test_fsck_faults PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_fsck_faults PRIVATE fatfs_host)
     add_test(NAME fsck_faults COMMAND test_fsck_faults)
 else()

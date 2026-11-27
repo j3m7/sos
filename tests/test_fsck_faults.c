@@ -32,7 +32,7 @@ TEST(fault_layer_counts) {
     fault_disk_t f;
     fault_init(&f, d);
     fault_arm(&f, FAULT_OFF, 0);
-    fault_io_t io = fault_io(&f);
+    fsck_io_t io = fault_io(&f);
     static uint8_t buf[3 * SECTOR];
     memset(buf, 7, sizeof(buf));
     CHECK(io.write(io.ctx, 10, 3, buf));
@@ -257,7 +257,7 @@ typedef struct {
 } toy_t;
 
 // Write i (from 1) fills toy_seq[i - 1] with i; each write reads its sector first.
-static int toy_repair(const fault_io_t *io, void *ctx) {
+static int toy_repair(const fsck_io_t *io, void *ctx) {
     toy_t *t = ctx;
     uint8_t buf[SECTOR];
     bool failed = false;
@@ -723,7 +723,7 @@ typedef struct {
     bool zero_first;
 } lost_repair_t;
 
-static bool set_entry(const fault_io_t *io, uint64_t lba, uint32_t ofs, uint32_t v) {
+static bool set_entry(const fsck_io_t *io, uint64_t lba, uint32_t ofs, uint32_t v) {
     uint8_t s[SECTOR];
     if (!io->read(io->ctx, lba, 1, s))
         return false;
@@ -734,7 +734,7 @@ static bool set_entry(const fault_io_t *io, uint64_t lba, uint32_t ofs, uint32_t
 
 // Set FAT entry `c` in every copy, copy 0 first. With `skip_same`, a copy that already holds
 // `v` isn't written (an earlier run, cut short, may have done one copy and not the other).
-static bool set_fat(const fault_io_t *io, const damage_fat32_t *g, uint32_t c, uint32_t v,
+static bool set_fat(const fsck_io_t *io, const damage_fat32_t *g, uint32_t c, uint32_t v,
                     bool skip_same) {
     for (uint32_t k = 0; k < g->nfats; k++) {
         uint64_t lba = g->fatbase + (uint64_t)k * g->fatsz + c / 128;
@@ -754,7 +754,7 @@ static bool set_fat(const fault_io_t *io, const damage_fat32_t *g, uint32_t c, u
     return true;
 }
 
-static uint32_t fat_read(const fault_io_t *io, const damage_fat32_t *g, uint32_t c, bool *ok) {
+static uint32_t fat_read(const fsck_io_t *io, const damage_fat32_t *g, uint32_t c, bool *ok) {
     uint8_t s[SECTOR];
     *ok = io->read(io->ctx, g->fatbase + c / 128, 1, s);
     const uint8_t *e = s + 4 * (c % 128);
@@ -766,7 +766,7 @@ static bool is_lost(const damage_fault_t *f) {
     return f->kind->apply == damage_fat32_kinds[DAMAGE_LOST_CHAIN].apply;
 }
 
-static int lost_repair(const fault_io_t *io, void *ctx) {
+static int lost_repair(const fsck_io_t *io, void *ctx) {
     const lost_repair_t *t = ctx;
     const damage_fat32_t *g = &t->g;
     uint32_t keep = 0;
