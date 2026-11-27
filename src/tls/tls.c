@@ -18,12 +18,15 @@
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/memory.h>
+#include <wolfssl/wolfcrypt/asn.h>
+#include <wolfssl/wolfcrypt/asn_public.h>
 
 #include "pico-sshd/ringbuffer.h"
 
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "time/timeconv.h"
 #include "time/timesync.h"
 #include "tls/certstore.h"
 #include "tls/tls_roots.h"
@@ -296,16 +299,58 @@ static int io_send(WOLFSSL *ssl, char *buf, int sz, void *ctx) {
 // Certificate dates can only be checked against a clock that is set. Before that (e.g. NTS
 // setting the clock for the first time) accept a chain whose only fault is its dates; the
 // signatures and the host name are still checked.
+// A certificate date (ASN.1, as DecodedCert keeps it) as seconds since 1970; 0 if unreadable.
+static int64_t cert_date(const byte *raw, int raw_len) {
+    const byte *date;
+    byte format;
+    int len;
+    struct tm tm;
+    if (!raw || wc_GetDateInfo(raw, raw_len, &date, &format, &len) != 0 ||
+        wc_GetDateAsCalendarTime(date, len, format, &tm) != 0)
+        return 0;
+    return timeconv_from_tm(tm.tm_year, tm.tm_mon, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+// Note the accepted leaf certificate's names and dates in the connection's stats (for scripts:
+// sos.http's tls.cert). Read from the DER the store holds; nothing here affects the verdict.
+static void note_leaf(tls_conn_t *c, const WOLFSSL_X509_STORE_CTX *store) {
+    if (!store->certs || store->totalCerts < 1)
+        return;
+    DecodedCert *dc = heap_alloc(HEAP_NET, sizeof(*dc));     // 1004 bytes in this build, briefly
+    if (!dc)
+        return;
+    wc_InitDecodedCert(dc, store->certs[0].buffer, store->certs[0].length, NULL);
+    if (wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL) == 0) {
+        tls_stats_t *s = &c->stats;
+        s->cert_known = true;
+        s->cert_not_before = cert_date(dc->beforeDate, dc->beforeDateLen);
+        s->cert_not_after = cert_date(dc->afterDate, dc->afterDateLen);
+        int n = dc->subjectCN && dc->subjectCNLen > 0 ? dc->subjectCNLen : 0;
+        snprintf(s->cert_subject, sizeof(s->cert_subject), "%.*s", n, n ? dc->subjectCN : "");
+        size_t m = strnlen(dc->issuer, sizeof(dc->issuer));      // cut to fit, on purpose
+        if (m >= sizeof(s->cert_issuer))
+            m = sizeof(s->cert_issuer) - 1;
+        memcpy(s->cert_issuer, dc->issuer, m);
+        s->cert_issuer[m] = '\0';
+    }
+    wc_FreeDecodedCert(dc);
+    heap_release(HEAP_NET, dc);
+}
+
+// wolfSSL calls this for every certificate that fails, and (WOLFSSL_ALWAYS_VERIFY_CB) for the
+// leaf even when it passed. The verdict is wolfSSL's, except that dates are let through while
+// the clock isn't set. The leaf, if accepted, is noted for the stats.
 static int verify_cb(int preverify, WOLFSSL_X509_STORE_CTX *store) {
-    if (preverify)
-        return 1;
-    if ((store->error == ASN_BEFORE_DATE_E || store->error == ASN_AFTER_DATE_E) &&
+    int ok = preverify;
+    if (!ok && (store->error == ASN_BEFORE_DATE_E || store->error == ASN_AFTER_DATE_E) &&
         !timesync_clock_set()) {
         if (verifying)
             verifying->stats.dates_unchecked = true;
-        return 1;
+        ok = 1;
     }
-    return 0;
+    if (ok && verifying && store->error_depth == 0)
+        note_leaf(verifying, store);
+    return ok;
 }
 
 int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len) {

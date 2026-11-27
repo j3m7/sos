@@ -434,6 +434,11 @@ static void http_stats(void) {
         s.handshake_us = clamp_u32(ts->handshake_us);
         s.longest_step_us = ts->longest_step_us;
         s.heap_peak = clamp_u32(ts->heap_peak);
+        s.cert = ts->cert_known;
+        s.cert_not_before = ts->cert_not_before;
+        s.cert_not_after = ts->cert_not_after;
+        memcpy(s.cert_subject, ts->cert_subject, sizeof(s.cert_subject));
+        memcpy(s.cert_issuer, ts->cert_issuer, sizeof(s.cert_issuer));
     }
     memcpy(lua_req.data, &s, sizeof(s));
 }

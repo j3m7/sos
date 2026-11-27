@@ -143,6 +143,10 @@ typedef struct {
     uint32_t handshake_us;          // TCP connected -> TLS handshake done
     uint32_t longest_step_us;       // longest single wolfSSL call
     uint32_t heap_peak;             // most wolfSSL heap in use at once, in bytes
+    bool cert;                      // the server's certificate was read (the rest is there)
+    int64_t cert_not_before, cert_not_after;    // seconds since 1970, 0 if unreadable
+    char cert_subject[64];
+    char cert_issuer[128];
 } lua_http_stats_t;
 
 // --- output: core 1 writes, core 0 reads -------------------------------------------------------

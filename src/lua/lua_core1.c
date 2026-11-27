@@ -610,6 +610,22 @@ static void push_stats(lua_State *L, const lua_http_stats_t *s) {
     set_int(L, "heap_peak", s->heap_peak);
     lua_pushboolean(L, s->dates_unchecked);
     lua_setfield(L, -2, "dates_unchecked");
+    if (s->cert) {
+        lua_createtable(L, 0, 4);
+        lua_pushstring(L, s->cert_subject);
+        lua_setfield(L, -2, "subject");
+        lua_pushstring(L, s->cert_issuer);
+        lua_setfield(L, -2, "issuer");
+        if (s->cert_not_before) {
+            lua_pushinteger(L, (lua_Integer)s->cert_not_before);
+            lua_setfield(L, -2, "not_before");
+        }
+        if (s->cert_not_after) {
+            lua_pushinteger(L, (lua_Integer)s->cert_not_after);
+            lua_setfield(L, -2, "not_after");
+        }
+        lua_setfield(L, -2, "cert");
+    }
     lua_setfield(L, -2, "tls");
 }
 
