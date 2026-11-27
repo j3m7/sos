@@ -12,9 +12,11 @@ holds several subsystems' commands), the boot sequence and main loop in `main.c`
 dozen direct calls from one subsystem into another. Once those go through a small number of
 seams, the CMake side is a list of options and a source list per feature.
 
-Status (2026-11-27): design only. Revised after Reviewer's review of #250 (§1, §3, §4.1,
-§4.3, §4.5). The code is changing quickly, so this note sets the rules and
-the order of work; it does not ask for the refactor now. Where this note and the code differ in
+Status (2026-11-27): design, reviewed by Reviewer on #250 (revised in §1, §3, §4.1, §4.3,
+§4.5). **Work starts once the open work has landed** (the user, 2026-11-27): the code is
+changing quickly, so this note sets the rules and the order of work, and is brought up to date
+against main before phase 1 begins (§10). Decided by the user: the security core stays fixed
+(decision 6), and the plain Pico 2, without the Wi-Fi chip, is a target (decision 9, §4.7). Where this note and the code differ in
 detail, the code is the reference.
 
 ## 1. What exists today
@@ -106,6 +108,12 @@ air), **boot and audit scope**, and **boards without the Wi-Fi chip**.
    `files_commands[]` already does, and the shell's list of tables is the one place that says
    which exist (§4.1).
 
+9. **The plain Pico 2 is a target** (decided by the user, 2026-11-27), alongside the Pico 2 W.
+   Same RP2350 chip, so the same security core (OTP, secure boot, glitch detector); the board
+   just has no Wi-Fi chip, so its images are built with NET off. Board differences live in
+   `*_board.c` files and a small `board.h`, not in `#if PICO_BOARD` scattered through the code
+   (§4.7).
+
 ## 3. Features and their dependencies
 
 | Option | What it contains | Needs |
@@ -181,9 +189,8 @@ the Wi-Fi and SSH steps of `setup`, `run_ssh`. The change:
     keyprov_lock();
 ```
 
-About eight such blocks. The LED blink uses the CYW43 chip's GPIO on the Pico 2 W; without NET
-it goes through a small `board_led_set()` (a plain GPIO on boards that have one, nothing
-otherwise).
+About eight such blocks. The LED blink goes through `board_led_set()` (§4.7): the Wi-Fi
+chip's GPIO on the Pico 2 W, GPIO 25 on the Pico 2.
 
 ### 4.3 Calls from one feature into another
 
@@ -274,6 +281,36 @@ already be missing at run time, most of these cope with no card, but how well ea
 hasn't been checked for this note. It should come after the others have shown the pattern
 works. Until then FILES is always on.
 
+### 4.7 Boards: Pico 2 W and Pico 2
+
+`PICO_BOARD` (already a cache variable, `pico2_w` by default) chooses the board; the features
+choose the software. The SDK's board files say whether the Wi-Fi chip is there
+(`PICO_CYW43_SUPPORTED`, set by `pico2_w.h`), and `features.cmake` uses it:
+
+- NET defaults to ON when the board has the chip and OFF when it hasn't. This is the one
+  exception to decision 1's "all ON": a default that can't build is no default.
+- `-DSOS_FEATURE_NET=ON` on a board without the chip is a configure error (decision 2), naming
+  the board.
+- Everything that needs NET is then off by the usual rule: a Pico 2 image never has TLS, HTTP,
+  NTS or SSH. `ninja -C build provision` and `setup` skip Wi-Fi, and the record keeps its
+  Wi-Fi fields unused (decision 5).
+
+Today the Wi-Fi chip is used outside `src/net` in these places, and each needs a board path:
+
+| Where | What it does with the chip | On the Pico 2 |
+|---|---|---|
+| `main.c` | `cyw43_arch_init_with_country()`; the LED blink (`CYW43_WL_GPIO_LED_PIN`) | no init; LED on `PICO_DEFAULT_LED_PIN` (25) |
+| `core/sensors_board.c` | USB power from the chip's GPIO (`CYW43_WL_GPIO_VBUS_PIN`); VSYS read only while holding the chip's lock, because VSYS shares its pin with the chip's SPI clock | USB power from `PICO_VBUS_PIN` (24); VSYS on `PICO_VSYS_PIN` (29) with no lock. The file already tests these macros with `#if defined(...)`, so this is mostly filling in the other branch |
+| `shell/shell.c` | `net` (link state, RSSI, address) and `mem` (lwIP's pools, under `cyw43_arch_lwip_begin()`) | `net` is a NET command (§4.1); `mem` leaves out its lwIP lines |
+| `lua/lua_health.c`, `time/timesync.c`, `time/nts.c`, `tls/tls.c`, `ssh/` | lwIP locking | NET-only code: not built |
+
+Boards are not features: there is no `SOS_FEATURE_PICO2`. `board.h` declares the few things
+that differ (`board_led_set()`, and the sensor reads already in `sensors_board.c`), with one
+implementation per board family chosen by `PICO_BOARD` in CMake. Any other RP2350 board with
+the same pins would work the same way; others are out of scope until someone has one.
+
+Testing needs a plain Pico 2 board, which the board registry doesn't have yet (§11).
+
 ## 5. Trimming wolfSSL and wolfSSH
 
 Leaving out SOS's TLS or SSH code drops `src/tls` or `src/ssh`, but most of the size is in the
@@ -300,6 +337,8 @@ measured, not predicted: some curve code is shared with the core's boot key chec
 | `offline` | NET (so TLS, HTTP, NTS, SSH) | console, card, Lua and the editor, nothing over the air |
 | `headless` | LUA, EDITOR, MAN, CHAT | network appliance: SSH, SFTP, time, HTTPS |
 | `minimal` | everything optional | the security core, the shell and the card |
+| `pico2` | NET (by the board, §4.7) | `offline` built for the plain Pico 2: `PICO_BOARD=pico2` |
+| `pico2-minimal` | everything optional | `minimal` built for the plain Pico 2 |
 
 ## 7. Docs, man pages and help
 
@@ -335,7 +374,11 @@ measured, not predicted: some curve code is shared with the core's boot key chec
   too). The pre-commit hook does not run it (too slow); a PR that adds an `#if SOS_HAVE_` runs it
   before review.
 - Board: a feature PR is tested on dev-1 with the `full` image (it must not change) and with
-  the preset that removes what it touched.
+  the preset that removes what it touched. A PR that touches board code (§4.7) is also tested
+  on a plain Pico 2 with the `pico2` preset: boot, console login, `version`, `uptime` (USB
+  power and VSYS), the LED, the SD card.
+- `just features` builds the `pico2` presets too, so a NET-only call left outside its `#if`
+  fails to link there even when nobody has a Pico 2 at hand.
 
 ## 9. Using SOS as a base
 
@@ -350,7 +393,27 @@ after the features have settled.
 
 ## 10. Phases
 
-Each phase leaves the default image the same and is useful on its own.
+Each phase leaves the default image the same and is useful on its own. **Nothing starts until
+the open work has landed** (the user, 2026-11-27). Before phase 1, this note is brought up to
+date against main: §1's dependency table and sizes regenerated, §4.3's call list and §4.7's
+table re-checked, file names and line counts corrected. The commands that did that for this
+version:
+
+```sh
+# includes between subsystem directories (run in src/)
+for f in $(find . -name '*.[ch]' | grep -v pico-sshd); do
+  from=$(echo "$f" | cut -d/ -f2)
+  grep -oE '#include "(core|shell|net|ssh|files|edit|time|tls|lua|chat|man)/[^"]+"' "$f" |
+    sed -E 's/#include "([^/]+)\/.*/\1/' | grep -vx "$from" | sed "s|^|$from -> |"
+done | sort | uniq -c
+# the Wi-Fi chip outside src/net
+grep -rn 'cyw43\|CYW43' src --include=*.c | grep -v '^src/net/'
+```
+
+Sizes come from `build/sos.elf.map`: sum each input file's allocated sections at flash
+(0x10000000) and RAM (0x20000000) addresses, grouped by `src/<subsystem>` or library. The merged
+string section is attributed to whichever object comes first, so leave it out.
+
 
 1. **Commands move to their subsystems** (§4.1), no options yet. Pure refactor; `shell.c`
    shrinks by roughly half. The riskiest phase for conflicts with other work, so best done
@@ -358,17 +421,23 @@ Each phase leaves the default image the same and is useful on its own.
 2. **Seams** (§4.3): the stand-in headers, the owner-gone hooks, the Lua health table moved.
    Still no options.
 3. **`cmake/features.cmake` with NET, SSH, LUA** and the presets that use them, plus
-   `just features`. The first options are the ones that pay most.
+   `just features`. The first options are the ones that pay most. Includes the board split
+   (§4.7) and the `pico2` presets, since NET off is what a Pico 2 needs.
 4. **The rest:** TLS, HTTP, NTS, CHAT, PAGER, EDITOR, MAN, FSCK.
 5. **wolfSSL and wolfSSH trimming** (§5), measured per preset.
 6. **FILES** (§4.6), if still wanted.
 7. **The app hook** (§9).
 
-## 11. Questions for the user
+## 11. Decisions and open items
 
-1. ~~Is the security core really fixed (decision 6)?~~ Yes (the user, 2026-11-27).
-2. **Is a board without the Wi-Fi chip (plain Pico 2) a goal?** If so, `PICO_BOARD` and NET
-   need to be tied together, and phase 3 includes the LED change. If not, NET off still works on
-   the Pico 2 W, with the LED off.
-3. **Timing:** phase 1 touches `shell.c`, which most open branches touch too. Start it now, or
-   wait for the current shell and Lua work to land?
+Decided by the user, 2026-11-27:
+
+1. The security core stays fixed (decision 6).
+2. The plain Pico 2 is a target (decision 9, §4.7).
+3. Work starts once the open work has landed; the note is updated first (§10).
+
+Open:
+
+1. **A plain Pico 2 board** for testing §4.7. Until there is one, the `pico2` presets are
+   build-checked only (§8).
+2. **Merging this note:** docs only, reviewed; needs the user's word.
