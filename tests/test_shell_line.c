@@ -1570,8 +1570,10 @@ static bool t_ssids(shell_t *s, shell_value_fn fn, void *arg) {
     ssids_calls++;
     char note[16];
     static const struct { const char *ssid; int rssi; } nets[] = {
-        {"Home Net", -40}, {"Hotel Guest", -70}, {"Ho\x1b[2J", -50}, {"Cafe", -60}};
-    for (int i = 0; i < 4; i++) {
+        {"Home Net", -40}, {"Hotel Guest", -70}, {"Ho\x1b[2J", -50}, {"Cafe", -60},
+        // Would look like another name: spaces at an end, or two in a row.
+        {"Cafe ", -45}, {" Cafe", -45}, {"Home  Net", -45}};
+    for (int i = 0; i < 7; i++) {
         snprintf(note, sizeof(note), "%d dBm", nets[i].rssi);
         fn(nets[i].ssid, note, arg);
     }

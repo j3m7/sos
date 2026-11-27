@@ -22,7 +22,10 @@ failure, then back to `W_SCANNING`. It logs each change.
   `wifi_names_start()` keeps the names of all networks every scan hears, on the heap (tag
   `wifi`, 16 at most, strongest first: `wifi_names.c`, pure C, host-tested), and starts a scan
   unless one is running. The scan callback is shared: the connection's own scans feed the names
-  too, and while the names' scan runs a connection attempt joins by name, unscanned. The answer
+  too, and while the names' scan runs a connection attempt joins by name, unscanned. The names'
+  scan also records the saved networks' access points in `scan_rx`, like any scan (more readings
+  of the same networks, bounded by `SCAN_MAX_APS`; `begin_attempt()` clears them before its own
+  scan). The answer
   frees them (`wifi_names_stop()`), and so does `wifi_poll()` 10 minutes after their last use.
 - **Configuration copies:** the scan callback runs in interrupt context, and the console edits
   the live configuration in place. So each attempt copies the saved networks (under the

@@ -30,11 +30,17 @@ static bool unicode_space(uint32_t cp) {
 // Nor what termtext_hidden() names (bidi controls, zero-width and other invisible characters,
 // tag characters, variation selectors) or other spaces: Tab puts the name on the line about to
 // be run, so what it shows must be what it is, and two names must never look the same.
-// With `spaces`, U+0020 may be in it too (an answer: an SSID can hold spaces).
+// With `spaces`, U+0020 may be in it too (an answer: an SSID can hold spaces), but only between
+// other characters and one at a time: "abc " would look like "abc", and "a  b" like "a b".
 static bool text_ok(const char *name, bool spaces) {
     const unsigned char *p = (const unsigned char *)name;
     if (!*p)
         return false;
+    if (spaces) {
+        size_t n = strlen(name);
+        if (name[0] == ' ' || name[n - 1] == ' ' || strstr(name, "  "))
+            return false;
+    }
     while (*p) {
         unsigned c = *p;
         if (c < 0x80) {

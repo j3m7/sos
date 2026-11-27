@@ -176,10 +176,10 @@ void shell_console_start(shell_t *console);
 void shell_ask(shell_t *sh, const char *prompt, bool secret, shell_answer_fn answer, void *arg);
 
 // Let Tab complete the answer to the question just asked from `complete`: the whole answer, as
-// one value (an SSID may hold spaces), offered when it passes the same check as a file name
-// but with spaces allowed (complete.h); a double Tab lists them with their notes. Refused for a
-// secret question: nothing typed at a password prompt is ever completed, listed or rung at.
-// Ends with the question (answered, cancelled, or another asked).
+// one value (an SSID may hold spaces), offered when it passes the same check as a file name but
+// with single spaces between other characters allowed (complete.h); a double Tab lists them
+// with their notes. Refused for a secret question: nothing typed at a password prompt is ever
+// completed, listed or rung at. Ends with the question (answered, cancelled, or another asked).
 void shell_ask_complete(shell_t *sh, shell_ask_complete_fn complete);
 
 // Like shell_ask (echoed), for questions that take a stream of lines, such as an interactive
