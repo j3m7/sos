@@ -104,9 +104,23 @@ To keep wolfSSL/wolfSSH outside the repository, develop in a VM, or debug over S
 ## Building
 
 ```sh
-cmake --preset debug          # or: release
+cmake --preset debug          # or: release, minsize
 cmake --build --preset debug  # produces build/sos.uf2 and build/sos.elf
 ```
+
+The three presets differ in how the compiler optimises (`build/`, `build-release/` and
+`build-minsize/`). Measured on 2026-11-26, on dev-1 where a board was involved:
+
+| Preset | Compiler | Image | SSH login handshake | TLS handshake |
+|---|---|---|---|---|
+| `debug` (the default) | `-Og` | 1,168 KB | 260 to 285 ms | 284 ms |
+| `minsize` | `-Os` | 1,050 KB | 158 to 215 ms | 278 to 281 ms |
+| `release` | `-O3` | 1,386 KB | not run on a board | not run on a board |
+
+`minsize` is 118 KB smaller than `debug` and no slower on the handshakes measured; the SSH and
+SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s against 8.6 s, a
+single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
+about 3,550 of 8,192 bytes). `debug` remains the default.
 
 The [`justfile`](justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer

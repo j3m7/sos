@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include "chat/chat.h"
+#include "shell/complete.h"
 #include "shell/shell.h"
 #include "test.h"
 
@@ -48,6 +49,16 @@ static int fake_space(void *ctx) {
 static const shell_io_t io = {
     .name = "ssh", .read = fake_read, .write = fake_write, .crlf = false, .write_space = fake_space,
 };
+
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
+    (void)sh;
+    return NULL;
+}
+
+complete_dir_t shell_list_dir(shell_t *s, const char *dir, complete_entry_fn fn, void *arg) {
+    (void)s; (void)dir; (void)fn; (void)arg;
+    return COMPLETE_DIR_NONE;
+}
 
 void shell_execute(shell_t *sh, char *cmd) {
     char *args = strchr(cmd, ' ');

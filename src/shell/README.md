@@ -20,6 +20,19 @@ translation (`crlf`), and `admin` (true for the console only).
   `shell_bind()` (a new session), `shell_end()` (the session ended), `shell_discard_input()`
   (the console locking itself) and `shell_clear_history()`, which login.c calls on `logout` and
   at login (so a line the gate refused while locked is never offered by Up).
+- **Tab completion:** Tab completes the word at the end of the line from the command tables
+  that `shell_command_tables()` gives (shell.c; NULL while the console is locked):
+  `complete.c` (pure C, host tested) walks the words before it, a command and then the words
+  that may follow (`shell_word_t`), and offers the names that start with it. One match: the
+  rest of it and a space. Several: as far as they agree; when they agree no further, a bell,
+  and a second Tab in a row lists them in columns and redraws the line. `SHELL_ADMIN` words
+  are offered only on an admin channel, `SHELL_HIDDEN` ones never. Nothing at a question.
+  After a command or word marked `SHELL_PATH` the words are paths: `complete.c` asks
+  `shell_list_dir()` (files.c: only while the card is mounted, at most 256 entries, since the
+  main loop waits) for the directory named up to the last `/`, and offers its entries that
+  start with the rest; a directory ends with `/` instead of a space, and `SHELL_DIR` keeps to
+  directories. Names that aren't valid UTF-8 from U+0021 up (spaces, controls, C1 controls)
+  are never offered, so a file name can't send the terminal an escape sequence.
 - **Questions:** `shell_ask(sh, prompt, secret, fn, arg)` replaces the `sos>` prompt. The next
   line typed goes to `fn` instead of being run as a command; with `secret` it isn't echoed (Wi-Fi
   passwords). Ctrl-C cancels. `setup`, `wifi set` and `tls roots approve` use it, and the loop
@@ -101,17 +114,21 @@ where 0x9B is CSI on 8-bit terminals, and U+0080–U+009F in UTF-8) and invalid 
 
 ## `shell.c`: the commands
 
-`shell_execute()` dispatches a command line. System commands are implemented here: `help`,
-`config`, `wifi`, `net`, `key`, `user`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`,
-`uptime`, `reboot`, `ssh`, `nts`, `tls`, `logout`/`exit`. Commands that belong to a subsystem are handed to it:
-`files_command()` (`files/`), `sdcard_command()` (`sd`), `certstore_command()`
-(`tls roots`), and the `lua` command (`lua/`).
+`shell_execute()` looks the command up in two tables (`shell_cmd_t`, shell.h): `commands[]`
+here and `files_commands[]` (`files/`), and runs it with its arguments. Each entry also lists
+the words Tab offers after the name. System commands are implemented here: `help`, `config`,
+`wifi`, `net`, `key`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`, `uptime`, `reboot`,
+`ssh`, `nts`, `tls`, `logout`/`exit`. Others belong to a subsystem: `sdcard_command()` (`sd`),
+`certstore_command()` (`tls roots`), `lua_command()`, `edit_command()`, `view_command()`
+(`more`), `http_command()`.
 
 Commands that change the configuration first call `require_admin()`, which refuses on any
 channel but the console.
 
 ## Adding a command
 
-Add it to `shell_execute()` and to `help` in `shell.c`, and to `docs/commands.md`. If it takes
+Add it to `commands[]` and to `help` in `shell.c`, and to `docs/commands.md`. Give it the
+subcommand words its parser takes, so Tab offers them (`SHELL_ADMIN` on those only the console
+may run), and `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories). If it takes
 more than a few milliseconds, make it a job so the watchdog and the other sessions keep running.
 If it changes the configuration or other protected state, call `require_admin()`.

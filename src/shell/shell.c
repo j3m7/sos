@@ -830,10 +830,15 @@ static void wifi_stats(shell_t *sh, bool chip) {
     // 0 frames sent, 2 resent, 15 received, 45 beacon times, 49 RTS sent, 75 CTS received,
     // 85 our access point's beacons received, 87 other networks' beacons, 88 response timeouts,
     // 67/68 received with a bad checksum / header, 70 receptions started.
-    static uint32_t c[128];
-    unsigned n = wifi_chip_counters(c, 128);
+    // The buffer the chip answers into (1 KB), for this command only. The first 128 words are
+    // shown, as before.
+    uint32_t *c = heap_alloc(HEAP_NET, WIFI_CHIP_COUNTER_WORDS * sizeof(uint32_t));
+    unsigned n = c ? wifi_chip_counters(c) : 0;
+    if (n > 128)
+        n = 128;
     if (!n) {
-        shell_printf(sh, "chip counters: not available\n");
+        shell_printf(sh, "chip counters: %s\n", c ? "not available" : "out of memory");
+        heap_release(HEAP_NET, c);
         return;
     }
     shell_printf(sh, "chip counters (version %u, %u bytes), index: value, zeros omitted:\n",
@@ -842,6 +847,7 @@ static void wifi_stats(shell_t *sh, bool chip) {
         if (c[i])
             shell_printf(sh, "%3u: %-10u%s", i - 1, (unsigned)c[i], ++col % 5 ? " " : "\n");
     shell_printf(sh, "\n");
+    heap_release(HEAP_NET, c);
 }
 
 // `wifi set` (arg NULL) replaces the first network; `wifi add` (arg non-NULL) adds one after
@@ -1919,6 +1925,161 @@ static void cmd_nts(shell_t *sh, char *args) {
 
 // --- dispatch ------------------------------------------------------------------------------------
 
+// Commands that take no arguments, and others whose handler has another signature.
+static void run_help(shell_t *sh, char *args) { (void)args; cmd_help(sh); }
+static void run_uptime(shell_t *sh, char *args) { (void)args; cmd_uptime(sh); }
+static void run_power(shell_t *sh, char *args) { (void)args; cmd_power(sh); }
+static void run_version(shell_t *sh, char *args) { (void)args; cmd_version(sh); }
+static void run_mem(shell_t *sh, char *args) { (void)args; cmd_mem(sh); }
+static void run_net(shell_t *sh, char *args) { (void)args; cmd_net(sh); }
+static void run_ssh(shell_t *sh, char *args) { (void)args; sshd_status(sh); }
+static void run_bootkey(shell_t *sh, char *args) { (void)args; cmd_bootkey(sh); }
+static void run_rootsecret(shell_t *sh, char *args) { cmd_rootsecret(sh, args); }
+static void run_passwd(shell_t *sh, char *args) { (void)args; cmd_passwd(sh); }
+static void run_setup(shell_t *sh, char *args) { (void)args; cmd_setup(sh); }
+static void run_logout(shell_t *sh, char *args) { (void)args; shell_logout(sh); }
+
+static void run_hostname(shell_t *sh, char *args) {
+    set_field(sh, "hostname", args, settings()->hostname, sizeof(settings()->hostname),
+              config_check_hostname);
+}
+
+static void run_crash(shell_t *sh, char *args) {
+    // Testing the fault record (core/fault.h): stops the firmware on purpose.
+    if (!require_admin(sh))
+        return;
+    if (args)
+        fault_test(args);
+    shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
+}
+
+static void run_reboot(shell_t *sh, char *args) {
+    (void)args;
+    shell_printf(sh, "rebooting...\n");
+    const char *who = chat_name(sh);
+    log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
+            who && strcmp(who, sh->io->name) ? " " : "",
+            who && strcmp(who, sh->io->name) ? who : "");
+    logfile_flush();                    // what the log files haven't written yet
+    sleep_ms(100);
+    watchdog_reboot(0, 0, 0);
+}
+
+// The words Tab offers after each command (shell.h): the subcommands its parser takes.
+#define END {0}
+#define W(name) {name, NULL, 0}
+static const shell_word_t on_off[] = {W("on"), W("off"), END};
+static const shell_word_t on_off_admin[] = {
+    {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN}, END};
+static const shell_word_t levels[] = {
+    W("err"), W("warning"), W("notice"), W("info"), W("debug"), END};
+static const shell_word_t facilities[] = {
+    W("none"), W("kern"), W("auth"), W("daemon"), W("user"), END};
+
+static const shell_word_t temp_words[] = {
+    {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    END};
+static const shell_word_t time_words[] = {
+    {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, END}, 0},
+    {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    {"server", (const shell_word_t[]){{"default", NULL, SHELL_ADMIN}, END}, 0},
+    {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    END};
+static const shell_word_t tls_words[] = {
+    {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},
+                                     END}, 0},
+    END};
+static const shell_word_t nts_words[] = {W("ke"), W("query"), END};
+static const shell_word_t dmesg_words[] = {{"-f", facilities, 0}, END};
+static const shell_word_t logger_words[] = {{"-p", levels, 0}, END};
+static const shell_word_t rotate_words[] = {W("every"), W("at"), END};
+static const shell_word_t log_words[] = {
+    {"console", levels, SHELL_ADMIN}, {"history", levels, SHELL_ADMIN},
+    {"file", levels, SHELL_ADMIN}, {"rotate", rotate_words, SHELL_ADMIN}, END};
+static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
+static const shell_word_t glitch_words[] = {
+    {"watch", NULL, SHELL_ADMIN}, {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN},
+    {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
+static const shell_word_t rootsecret_words[] = {
+    {"forget", NULL, SHELL_ADMIN},
+    {"burn", (const shell_word_t[]){W("plan"), W("rehearse"), END}, SHELL_ADMIN},
+    END};
+static const shell_word_t key_words[] = {
+    W("list"), {"add", NULL, SHELL_ADMIN}, {"del", NULL, SHELL_ADMIN}, END};
+static const shell_word_t wifi_words[] = {
+    {"stats", (const shell_word_t[]){W("chip"), END}, 0},
+    {"set", NULL, SHELL_ADMIN},
+    {"add", NULL, SHELL_ADMIN},
+    {"remove", NULL, SHELL_ADMIN},
+    {"prefer", NULL, SHELL_ADMIN},
+    {"connect", NULL, SHELL_ADMIN},
+    {"power", on_off_admin, 0},             // shows the setting anywhere; on|off: console
+    {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
+    {"keepalive", on_off, SHELL_ADMIN},
+    {"iovar", NULL, SHELL_ADMIN},
+    END};
+static const shell_word_t sd_words[] = {
+    W("info"),
+    W("speed"),
+    {"test", NULL, SHELL_ADMIN},
+    {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
+    {"unmount", NULL, SHELL_ADMIN},
+    END};
+static const shell_word_t lua_words[] = {
+    W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
+static const shell_word_t http_words[] = {W("get"), W("head"), W("post"), END};
+static const shell_word_t crash_words[] = {W("fault"), W("stack"), W("panic"), W("hang"), END};
+
+static const shell_cmd_t commands[] = {
+    {"help", run_help, NULL, 0},
+    {"?", run_help, NULL, SHELL_HIDDEN},
+    {"uptime", run_uptime, NULL, 0},
+    {"temp", cmd_temp, temp_words, 0},
+    {"power", run_power, NULL, 0},
+    {"version", run_version, NULL, 0},
+    {"time", cmd_time, time_words, 0},
+    {"tls", cmd_tls, tls_words, 0},
+    {"nts", cmd_nts, nts_words, 0},
+    {"mem", run_mem, NULL, 0},
+    {"net", run_net, NULL, 0},
+    {"ping", ping_command, NULL, 0},
+    {"ssh", run_ssh, NULL, 0},
+    {"who", chat_cmd_who, NULL, 0},
+    {"wall", chat_cmd_wall, NULL, 0},
+    {"chat", chat_cmd_chat, NULL, 0},
+    {"dmesg", cmd_dmesg, dmesg_words, 0},
+    {"logger", cmd_logger, logger_words, 0},
+    {"log", cmd_log, log_words, 0},
+    {"config", cmd_config, config_words, 0},
+    {"glitch", cmd_glitch, glitch_words, 0},
+    {"bootkey", run_bootkey, NULL, 0},
+    {"rootsecret", run_rootsecret, rootsecret_words, 0},
+    {"key", cmd_key, key_words, 0},
+    {"wifi", cmd_wifi, wifi_words, 0},
+    {"hostname", run_hostname, NULL, 0},
+    {"sd", sdcard_command, sd_words, 0},
+    {"lua", lua_command, lua_words, SHELL_PATH},
+    {"edit", edit_command, NULL, SHELL_PATH},
+    {"more", view_command, NULL, SHELL_PATH},
+    {"http", http_command, http_words, 0},
+    {"passwd", run_passwd, NULL, SHELL_ADMIN},
+    {"setup", run_setup, NULL, SHELL_ADMIN},
+    {"logout", run_logout, NULL, 0},
+    {"exit", run_logout, NULL, 0},
+    {"crash", run_crash, crash_words, SHELL_ADMIN | SHELL_HIDDEN},
+    {"reboot", run_reboot, NULL, 0},
+    END};
+#undef W
+#undef END
+
+static const shell_cmd_t *const command_tables[] = {commands, files_commands, NULL};
+
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
+    if (sh->io->admin && login_locked())        // nothing to offer before the password
+        return NULL;
+    return command_tables;
+}
+
 void shell_execute(shell_t *sh, char *cmd) {
     // The console takes no command while it's locked (shell/login.h).
     if (sh->io->admin && login_gate(sh, cmd))
@@ -1932,90 +2093,11 @@ void shell_execute(shell_t *sh, char *cmd) {
         if (!*args)
             args = NULL;
     }
-
-    if (!strcmp(cmd, "help") || !strcmp(cmd, "?"))
-        cmd_help(sh);
-    else if (!strcmp(cmd, "uptime"))
-        cmd_uptime(sh);
-    else if (!strcmp(cmd, "temp"))
-        cmd_temp(sh, args);
-    else if (!strcmp(cmd, "power"))
-        cmd_power(sh);
-    else if (!strcmp(cmd, "version"))
-        cmd_version(sh);
-    else if (!strcmp(cmd, "time"))
-        cmd_time(sh, args);
-    else if (!strcmp(cmd, "tls"))
-        cmd_tls(sh, args);
-    else if (!strcmp(cmd, "nts"))
-        cmd_nts(sh, args);
-    else if (!strcmp(cmd, "mem"))
-        cmd_mem(sh);
-    else if (!strcmp(cmd, "net"))
-        cmd_net(sh);
-    else if (!strcmp(cmd, "ping"))
-        ping_command(sh, args);
-    else if (!strcmp(cmd, "ssh"))
-        sshd_status(sh);
-    else if (!strcmp(cmd, "who"))
-        chat_cmd_who(sh, args);
-    else if (!strcmp(cmd, "wall"))
-        chat_cmd_wall(sh, args);
-    else if (!strcmp(cmd, "chat"))
-        chat_cmd_chat(sh, args);
-    else if (!strcmp(cmd, "dmesg"))
-        cmd_dmesg(sh, args);
-    else if (!strcmp(cmd, "logger"))
-        cmd_logger(sh, args);
-    else if (!strcmp(cmd, "log"))
-        cmd_log(sh, args);
-    else if (!strcmp(cmd, "config"))
-        cmd_config(sh, args);
-    else if (!strcmp(cmd, "glitch"))
-        cmd_glitch(sh, args);
-    else if (!strcmp(cmd, "bootkey"))
-        cmd_bootkey(sh);
-    else if (!strcmp(cmd, "rootsecret"))
-        cmd_rootsecret(sh, args);
-    else if (!strcmp(cmd, "key"))
-        cmd_key(sh, args);
-    else if (!strcmp(cmd, "wifi"))
-        cmd_wifi(sh, args);
-    else if (!strcmp(cmd, "hostname"))
-        set_field(sh, "hostname", args, settings()->hostname, sizeof(settings()->hostname),
-                  config_check_hostname);
-    else if (!strcmp(cmd, "sd"))
-        sdcard_command(sh, args);
-    else if (!strcmp(cmd, "lua"))
-        lua_command(sh, args);
-    else if (!strcmp(cmd, "edit"))
-        edit_command(sh, args);
-    else if (!strcmp(cmd, "more"))
-        view_command(sh, args);
-    else if (!strcmp(cmd, "http"))
-        http_command(sh, args);
-    else if (!strcmp(cmd, "passwd"))
-        cmd_passwd(sh);
-    else if (!strcmp(cmd, "setup"))
-        cmd_setup(sh);
-    else if (!strcmp(cmd, "logout") || !strcmp(cmd, "exit"))
-        shell_logout(sh);
-    else if (!strcmp(cmd, "crash")) {
-        // Testing the fault record (core/fault.h): stops the firmware on purpose.
-        if (!require_admin(sh))
-            return;
-        if (args)
-            fault_test(args);
-        shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
-    } else if (!strcmp(cmd, "reboot")) {
-        shell_printf(sh, "rebooting...\n");
-        const char *who = chat_name(sh);
-        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
-                who && strcmp(who, sh->io->name) ? " " : "",
-                who && strcmp(who, sh->io->name) ? who : "");
-        logfile_flush();                    // what the log files haven't written yet
-        sleep_ms(100);
-        watchdog_reboot(0, 0, 0);
-    } else if (!files_command(sh, cmd, args))
-        shell_printf(sh, "%s: unknown command (try 'help')\n", cmd);
+    for (const shell_cmd_t *const *t = command_tables; *t; t++)
+        for (const shell_cmd_t *c = *t; c->name; c++)
+            if (!strcmp(cmd, c->name)) {
+                c->run(sh, args);
+                return;
+            }
+    shell_printf(sh, "%s: unknown command (try 'help')\n", cmd);
 }
