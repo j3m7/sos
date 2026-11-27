@@ -16,8 +16,10 @@ write (`grep`, `head`, `tail`, `wc`) are functions of a byte stream and need no 
 own; the only consumer that must run *while* the producer runs is the pager, and it is a raw-mode
 job already. So: filters are plain functions, and the pager steps the producer itself.
 
-Status: design. Nothing here is built. Issues: #182 (the investigation), #184 (phase 1),
-#185 (phase 2), #186 (phase 3), #187 (phase 4).
+Status (2026-11-26): phases 1 and 2 are built (PR #192 for #184, PR #189 for #185); phases 3
+(#186) and 4 (#187) are open. Where this note and the code differ in detail (phase 2 extends
+the line count rather than resetting it, and has the F key), the code and its header comments
+are the reference; this note records the decision and why. Issues: #182 (the investigation).
 
 ## 1. What exists today
 
