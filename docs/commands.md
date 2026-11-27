@@ -22,7 +22,7 @@ this page is the reference.
 | Command | Where | What it does |
 |---|---|---|
 | `help` (or `?`) | any | List the commands this channel may use |
-| `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset, `(last reset: glitch detector)` if the glitch detector did, or a `last reset:` line if a hard fault or panic did |
+| `uptime` | any | Time since boot, with `(last reset: watchdog)` if the watchdog caused the last reset, `(last reset: glitch detector)` if the glitch detector did, or a `last reset:` line if a hard fault or panic did. Once flash has been written since boot (a configuration save, a console login), a `flash writes:` line: how many, and how long the last and the longest held interrupts off, since nothing else runs during one |
 | `version` | any | The commit the firmware was built from (12 hex digits, `-dirty` if the build had uncommitted changes, `unknown` if not built from a git checkout). It names the SOS commit only, not libraries a build takes from outside the tree through `local.cmake`. The commit is also shown above the first prompt on the console and after each SSH login. Two more lines follow: `board: serial …`, the board's serial number (the one it reports over USB and to `picotool`), and `chip: RP2350 A4 (revision 3, ROM 4)`, the chip revision named from the chip's revision field and the boot ROM version (`unknown revision` if the pair isn't one this firmware knows). Then what the chip's one-time-programmable memory says about how the board is secured: `secure boot: off` or `on`, and `debug port: enabled`, `Secure debug disabled` or `disabled`. These are the flags the chip latched at reset; a further line appears only if the OTP rows behind them can't be read or say something else. Then `root secret: in OTP`, `in flash (open board)` or `none`. And `console-only setup: no` or `yes`: whether the board takes its settings only from `setup` on its console, refusing a configuration or host key written to its flash over USB (unsealed records, as `ninja provision` writes them). It is a marker of its own in OTP, not secure boot; `yes` also when the marker can't be read or is damaged, and the line then says so |
 | `temp` | any | The chip's temperature, from the RP2350's own sensor, and the lowest and highest since boot with how long ago each was. Read every 10 s, and logged at boot, when it has moved a degree (at most once a minute) and at least once an hour. It's the chip's temperature, not the room's: the chip runs warmer than the air, more so under Wi-Fi load. Uncalibrated, it's a few degrees off, but good for change over time on one board |
 | `mem` | any | Heap in use, peak and total, and core 0's peak stack use. After a Lua script has run, also how much of core 1's 32 KB stack the last script used |
@@ -159,6 +159,7 @@ console can change anything under `/certs`. See [Files (SD card)](../README.md#f
 | `mkdir <dir>` | any | Create a directory |
 | `echo <text> [> <file> \| >> <file>]` | any | Print the text, or write or append it as a line |
 | `edit <file>` | any | Full-screen text editor; creates the file on the first save if it doesn't exist. See [Editor](#editor) |
+| `more <file>` | any | Read a file a screen at a time, whatever its size. See [Pager](#pager) |
 | `sd` / `sd info` | any | Card and volume information, the SPI clock, and whether the card is encrypted (with its card id) |
 | `sd speed` | any | Show the SPI clock, set and actual |
 | `sd speed <MHz>` | console only | Set the SPI clock (1 to 75 MHz) and reinitialize the card. Not saved |
@@ -202,6 +203,31 @@ at most 400 columns and 200 rows of a bigger window.
 - **Log messages** aren't printed on the console while the editor runs there. The status bar
   counts them, and they appear when you quit (and are in `dmesg`).
 - `/certs` can be opened from SSH but only saved from the console.
+
+## Pager
+
+`more <file>` shows a file a screen at a time, on the same kind of terminal as the editor and
+with the same screen size handling. The file can be of any size: only a 16 KB window of it is in
+memory at a time, read from the card as you move. Nothing in a file can send the terminal a
+sequence: controls, invalid UTF-8 and invisible or bidi characters show as `?`, as in the editor,
+and long lines scroll sideways. The bottom row shows the file name, the lines on screen (`lines
+12-34`, with the total once it's known: after **G**, or once the end has been on screen), and how
+far in you are, or `END`.
+
+| Key | What it does |
+|---|---|
+| **Space**, **f**, **PgDn** / **b**, **PgUp** | A screen forward / back |
+| **d** / **u** | Half a screen forward / back |
+| **j**, **Enter**, **↓** / **k**, **↑** | A line forward / back |
+| **g**, **Home** / **G**, **End** | The start / the end of the file (the first **G** on a large file counts its lines, about a second per megabyte) |
+| **←** / **→** | Half a screen sideways, for long lines |
+| **/** (or **Ctrl-F**) | Find: type the text, **Enter** finds the next match from the line after the top one (empty: the last search again), wrapping around to the start; **Ctrl-C** cancels |
+| **n** | The next match |
+| **Ctrl-L** | Redraw, and ask the terminal for its size again |
+| **h**, **?** | List the keys |
+| **q** (or **Ctrl-Q**, **Ctrl-C**) | Quit |
+
+Log messages are held on the console while the pager runs there, as for the editor.
 
 ## Lua
 

@@ -6,9 +6,9 @@
 #include <string.h>
 
 #include "hardware/flash.h"
-#include "pico/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/flashop.h"
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/pwverify.h"
@@ -66,9 +66,10 @@ static bool flash_slot_write(void *ctx, unsigned slot, const void *data, size_t 
         memset(tail, 0xff, sizeof(tail));
         memcpy(tail, (const uint8_t *)data + whole, rest);
     }
-    // Interrupts (Wi-Fi, USB) pause while the sector is erased and programmed: tens of ms.
+    // Interrupts (Wi-Fi, USB) pause while the sector is erased and programmed: tens of ms
+    // (core/flashop.h times it).
     write_job_t job = { slot, data, whole, rest ? tail : NULL };
-    return flash_safe_execute(do_write, &job, 1000) == PICO_OK;
+    return flashop_run(do_write, &job);
 }
 
 // The key the configuration is sealed under (KEYPROV_CONFIG_SEAL), derived once in

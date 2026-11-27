@@ -6,11 +6,8 @@
 // save never leaves half a file under the real name.
 //
 // The editor runs as a raw-mode shell job: keys arrive through edit_key(), and each main-loop pass
-// edit_step() sends as much of the screen update as the channel takes without waiting. It uses
-// the terminal's alternate screen (xterm, and most terminals since), so the shell's output is
-// back as it was afterwards, with autowrap off (a wide character then can't push a row onto the
-// next one: it only hides the end of its own row), and asks the terminal for its size by moving the cursor to the
-// far corner and asking where it ended up.
+// edit_step() sends as much of the screen update as the channel takes without waiting. The
+// terminal side (the alternate screen, the size query, held log messages) is fsterm.c.
 
 #include "edit/edit.h"
 
@@ -23,8 +20,8 @@
 
 #include "core/heap.h"
 #include "core/heaptag.h"
-#include "core/log.h"
 #include "edit/editor.h"
+#include "edit/fsterm.h"
 #include "files/files.h"
 #include "files/path.h"
 #include "files/sdcard.h"
@@ -40,26 +37,14 @@
 #define HEAP_RESERVE    (64 * 1024)
 #define GROWTH          (32 * 1024)
 #define MIN_ROOM        1024
-#define SIZE_WAIT_US    500000      // first frame: wait this long for the terminal's size
-#define SIZE_ANSWER_US  3000000     // a cursor position report later than this isn't the answer
-#define LOG_CHECK_US    1000000     // how often to count held log messages (console)
 
 typedef struct {
     editor_t ed;
+    fsterm_t term;                  // its out[] is the save buffer too
     char path[PATH_LEN];
-    char out[2048];                 // screen output and save buffer (SSH takes 2048 a pass)
     FIL file;
     bool quit;
-    bool want_size;                 // send the size query when there's room
-    bool size_asked;                // ... sent: the next cursor position report is the answer
-    uint64_t size_wait_until;       // no drawing before then (unless the answer comes)
-    uint64_t size_expires;          // size_asked ends then (Ctrl+F3 sends the same bytes)
-    uint64_t next_log_check;
 } edit_t;
-
-static void put(shell_t *sh, const char *s) {
-    sh->io->write(sh->ctx, s, (int)strlen(s));     // raw: no newline translation needed
-}
 
 // A size for a message: whole KB once rounding down loses under a tenth, else bytes.
 static const char *size_text(char *buf, size_t cap, size_t n) {
@@ -88,9 +73,9 @@ static void save(shell_t *sh, edit_t *e) {
     FRESULT fr = f_open(&e->file, tmp, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr == FR_OK) {
         size_t pos = 0, n;
-        while (fr == FR_OK && (n = editor_export(&e->ed, &pos, e->out, sizeof(e->out))) > 0) {
+        while (fr == FR_OK && (n = editor_export(&e->ed, &pos, e->term.out, sizeof(e->term.out))) > 0) {
             UINT wrote;
-            fr = f_write(&e->file, e->out, (UINT)n, &wrote);
+            fr = f_write(&e->file, e->term.out, (UINT)n, &wrote);
             if (fr == FR_OK && wrote != n)
                 fr = FR_DENIED;             // card full
         }
@@ -130,12 +115,10 @@ static void edit_key(shell_t *sh, int key, void *arg) {
     edit_t *e = arg;
     if (e->quit)
         return;
-    if (key == KEY_CURSOR_POS) {
-        if (e->size_asked) {
-            e->size_asked = false;
-            e->size_wait_until = 0;
-            editor_resize(&e->ed, sh->keys.param[0], sh->keys.param[1]);
-        }
+    int rows, cols;
+    if (fsterm_size_key(sh, &e->term, key, &rows, &cols)) {
+        if (rows)
+            editor_resize(&e->ed, rows, cols);
         return;
     }
     switch (editor_key(&e->ed, key)) {
@@ -146,7 +129,7 @@ static void edit_key(shell_t *sh, int key, void *arg) {
         e->quit = true;
         break;
     case EDITOR_RESIZE:
-        e->want_size = true;
+        fsterm_ask_size(&e->term);
         break;
     case EDITOR_NONE:
         break;
@@ -156,50 +139,16 @@ static void edit_key(shell_t *sh, int key, void *arg) {
 static bool edit_step(shell_t *sh, void *arg, bool cancel) {
     edit_t *e = arg;
     if (cancel || e->quit) {
-        // A cancel means the session is gone, except on the console, which cancels the editor
-        // when it locks itself (shell/login.h) with the terminal possibly still there: give
-        // that terminal its screen back too, for the password prompt.
-        if (!cancel || sh->io->admin) {
-            // A row cut short between passes goes out to its end first, so the terminal never
-            // sees a sequence or character cut by what follows.
-            editor_t *ed = &e->ed;
-            if (ed->row_sent < ed->row_len)
-                sh->io->write(sh->ctx, ed->row + ed->row_sent, (int)(ed->row_len - ed->row_sent));
-            // Bottom row, erased, for a terminal without an alternate screen (the prompt goes
-            // there); autowrap back on; back to the shell's screen.
-            char bye[48];
-            snprintf(bye, sizeof(bye), "\x1b[%d;1H\x1b[K\x1b[?7h\x1b[?1049l", e->ed.rows);
-            put(sh, bye);
-        }
+        fsterm_leave(sh, &e->ed.scr, cancel);
         editor_free(&e->ed);
         heap_release(HEAP_EDIT, e);
         return false;
     }
-    uint64_t now = time_us_64();
-    if (e->size_asked && now >= e->size_expires)
-        e->size_asked = false;
-    // Only the console's log is held while the editor runs there (main.c's log hold).
-    if (sh->io->admin && now >= e->next_log_check) {
-        editor_set_log_waiting(&e->ed, log_pending());
-        e->next_log_check = now + LOG_CHECK_US;
-    }
-    if (e->want_size && shell_write_space(sh) >= 32) {
-        put(sh, "\x1b[999;999H\x1b[6n");
-        e->want_size = false;
-        e->size_asked = true;
-        e->size_wait_until = now + SIZE_WAIT_US;
-        e->size_expires = now + SIZE_ANSWER_US;
-    }
-    if (now < e->size_wait_until)
-        return true;
-    int space;
-    while (!editor_drawn(&e->ed) && (space = shell_write_space(sh)) > 0) {
-        size_t n = editor_draw(&e->ed, e->out, (size_t)space < sizeof(e->out) ? (size_t)space
-                                                                              : sizeof(e->out));
-        if (!n)
-            break;                          // the next row needs more room: next pass
-        sh->io->write(sh->ctx, e->out, (int)n);
-    }
+    int waiting = e->ed.log_waiting;
+    bool draw = fsterm_step(sh, &e->term, &waiting);
+    editor_set_log_waiting(&e->ed, waiting);
+    if (draw)
+        fsterm_send(sh, &e->term, &e->ed.scr);
     return true;
 }
 
@@ -341,7 +290,6 @@ void edit_command(shell_t *sh, char *args) {
         editor_message(&e->ed, "an interrupted save left " TMP_SUFFIX " (incomplete): saving replaces it");
     else if (is_new)
         editor_message(&e->ed, "new file; Ctrl-S save, Ctrl-Q quit, Ctrl-F find, Ctrl-L redraw");
-    put(sh, "\x1b[?1049h\x1b[?7l");         // the alternate screen, autowrap off
-    e->want_size = true;
+    fsterm_enter(sh, &e->term);
     shell_run_raw(sh, edit_step, edit_key, e);
 }
