@@ -21,5 +21,8 @@ void edit_view_file(shell_t *sh, const char *path, const char *name);
 // The pager on `len` bytes of text in RAM (copied), shown under `name`: for any command with
 // more text to show than a screen.
 void edit_view(shell_t *sh, const char *name, const char *text, size_t len);
+// The same on a HEAP_EDIT block the pager owns from here on (freed when it quits, or at once if
+// it can't start): a command's captured output (`<command> | more`, shell_page()).
+void edit_view_take(shell_t *sh, const char *name, char *text, size_t len);
 
 #endif

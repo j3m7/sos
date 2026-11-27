@@ -260,6 +260,7 @@ static void cmd_help(shell_t *sh) {
     files_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
+    shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
@@ -2186,6 +2187,10 @@ const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
     if (sh->io->admin && login_locked())        // nothing to offer before the password
         return NULL;
     return command_tables;
+}
+
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    edit_view_take(sh, name, text, len);
 }
 
 void shell_execute(shell_t *sh, char *cmd) {

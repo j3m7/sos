@@ -52,7 +52,8 @@ Paths given to the file commands are relative to the shell's working directory (
 they start with '/'. File names with spaces aren't supported yet.
 
 Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a screen at a time, and
-'man <topic>' shows a page in the same viewer.
+'man <topic>' shows a page in the same viewer. Any command's output can be read that way too: end
+the line with '| more' ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
 ## System
 
@@ -140,7 +141,7 @@ Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a scre
 
 | Command | Where | What it does |
 |---|---|---|
-| `more <file>` | any | read a file a screen at a time, whatever its size ([page](../man/more.txt)) |
+| `more <file>`<br>`<command> \| more` | any | read a file a screen at a time, whatever its size ([page](../man/more.txt)) |
 
 ## Manual pages
 

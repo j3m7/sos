@@ -706,6 +706,9 @@ with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `
 quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
 it is the viewer for any command with more text to show than a screen, the manual pages first
 of all. The keys are in [man/more.txt](man/more.txt).
+Any command's output can be read the same way: end the line with `| more` (`dmesg | more`,
+`wifi stats chip | more`). The output is kept instead of printed, up to 32 KB, and paged once
+the command has finished; see [man/more.txt](man/more.txt).
 
 ## Manual pages
 

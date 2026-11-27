@@ -56,6 +56,8 @@ DESCRIPTION
 
     Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one
     a screen at a time, and 'man <topic>' shows a page in the same viewer.
+    Any command's output can be read that way too: end the line with '| more'
+    ('dmesg | more', 'wifi stats | more'); the pager takes up to 32 KB of it.
 
 SEE ALSO
     help, man, logout, passwd, setup, edit, more
