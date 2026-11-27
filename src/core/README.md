@@ -134,8 +134,8 @@ Two layers:
     provider locks, and kept in RAM by `settings.c` while the board runs: every save needs it.
     Without a usable root secret a sealed configuration can't be read and nothing can be
     saved; the log says so.
-  - **Flash writes** go through `flash_safe_execute()`, which pauses core 1 (Lua) while
-    flash is busy.
+  - **Flash writes** go through `flashop_run()` (see "Flash writes" below), which pauses
+    core 1 (Lua) and holds interrupts off while flash is busy.
 
 Only the console may change the configuration; see `require_admin()` in `shell/shell.c`.
 
@@ -270,6 +270,29 @@ configuration sectors, so `picotool load`, `config reset` and provisioning don't
 `keysector_write()` replaces one page and keeps the others; it erases and rewrites the whole
 sector, so a power cut during a write can lose what's in it. Writes happen only when the host
 key is made or sealed.
+
+## Flash writes (`flashop.c`)
+
+Every erase or program of the flash the firmware runs from goes through `flashop_run()`: the
+configuration (`settings.c`), the wrong-password count (`failflash.c`), the root secret record
+(`rootflash.c`) and the key sector (`keysector.c`). It wraps the SDK's `flash_safe_execute()`,
+which stops core 1 and turns interrupts off for as long as the write takes. For that long
+nothing else is served: not the Wi-Fi driver, not USB. It is the longest time this firmware
+spends with interrupts off, so `flashop_run()` times it, and `uptime` shows how many writes
+there were, how long the last held interrupts off, and the longest.
+
+Measured on dev-1 (Pico 2 W, RP2350 A2), 2026-11-26, issue #109:
+
+| Write | Interrupts off |
+|---|---|
+| Saving the configuration: one 4 KB sector erased, then nine pages programmed | 39 to 43 ms (three saves) |
+| One page programmed, no erase (the wrong-password count at a console login) | 0.5 ms |
+
+An SSH session open across three configuration saves kept working: 40 ms is far below TCP's
+retransmission time. The erase is nearly all of it, and the flash part's worst-case erase time
+is several times the typical one, so a save should stay something a person asks for, not
+something done on a timer. If a write ever has to be shorter, erase and program can be made
+separate calls so interrupts run in between.
 
 ## Reading OTP and the boot key check (`otpread.c`, `bootkey.c`)
 

@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Julio Martinez
+//
+// `more <file>` and edit_view(): the pager (pager.c) on a shell, over a file on the card (read
+// through a window, so the file can be larger than RAM) or over a text in RAM (a copy, for the
+// manual pages). A raw-mode shell job, like the editor; the terminal side is fsterm.c.
+
+#include "edit/edit.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "ff.h"
+
+#include "core/heaptag.h"
+#include "edit/fsterm.h"
+#include "edit/pager.h"
+#include "files/files.h"
+#include "files/path.h"
+#include "files/sdcard.h"
+
+#define PATH_LEN 256
+
+typedef struct {
+    pager_t pg;
+    fsterm_t term;
+    FIL file;
+    bool file_open;                 // reading the card: files_hold() until it's closed
+    char *text;                     // or a copy of a text in RAM
+    bool quit;
+} view_t;
+
+static size_t read_file(void *ctx, size_t off, char *buf, size_t n) {
+    view_t *v = ctx;
+    UINT got = 0;
+    if (f_lseek(&v->file, off) != FR_OK || f_read(&v->file, buf, (UINT)n, &got) != FR_OK)
+        return 0;
+    return got;
+}
+
+static void view_key(shell_t *sh, int key, void *arg) {
+    view_t *v = arg;
+    int rows, cols;
+    if (v->quit)
+        return;
+    if (fsterm_size_key(sh, &v->term, key, &rows, &cols)) {
+        if (rows)
+            pager_resize(&v->pg, rows, cols);
+        return;
+    }
+    switch (pager_key(&v->pg, key)) {
+    case PAGER_QUIT:
+        v->quit = true;
+        break;
+    case PAGER_RESIZE:
+        fsterm_ask_size(&v->term);
+        break;
+    case PAGER_NONE:
+        break;
+    }
+}
+
+static bool view_step(shell_t *sh, void *arg, bool cancel) {
+    view_t *v = arg;
+    if (cancel || v->quit) {
+        fsterm_leave(sh, &v->pg.scr, cancel);
+        if (v->file_open) {
+            f_close(&v->file);
+            files_release();
+        }
+        pager_free(&v->pg);
+        heap_release(HEAP_EDIT, v->text);
+        heap_release(HEAP_EDIT, v);
+        return false;
+    }
+    int waiting = v->pg.log_waiting;
+    bool draw = fsterm_step(sh, &v->term, &waiting);
+    pager_set_log_waiting(&v->pg, waiting);
+    if (draw)
+        fsterm_send(sh, &v->term, &v->pg.scr);
+    return true;
+}
+
+// Start the job on a source that is ready. Frees `v` if the pager can't start.
+static void run(shell_t *sh, view_t *v, const char *name, pager_source_t src) {
+    if (!pager_init(&v->pg, name, src, 0)) {
+        shell_printf(sh, "%s: out of memory\n", name);
+        if (v->file_open) {
+            f_close(&v->file);
+            files_release();
+        }
+        heap_release(HEAP_EDIT, v->text);
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    fsterm_enter(sh, &v->term);
+    shell_run_raw(sh, view_step, view_key, v);
+}
+
+void view_command(shell_t *sh, char *args) {
+    if (!args || !*args || strchr(args, ' ')) {
+        shell_printf(sh, "usage: more <file>\n");
+        return;
+    }
+    view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
+    if (!v) {
+        shell_printf(sh, "more: out of memory\n");
+        return;
+    }
+    char path[PATH_LEN];
+    if (!path_resolve(sh->cwd, args, path, sizeof(path))) {
+        shell_printf(sh, "path too long\n");
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    if (!sdcard_mount(sh)) {
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    FILINFO fi;
+    FRESULT fr = f_stat(path, &fi);
+    if (fr == FR_OK && (fi.fattrib & AM_DIR)) {
+        shell_printf(sh, "more: %s: is a directory\n", path);
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    if (fr == FR_OK)
+        fr = f_open(&v->file, path, FA_READ);
+    if (fr != FR_OK) {
+        shell_printf(sh, "more: %s: %s\n", path, files_error(fr));
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    v->file_open = true;
+    files_hold();
+    pager_source_t src = { .read = read_file, .ctx = v, .size = (size_t)f_size(&v->file) };
+    run(sh, v, path, src);
+}
+
+void edit_view(shell_t *sh, const char *name, const char *text, size_t len) {
+    view_t *v = heap_zalloc(HEAP_EDIT, sizeof(*v));
+    char *copy = v ? heap_alloc(HEAP_EDIT, len ? len : 1) : NULL;
+    if (!copy) {
+        shell_printf(sh, "%s: out of memory\n", name);
+        heap_release(HEAP_EDIT, v);
+        return;
+    }
+    memcpy(copy, text, len);
+    v->text = copy;
+    pager_source_t src = { .read = pager_read_mem, .ctx = copy, .size = len };
+    run(sh, v, name, src);
+}

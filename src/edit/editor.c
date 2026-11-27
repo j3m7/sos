@@ -1,33 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// The full-screen editor's model and screen (see editor.h). Depends only on keys.h, termtext.c,
-// charwidth.c and the C library, so it builds on the host for unit tests.
+// The full-screen editor's model and screen (see editor.h). Depends only on screen.c, keys.h
+// and the C library, so it builds on the host for unit tests.
 //
-// Text is bytes in a gap buffer. A character takes the columns charwidth() says: two for wide
-// CJK characters and most emoji, none for combining marks (an accent added to the letter before
-// it), one otherwise; a tab goes up to the next multiple of EDITOR_TAB. The cursor moves by
-// character, and a character with the combining marks after it (up to EDITOR_MAX_MARKS) moves
-// and deletes as one; a mark beyond that, or with no character to go on, shows as '?'.
-// Anything a terminal could act on, or that would hide what the bytes are (controls, invalid
-// UTF-8, bidi and invisible characters: termtext_hidden()), shows as '?' and takes one column.
-// Width is a guess at what the terminal does: one built on an older Unicode can disagree about
-// recent emoji, and sequences joined with ZWJ count as their separate characters.
-// Lines don't wrap: the view scrolls sideways to follow the cursor. The terminal's autowrap should
-// be off (edit.c does that), so a wide character can't push a row onto the next one.
+// Text is bytes in a gap buffer. A character takes the columns screen_unit() says (screen.h):
+// two for wide CJK characters and most emoji, none for combining marks (an accent added to the
+// letter before it), one otherwise; a tab goes up to the next multiple of EDITOR_TAB. The cursor
+// moves by character, and a character with the combining marks after it (up to EDITOR_MAX_MARKS)
+// moves and deletes as one; a mark beyond that, or with no character to go on, shows as '?', as
+// does anything a terminal could act on or that would hide what the bytes are.
+// Lines don't wrap: the view scrolls sideways to follow the cursor.
 
 #include "edit/editor.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "core/heaptag.h"
-#include "shell/charwidth.h"
 #include "shell/keys.h"
-#include "shell/termtext.h"
 
-#define BAD_CP 0xFFFFFFFFu
 #define CTRL(c) ((c) & 0x1f)
 
 // --- gap buffer ----------------------------------------------------------------------------------
@@ -91,98 +83,19 @@ static void delete(editor_t *ed, size_t pos, size_t n) {
 
 // --- characters and lines ------------------------------------------------------------------------
 
-// The UTF-8 character at pos: its length (1 for a byte that doesn't start a valid one) and code
-// point (BAD_CP if invalid). Same rules as termtext.c: no overlongs, surrogates or > U+10FFFF.
-static size_t decode_bytes(const unsigned char *s, size_t avail, uint32_t *cp) {
-    unsigned c = s[0];
-    *cp = BAD_CP;
-    if (c < 0x80) {
-        *cp = c;
-        return 1;
-    }
-    unsigned need;
-    uint32_t v;
-    if (c >= 0xc2 && c <= 0xdf)
-        need = 1, v = c & 0x1f;
-    else if (c >= 0xe0 && c <= 0xef)
-        need = 2, v = c & 0x0f;
-    else if (c >= 0xf0 && c <= 0xf4)
-        need = 3, v = c & 0x07;
-    else
-        return 1;
-    if (need >= avail)
-        return 1;
-    for (unsigned i = 1; i <= need; i++) {
-        unsigned b = s[i], lo = 0x80, hi = 0xbf;
-        if (i == 1) {
-            if (c == 0xe0) lo = 0xa0;       // overlong
-            if (c == 0xed) hi = 0x9f;       // surrogates
-            if (c == 0xf0) lo = 0x90;       // overlong
-            if (c == 0xf4) hi = 0x8f;       // above U+10FFFF
-        }
-        if (b < lo || b > hi)
-            return 1;
-        v = v << 6 | (b & 0x3f);
-    }
-    *cp = v;
-    return need + 1;
-}
-
-// Shown as itself (else as '?').
-static bool shows(uint32_t cp) {
-    return (cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp != BAD_CP && !termtext_hidden(cp));
-}
-
-// A combining mark or joiner: it belongs to the character before it.
-static bool joins(uint32_t cp) {
-    return shows(cp) && charwidth(cp) == 0;
-}
-
-// What the screen shows for one character: its bytes, the combining marks attached to it (at most
-// EDITOR_MAX_MARKS), how many columns it takes, and whether its bytes go out as they are
-// (`glyph`); if not, it shows as '?' in one column, or as spaces for a tab. Everything that lays
-// out a line goes through unit_bytes(), so a line's columns, the cursor and what's drawn agree.
-// A mark that can't be attached (at the start of a line, after a tab or a '?', or beyond the
-// limit) is a unit of its own and shows as '?', so no bytes of the file are hidden.
-typedef struct {
-    size_t len;         // bytes, marks included
-    size_t width;       // columns
-    bool glyph;         // send the bytes (else '?', or spaces for a tab)
-    bool tab;
-} unit_t;
-
-#define UNIT_BYTES_MAX (4 * (1 + EDITOR_MAX_MARKS))
-
-static unit_t unit_bytes(const unsigned char *s, size_t avail, size_t col) {
-    unit_t u = { 0 };
-    uint32_t cp;
-    u.len = decode_bytes(s, avail, &cp);
-    if (cp == '\t') {
-        u.tab = true;
-        u.width = EDITOR_TAB - col % EDITOR_TAB;
-        return u;
-    }
-    int w = shows(cp) ? charwidth(cp) : 0;
-    u.glyph = w > 0;
-    u.width = w > 0 ? (size_t)w : 1;
-    for (int m = 0; u.glyph && m < EDITOR_MAX_MARKS && u.len < avail; m++) {
-        size_t l = decode_bytes(s + u.len, avail - u.len, &cp);
-        if (!joins(cp))
-            break;
-        u.len += l;
-    }
-    return u;
-}
-
 // The unit starting at pos (not a '\n'), at column col.
-static unit_t unit_at(const editor_t *ed, size_t pos, size_t col) {
-    unsigned char s[UNIT_BYTES_MAX];
+static size_t unit_bytes_at(const editor_t *ed, size_t pos, unsigned char s[SCREEN_UNIT_MAX]) {
     size_t avail = editor_len(ed) - pos;
-    if (avail > sizeof(s))
-        avail = sizeof(s);
+    if (avail > SCREEN_UNIT_MAX)
+        avail = SCREEN_UNIT_MAX;
     for (size_t i = 0; i < avail; i++)
         s[i] = at(ed, pos + i);
-    return unit_bytes(s, avail, col);
+    return avail;
+}
+
+static unit_t unit_at(const editor_t *ed, size_t pos, size_t col) {
+    unsigned char s[SCREEN_UNIT_MAX];
+    return screen_unit(s, unit_bytes_at(ed, pos, s), col);
 }
 
 // Past the unit at pos (a character and its marks), or past the '\n' there.
@@ -264,14 +177,17 @@ static size_t count_lines(const editor_t *ed, size_t from, size_t to) {
 }
 
 static int text_rows(const editor_t *ed) {
-    return ed->rows - 2;
+    return ed->scr.rows - 2;
 }
 
 // --- setup ---------------------------------------------------------------------------------------
 
+static void begin_frame(void *ctx);
+static size_t render_row(void *ctx, int r, char *out);
+static void cursor_at(void *ctx, int *row, int *col, bool *shown);
+
 static void changed(editor_t *ed) {
-    ed->dirty = true;
-    ed->drawing = false;                    // restart the frame
+    screen_changed(&ed->scr);
 }
 
 void editor_message(editor_t *ed, const char *msg) {
@@ -280,9 +196,7 @@ void editor_message(editor_t *ed, const char *msg) {
 }
 
 void editor_invalidate(editor_t *ed) {
-    ed->clear = true;
-    memset(ed->row_valid, 0, sizeof(ed->row_valid));
-    changed(ed);
+    screen_invalidate(&ed->scr);
 }
 
 char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit) {
@@ -292,8 +206,7 @@ char *editor_open(editor_t *ed, const char *name, size_t len, size_t limit) {
         snprintf(ed->name, sizeof(ed->name), "%s", name);
     else
         snprintf(ed->name, sizeof(ed->name), "...%s", name + nl - (sizeof(ed->name) - 4));
-    ed->rows = 24;
-    ed->cols = 80;
+    screen_init(&ed->scr, begin_frame, render_row, cursor_at, ed);
     ed->limit = limit > EDITOR_MAX_TEXT ? EDITOR_MAX_TEXT : limit;
     if (len > ed->limit)
         return NULL;
@@ -345,9 +258,7 @@ void editor_free(editor_t *ed) {
 }
 
 void editor_resize(editor_t *ed, int rows, int cols) {
-    ed->rows = rows < EDITOR_ROWS_MIN ? EDITOR_ROWS_MIN : rows > EDITOR_ROWS_MAX ? EDITOR_ROWS_MAX : rows;
-    ed->cols = cols < EDITOR_COLS_MIN ? EDITOR_COLS_MIN : cols > EDITOR_COLS_MAX ? EDITOR_COLS_MAX : cols;
-    editor_invalidate(ed);
+    screen_resize(&ed->scr, rows, cols);
 }
 
 void editor_saved(editor_t *ed, bool ok, const char *msg) {
@@ -581,6 +492,7 @@ editor_action_t editor_key(editor_t *ed, int key) {
 // Keep the cursor on screen.
 static void scroll(editor_t *ed) {
     int rows = text_rows(ed);
+    size_t cols = (size_t)ed->scr.cols;
     if (ed->top > editor_len(ed))
         ed->top = line_start(ed, editor_len(ed));
     if (ed->cursor < ed->top) {
@@ -593,65 +505,27 @@ static void scroll(editor_t *ed) {
     size_t col = col_of(ed, ed->cursor), w = 1;
     if (ed->cursor < editor_len(ed) && at(ed, ed->cursor) != '\n') {
         w = unit_at(ed, ed->cursor, col).width;
-        if (w > (size_t)ed->cols)
+        if (w > cols)
             w = 1;
     }
     if (col < ed->col_off)                  // back to the left: the start of the line if it fits
-        ed->col_off = col + w <= (size_t)ed->cols ? 0 : col;
-    else if (col + w > ed->col_off + (size_t)ed->cols)
-        ed->col_off = col + w - (size_t)ed->cols;   // all of the character under the cursor
+        ed->col_off = col + w <= cols ? 0 : col;
+    else if (col + w > ed->col_off + cols)
+        ed->col_off = col + w - cols;       // all of the character under the cursor
 }
 
-static size_t put(char *out, size_t n, const char *s, size_t len) {
-    memcpy(out + n, s, len);
-    return n + len;
+static void begin_frame(void *ctx) {
+    scroll(ctx);
 }
 
-// Up to `cols` columns of a C string, laid out like text (a tab shows as '?'). With out NULL,
-// only counts columns.
-static size_t put_text(char *out, size_t n, const char *s, size_t cols, size_t *used) {
-    size_t len = strlen(s), col = 0;
-    for (size_t p = 0; p < len;) {
-        unit_t u = unit_bytes((const unsigned char *)s + p, len - p, col);
-        if (u.tab) {
-            u.width = 1;
-            u.glyph = false;
-        }
-        if (col + u.width > cols)
-            break;
-        if (out) {
-            if (u.glyph)
-                n = put(out, n, s + p, u.len);
-            else
-                out[n++] = '?';
-        }
-        col += u.width;
-        p += u.len;
-    }
-    if (used)
-        *used = col;
-    return n;
-}
-
-// One text row: the line starting at `line`, from column col_off. A wide character cut by either
-// edge shows as spaces. Each column gets one unit of at most UNIT_BYTES_MAX bytes, so a row is at
-// most cols * UNIT_BYTES_MAX bytes, whatever the line holds (EDITOR_ROW_BYTES).
+// One text row: the line starting at `line`, from column col_off (screen_unit_out() shows a wide
+// character cut by either edge as spaces).
 static size_t text_row(const editor_t *ed, size_t line, char *out, size_t n) {
-    size_t len = editor_len(ed), col = 0, left = ed->col_off, right = left + (size_t)ed->cols;
+    size_t len = editor_len(ed), col = 0, left = ed->col_off, right = left + (size_t)ed->scr.cols;
     for (size_t p = line; p < len && at(ed, p) != '\n' && col < right;) {
-        unit_t u = unit_at(ed, p, col);
-        if (col + u.width > left) {
-            size_t from = col < left ? left : col, to = col + u.width > right ? right : col + u.width;
-            if (u.tab || to - from < u.width) {     // a tab, or cut by an edge
-                for (size_t i = from; i < to; i++)
-                    out[n++] = ' ';
-            } else if (u.glyph) {
-                for (size_t i = 0; i < u.len; i++)
-                    out[n++] = editor_at(ed, p + i);
-            } else {
-                out[n++] = '?';
-            }
-        }
+        unsigned char s[SCREEN_UNIT_MAX];
+        unit_t u = screen_unit(s, unit_bytes_at(ed, p, s), col);
+        n = screen_unit_out(out, n, s, u, col, left, right);
         col += u.width;
         p += u.len;
     }
@@ -668,36 +542,46 @@ static size_t status_row(const editor_t *ed, char *out, size_t n) {
                      ed->log_waiting == 1 ? "" : "s");
     snprintf(right + r, sizeof(right) - (size_t)r, "line %zu/%zu col %zu ", line, lines,
              col_of(ed, ed->cursor) + 1);
-    size_t cols = (size_t)ed->cols, rl = strlen(right);
+    size_t cols = (size_t)ed->scr.cols, rl = strlen(right);
     if (rl > cols)
         rl = cols;
-    n = put(out, n, "\x1b[7m", 4);
+    n = screen_put(out, n, "\x1b[7m", 4);
     size_t used;
-    n = put_text(out, n, left, cols - rl, &used);
+    n = screen_put_text(out, n, left, cols - rl, &used);
     for (; used < cols - rl; used++)
         out[n++] = ' ';
-    n = put(out, n, right + strlen(right) - rl, rl);
-    return put(out, n, "\x1b[m", 3);
+    n = screen_put(out, n, right + strlen(right) - rl, rl);
+    return screen_put(out, n, "\x1b[m", 3);
 }
 
 static size_t message_row(const editor_t *ed, char *out, size_t n) {
     if (ed->finding) {
-        n = put(out, n, "Search: ", 8);
-        return put_text(out, n, ed->find, (size_t)ed->cols - 8, NULL);
+        n = screen_put(out, n, "Search: ", 8);
+        return screen_put_text(out, n, ed->find, (size_t)ed->scr.cols - 8, NULL);
     }
-    return put_text(out, n, ed->msg, (size_t)ed->cols, NULL);
+    return screen_put_text(out, n, ed->msg, (size_t)ed->scr.cols, NULL);
 }
 
-// Render screen row r (0-based) into out (EDITOR_ROW_BYTES): position, erase the row, contents.
-// Erasing first: after a character in the last column the cursor stays on it, so an erase
-// after the contents would remove that character from a full row.
-static size_t render_row(const editor_t *ed, int r, char *out) {
-    size_t n = (size_t)snprintf(out, 16, "\x1b[%d;1H\x1b[K", r + 1);
+// Screen row r (0-based): a text row (walking the lines from the top as the rows go), the status
+// bar, or the message line.
+static size_t render_row(void *ctx, int r, char *out) {
+    editor_t *ed = ctx;
+    size_t n = screen_row_start(r, out);
+    if (r == 0) {
+        ed->draw_line = ed->top;
+        ed->draw_past_end = false;
+    }
     if (r < text_rows(ed)) {
-        if (ed->draw_past_end)
+        if (ed->draw_past_end) {
             out[n++] = '~';
-        else
+        } else {
             n = text_row(ed, ed->draw_line, out, n);
+            size_t e = line_end(ed, ed->draw_line);
+            if (e < editor_len(ed))
+                ed->draw_line = e + 1;
+            else
+                ed->draw_past_end = true;
+        }
     } else if (r == text_rows(ed)) {
         n = status_row(ed, out, n);
     } else {
@@ -706,96 +590,26 @@ static size_t render_row(const editor_t *ed, int r, char *out) {
     return n;
 }
 
-static uint32_t hash(const char *s, size_t n) {
-    uint32_t h = 2166136261u;               // FNV-1a
-    for (size_t i = 0; i < n; i++)
-        h = (h ^ (unsigned char)s[i]) * 16777619u;
-    return h;
-}
-
-bool editor_drawn(const editor_t *ed) {
-    return !ed->dirty;
+static void cursor_at(void *ctx, int *row, int *col, bool *shown) {
+    editor_t *ed = ctx;
+    *shown = true;
+    if (ed->finding) {
+        size_t used;
+        screen_put_text(NULL, 0, ed->find, (size_t)ed->scr.cols - 8, &used);
+        *row = ed->scr.rows;
+        *col = 9 + (int)used;
+        if (*col > ed->scr.cols)
+            *col = ed->scr.cols;
+    } else {
+        *row = (int)count_lines(ed, ed->top, ed->cursor) + 1;
+        *col = (int)(col_of(ed, ed->cursor) - ed->col_off) + 1;
+    }
 }
 
 size_t editor_draw(editor_t *ed, char *out, size_t cap) {
-    size_t n = 0;
-    if (!ed->dirty)
-        return 0;
-    if (!ed->drawing) {
-        // A row cut short when the frame restarted goes out whole first: stale, but complete, so
-        // the terminal never sees a sequence or character cut by a new one. It's drawn again
-        // below (its row isn't valid).
-        if (ed->row_sent < ed->row_len) {
-            size_t take = ed->row_len - ed->row_sent;
-            if (take > cap)
-                take = cap;
-            n = put(out, n, ed->row + ed->row_sent, take);
-            ed->row_sent += take;
-            if (ed->row_sent < ed->row_len)
-                return n;
-        }
-        if (cap - n < 16)
-            return n;
-        scroll(ed);
-        ed->drawing = true;
-        ed->draw_row = 0;
-        ed->draw_line = ed->top;
-        ed->draw_past_end = false;
-        n = put(out, n, "\x1b[?25l", 6);    // hide the cursor while drawing
-        if (ed->clear) {
-            n = put(out, n, "\x1b[2J", 4);
-            ed->clear = false;
-        }
-    }
-    while (ed->draw_row < ed->rows) {
-        int r = ed->draw_row;
-        if (ed->row_sent == ed->row_len) {  // not in the middle of a row: render this one
-            size_t len = render_row(ed, r, ed->row);
-            uint32_t h = hash(ed->row, len);
-            if (ed->row_valid[r] && ed->drawn[r] != h)
-                ed->row_valid[r] = false;   // what it shows is wrong until the whole row is out
-            ed->drawn[r] = h;
-            ed->row_len = ed->row_valid[r] ? 0 : len;
-            ed->row_sent = 0;
-        }
-        if (ed->row_sent < ed->row_len) {
-            size_t take = ed->row_len - ed->row_sent;
-            if (take > cap - n)
-                take = cap - n;             // the rest on the next call
-            n = put(out, n, ed->row + ed->row_sent, take);
-            ed->row_sent += take;
-            if (ed->row_sent < ed->row_len)
-                return n;
-            ed->row_valid[r] = true;
-        }
-        if (r < text_rows(ed) && !ed->draw_past_end) {
-            size_t e = line_end(ed, ed->draw_line);
-            if (e < editor_len(ed))
-                ed->draw_line = e + 1;
-            else
-                ed->draw_past_end = true;
-        }
-        ed->draw_row++;
-    }
-    // Finally the cursor.
-    char tail[32];
-    int row_no, col_no;
-    if (ed->finding) {
-        size_t used;
-        put_text(NULL, 0, ed->find, (size_t)ed->cols - 8, &used);
-        row_no = ed->rows;
-        col_no = 9 + (int)used;
-        if (col_no > ed->cols)
-            col_no = ed->cols;
-    } else {
-        row_no = (int)count_lines(ed, ed->top, ed->cursor) + 1;
-        col_no = (int)(col_of(ed, ed->cursor) - ed->col_off) + 1;
-    }
-    size_t tl = (size_t)snprintf(tail, sizeof(tail), "\x1b[%d;%dH\x1b[?25h", row_no, col_no);
-    if (n + tl > cap)
-        return n;
-    n = put(out, n, tail, tl);
-    ed->drawing = false;
-    ed->dirty = false;
-    return n;
+    return screen_draw(&ed->scr, out, cap);
+}
+
+bool editor_drawn(const editor_t *ed) {
+    return screen_drawn(&ed->scr);
 }

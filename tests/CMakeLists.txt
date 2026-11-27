@@ -40,6 +40,11 @@ add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
 target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
 add_test(NAME wifi_pick COMMAND test_wifi_pick)
 
+# src/net/ping_msg.c: ping's arguments, echo requests and replies, and statistics.
+add_executable(test_ping_msg test_ping_msg.c ${SOS_ROOT}/src/net/ping_msg.c)
+target_include_directories(test_ping_msg PRIVATE ${SOS_ROOT}/src)
+add_test(NAME ping_msg COMMAND test_ping_msg)
+
 # src/core/failcount.c: the count of wrong console passwords kept in flash across reboots.
 add_executable(test_failcount test_failcount.c ${SOS_ROOT}/src/core/failcount.c)
 target_include_directories(test_failcount PRIVATE ${SOS_ROOT}/src)
@@ -56,9 +61,14 @@ target_include_directories(test_charwidth PRIVATE ${SOS_ROOT}/src)
 add_test(NAME charwidth COMMAND test_charwidth)
 
 # src/edit/editor.c: the full-screen editor's text, keys and screen.
-add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
+add_executable(test_editor test_editor.c ${SOS_ROOT}/src/edit/editor.c ${SOS_ROOT}/src/edit/screen.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
 target_include_directories(test_editor PRIVATE ${SOS_ROOT}/src)
 add_test(NAME editor COMMAND test_editor)
+
+# src/edit/pager.c: the pager's window, keys and screen.
+add_executable(test_pager test_pager.c ${SOS_ROOT}/src/edit/pager.c ${SOS_ROOT}/src/edit/screen.c ${SOS_ROOT}/src/core/heaptag.c ${SOS_ROOT}/src/shell/termtext.c ${SOS_ROOT}/src/shell/charwidth.c)
+target_include_directories(test_pager PRIVATE ${SOS_ROOT}/src)
+add_test(NAME pager COMMAND test_pager)
 
 # src/files/path.c: path resolution for the file commands.
 add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
