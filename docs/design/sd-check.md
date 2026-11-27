@@ -270,16 +270,18 @@ are covered in `ceil(count / 8W)` passes:
 - **Passes 2 …** walk the tree again and only mark clusters. Per-entry problems are reported
   once, in pass 1.
 - In each pass a cluster is marked when a chain (or a NoFatChain run) reaches it. A bit that is
-  already set is a **cross-link**, reported with the path of the second entry to reach it, and
-  with the first entry's path when it is still on the directory stack. When a pass ends, the
+  already set is a **cross-link**, reported with the path of the second entry to reach it (one
+  line per later entry, in the pass whose window holds the shared run's last cluster, so the
+  lines don't depend on the window size). When a pass ends, the
   window is compared with the FAT (FAT32: entry non-zero and not marked → lost) or with the
   allocation bitmap (exFAT, same rule). Lost clusters are counted, and reported as runs
   (`lost: clusters 81920-81935 (512 KB)`), up to the report limit.
 - **Window size:** `sdcard.c` asks `HEAP_FILES` for 16 KB, and falls back to 8 KB and then 4 KB.
-  If 4 KB isn't available it refuses: `not enough memory to check the card (needs 6 KB)`. On a
-  32 GB card with 1 M clusters, 16 KB means 8 passes, 4 KB means 32. Other memory: the directory
-  stack (64 levels × 24 bytes), three sector buffers (directory, FAT, bitmap), the name buffer
-  (255 UTF-16 characters), about 3 KB in all. The encryption layer's 7.5 KB is allocated by
+  If 4 KB isn't available it refuses, naming what it needs: `fsck_state_size()` plus 4 KB,
+  about 10 KB. On a 32 GB card with 1 M clusters, 16 KB means 8 passes, 4 KB means 32. The
+  checker's own state (`sizeof(fsck_t)`, 5.9 KB in phase 1) holds the directory stack (64
+  levels × 24 bytes), the sector buffers, two name buffers (255 UTF-16 characters each), the
+  repeated-name filter, the path and the report line. The encryption layer's 7.5 KB is allocated by
   `detect()` as for any mount.
 - **Time:** each pass reads every directory and every FAT sector that a chain passes through,
   plus its window's share of the FAT or bitmap. A NoFatChain exFAT file costs no FAT reads, and
