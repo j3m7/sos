@@ -513,11 +513,11 @@ static void cmd_mem_test(shell_t *sh, char *args) {
             shell_printf(sh, "mem release first: 0 to 3600 seconds\n");
             return;
         }
-        size_t n = memhold_release_first((unsigned)secs * 1000);
-        if (!n)
+        size_t first = memhold_release_first((unsigned)secs * 1000);
+        if (!first)
             shell_printf(sh, "nothing held\n");
         else if (secs)
-            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)n,
+            shell_printf(sh, "the first block held (%u bytes) is freed in %d s\n", (unsigned)first,
                          secs);
         else
             mem_held_summary(sh);
