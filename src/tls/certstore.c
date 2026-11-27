@@ -216,12 +216,12 @@ static bool describe(shell_t *sh, unsigned n, const uint8_t *der, size_t len) {
             // The name is the file's to choose: only printable ASCII reaches the terminal, so
             // it can't redraw what the approval shows.
             char cn[65];
-            int n = dc->subjectCNLen < (int)sizeof(cn) - 1 ? dc->subjectCNLen : (int)sizeof(cn) - 1;
-            for (int i = 0; i < n; i++) {
+            int cn_len = dc->subjectCNLen < (int)sizeof(cn) - 1 ? dc->subjectCNLen : (int)sizeof(cn) - 1;
+            for (int i = 0; i < cn_len; i++) {
                 unsigned char c = (unsigned char)dc->subjectCN[i];
                 cn[i] = (c >= 0x20 && c <= 0x7e) ? (char)c : '?';
             }
-            cn[n] = '\0';
+            cn[cn_len] = '\0';
             shell_printf(sh, "%s", cn);
         }
         else

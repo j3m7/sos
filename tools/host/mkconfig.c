@@ -117,7 +117,7 @@ static const char *apply(sos_config_t *cfg, const char *name, const char *value)
         }
         if (value[0] < '0' || value[0] > '3' || value[1])
             return "must be off, default, a sensitivity from 0 to 3, or 'watch' and a sensitivity";
-        cfg->glitch_detector = (uint8_t)(value[0] - '0' + base);
+        cfg->glitch_detector = (uint8_t)((unsigned)(value[0] - '0') + base);
         return NULL;
     }
     if (!strcmp(name, "nts_sync_hours")) {

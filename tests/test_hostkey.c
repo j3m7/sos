@@ -76,12 +76,14 @@ bool random_bytes(void *ctx, uint8_t *out, size_t len) {
 }
 
 static int keys_made;
+// Stands in for wolfSSH's key generation, which hostkey.c declares itself.
+int wolfSSH_MakeEd25519Key(uint8_t *out, uint32_t out_size, uint32_t size);
 int wolfSSH_MakeEd25519Key(uint8_t *out, uint32_t out_size, uint32_t size) {
     (void)size;
     CHECK(out_size >= 82);
     keys_made++;
     for (unsigned i = 0; i < 82; i++)
-        out[i] = (uint8_t)(keys_made * 16 + i);  // each key made is different
+        out[i] = (uint8_t)((unsigned)keys_made * 16 + i);  // each key made is different
     return 82;
 }
 

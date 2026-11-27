@@ -94,7 +94,8 @@ target_sources(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
     ${SDCARD_ROOT}/src/src/my_rtc.c
     ${SDCARD_ROOT}/src/src/util.c
 )
-target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+# SYSTEM: third-party headers, kept out of SOS's warnings (cmake/warnings.cmake).
+target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico SYSTEM INTERFACE
     ${SDCARD_ROOT}/src/ff15/source
     ${SDCARD_ROOT}/src/sd_driver
     ${SDCARD_ROOT}/src/include
@@ -263,7 +264,18 @@ add_dependencies(sos sos_version)
 target_sources(sos PRIVATE ${SOS_AES_ASM_SRC})
 
 # Warnings for our own code only (third-party sources are compiled into this target too).
-set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
+# -Wstack-usage: any one function's frame over 1.5K, or unbounded (alloca), against an 8K core 0
+# stack shared with interrupt handlers and a 4K core 1 stack. The largest today are ~1K: two
+# 512-byte path copies (path_is_protected), a FatFs FIL with its sector buffer (sd test).
+include(cmake/warnings.cmake)
+set(SOS_FIRMWARE_WARNINGS ${SOS_WARNINGS} -Wstack-usage=1536)
+set_source_files_properties(${SOS_SOURCES} PROPERTIES COMPILE_OPTIONS "${SOS_FIRMWARE_WARNINGS}")
+# The SDK's stdatomic.h (via wolfSSL) tests #if PICO_RP2040, which isn't defined on RP2350:
+# -Wundef flags it in every file that includes it. The SDK only tests it with #if, so 0 means
+# what undefined did.
+if (PICO_PLATFORM MATCHES "^rp2350")
+    target_compile_definitions(sos PRIVATE PICO_RP2040=0)
+endif()
 
 target_include_directories(sos PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src             # "subsystem/header.h"
@@ -382,6 +394,8 @@ endif()
 option(SOS_BURN_IMAGE "Build the image that writes the root secret into OTP (permanent)" OFF)
 if (SOS_BURN_IMAGE)
     target_sources(sos PRIVATE src/core/rootburn.c src/core/rootburn_board.c)
+    set_source_files_properties(src/core/rootburn.c src/core/rootburn_board.c
+        PROPERTIES COMPILE_OPTIONS "${SOS_FIRMWARE_WARNINGS}")
     target_compile_definitions(sos PRIVATE SOS_BURN_IMAGE=1)
     message(WARNING "SOS: this is the BURN IMAGE. It can write one-time-programmable memory. "
                     "Do not leave it on a board.")

@@ -508,7 +508,7 @@ int config_base64_decode(const char *in, size_t inlen, uint8_t *out, size_t outl
     size_t n = 0;
     for (size_t i = 0; i < inlen; i += 4) {
         int v[4], pad = 0;
-        for (int k = 0; k < 4; k++) {
+        for (size_t k = 0; k < 4; k++) {
             char c = in[i + k];
             if (c == '=' && i + 4 == inlen && k >= 2) {
                 v[k] = 0;

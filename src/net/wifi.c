@@ -385,13 +385,13 @@ static void retry_later(const char *why, bool wrong_password) {
         prefer_bssid = false;
     // The first failures are often transient (see QUICK_RETRIES), so retry those soon, and
     // move on to the next network soon too. Wait longer once every network has failed.
-    int delay_ms = round_over ? RETRY_DELAY_MS : QUICK_RETRY_DELAY_MS;
+    unsigned delay_ms = round_over ? RETRY_DELAY_MS : QUICK_RETRY_DELAY_MS;
     if (net_count > 1 && give_up && !round_over)
-        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: '%s': %s; trying the next network in %d s",
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "wifi: '%s': %s; trying the next network in %u s",
                 nets[cur].ssid, why, delay_ms / 1000);
     else
         log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
-                "wifi: %s; retrying in %d s", why, delay_ms / 1000);
+                "wifi: %s; retrying in %u s", why, delay_ms / 1000);
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     state = W_WAIT;
     deadline = make_timeout_time_ms(delay_ms);

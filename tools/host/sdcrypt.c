@@ -25,6 +25,8 @@
 
 #include <openssl/evp.h>
 
+#include "sdcrypt_tool.h"
+
 #define SECTOR      512
 #define KEY_LEN     32
 #define HDR_OFFSET  20
