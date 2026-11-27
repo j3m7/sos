@@ -42,6 +42,11 @@ add_executable(test_wifi_pick test_wifi_pick.c ${SOS_ROOT}/src/net/wifi_pick.c)
 target_include_directories(test_wifi_pick PRIVATE ${SOS_ROOT}/src)
 add_test(NAME wifi_pick COMMAND test_wifi_pick)
 
+# src/net/ping_msg.c: ping's arguments, echo requests and replies, and statistics.
+add_executable(test_ping_msg test_ping_msg.c ${SOS_ROOT}/src/net/ping_msg.c)
+target_include_directories(test_ping_msg PRIVATE ${SOS_ROOT}/src)
+add_test(NAME ping_msg COMMAND test_ping_msg)
+
 # src/core/failcount.c: the count of wrong console passwords kept in flash across reboots.
 add_executable(test_failcount test_failcount.c ${SOS_ROOT}/src/core/failcount.c)
 target_include_directories(test_failcount PRIVATE ${SOS_ROOT}/src)

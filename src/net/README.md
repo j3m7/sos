@@ -1,4 +1,4 @@
-# net: Wi-Fi and HTTPS
+# net: Wi-Fi, HTTPS and ping
 
 `wifi.c` keeps the station connection up, without ever blocking the main loop. lwIP and the
 CYW43 driver come from the Pico SDK (`pico_cyw43_arch_lwip_threadsafe_background`: network
@@ -154,3 +154,33 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
 
 `http get|head|post` (any shell, `docs/commands.md`) runs a request as a shell job, for
 testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), from any shell.
+
+## Ping
+
+`ping.c` runs `ping <host> [<count>]` (`docs/commands.md`) as a shell job, from any shell.
+`ping_msg.c` holds the parts without lwIP: the arguments, the echo request and the check of a
+reply, and the statistics and their text (pure C, host tested).
+
+- **Raw PCB:** each run opens its own raw ICMP PCB (`LWIP_RAW`). lwIP's
+  `contrib/apps/ping/ping.c` isn't used: it reports only through `LWIP_DEBUGF`, keeps a single
+  static target, and paces itself with `sys_timeout`, of which there is one spare.
+- **Interrupt context:** lwIP hands every incoming ICMP packet to the raw PCBs before its own
+  ICMP code, in interrupt context. The callback copies the packet (at most 100 bytes) to the
+  stack and takes it only if it is an echo reply of exactly our size, with the run's
+  identifier, a sequence number already sent, our data and a correct checksum. It records the
+  arrival time, TTL and sender for the request in flight, and nothing more: no heap, no
+  logging, no output. Everything else goes back to lwIP (return 0), so the board keeps
+  answering pings and other ICMP isn't lost.
+- **Several at once:** every run gets its own ICMP identifier (a counter, seeded at random once
+  per boot), so runs in different shells don't take each other's replies. lwIP has 4 raw PCBs,
+  one per shell (the console and 3 SSH sessions); a fifth run is refused.
+- **Names:** `dns_gethostbyname()`, as `tls/` does. The DNS callback gets the run's id, not a
+  pointer, and looks the run up: a run can be cancelled and freed before DNS answers. The raw
+  PCB's callback can take a pointer, because the PCB is removed (under the lwIP lock) before the
+  run is freed.
+- **Timing:** one request at a time. Each waits up to 1 s for its reply, and the next goes out
+  1 s after it, so a lost reply costs no extra time; a reply after that is dropped. The send
+  time is taken under the lwIP lock just before `raw_sendto()`, and the arrival time in the
+  callback, so the main loop's pace (5 ms) doesn't count in the round trip.
+- **Ctrl-C** prints the summary. The same cancel ends a run when its SSH session goes away;
+  its output then goes nowhere (`ssh_session_write()` refuses a closed session), as with `chat`.
