@@ -19,7 +19,7 @@
     )
 
     add_library(wolfssh INTERFACE)
-    target_include_directories(wolfssh INTERFACE ${WOLFSSH_ROOT})
+    target_include_directories(wolfssh SYSTEM INTERFACE ${WOLFSSH_ROOT})  # third-party: no SOS warnings
     target_sources(wolfssh INTERFACE ${WOLFSSH_SRC})
 
     target_compile_definitions(wolfssh INTERFACE

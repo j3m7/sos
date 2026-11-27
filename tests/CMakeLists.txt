@@ -11,7 +11,9 @@ set(CMAKE_C_STANDARD 11)
 set(SOS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 option(SOS_TEST_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" ON)
-add_compile_options(-Wall -Wextra -g)
+# The firmware's warnings (cmake/warnings.cmake); third-party libraries below turn them off (-w).
+include(${SOS_ROOT}/cmake/warnings.cmake)
+add_compile_options(${SOS_WARNINGS} -g)
 if (SOS_TEST_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
