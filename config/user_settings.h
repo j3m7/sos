@@ -84,6 +84,8 @@ extern "C"
  * more than it, and OpenSSH's sftp asks for 32 KB. Each request is handled in one main-loop pass,
  * so a 32 KB reply holds the loop while it's encrypted (see README: Files). */
 
+/* The hybrid post-quantum SSH key exchange (mlkem768x25519-sha256). About 30 KB of flash with
+ * SHA-3; why it is on anyway: "Key exchange" in src/ssh/README.md (issue #120). */
 #if __GNUC__ >= 15
 #define WOLFSSL_HAVE_MLKEM
 #define WOLFSSL_WC_MLKEM
