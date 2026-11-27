@@ -185,9 +185,12 @@ def dirent(sfn, attr, clus, size, nt=0):
                              clus & 0xFFFF, size)
 
 
-def fat32_image(sectors, part_lba, nfats=1, spc=1, layout="mbr"):
+def fat32_image(sectors, part_lba, nfats=1, spc=1, layout="mbr", damage=None, copy1=None,
+                fsi_off=0):
     """A small FAT32 volume laid out as f_mkfs lays one out: files, a long name and a
-    subdirectory. Returns {lba: bytearray(512)} for the sectors that aren't all zeros."""
+    subdirectory. Returns {lba: bytearray(512)} for the sectors that aren't all zeros.
+    For repair seeds: `damage` FAT entries written to every copy, `copy1` to the second copy
+    only, and `fsi_off` added to FSInfo's free count."""
     sec = {}
 
     def put(lba, off, data):
@@ -218,7 +221,7 @@ def fat32_image(sectors, part_lba, nfats=1, spc=1, layout="mbr"):
     used = sum(len(c) for c in chains.values())
     fsi = bytearray(512)
     struct.pack_into("<I", fsi, 0, 0x41615252)
-    struct.pack_into("<III", fsi, 484, 0x61417272, clusters - used, 10)
+    struct.pack_into("<III", fsi, 484, 0x61417272, clusters - used + fsi_off, 10)
     fsi[510:512] = b"\x55\xAA"
     for off, data in ((0, bpb), (1, fsi), (6, bpb), (7, fsi)):
         put(part_lba + off, 0, data)
@@ -226,8 +229,9 @@ def fat32_image(sectors, part_lba, nfats=1, spc=1, layout="mbr"):
     for chain in chains.values():
         for a, b in zip(chain, chain[1:] + [0x0FFFFFFF]):
             fat[a] = b
+    fat.update(damage or {})
     for copy in range(nfats):
-        for c, v in fat.items():
+        for c, v in ({**fat, **(copy1 or {})} if copy else fat).items():
             put(part_lba + rsv + copy * fatsz + c // 128, c % 128 * 4, struct.pack("<I", v))
     data = part_lba + rsv + nfats * fatsz
 
@@ -283,6 +287,13 @@ def fsck():
     write("fsck", "mbr", b"\0" + sparse(70000, fat32_image(70000, 2048)))
     write("fsck", "sfd-2fat", b"\x25" + sparse(70000, fat32_image(70000, 0, nfats=2, layout="sfd")))
     write("fsck", "gpt", b"\x4a" + sparse(72000, fat32_image(72000, 2048, layout="gpt")))
+    # Repair (the selector's top bit): README.TXT's chain runs on into 200-201, clusters 300-302
+    # are a lost chain, FSInfo's count is stale; with two FATs, cluster 400 differs in copy 2.
+    longer = {3: 200, 200: 201, 201: 0x0FFFFFFF, 300: 301, 301: 302, 302: 0x0FFFFFFF}
+    write("fsck", "repair-mbr", b"\x90" + sparse(70000, fat32_image(70000, 2048, damage=longer,
+                                                                   fsi_off=7)))
+    write("fsck", "repair-sfd-2fat", b"\xa5" + sparse(70000, fat32_image(
+        70000, 0, nfats=2, layout="sfd", damage=longer, copy1={400: 0x0FFFFFFF})))
     exfat = bytearray(512)
     exfat[0:11] = b"\xEB\x76\x90EXFAT   "
     exfat[510:512] = b"\x55\xAA"
