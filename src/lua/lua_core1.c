@@ -745,6 +745,7 @@ static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
 static int l_clock(lua_State *L) { return info(L, LH_CLOCK); }
+static int l_health(lua_State *L) { return info(L, LH_HEALTH); }
 
 // Core 0's figures, and the script's own allocation, which core 1 keeps.
 static int l_mem(lua_State *L) {
@@ -812,7 +813,8 @@ static const luaL_Reg sos_lib[] = {
     {"remove", l_remove}, {"mkdir", l_mkdir},   {"every", l_every},   {"after", l_after},
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
-    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {NULL, NULL},
+    {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"health", l_health},
+    {NULL, NULL},
 };
 
 // setmetatable() without __gc. Lua runs finalizers with hooks off, so a finalizer that loops
