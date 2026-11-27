@@ -14,6 +14,7 @@
 #define SOS_TIMESYNC_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "shell/shell.h"
 
@@ -46,6 +47,26 @@ void timesync_cal_str(char *buf, unsigned len);
 void timesync_poll(void);
 
 // The `time` command output.
+// The state `time` prints, as values (for Lua's sos.clock()). Strings point at static or settings
+// storage and stay valid until the next sync starts or the configuration changes.
+#define TIMESYNC_NEVER UINT32_MAX
+typedef struct {
+    const char *source;         // where the clock's time came from: "rtc", "nts", "sntp"; NULL: not set
+    const char *syncing;        // the server of a sync running now, NULL if none
+    bool syncing_sntp;          // ...and that sync is plain SNTP
+    uint32_t synced_ago_s;      // since the last accepted sync, TIMESYNC_NEVER: none since boot
+    bool step_set;              // that sync set a clock that had no time (step_ms then means nothing)
+    int64_t step_ms;            // how far it moved the clock
+    int64_t delay_ms;           // its round trip (NTS)
+    uint32_t failed_ago_s;      // since the last failed sync, TIMESYNC_NEVER: none since the last success
+    const char *failed_why;
+    uint32_t retry_in_s;        // until the next try after that failure, 0 if none is planned
+    const char *server;         // the NTS server used
+    bool server_default;        // ...the build's default, not one set with `time server`
+    unsigned auto_hours;        // periodic sync interval, 0: off
+} timesync_info_t;
+void timesync_info(timesync_info_t *info);
+
 void timesync_status(shell_t *sh);
 
 #endif

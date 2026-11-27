@@ -61,6 +61,8 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.list([path])` | `{ {name=, size=, dir=}, ... }` |
 | `sos.remove(path)`, `sos.mkdir(path)` | delete a file or empty directory, create a directory |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
+| `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but always in UTC (see [Dates and the clock](#dates-and-the-clock)) |
+| `sos.clock()` | the clock's state: set or not, the last sync, the RTC (the same section) |
 | `sos.sleep(ms)`, `sos.log(msg [, level])` | wait (Ctrl-C still works), write a line to the system log: facility `user`, tagged with the script's path (`lua -e` for code given with `-e`, `lua prompt` at the prompt), at `"notice"` unless a level (`"err"`, `"warning"`, `"notice"`, `"info"`, `"debug"`) is given. Shares the background output's limit of 10 lines a second |
 | `sos.every(s, fn)`, `sos.after(s, fn)` | call `fn(id)` every `s` seconds (at least 0.01) / once after `s`; returns the timer's id. Timers run once the script's main code has returned: the script then keeps going until no timers are left, it's stopped, or a callback fails. Not at the prompt |
 | `sos.cancel(id)` | stop a timer; true if it existed |
@@ -140,6 +142,51 @@ local r, err = sos.http.post("https://ntfy.example/alerts", "disk almost full",
                              {headers = {Title = "sos"}})
 if not r then print("failed: " .. err) elseif r.status ~= 200 then print(r.status, r.reason) end
 ```
+
+## Dates and the clock
+
+SOS keeps time in UTC and has no time zones, so these always work in UTC.
+
+`sos.date([format [, t]])` is Lua's `os.date`: the time `t` (seconds since 1970; the time now
+if not given) as text, with strftime's conversions (`%Y-%m-%d %H:%M:%S` if no format is given),
+or as a table with `"*t"`: `{year, month, day, hour, min, sec, wday, yday, isdst}`, where `wday`
+1 is Sunday and `isdst` is always `false`. A `!` before the format, as in `"!*t"`, changes nothing.
+The conversions are C99's in the C locale (`%a %A %b %B %c %C %d %D %e %F %h %H %I %j %m %M %n %p
+%r %R %S %t %T %u %w %x %X %y %Y %z %Z %%`), plus `%s` for the seconds; others are an error.
+Years 1 to 9999.
+
+`sos.time(table)` is `os.time`: the time of a date given as a table. `year`, `month` and `day`
+are needed; `hour` is 12 if not given, `min` and `sec` 0. A field out of its range carries over
+(`month = 13` is January of the next year, `day = 0` the last day of the month before), which
+makes date arithmetic easy.
+
+Without `t`, `sos.date` needs the clock: it returns `nil` and a message if the clock isn't set
+yet, like `sos.time()`.
+
+```lua
+print(sos.date())                               -- 2026-11-29 14:03:05
+print(sos.date("%A %e %B", 0))                  -- Thursday  1 January
+-- seconds until the next 03:00 UTC
+local now = sos.time()
+local d = sos.date("*t", now)
+local next3 = sos.time{year = d.year, month = d.month, day = d.day + (d.hour >= 3 and 1 or 0),
+                       hour = 3}
+print(next3 - now)
+```
+
+`sos.clock()` returns what `time` shows:
+
+| Field | |
+|---|---|
+| `set` | whether the clock has a time |
+| `source` | where it came from: `"nts"` (authenticated), `"sntp"`, `"rtc"` (the battery-backed clock at boot), or `nil` |
+| `time` | seconds since 1970, when set |
+| `server`, `server_default` | the NTS server, and whether it's the build's default |
+| `auto_hours` | how often it syncs (`time auto`), 0 for never |
+| `syncing`, `syncing_sntp` | the server of a sync running now, and whether it's plain SNTP |
+| `last_sync` | `{ago=, step_ms=, delay_ms=}`: seconds since the last sync, how far it moved the clock (`nil` if it set an unset clock) and its round trip (NTS) |
+| `last_failure` | `{ago=, why=, retry_in=}` after a failed sync |
+| `rtc` | `{status=, time=, battery_low=, cal=}`: the RTC's state (`"ok"` or why not), its time, its battery and its calibration |
 
 ## Board health
 
