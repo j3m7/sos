@@ -12,7 +12,8 @@ reference.
 
 Status (2026-11-27): phase 1 merged (#237); phase 2, the boot tier's hardware and crypto checks,
 built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in §9.2, and waits for
-the second. Tracking issue: #233. Revised after Reviewer's review
+the second. Phase 3, checks of stored state: design in §9.3, for review before the code.
+Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
 
@@ -556,6 +557,266 @@ every known answer once and prints each one's time, the boot subset's total and 
 are about 600 bytes of it), bss +68 bytes; about 2 KB of heap while `crypto` or `crypto-ssh`
 runs, 384 bytes of stack for `trng`.
 
+### 9.3 Phase 3 design: checks of stored state
+
+Status: design, for review before the code (#233). Phase 3 adds six background checks that read
+what the board keeps in flash, in OTP and on the card, and compare it with what the running
+board uses. §9.4 will record what the build settles.
+
+**Common rules.**
+
+- **Read only.** No check writes flash, OTP or the card, mounts a card, or repairs anything
+  (§2.4). A finding names the feature's own command where one fixes it.
+- **No gates.** None of the six holds KEYS or CRYPTO. They report state that is already stored;
+  refusing to make keys or seal would protect nothing that isn't already damaged, and it would
+  block the repair: a broken configuration is repaired by `setup` (which makes an owner secret
+  and seals), a broken host key by making a new one. The gates stay with the checks that test
+  the means of making keys (`trng`, `crypto`, `crypto-ssh`).
+- **A FAIL says what the board is doing about it**, which in phase 3 is nothing new: the text
+  reads as a finding, never as a refusal ("the record in use doesn't open; running on
+  defaults"), because the rescue console shows it next to real refusals. Each FAIL text is
+  listed below.
+- **Key material stays where it is.** `config` opens sealed records only with the seal key
+  `settings.c` already holds in RAM for saves, through the store it saves with; nothing is
+  derived again (the key provider is locked after boot, and a second derivation path is what
+  the lock prevents). `hostkey` compares a digest of the stored sealed record and the public
+  fingerprint; it never opens the private key. `rootsecret` reads no secret: it uses the
+  results `rootsource_init()` recorded at boot, plus the in-place record check `rootsecret`
+  already runs (open boards only, below).
+- **Tier and timing.** All six are HEALTH_BACKGROUND (they need the configuration, the host key
+  and the card, none of which exists during the boot tier), and run under `health run`. First
+  runs are staggered after boot so that the first minute isn't one long burst, then hourly; the
+  card's every 6 hours. Each step stays under 10 ms (§4); the estimates are listed and the board
+  run measures them with `health state-dump` (below), which times each read.
+
+| Check | First run | Period | Steps | Estimated longest step |
+|---|---|---|---|---|
+| `config` | 40 s | 1 h | 2 (one slot each) | about 3.5 ms (CRC-32 over 2.2 KB, about 0.6 ms; AES-GCM open, about 2 to 3 ms) |
+| `rootsecret` | 45 s | 1 h | 1 | under 0.1 ms (open board: two 256-byte pages checked in place) |
+| `otp` | 50 s | 1 h | 1 | about 0.3 ms (75 raw and 64 corrected row reads, one SHA-256 of 64 bytes) |
+| `failcount` | 55 s | 1 h | 1 | under 0.5 ms (one 4 KB sector scanned in place) |
+| `hostkey` | 60 s | 1 h | 1 | under 0.2 ms (SHA-256 of one 256-byte page) |
+| `card` | 90 s | 6 h | 1, then 1 per 2 KB of `/certs/roots.pem` | about 5 ms (two `f_stat` calls on an encrypted card; 2 KB read, decrypted and hashed) |
+
+#### `config`: both configuration records
+
+**Reads:** the two slots through `settings.c`'s store, with a new pure function in `config.c`,
+`config_slot_info(store, slot, &info)`, host tested in `tests/test_config.c`. Its contract:
+it reports a slot's **kind and sequence number only, never the record's contents** (the opened
+record goes into the scratch buffer `slot_read()` already uses, and is wiped there). `slot_read()`
+becomes a mapping of it, so loading and checking can't disagree. `config_in_use(info[2])` (pure)
+picks the record in use by `scan()`'s rule (the plain one before a sealed one; else the higher
+sequence number), which is what `config_load()` takes at boot. `settings.c` exposes both with
+`settings_config_slot()` (the store is static there) and whether flash is usable
+(`settings_persistent()`).
+
+Kinds: `empty` (header all 0xff or all zero: erased, or blanked by `config reset`), `junk` (no
+magic, not empty), `bad-header` (magic, unknown version or length), `bad-crc`, `refused` (a plain
+record, CRC right, on a store that refuses plain), `unopened` (sealed, CRC right, doesn't open),
+`invalid` (opens, contents out of bounds), `plain`, `sealed`.
+
+| Status | When | Text (dev-1 or example) |
+|---|---|---|
+| PASS | in use: sealed; other slot empty or an older sealed record | `rev 28 sealed, in use (slot B); slot A rev 27 sealed` |
+| WARN | in use: plain (an open board; `settings_init()` seals it at boot, so one still plain means sealing failed) | `rev 3 plain, in use (slot A): not sealed yet (see dmesg)` |
+| WARN | in use: sealed; other slot `junk`, `bad-header`, `bad-crc` or `invalid` | `rev 28 sealed, in use (slot B); slot A damaged (bad CRC): no fallback` |
+| WARN | in use: sealed; other slot `unopened` | `...; slot A sealed under another key (old root secret?)` |
+| WARN | other slot `refused` or plain beside a sealed record (the scrub didn't erase it) | `...; slot A: plain record left beside the sealed one` |
+| WARN | nothing in use, a `refused` record (console-only board) | `plain record refused (console-only board); running unconfigured` |
+| FAIL | nothing in use, a slot `unopened` | `sealed record doesn't open (another root secret?); running unconfigured` |
+| FAIL | nothing in use, a slot damaged (any damaged kind) | `slot A damaged (bad CRC), no usable record; running on defaults` |
+| FAIL | flash not usable | `firmware overlaps the config slots; settings aren't saved` |
+| SKIP | both slots empty | `nothing saved yet (run setup)` |
+
+Two steps, one slot each (each opens at most one sealed record). No retry or repair:
+`config reset` and `setup` are the commands that change it. The static scratch buffer is shared
+with `config_save()`; both run only on core 0 from the main loop, never interleaved (a check
+step runs to completion).
+
+#### `rootsecret`: the root secret's source against the OTP flags
+
+**Reads:** nothing new from OTP. The source and what `rootsource_init()` found at boot
+(`rootsource()`, `rootsource_otp_found()`, `rootsource_otp_index()`, a new accessor for its
+`locks_ok`, `rootsource_otp_locked()`), `consoleonly_state()`, and on an OTP board the
+**soft-lock register** `otp_hw->sw_lock[page]` (a register, not an OTP row: it says whether the
+secret's page is still inaccessible). On an open board, `rootflash_state()` and
+`rootflash_degraded()`: the same in-place check of the flash record that `rootsecret` runs from
+any shell (FNV over each copy, read through XIP; nothing is copied).
+
+| Status | When | Text |
+|---|---|---|
+| PASS | OTP; page soft-locked; list pages locked against the bootloader | `OTP page 5, locked for this boot; list pages locked` (dev-1) |
+| PASS | flash (open board); both copies intact | `in flash, both copies intact (open board)` |
+| WARN | OTP, but a list page is still writable from the USB bootloader (an open board uses it anyway, `rootsource.c`) | `OTP page 5; page 4 writable from the bootloader` |
+| WARN | OTP, and the page's soft lock reads as not set after boot | `OTP page 5 not locked for this boot (readable by firmware)` |
+| WARN | flash, one copy damaged | `in flash, one copy damaged; the other in use` |
+| WARN | flash, the OTP list spent | `in flash; every OTP page for it is spent` |
+| FAIL | no source, with the reason from boot: OTP secret fails its check, marker damaged, unreadable, console-only with none, locks open on a console-only board | `none: OTP page 5's secret fails its check; there are no keys` |
+| FAIL | flash record unusable, none made, or the image overlaps it | `flash record unusable (damaged or newer); there are no keys` |
+| FAIL | console-only board on a flash secret (impossible by `roototp_choose()`; checked as an invariant) | `console-only board using a flash secret (a bug); keys in use` |
+
+The texts match `version` (`root secret: in OTP`) and `rootsecret` (`rootsource_describe()`),
+which read the same values.
+
+#### `otp`: OTP rows SOS relies on, and the boot keys
+
+**Rows read, and only these** (through `otpread.h`'s read aliases, the read-only path `version`
+and `bootkey` already use; the SDK's `otp_access` ROM call can program and is never linked into
+everyday firmware, decision 12):
+
+| Rows | What | How |
+|---|---|---|
+| 0x040-0x047 | CRIT1, eight copies (secure boot, debug, glitch detector) | raw |
+| 0x04b-0x04d | BOOT_FLAGS1, three copies (KEY_VALID, KEY_INVALID) | raw |
+| 0x080-0x0bf | BOOTKEY0_0 to BOOTKEY3_15, the four boot key slots | raw and error-corrected |
+| (register) | OTP CRITICAL, what the chip latched at reset | register |
+
+The root secret's rows (pages 4 to 6, rows 0x100-0x1bf) and their lock words are never read by
+this check; every row number above is below 0x0c0. The console-only marker (0x0c0-0x0c2) isn't
+read again: `rootsecret` uses its boot-time result.
+
+**ECC without faulting.** The guarded alias faults on an uncorrectable row, which would restart
+the board, so it isn't used. For each boot key row the check takes the raw 24 bits, undoes the
+bit-repair flip (both BRBP bits set: invert all 24), recomputes the 6 parity bits of the 16 data
+bits (the OTP macro's Hamming code, as picotool's `otp_calculate_ecc()` computes it), and
+compares. A blank row (all zero) is consistent. Pure and host tested (`statecheck.c`), with known
+rows from picotool's code. A row that reads as all ones (no permission) is reported, never
+judged.
+
+**Dev keys.** The OTP hashes of `keys/dev-INSECURE-1.pem` and `-2.pem` (SHA-256 of the 64-byte
+public key, as `keys/README.md` shows them) are constants in `statecheck.c`, with the command
+that computes them; a host test recomputes them from the `.pem` files with `openssl` when it is
+installed, and fails if they differ. **Release builds** are those built with `NDEBUG` (CMake's
+Release and MinSizeRel; the `release` preset): there a valid dev key is a WARN. In a debug build
+it is expected (dev boards are meant to have them) and named in a PASS.
+
+**The running image's key.** As `bootkey` does: the image's public key hashed and compared with
+the slots (`bootkey_compare()`).
+
+| Status | When | Text |
+|---|---|---|
+| PASS | secure boot on, rows consistent, the image's key in a usable slot | `secure boot, debug on; slots 0,1 valid: dev keys 1,2; image key slot 0` (dev-1, debug build; the slot numbers are what it finds) |
+| WARN | release build, a usable slot holds a dev key | `valid slot 0 holds public dev key 1: anyone can sign firmware` |
+| WARN | a named row unreadable (locked or damaged: the check can't tell) | `row 0x085 unreadable (locked or damaged)` |
+| WARN | a boot key row's ECC doesn't match (correctable or not: it can't tell which the boot ROM saw) | `boot key slot 0 row 0x085: ECC mismatch (raw 0x...)` |
+| WARN | CRIT1 copies disagree with each other, or their vote with the latched register (`version`'s WARNING) | `CRIT1 rows 0x.. vs latched 0x..: written since reset or damaged` |
+| WARN | BOOT_FLAGS1 copies disagree | `BOOT_FLAGS1 copies disagree on bits 0x..` |
+| FAIL | secure boot on and the image's key is in no usable slot (revoked, or the slots read differently than at boot) | `image key in no valid slot: it won't start after a reset (running on)` |
+| SKIP | secure boot off, every slot blank, no KEY_VALID bit | `open board: secure boot off, no boot keys` |
+
+With secure boot off and keys present (a board being prepared), the rows are still checked and
+the image comparison is reported, never FAILed.
+
+#### `failcount`: the wrong-password sector
+
+**Reads:** the sector in place (`failflash.c`'s read), with a new pure function in `failcount.c`,
+`failcount_inspect(sector, &info)`, host tested: marker present, erased, or neither; each track's
+count; stray cleared bits after a track's count; cleared beyond attempts. And `failflash_count()`
+(the count the console uses, RAM included).
+
+| Status | When | Text |
+|---|---|---|
+| PASS | erased (never counted: no password check has started since it was made) | `no wrong passwords recorded` |
+| PASS | marker, count 0 | `0 wrong passwords; 37 of 14336 checks used` (dev-1: some small number) |
+| WARN | count above 0: someone typed wrong passwords since the last right one (a check in progress counts too) | `3 wrong passwords since the last right one` |
+| WARN | the RAM count is higher than flash's (flash writes didn't take) | `2 counted in RAM only: flash writes failed` |
+| WARN | neither marker nor erased: reads as 0, and the next check writes a fresh sector | `no marker: counts as 0 until the next password check` |
+| WARN | a track has cleared bits past its count, or cleared beyond attempts | `tracks inconsistent (attempts 5, cleared 7): counts as 0` |
+| FAIL | the firmware image overlaps the sector | `firmware overlaps the sector; wrong passwords counted in RAM only` |
+
+Garbage where the marker should be is a WARN, not the FAIL #233 suggested: the board's behaviour
+is defined (it counts as zero and starts a fresh sector at the next check), and an erased sector,
+which someone with a cable can produce, looks the same as a new one. The count is in the text.
+
+#### `hostkey`: the stored host key against the one sshd serves
+
+**Reads:** the key sector's host key page, and the fingerprint sshd computed at start
+(`sshd_host_fingerprint()`). `hostkey.c` keeps, when it opens or stores the key, a SHA-256 of the
+256-byte stored page (the sealed record as it is in flash: ciphertext, not key material). The
+check hashes the page again and compares. It never opens the record.
+
+| Status | When | Text |
+|---|---|---|
+| PASS | key in use; page unchanged since it was loaded; sealed for this owner | `sealed, as loaded; SHA256:abcdefghijklmnop...` (dev-1: its fingerprint) |
+| WARN | in use unsealed (no root secret on an open board, `HOSTKEY_USE_PLAIN_UNSEALED`) | `stored unsealed (no root secret); SHA256:...` |
+| FAIL | the page changed since the key was loaded (nothing but `hostkey.c` writes it) | `stored record changed since boot; sshd serves the key in RAM` |
+| FAIL | no key, and `hostkey.c` gave up (no root secret, or the store failed) | `no host key (see dmesg); sshd isn't running` |
+| SKIP | the board isn't set up (no owner secret), or no key asked for yet | `board not set up: no host key yet` |
+
+The comparison #233 asked for ("the record opens and its public key matches") would mean opening
+the record into a second buffer; the digest of the page as loaded answers the same question (is
+what's stored the key being served?) without that.
+
+#### `card`: the protected directories and the approved roots
+
+**Yields to everything that owns the card.** SKIP, without touching the card, when no card is
+mounted (it never mounts one), the card was unmounted by hand (`sd unmount`), `sd check` runs, a
+format runs, or `files_busy()` (a file command or SFTP has files open: it runs again at the next
+period, or on `health run`). `sdcard.c` gets one read-only accessor for those states and
+`locked_without_key`. All FatFs calls are on core 0, from the main loop, as every other card
+user's (FatFs runs without a reentrancy lock here; one step finishes before anything else runs).
+While it hashes, the check holds the files layer (`files_hold()`), so a format or unmount waits
+for it as for any open file, and releases it at the end or on cancel; a remount between steps
+(`sdcard_generation()` changed) ends it with SKIP.
+
+**What "protected" means here.** The files layer protects `/certs` and `/var/log` (and `/var`)
+by path (`path_is_protected()`, called by `files_write_allowed()` before every change), not by
+anything stored on the card. So the check sees that each is a directory where expected; there is
+no stored protection to read.
+
+**Roots.** If `settings()->certs_hash` is set, `/certs/roots.pem` is hashed (SHA-256, 2 KB a
+step, so a 64 KB file is 32 steps, each releasing the main loop) and compared, as
+`certstore.c` does before using it.
+
+**Not checked: the man bundle.** `man install` puts the pages of whatever commit is running on the
+card, and a card may legitimately hold another commit's; there is no approved reference to
+compare against.
+
+| Status | When | Text |
+|---|---|---|
+| PASS | `/var/log` a directory; no roots approved | `exFAT encrypted; /var/log ok; no /certs: built-in roots only` (dev-1) |
+| PASS | roots approved and the file matches | `...; /certs/roots.pem matches its approval` |
+| WARN | approved, and the file differs, is missing or is over 64 KB | `roots.pem changed since approval: built-in roots only` |
+| WARN | `/var/log` missing or not a directory | `/var/log missing: log files aren't written` |
+| WARN | `/certs` exists but isn't a directory | `/certs is not a directory` |
+| WARN | an encrypted card is in and doesn't open with this board's key | `encrypted card doesn't open with this board's key; not mounted` |
+| SKIP | the yielding cases above | `card unmounted by hand`, `sd check running`, `files open; next run` |
+
+The encrypted card's key needs no separate check: an encrypted card that mounted was opened with
+it.
+
+#### Diagnostic and tests
+
+**`health state-dump`** (test builds only; reads only; allowed over SSH too, since it prints no
+secret): each config slot's kind, version, length, sequence number and the time to read it; the
+slot in use; the root secret source and boot-time OTP findings; each boot key slot's first 8
+hash bytes, valid/invalid bits, which dev key it is, and per-row ECC results; the failcount
+sector's marker and track counts; the host key page's kind and whether its digest matches.
+So one board run shows why each check passed or failed.
+
+**Host tests:** every judging function from synthetic inputs, one test per status path:
+`config_slot_info()` over made-up slots (each kind, both orders, wrap-around sequence numbers),
+`failcount_inspect()` over made-up sectors, the ECC recomputation over rows from picotool's code
+and one-bit and two-bit damage, the OTP judging from made-up summaries (debug and release), the
+dev key constants against the `.pem` files, and the card and host key judging.
+
+**Board run** (dev-1 slot; no OTP writes of any kind):
+
+1. `health run` on the console: the six new rows as predicted above; `health state-dump` saved
+   with the result. `ssh` "longest" and `mem` before and after.
+2. FAILs through `health inject <name> fail`, for each new check: logged, no gate closes (making
+   a key still works: `health` shows no refusal).
+3. **Real damage to the older config slot**, by Reviewer's plan: back up both config sectors
+   with picotool (`picotool save -r` of the two sectors below the key sector, files kept until
+   the board is back), find the older slot in `health state-dump`, write a copy of that sector
+   with one payload byte flipped, boot, `health run config`: expect
+   `...; slot X damaged (bad CRC): no fallback`, the board configured as before. Restore the
+   saved sector, boot, `health run config`: PASS again. The newer slot is never written.
+4. `failcount`: one wrong console password, then the right one; over SSH, `health state-dump`
+   between the two shows the count 1 (the background run may or may not catch it; that is fine).
+5. `card`: with SFTP holding a file open, `health run card` is SKIP `files open`; after
+   `sd unmount`, SKIP `card unmounted by hand`; `sd mount` again, PASS.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -567,7 +828,7 @@ runs, 384 bytes of stack for `trng`.
    source against the OTP flags, the host key against its fingerprint, the card key unwraps,
    the failcount marker, `/var/log` and `/certs` present and protected, the man bundle and cert
    store hashes. Also the OTP ECC rows, the boot key hashes (dev or production set), and the CRIT
-   flags against `version`. Reads only, never writes OTP.
+   flags against `version`. Reads only, never writes OTP. Design: §9.3.
 4. **Background tier:** RTC drift as ppm after each NTS sync, the brownout detector and
    `last reset: brownout`, a heap free-list walk in steps, a core 1 heartbeat while a script
    runs, and reset history.
