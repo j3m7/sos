@@ -464,8 +464,13 @@ void health_lua_table(lua_info_t *w) {
 void health_judge_resets(const char *fault, bool glitch, bool watchdog, health_result_t *out) {
     // The order of `uptime`: a fault record says the most.
     if (fault) {
+        // The record's first part names the fault and where ("hard fault on core 0 at
+        // 0x1000409c"); the rest (caller, CFSR) doesn't fit the line and would be cut mid-number.
+        // `uptime` shows all of it.
         out->status = HEALTH_WARN;
-        snprintf(out->text, sizeof(out->text), "last reset: %s", fault);
+        int head = (int)strcspn(fault, ",");
+        snprintf(out->text, sizeof(out->text), "last reset: %.*s%s", head, fault,
+                 fault[head] ? " (see uptime)" : "");
     } else if (glitch) {
         set_result(out, HEALTH_WARN, "last reset: glitch detector");
     } else if (watchdog) {

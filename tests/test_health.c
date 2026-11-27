@@ -465,6 +465,9 @@ TEST(judge_resets) {
     health_judge_resets("hard fault at 0x10001234", true, true, &r);    // the fault says most
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(!strcmp(r.text, "last reset: hard fault at 0x10001234"));
+    health_judge_resets("hard fault on core 0 at 0x1000409c, called from 0x1000409b "
+                        "(undefined instruction, CFSR 0x00010000)", false, false, &r);
+    CHECK(!strcmp(r.text, "last reset: hard fault on core 0 at 0x1000409c (see uptime)"));
     char longer[200];
     memset(longer, 'x', sizeof(longer) - 1);
     longer[sizeof(longer) - 1] = '\0';
