@@ -119,6 +119,13 @@ static bool endless_job(shell_t *s, void *arg, bool cancel) {
     return !cancel;
 }
 
+static const shell_cmd_t commands[] = {{"job", NULL, NULL, 0}, {"logout", NULL, NULL, 0}, {0}};
+static const shell_cmd_t *const tables[] = {commands, NULL};
+
+const shell_cmd_t *const *shell_command_tables(const shell_t *s) {   // as shell.c does
+    return s->io->admin && login_locked() ? NULL : tables;
+}
+
 void shell_execute(shell_t *s, char *cmd) {
     if (login_gate(s, cmd))             // as shell.c does for the console
         return;
@@ -503,6 +510,33 @@ TEST(no_keys_locks_with_rescue_commands_only) {
     CHECK(login_locked());
 }
 
+// Tab offers nothing before the password: not at the prompt, not with the question dropped,
+// and it echoes nothing there.
+TEST(tab_completes_nothing_while_locked) {
+    boot("open sesame");
+    clear_out();
+    type("jo\t\t");
+    run_ms(20);
+    CHECK(!strcmp(out, ""));
+    type("\x03");                               // drop "jo"
+    run_ms(20);
+    shell_cancel_question(&sh);                 // as if some code dropped it
+    clear_out();
+    type("jo\t\t");
+    run_ms(20);
+    CHECK(!strcmp(out, "jo"));                  // echoed, but no completion, not even a bell
+    type("\x03" "x\r");                         // a line brings the question back
+    run_ms(20);
+    CHECK(login_locked());
+    type("open sesame\r");
+    run_ms(100);
+    CHECK(!login_locked());
+    clear_out();
+    type("jo\t");                               // open: Tab works
+    run_ms(20);
+    CHECK(!strcmp(out, "job "));
+}
+
 // --- the console locking itself ----------------------------------------------------------------------
 
 static void open_console(void) {
@@ -809,6 +843,7 @@ TEST_MAIN(
     RUN(logout_without_a_password_does_not_lock);
     RUN(gate_holds_without_the_question);
     RUN(no_keys_locks_with_rescue_commands_only);
+    RUN(tab_completes_nothing_while_locked);
     RUN(disconnecting_the_terminal_locks);
     RUN(idle_console_locks);
     RUN(typing_restarts_the_idle_time);

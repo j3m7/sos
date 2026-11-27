@@ -8,6 +8,7 @@
 #include "shell/shell.h"
 #include "core/version.h"
 #include "shell/charwidth.h"
+#include "shell/complete.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -98,6 +99,7 @@ void shell_discard_input(shell_t *sh) {
     sh->ahead_len = 0;
     sh->last_was_cr = false;
     sh->keys = (keys_t)KEYS_INIT;
+    sh->tab_pressed = false;
 }
 
 void shell_cancel_question(shell_t *sh) {
@@ -260,6 +262,7 @@ void shell_bind(shell_t *sh, const shell_io_t *io, void *ctx) {
     sh->line_len = 0;
     sh->last_was_cr = false;
     sh->keys = (keys_t)KEYS_INIT;
+    sh->tab_pressed = false;
     sh->logger_quota = (log_quota_t){0};    // a reused SSH slot starts with its own count
     sh->answer = NULL;
     sh->secret = false;
@@ -420,6 +423,97 @@ static void line_backspace(shell_t *sh) {
             shell_printf(sh, "\b \b");
 }
 
+// --- Tab completion ------------------------------------------------------------------------------
+// Tab completes the word at the end of the line: a command, or a word that may follow it
+// (complete.h). One match: the rest of it and a space. Several: as far as they agree; when
+// they agree no further, the terminal's bell, and a second Tab lists them.
+
+#define TAB_LIST_COLUMNS 80     // the terminal's width isn't known: list for the narrowest
+
+typedef struct {
+    const char *first;          // the first match
+    size_t common;              // bytes all matches have in common
+    size_t widest;
+} tab_matches_t;
+
+static void tab_collect(const char *word, void *arg) {
+    tab_matches_t *m = arg;
+    size_t n = strlen(word);
+    if (!m->first) {
+        m->first = word;
+        m->common = n;
+    } else {
+        size_t i = 0;
+        while (i < m->common && word[i] == m->first[i])
+            i++;
+        m->common = i;
+    }
+    if (n > m->widest)
+        m->widest = n;
+}
+
+typedef struct {
+    shell_t *sh;
+    size_t width, per_row, in_row, last;   // `last`: length of the word printed before
+} tab_list_t;
+
+// One match of the list, in columns `width` wide; no spaces at the end of a row.
+static void tab_print(const char *word, void *arg) {
+    tab_list_t *l = arg;
+    if (l->in_row == l->per_row) {
+        write_out(l->sh, "\n", 1);
+        l->in_row = 0;
+    } else if (l->in_row) {
+        shell_printf(l->sh, "%*s", (int)(l->width - l->last), "");
+    }
+    l->in_row++;
+    l->last = strlen(word);
+    write_out(l->sh, word, l->last);
+}
+
+static void line_tab(shell_t *sh, bool again) {
+    const shell_cmd_t *const *tables = shell_command_tables(sh);
+    if (!tables)
+        return;
+    bool admin = sh->io->admin;
+    size_t start;
+    tab_matches_t m = {0};
+    size_t n = complete_words(tables, admin, sh->line, sh->line_len, &start, tab_collect, &m);
+    size_t typed = sh->line_len - start;
+    if (n == 0) {
+        write_out(sh, "\a", 1);
+        return;
+    }
+    if (m.common > typed || n == 1) {
+        size_t add = m.common - typed + (n == 1);     // a single match ends with a space
+        if (sh->line_len + add > SHELL_LINE_MAX) {
+            write_out(sh, "\a", 1);
+            return;
+        }
+        history_edited(sh);
+        memcpy(sh->line + sh->line_len, m.first + typed, m.common - typed);
+        if (n == 1)
+            sh->line[sh->line_len + add - 1] = ' ';
+        write_out(sh, sh->line + sh->line_len, add);
+        sh->line_len += add;
+        return;
+    }
+    if (!again) {
+        sh->tab_pressed = true;
+        write_out(sh, "\a", 1);
+        return;
+    }
+    tab_list_t l = {.sh = sh, .width = m.widest + 2};
+    l.per_row = TAB_LIST_COLUMNS / l.width;
+    if (!l.per_row)
+        l.per_row = 1;
+    write_out(sh, "\n", 1);
+    complete_words(tables, admin, sh->line, sh->line_len, &start, tab_print, &l);
+    write_out(sh, "\n", 1);
+    prompt(sh);
+    write_out(sh, sh->line, sh->line_len);
+}
+
 // Line editing for `n` input bytes. Stops early (stashing the rest) if a command starts a job.
 static void process_input(shell_t *sh, const char *buf, size_t n) {
     for (size_t i = 0; i < n; i++) {
@@ -431,6 +525,13 @@ static void process_input(shell_t *sh, const char *buf, size_t n) {
         sh->last_was_cr = (c == '\r');
 
         int k = keys_feed(&sh->keys, (unsigned char)c);
+        bool tab_again = sh->tab_pressed;       // any other key in between starts over
+        sh->tab_pressed = false;
+        if (k == '\t') {
+            if (!sh->answer)                    // questions (passwords) have nothing to complete
+                line_tab(sh, tab_again);
+            continue;
+        }
         if (k == KEY_UP || k == KEY_DOWN) {
             history_key(sh, k);
             continue;

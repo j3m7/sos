@@ -456,29 +456,25 @@ fail:
 
 // --- dispatch ----------------------------------------------------------------------------------
 
-bool files_command(shell_t *sh, const char *cmd, char *args) {
-    if (!strcmp(cmd, "ls"))
-        cmd_ls(sh, args);
-    else if (!strcmp(cmd, "cd"))
-        cmd_cd(sh, args);
-    else if (!strcmp(cmd, "pwd"))
-        shell_printf(sh, "%s\n", sh->cwd);
-    else if (!strcmp(cmd, "cat"))
-        cmd_cat(sh, args);
-    else if (!strcmp(cmd, "cp"))
-        cmd_cp(sh, args);
-    else if (!strcmp(cmd, "mv"))
-        cmd_mv(sh, args);
-    else if (!strcmp(cmd, "rm"))
-        cmd_rm(sh, args);
-    else if (!strcmp(cmd, "mkdir"))
-        cmd_mkdir(sh, args);
-    else if (!strcmp(cmd, "echo"))
-        cmd_echo(sh, args);
-    else
-        return false;
-    return true;
-}
+static void run_ls(shell_t *sh, char *args) { cmd_ls(sh, args); }
+static void run_cd(shell_t *sh, char *args) { cmd_cd(sh, args); }
+static void run_pwd(shell_t *sh, char *args) { (void)args; shell_printf(sh, "%s\n", sh->cwd); }
+static void run_cat(shell_t *sh, char *args) { cmd_cat(sh, args); }
+static void run_rm(shell_t *sh, char *args) { cmd_rm(sh, args); }
+static void run_mkdir(shell_t *sh, char *args) { cmd_mkdir(sh, args); }
+
+const shell_cmd_t files_commands[] = {
+    {"ls", run_ls, NULL, 0},
+    {"cd", run_cd, NULL, 0},
+    {"pwd", run_pwd, NULL, 0},
+    {"cat", run_cat, NULL, 0},
+    {"cp", cmd_cp, NULL, 0},
+    {"mv", cmd_mv, NULL, 0},
+    {"rm", run_rm, NULL, 0},
+    {"mkdir", run_mkdir, NULL, 0},
+    {"echo", cmd_echo, NULL, 0},
+    {0},
+};
 
 void files_help(shell_t *sh) {
     shell_printf(sh, "ls [path]         list a directory on the SD card\n");

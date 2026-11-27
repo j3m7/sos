@@ -118,6 +118,30 @@ void shell_execute(shell_t *sh, char *cmd) {
     shell_printf(sh, "<%s>\n", cmd);
 }
 
+// Command tables for Tab: two, as shell.c has (its own and the file commands').
+#define W(name) {name, NULL, 0}
+#define C(name) {name, NULL, NULL, 0}
+static const shell_word_t t_levels[] = {W("err"), W("warning"), {0}};
+static const shell_word_t t_time[] = {
+    {"sync", (const shell_word_t[]){{"sntp", NULL, SHELL_ADMIN}, {0}}, 0},
+    {"server", (const shell_word_t[]){W("default"), {0}}, 0},
+    {"secret", NULL, SHELL_HIDDEN},
+    W("stats"),
+    W("status"),
+    {0}};
+static const shell_word_t t_log[] = {{"console", t_levels, 0}, {"history", t_levels, 0}, {0}};
+static const shell_cmd_t t_commands[] = {
+    C("help"), C("hostname"), {"time", NULL, t_time, 0}, {"setup", NULL, NULL, SHELL_ADMIN},
+    {"?", NULL, NULL, SHELL_HIDDEN}, {0}};
+static const shell_cmd_t t_files[] = {C("ls"), C("lua"), {"log", NULL, t_log, 0}, {0}};
+static const shell_cmd_t *const t_tables[] = {t_commands, t_files, NULL};
+static bool no_tables;          // as on a locked console
+
+const shell_cmd_t *const *shell_command_tables(const shell_t *s) {
+    (void)s;
+    return no_tables ? NULL : t_tables;
+}
+
 // --- helpers ---------------------------------------------------------------------------------
 
 static fake_t fake;
@@ -127,6 +151,7 @@ static shell_t sh;
 static void start(const shell_io_t *io) {
     memset(&fake, 0, sizeof(fake));
     n_executed = 0;
+    no_tables = false;
     shell_init(&sh, io, &fake);
     fake.out_len = 0;
     fake.out[0] = '\0';
@@ -1105,6 +1130,184 @@ TEST(history_on_a_crlf_channel) {
     CHECK_OUT("\r\x1b[Ksos> one");
 }
 
+// --- Tab completion ----------------------------------------------------------------------------
+
+static const shell_io_t io_admin = {        // the console: offered admin commands too
+    .name = "console", .read = fake_read, .write = fake_write, .crlf = false, .admin = true,
+};
+
+TEST(tab_completes_a_unique_command_and_adds_a_space) {
+    start(&io_plain);
+    type("ti\t");
+    CHECK_OUT("time ");
+    CHECK(line_is("time "));
+    type("\r");
+    CHECK_EQ(n_executed, 1);
+    CHECK(!strcmp(executed[0], "time"));
+}
+
+TEST(tab_completes_from_both_tables) {
+    start(&io_plain);
+    type("lu\t");
+    CHECK(line_is("lua "));
+}
+
+TEST(tab_extends_to_what_the_matches_share) {
+    start(&io_plain);
+    type("time st\t");                               // stats, status
+    CHECK_OUT("time stat");                          // no space: not a whole word yet
+    CHECK(line_is("time stat"));
+    clear_out();
+    type("\t");                                      // can't go further: the bell, not a list
+    CHECK_OUT("\a");
+    type("u\t");
+    CHECK(line_is("time status "));
+}
+
+TEST(tab_rings_then_lists_when_it_cant_extend) {
+    start(&io_plain);
+    type("h\t");
+    CHECK_OUT("h\a");                                // help, hostname: nothing in common
+    CHECK(line_is("h"));
+    clear_out();
+    type("\t");
+    CHECK_OUT("\nhelp      hostname\nsos> h");      // columns, no trailing spaces
+    CHECK(line_is("h"));
+    clear_out();
+    type("\t");                                      // and again
+    CHECK_OUT("\a");
+}
+
+TEST(tab_another_key_in_between_starts_over) {
+    start(&io_plain);
+    type("h\t" "\x1b[A" "\t");                       // Up (no history) between the Tabs
+    CHECK_OUT("h\a\a");
+}
+
+TEST(tab_on_an_empty_line_lists_the_commands) {
+    start(&io_plain);
+    type("\t\t");
+    // Not setup (admin only), not ? (hidden).
+    CHECK_OUT("\a\nhelp      hostname  time      ls        lua       log\nsos> ");
+    start(&io_admin);
+    type("\t\t");
+    CHECK_OUT("\a\nhelp      hostname  time      setup     ls        lua       log\nsos> ");
+}
+
+TEST(tab_list_wraps_rows_on_a_crlf_channel) {
+    start(&io_crlf);
+    type("l\t\t");
+    CHECK_OUT("l\a\r\nls   lua  log\r\nsos> l");
+}
+
+TEST(tab_completes_subcommands) {
+    start(&io_plain);
+    type("time s\t");
+    CHECK(line_is("time s"));                        // sync, server
+    type("y\t");
+    CHECK(line_is("time sync "));
+    start(&io_plain);
+    type("log c\t");
+    CHECK(line_is("log console "));
+    type("w\t");
+    CHECK(line_is("log console warning "));
+}
+
+TEST(tab_lists_subcommands_without_hidden_ones) {
+    start(&io_plain);
+    type("time \t");                                 // all four start with s
+    CHECK_OUT("time s");
+    clear_out();
+    type("\t\t");
+    CHECK_OUT("\a\nsync    server  stats   status\nsos> time s");
+}
+
+TEST(tab_admin_words_only_on_an_admin_channel) {
+    start(&io_plain);
+    type("se\t");
+    CHECK_OUT("se\a");
+    type("\x7f\x7f" "time sync \t");
+    CHECK(line_is("time sync "));
+    CHECK(fake.out[fake.out_len - 1] == '\a');
+    start(&io_admin);
+    type("se\t");
+    CHECK(line_is("setup "));
+    start(&io_admin);
+    type("time sync \t");
+    CHECK(line_is("time sync sntp "));
+}
+
+TEST(tab_nothing_after_unknown_words_or_free_text) {
+    start(&io_plain);
+    type("foo b\t");
+    CHECK_OUT("foo b\a");
+    start(&io_plain);
+    type("help x\t");                                // help takes no words
+    CHECK_OUT("help x\a");
+    start(&io_plain);
+    type("time server default \t");                  // nothing after default
+    CHECK_OUT("time server default \a");
+    start(&io_plain);
+    type("ls \t");                                   // file names: not (yet)
+    CHECK_OUT("ls \a");
+}
+
+TEST(tab_spaces_before_and_between_words) {
+    start(&io_plain);
+    type("  ti\t");
+    CHECK(line_is("  time "));
+    type(" sy\t");
+    CHECK(line_is("  time  sync "));
+}
+
+TEST(tab_does_not_overflow_the_line) {
+    char in[SHELL_LINE_MAX];
+    start(&io_plain);
+    memset(in, ' ', SHELL_LINE_MAX - 4);
+    memcpy(in + SHELL_LINE_MAX - 4, "ti\t", 3);      // 254 bytes, "me " would make 257
+    type_n(in, SHELL_LINE_MAX - 1);
+    CHECK_EQ(sh.line_len, SHELL_LINE_MAX - 2);
+    CHECK(fake.out[fake.out_len - 1] == '\a');
+    start(&io_plain);
+    memset(in, ' ', SHELL_LINE_MAX - 5);
+    memcpy(in + SHELL_LINE_MAX - 5, "ti\t", 3);      // exactly fills it
+    type_n(in, SHELL_LINE_MAX - 2);
+    CHECK_EQ(sh.line_len, SHELL_LINE_MAX);
+}
+
+TEST(tab_does_nothing_in_a_question) {
+    start_ask(&io_plain);
+    shell_ask(&sh, "Password: ", true, on_answer, NULL);
+    type("ti\t\t");
+    CHECK_OUT("");                                   // not even a bell
+    CHECK_EQ(sh.line_len, 2);
+    type("\r");
+    CHECK_EQ(n_answers, 1);
+    CHECK(!strcmp(answers[0], "ti"));
+    start_ask(&io_plain);
+    shell_ask(&sh, "Name: ", false, on_answer, NULL);
+    type("ti\t");
+    CHECK_OUT("ti");
+}
+
+TEST(tab_does_nothing_without_tables) {
+    start(&io_plain);
+    no_tables = true;
+    type("ti\t\t");
+    CHECK_OUT("ti");
+    CHECK(line_is("ti"));
+}
+
+TEST(tab_completion_after_up_is_a_new_command) {
+    start(&io_plain);
+    type("ls\r" "time sy\r" UP);
+    CHECK(line_is("time sy"));
+    type("\t");
+    CHECK(line_is("time sync "));
+    type(UP);                                        // an edit: Up starts again from the newest
+    CHECK(line_is("time sy"));
+}
+
 TEST_MAIN(
     RUN(utf8_characters_are_taken);
     RUN(utf8_byte_at_a_time);
@@ -1183,4 +1386,20 @@ TEST_MAIN(
     RUN(keys_that_change_nothing_keep_the_recall);
     RUN(cancelling_a_secret_question_wipes_the_half_typed_answer);
     RUN(history_on_a_crlf_channel);
+    RUN(tab_completes_a_unique_command_and_adds_a_space);
+    RUN(tab_completes_from_both_tables);
+    RUN(tab_extends_to_what_the_matches_share);
+    RUN(tab_rings_then_lists_when_it_cant_extend);
+    RUN(tab_another_key_in_between_starts_over);
+    RUN(tab_on_an_empty_line_lists_the_commands);
+    RUN(tab_list_wraps_rows_on_a_crlf_channel);
+    RUN(tab_completes_subcommands);
+    RUN(tab_lists_subcommands_without_hidden_ones);
+    RUN(tab_admin_words_only_on_an_admin_channel);
+    RUN(tab_nothing_after_unknown_words_or_free_text);
+    RUN(tab_spaces_before_and_between_words);
+    RUN(tab_does_not_overflow_the_line);
+    RUN(tab_does_nothing_in_a_question);
+    RUN(tab_does_nothing_without_tables);
+    RUN(tab_completion_after_up_is_a_new_command);
 )

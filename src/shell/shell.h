@@ -32,6 +32,31 @@ typedef struct {
 
 typedef struct shell shell_t;
 
+// --- commands --------------------------------------------------------------------------------
+// The command module keeps its commands in tables: shell_execute() looks a command up by name
+// there, and Tab completes the name and the subcommand words from them (shell/complete.h).
+
+#define SHELL_ADMIN  0x01      // offered by Tab only on an admin channel (the command checks too)
+#define SHELL_HIDDEN 0x02      // never offered by Tab (an alias, a testing command)
+
+// A word that may follow a command or another word, e.g. "sync" after "time". `words` are the
+// words that may follow this one (NULL: none, or free text Tab can't guess). Arrays of them end
+// with an entry whose name is NULL.
+typedef struct shell_word {
+    const char *name;
+    const struct shell_word *words;
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN
+} shell_word_t;
+
+// A command: `run` gets the arguments after the name, spaces trimmed; NULL without any. Tables
+// end with an entry whose name is NULL.
+typedef struct {
+    const char *name;
+    void (*run)(shell_t *sh, char *args);
+    const shell_word_t *words; // words that may follow the name, for Tab
+    unsigned flags;            // SHELL_ADMIN, SHELL_HIDDEN
+} shell_cmd_t;
+
 // Receives the next line typed after shell_ask(): as typed (not trimmed), or NULL if the
 // question was cancelled with Ctrl-C.
 typedef void (*shell_answer_fn)(shell_t *sh, char *answer, void *arg);
@@ -79,6 +104,7 @@ struct shell {
     char draft[SHELL_LINE_MAX + 1];     // the line being typed before Up, for Down to give back
     size_t draft_len;
     log_quota_t logger_quota;   // `logger`'s rate limit for this shell
+    bool tab_pressed;           // the last key was a Tab that couldn't complete: the next lists
 };
 
 // Bind a shell to a channel and print the greeting and first prompt.
@@ -105,6 +131,10 @@ void shell_logout(shell_t *sh);
 // Run one command line (spaces trimmed, never empty). Implemented by the command module
 // (shell.c); shell_core.c (line editing) calls it.
 void shell_execute(shell_t *sh, char *cmd);
+
+// The command tables Tab completes from, NULL-terminated; NULL when this shell takes no command
+// now (the console is locked). Implemented by the command module (shell.c).
+const shell_cmd_t *const *shell_command_tables(const shell_t *sh);
 
 // Start the console (the admin channel) on a shell that was bound with shell_bind(): ask for
 // the console password, or open it if none is set (shell/login.h). Implemented by shell.c.
