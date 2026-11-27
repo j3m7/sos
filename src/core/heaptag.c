@@ -24,6 +24,7 @@ static const char *const names[HEAP_TAGS] = {
     [HEAP_FILES] = "files",
     [HEAP_HTTP] = "http",
     [HEAP_TIME] = "time",
+    [HEAP_PING] = "ping",
 };
 
 static void grew(heap_tag_t tag, size_t n) {
