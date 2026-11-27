@@ -1748,6 +1748,8 @@ static void run_reboot(shell_t *sh, char *args) {
 #define END {0}
 #define W(name) {name, NULL, 0}
 static const shell_word_t on_off[] = {W("on"), W("off"), END};
+static const shell_word_t on_off_admin[] = {
+    {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN}, END};
 static const shell_word_t levels[] = {
     W("err"), W("warning"), W("notice"), W("info"), W("debug"), END};
 static const shell_word_t facilities[] = {
@@ -1771,7 +1773,7 @@ static const shell_word_t log_words[] = {
 static const shell_word_t config_words[] = {{"reset", NULL, SHELL_ADMIN}, END};
 static const shell_word_t glitch_words[] = {
     {"watch", NULL, SHELL_ADMIN}, {"on", NULL, SHELL_ADMIN}, {"off", NULL, SHELL_ADMIN},
-    {"default", NULL, SHELL_ADMIN}, W("trig"), END};
+    {"default", NULL, SHELL_ADMIN}, {"trig", NULL, SHELL_ADMIN}, END};
 static const shell_word_t rootsecret_words[] = {
     {"forget", NULL, SHELL_ADMIN},
     {"burn", (const shell_word_t[]){W("plan"), W("rehearse"), END}, SHELL_ADMIN},
@@ -1785,7 +1787,7 @@ static const shell_word_t wifi_words[] = {
     {"remove", NULL, SHELL_ADMIN},
     {"prefer", NULL, SHELL_ADMIN},
     {"connect", NULL, SHELL_ADMIN},
-    {"power", on_off, SHELL_ADMIN},
+    {"power", on_off_admin, 0},             // shows the setting anywhere; on|off: console
     {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
     {"keepalive", on_off, SHELL_ADMIN},
     {"iovar", NULL, SHELL_ADMIN},
