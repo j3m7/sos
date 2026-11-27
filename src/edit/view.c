@@ -184,6 +184,10 @@ void view_command(shell_t *sh, char *args) {
         shell_printf(sh, "path too long\n");
         return;
     }
+    if (shell_output_piped(sh)) {           // `more <file> | tail 5`: the text, not the pager
+        files_cat(sh, "more", args);
+        return;
+    }
     edit_view_file(sh, path, "more");
 }
 

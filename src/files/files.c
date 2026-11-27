@@ -400,26 +400,30 @@ static bool cat_step(shell_t *sh, void *arg, bool cancel) {
     return job_done(j);
 }
 
-static void cmd_cat(shell_t *sh, const char *arg) {
+void files_cat(shell_t *sh, const char *who, const char *arg) {
     char path[PATH_LEN];
-    if (!arg) {
-        shell_printf(sh, "usage: cat <file>\n");
-        return;
-    }
     if (!resolve(sh, arg, path))
         return;
     cat_job_t *j = heap_alloc(HEAP_FILES, sizeof(*j));
     if (!j) {
-        shell_printf(sh, "cat: out of memory\n");
+        shell_printf(sh, "%s: out of memory\n", who);
         return;
     }
     FRESULT fr = f_open(&j->f, path, FA_READ);
     if (fr != FR_OK) {
-        shell_printf(sh, "cat: %s: %s\n", arg, files_error(fr));
+        shell_printf(sh, "%s: %s: %s\n", who, arg, files_error(fr));
         heap_release(HEAP_FILES, j);
         return;
     }
     job_start(sh, cat_step, j);
+}
+
+static void cmd_cat(shell_t *sh, const char *arg) {
+    if (!arg) {
+        shell_printf(sh, "usage: cat <file>\n");
+        return;
+    }
+    files_cat(sh, "cat", arg);
 }
 
 // --- cp ----------------------------------------------------------------------------------------

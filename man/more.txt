@@ -13,6 +13,9 @@ DESCRIPTION
     controls, invalid UTF-8 and invisible or bidi characters show as '?', and
     long lines scroll sideways.
 
+    Piped, 'more <file>' prints the file as plain text, as 'cat <file>' does,
+    instead of opening the pager: 'more /log/sos.log | tail 5'.
+
     The bottom row shows the file name, the lines on screen ('lines 12-34',
     with the total once it is known: after G, or once the end has been on
     screen) and how far in you are, or END.
@@ -84,7 +87,8 @@ PIPES
     question or draws its own screen runs as if there were no pipe. Tab
     completes the stage names after '| ', and grep's options.
 
-    'man <topic>' shows a manual page in this viewer. Log messages are held on
+    'man <topic>' shows a manual page in this viewer (piped, it prints the
+    page as text, like 'more <file>'). Log messages are held on
     the console while it runs there, as for the editor.
 
 SEE ALSO
