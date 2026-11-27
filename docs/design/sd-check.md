@@ -3,13 +3,17 @@
 Decision (the user's, 2026-11-27): **SOS gets an on-device filesystem checker, `sd check`, that
 reads the FAT32 or exFAT structures itself, and it runs only while the card is unmounted.**
 Nothing else reaches the card while a check runs: no mount, no file command, no SFTP, no log
-writer. The first version only reports problems; repair is a later phase (§10).
+writer. The checker comes first and only reports problems. Repair follows in its own PRs, and is
+tested by injecting faults (§10).
+
+Further decisions (the user's, 2026-11-27, on #213): `sd check` is console only (§2.2); the
+cluster window is 16 KB by default (§6.2).
 
 This note sets the rules so that the phases (§9) can be built without deciding them again.
 Where this note and the code differ in detail, the code and its header comments are the
 reference.
 
-Status (2026-11-27): design only; the phases below are still to be built.
+Status (2026-11-27): design only; the phases below are still to be built. Tracking issue: #213.
 
 ## 1. What exists today
 
@@ -81,6 +85,8 @@ FSInfo or allocation bitmap update in flight that it could disagree with or corr
       // One problem found, already formatted ("/var/log/messages: size 70000 needs 3 clusters,
       // chain has 2"). Called at most FSCK_REPORT_MAX times; later problems are only counted.
       void (*report)(void *ctx, const char *line);
+      // Write sectors: NULL for a check. Only repair (§10) passes one.
+      bool (*write)(void *ctx, uint64_t lba, uint32_t count, const uint8_t *buf);
       void *ctx;
       uint64_t sectors;         // size of the device as the layer shows it
   } fsck_io_t;
@@ -247,7 +253,7 @@ pass 8/8
   written by SOS they only show that a PC or camera left the card dirty.
 - The summary also goes to the log (`sd: check: …`) once the card is mounted again. During the
   check, log lines wait in the log writer's buffers, as they do whenever the card is out.
-- No change to the card, ever, in this version.
+- `sd check` never writes to the card. Repair is a separate command, `sd check fix` (§10).
 
 ## 8. Tests
 
@@ -291,19 +297,103 @@ pass 8/8
    and [src/files/README.md](../../src/files/README.md). Board-tested in a dev-1 slot, including
    the timing in §6.2.
 
-Each phase is a PR that leaves main working. Phases 1 and 2 add no code to the firmware image
-until phase 3 links `fsck.c`.
+4. **Repair on the host:** the fault-injection harness of §10.4 (write counting, cut and failure
+   after N writes, the random damage generator) comes first, in the same PR or one before it.
+   Then the repairs of §10.1 with the write order of §10.2. Host only.
+5. **`sd check fix` on the device:** §10.3's command, the test-build-only fault commands of
+   §10.4, man page and docs. Board-tested in a dev-1 slot, with injected faults.
 
-## 10. Later, not in these phases
+Each phase is a PR that leaves main working. Phases 1, 2 and 4 are host code only. `fsck.c`
+enters the firmware image in phase 3, and repair's code reaches the board in phase 5.
 
-- **Repair** (`sd check fix`): free lost clusters (FAT32 FAT entries to 0, or exFAT bitmap bits
-  cleared) and trim chains longer than their file. FSInfo's free count is then set to
-  "unknown". Nothing else: cross-links, damaged entry sets and broken boot sectors are only
-  reported. Repair stays within the §2 rule. Because nothing else has the card mounted, the
-  checker's writes can't race FatFs's cache, which is the main reason for checking unmounted.
-  It writes through `disk_write` (and so through the encryption layer), asks for `yes` first,
-  and needs its own damage-and-repair tests: repair, then check again, then mount with host
-  FatFs and read every file.
+## 10. Repair
+
+Decided (#213): repair is in scope, in its own PRs after the checker, and it is tested by
+injecting faults. Everything in §2 still holds: the card stays unmounted, so repair's writes
+can't race FatFs's cache. That is the main reason for checking unmounted.
+
+### 10.1 What is repaired
+
+Only fixes that can't lose data that is still reachable:
+
+- **Lost clusters** are freed: on FAT32, FAT entries set to 0; on exFAT, bitmap bits cleared
+  (the FAT entries of free clusters don't matter on exFAT).
+- **Chains longer than their file** are trimmed to `ceil(size / cluster_size)` clusters: an
+  end-of-chain mark at the last needed cluster, then the tail freed. For exFAT this applies to
+  files with a FAT chain and, for NoFatChain files, to bitmap bits past the run.
+- **exFAT clusters reached but clear in the bitmap** get their bitmap bit set, so FatFs won't
+  hand that cluster to another file later.
+- **FAT32's FSInfo free count** is set to `0xFFFFFFFF` (unknown) before any other write, so
+  FatFs recounts on its next mount.
+- **A second FAT copy** (FAT32 with two FATs) gets every change written to the first copy.
+
+Only reported, never changed: cross-links, chains shorter than their file or broken, damaged
+entry sets or names, a damaged boot region, GPT or MBR. Each of those needs a choice about whose
+data wins, and that is for a person with a PC and a backup.
+
+### 10.2 Write order
+
+Every repair is a sequence of single-sector writes, ordered so that **stopping after any
+prefix of the sequence leaves the volume no worse than before**: a check then reports a subset
+of the original problems, plus at most a "FAT copies differ" note, and every file reads the same
+bytes as before the repair.
+
+- FSInfo is invalidated first.
+- A trim writes the new end-of-chain mark before freeing anything. Until the tail is freed,
+  it is a run of lost clusters, which the checker already handles.
+- On FAT32, the first FAT copy is written before the second.
+- On exFAT a bit is set before any bit is cleared in the same sector, and a sector's new
+  bitmap state is written in a single write.
+
+Repair runs inside the passes of §6.2. Trims are decided and written in pass 1 while each chain
+is followed, so the tail is never marked in any window. Lost clusters are freed at the end of
+the pass whose window holds them. When the last pass ends, a full check runs again by itself,
+and its summary is what `sd check fix` reports. It must show no problem of a kind §10.1 repairs.
+
+### 10.3 The command
+
+`sd check fix`: console only and only unmounted, like `sd check`. It explains that it will
+write to the card, and that cross-links and damaged entries are only reported, then asks for
+`yes`, as `sd format` does. A read or write error stops repair at once: no further writes, and
+the card is left as §10.2 guarantees. The summary and every fix (as a count per kind) go to the
+log.
+
+### 10.4 Fault injection
+
+Repair is tested by injecting two kinds of fault: damage to the volume before repair, and
+failures of repair's own writes.
+
+- **Damage catalogue:** every §8 damage case, with repair run on it. After repair the check
+  must show no problem of a repaired kind. Files the damage didn't touch must read the same
+  bytes as before the damage (the test keeps a hash of each). Host FatFs must mount the
+  volume, write a new file and read everything back.
+- **Random damage:** a seeded generator applies one to four faults of the repairable kinds at
+  random places (lost chains, over-long chains, bitmap bits cleared under files, stale FSInfo,
+  FAT copies different), mixed with faults that are only reported. Same properties as above,
+  a few hundred seeds per ctest run, and the seed is printed when a case fails.
+- **Cut after N writes:** the test's write callback counts writes. For every N from 0 up to
+  the repair's total, it repairs a fresh copy of the damaged image and stops after write N,
+  as a power cut would. Then it checks that §10.2's guarantee holds, runs repair again to the
+  end, and checks the result is clean of repaired kinds.
+- **Failed write N:** the same, but write N returns an error. Repair must stop with nothing
+  written after it.
+- **Read errors:** a read callback that fails at read N. Repair must stop, and a later check
+  must show no change.
+- **Fuzz:** `fuzz_fsck` gets a repair mode: repair a mutated image on a RAM disk, then check it
+  again. It must not crash, must not loop, and must leave no problem of a repaired kind.
+- **On the board** (phase 5): a test-only command, built only with a test option as the OOM
+  test tool's `mem hold` was (#190), such as `sd fault fail <N>` (the layer fails the Nth write
+  from now) and `sd fault reboot <N>` (watchdog reboot at the Nth write, the nearest thing to a
+  power cut that can be scripted). The board run damages the card with real power cuts during
+  `cp` and log writes, checks, repairs with each fault armed in turn, and checks again. A copy
+  of the card is checked on a PC (decrypted with `tools/host/sdcrypt.c`) before and after.
+- **Not simulated:** a torn sector, where a power cut inside one sector write leaves it
+  half-written. SD cards don't promise that a sector write is atomic, so §10.2 can only reduce
+  that risk, not exclude it. A card that has lost power during a repair should be checked
+  again before use.
+
+## 11. Later, not in these phases
+
 - **Dirty marking:** SOS sets the volume's dirty flag (exFAT `VolumeFlags`, FAT32 FAT entry 1)
   while files are open for writing and clears it at close and unmount. The next mount after a
   power cut then sees the flag, and prints and logs `the card wasn't unmounted cleanly: consider
@@ -313,12 +403,11 @@ until phase 3 links `fsck.c`.
   card).
 - **FAT12/FAT16:** SOS never formats them, and cards over 2 GB don't use them.
 
-## 11. Open questions for the user
+## 12. Decisions
 
-- **Console only** (§2.2): chosen to match `sd unmount` and `sd format`. An SSH session could be
-  allowed to check if the card is already unmounted, but it would hold the card for the length
-  of the check.
-- **Default window** (§6.2): 16 KB, falling back to 4 KB. Larger means fewer passes but less
-  heap left for TLS while the check runs.
-- **Repair** (§10): in scope as a phase 4, or left until checks have found real problems on
-  real cards?
+Recorded on #213 (the user's, 2026-11-27):
+
+- **Console only** (§2.2), matching `sd unmount` and `sd format`.
+- **Window: 16 KB** by default (§6.2), falling back to 8 KB and 4 KB.
+- **Repair** (§10): in scope, in its own PRs after the checker (phases 4 and 5), tested by
+  injecting faults (§10.4).
