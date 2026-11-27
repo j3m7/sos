@@ -69,11 +69,9 @@ static bool have_pages(void) {
         return false;
     FILINFO fi;
     bool found = false;
-    while (!found && f_readdir(&d, &fi) == FR_OK && fi.fname[0]) {
-        size_t n = strlen(fi.fname);
-        found = !(fi.fattrib & AM_DIR) && n > strlen(MAN_EXT) &&
-                !strcmp(fi.fname + n - strlen(MAN_EXT), MAN_EXT);
-    }
+    char topic[MAN_TOPIC_MAX + 1];
+    while (!found && f_readdir(&d, &fi) == FR_OK && fi.fname[0])
+        found = !(fi.fattrib & AM_DIR) && man_topic_of(fi.fname, topic, sizeof(topic));
     f_closedir(&d);
     return found;
 }
@@ -450,18 +448,15 @@ static bool list_step(shell_t *sh, void *arg, bool cancel) {
                 shell_printf(sh, "manual pages ('man <topic>' shows one; in it, q quits, h lists the keys):\n");
                 return true;
             }
-            size_t n = strlen(fi.fname);
-            if ((fi.fattrib & AM_DIR) || n <= strlen(MAN_EXT) ||
-                strcmp(fi.fname + n - strlen(MAN_EXT), MAN_EXT))
-                continue;
-            fi.fname[n - strlen(MAN_EXT)] = '\0';
-            if (!man_topic_ok(fi.fname))
+            // The same pages Tab offers: ".txt" in any case (FAT), a topic's name.
+            char topic[MAN_TOPIC_MAX + 1];
+            if ((fi.fattrib & AM_DIR) || !man_topic_of(fi.fname, topic, sizeof(topic)))
                 continue;
             if (j->count == MAN_PAGES_MAX) {
                 j->more = true;
                 continue;
             }
-            strcpy(j->names[j->count++], fi.fname);
+            strcpy(j->names[j->count++], topic);
         }
         return true;
     }
