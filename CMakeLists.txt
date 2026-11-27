@@ -145,6 +145,8 @@ set(SOS_SOURCES
     src/core/chipinfo.c
     src/core/chiptemp.c
     src/core/chiptemp_board.c
+    src/core/logfile.c
+    src/core/logfile_board.c
     src/core/bootkey.c
     src/core/otpread.c
     src/core/consoleonly.c

@@ -48,6 +48,37 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
   `log_flush()`, so log lines never land in the middle of a command's output.
 - **Pure C:** all platform access goes through `log_hooks_t`, so it's unit tested on the host.
 
+## Log files (`logfile.c`, `logfile_board.c`)
+
+The log's messages also go to the SD card, one file per facility in `/var/log` (`kern.log`,
+`auth.log`, `daemon.log`, `user.log`, and `syslog` for facility 0), each message to one file.
+
+- **A third cursor:** `log.c` keeps `written` beside `start` and `printed`. `log_file_next()`
+  hands the writer the next entry (priority, time since boot parsed back from the stored
+  `[    1.234] ` prefix, and the text without the level's tag); `log_file_lost()` counts the
+  entries the history dropped before the writer took them.
+- **Buffers:** `logfile_poll()` (main loop) takes entries into a 1 KB buffer per file, while
+  every buffer has room for one more line, so a busy file can't make another lose lines. A
+  buffer is written when it's nearly full, holds a warning or an error, or its oldest line is
+  5 s old; at most two files a pass. Each write opens the file for appending, writes and closes
+  (closing syncs), making `/var/log` first if needed. Nothing stays open, so `sd unmount` and
+  `sd format` are never blocked.
+- **Times:** converted to UTC when written: the clock now, less the entry's age. Before the
+  clock is set, `+<seconds since boot>`.
+- **No card, a failed write:** with no card mounted the entries wait in the history and the
+  drops are counted; the next mount writes them, with a `[log: N messages lost ...]` line in
+  every file. A failed write stops the writer (one line in the history, which can't loop since
+  it's stopped) until `sdcard_generation()` says the card was mounted again.
+- **Mounting:** `logfile_start()` mounts the card once at boot, after the configuration (so an
+  encrypted card opens). With no card mounted, `logfile_poll()` tries again every minute
+  through `sdcard_mount_retry()`, which logs nothing on failure (the library's messages
+  included), so a card put back is written to without anyone typing a command. It doesn't
+  after `sd unmount` (the card may be on its way out) until something mounts it with
+  `sdcard_mount()`. Any mount, by a file command, `sd`, SFTP or Lua, starts the files.
+- **Level:** `logfile_set_level()` takes what's waiting under the old level first, so the
+  record of `log file err` (logged just before) isn't filtered out by the change it records.
+- **Host tested** with the real `log.c` and a fake card (`tests/test_logfile.c`).
+
 ## Heap (`heap.c`)
 
 `heap_info()` gives the heap's size, what's allocated and malloc's high-water mark (`mem` shows
