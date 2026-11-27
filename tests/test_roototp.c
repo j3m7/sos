@@ -84,7 +84,7 @@ TEST(layout) {
     CHECK_EQ(ROOTOTP_ROW(0, 0), 0x100);         // page 4
     CHECK_EQ(ROOTOTP_ROW(1, 0), 0x140);
     CHECK_EQ(ROOTOTP_ROW(2, 63), 0x1bf);        // the last row of page 6
-    CHECK(ROOTOTP_FIRST_PAGE > 3);              // page 3 is the sealed-only marker's
+    CHECK(ROOTOTP_FIRST_PAGE > 3);              // page 3 is the console-only marker's
     CHECK(ROOTOTP_MARKER_ROW >= ROOTOTP_CHECK_ROW + ROOTOTP_CHECK_ROWS);
     CHECK(ROOTOTP_CHAFF_ROW > ROOTOTP_MARKER_ROW);
     CHECK(ROOTOTP_CHAFF_ROW + ROOTOTP_SECRET_ROWS <= ROOTOTP_PAGE_ROWS);
@@ -230,14 +230,14 @@ TEST(the_check_depends_on_every_byte) {
     CHECK(!memcmp(c, c0, sizeof(c)));
 }
 
-// Where the root secret comes from. The rule that matters most: on a sealed-only board it is
+// Where the root secret comes from. The rule that matters most: on a console-only board it is
 // OTP or nothing, whatever is in OTP and whatever is in flash.
 TEST(source) {
-    // A secret in OTP, with its pages locked, is used, sealed-only or not.
+    // A secret in OTP, with its pages locked, is used, console-only or not.
     CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, true, false), ROOTSRC_OTP);
     CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, true, true), ROOTSRC_OTP);
     // With a list page the bootloader can still write: an open board uses it (and warns); a
-    // sealed-only board does not.
+    // console-only board does not.
     CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, false, false), ROOTSRC_OTP);
     CHECK_EQ(roototp_choose(ROOTOTP_FOUND, true, false, true), ROOTSRC_NONE);
     // A secret in OTP that can't be used is replaced by nothing.
@@ -251,7 +251,7 @@ TEST(source) {
     // ... but not if what is there can't be read or made sense of.
     CHECK_EQ(roototp_choose(ROOTOTP_CANT_READ, false, false, false), ROOTSRC_NONE);
     CHECK_EQ(roototp_choose(ROOTOTP_BAD_MARKER, false, false, false), ROOTSRC_NONE);
-    // A sealed-only board never uses the flash record, whatever else is true.
+    // A console-only board never uses the flash record, whatever else is true.
     for (int found = ROOTOTP_FOUND; found <= ROOTOTP_BAD_MARKER; found++)
         for (int ok = 0; ok <= 1; ok++)
             for (int locks = 0; locks <= 1; locks++) {

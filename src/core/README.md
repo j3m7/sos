@@ -169,13 +169,13 @@ firmware reads it there; a separate image, used once per board, writes it.
   someone with a cable could add the check and the marker and make it the board's root
   secret, one they know. So every list page up to the secret's must be locked against the
   bootloader's writes (the burn image does it). The firmware reads those lock words at boot:
-  an open board warns, a sealed-only board refuses the secret.
+  an open board warns, a console-only board refuses the secret.
 - **Reading it:** what a page holds is decided with reads that can't fault. The secret itself
   is read through the chip's guarded alias, which faults instead of returning a wrong value,
   and then verified against its check. A complete page that fails its check is not a secret
   and nothing replaces it.
 - **Which source** (`roototp_choose`, in `rootsource_init()` at boot): OTP if a secret is
-  there; otherwise **nothing on a sealed-only board**, whose flash is never read for a root
+  there; otherwise **nothing on a console-only board**, whose flash is never read for a root
   secret nor given one (anyone with a cable could write a root secret there with a
   configuration sealed under it); otherwise the flash record of an open board, as before. An
   open board whose OTP pages can't be read or hold a damaged secret also gets nothing, said
@@ -267,10 +267,10 @@ debug off) and the hashes of the keys its firmware must be signed with.
 - **Not for secrets:** these are the unguarded read aliases, which return all ones for a row
   that can't be read. Reading the root secret from OTP will need the guarded ones.
 
-## Sealed-only boards (`sealedonly.c`, `sealedonly_board.c`)
+## Console-only setup (`consoleonly.c`, `consoleonly_board.c`)
 
 An open board loads an unsealed configuration or host key from flash and seals it; that is how
-`ninja provision` works. A sealed-only board refuses them: anyone with a cable can write the
+`ninja provision` works. A console-only board refuses them: anyone with a cable can write the
 flash, and an unsealed configuration naming their own SSH key would otherwise let them in.
 
 - **The marker** is three OTP rows, 0x0c0 to 0x0c2 (the start of page 3, the first page the
@@ -282,13 +282,13 @@ flash, and an unsealed configuration naming their own SSH key would otherwise le
 - **What it changes:** `core/settings.c` and `ssh/hostkey.c` refuse unsealed records
   (`refuse_plain`); `rootsecret forget` is refused. An unsealed record that was refused is
   reported in the log and left in flash. If it replaced the sealed one, the board has no
-  configuration and is set up on its console: an attacker with a cable can wipe a sealed-only
+  configuration and is set up on its console: an attacker with a cable can wipe a console-only
   board, as they can erase its flash, but can't give it a configuration.
 - **The firmware only reads the rows.** Writing them is a step of `docs/securing-a-board.md`,
   for production boards, done by the owner with `picotool`.
-- **`-DSOS_FORCE_SEALED_ONLY=ON`** builds an image that treats every board as sealed-only, to
+- **`-DSOS_FORCE_CONSOLE_ONLY=ON`** builds an image that treats every board as console-only, to
   try the behaviour on a development board without touching its OTP. It can only add the
-  restriction. `sealedonly_decide()` has no hardware in it and is unit tested on the host.
+  restriction. `consoleonly_decide()` has no hardware in it and is unit tested on the host.
 
 ## Glitch detector (`glitchdet.c`)
 

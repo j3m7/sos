@@ -13,8 +13,8 @@
 # needs the board on USB; it reboots it into BOOTSEL and back.
 #
 # The record is written unsealed: this machine doesn't have the board's key. An open board
-# loads it, stores it sealed at its first boot and erases the unsealed copy. A sealed-only
-# board (src/core/sealedonly.h) refuses an unsealed record: don't provision one. This would
+# loads it, stores it sealed at its first boot and erases the unsealed copy. A console-only
+# board (src/core/consoleonly.h) refuses an unsealed record: don't provision one. This would
 # replace its sealed configuration with a record it won't load, leaving it with none.
 #
 # Use the source tree the board's firmware was built from: firmware older than the record's

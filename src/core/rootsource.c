@@ -15,7 +15,7 @@
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
-#include "core/sealedonly.h"
+#include "core/consoleonly.h"
 
 static rootsrc_t source = ROOTSRC_NONE;
 static roototp_find_t found = ROOTOTP_CANT_READ;
@@ -91,7 +91,7 @@ void rootsource_init(void) {
         keyprov_wipe(probe, sizeof(probe));
         locks_ok = roototp_locks_ok(&reader, otp_index, &open_page);
     }
-    source = roototp_choose(found, secret_ok, locks_ok, sealedonly());
+    source = roototp_choose(found, secret_ok, locks_ok, consoleonly());
     unsigned page = ROOTOTP_FIRST_PAGE + otp_index;
 
     switch (source) {
@@ -105,7 +105,7 @@ void rootsource_init(void) {
             log_msg(SOS_LOG_ERR, "rootsecret: OTP page %u is not locked against writes from "
                                  "the USB bootloader. Someone with a cable could turn a spent "
                                  "page into a root secret they know. This open board uses the "
-                                 "secret all the same; a sealed-only board would not",
+                                 "secret all the same; a console-only board would not",
                     open_page);
         return;
     case ROOTSRC_FLASH: {
@@ -141,10 +141,10 @@ void rootsource_init(void) {
     else if (found == ROOTOTP_CANT_READ)
         snprintf(why, sizeof(why), "none: OTP page %u, where it would be, can't be read", page);
     else if (found == ROOTOTP_EXHAUSTED)
-        snprintf(why, sizeof(why), "none: this is a sealed-only board and every OTP page for "
+        snprintf(why, sizeof(why), "none: this is a console-only board and every OTP page for "
                                    "the root secret is spent");
     else
-        snprintf(why, sizeof(why), "none: this is a sealed-only board and no root secret has "
+        snprintf(why, sizeof(why), "none: this is a console-only board and no root secret has "
                                    "been written to its OTP (its flash is not used for one)");
     log_msg(SOS_LOG_ERR, "rootsecret: %s; there are no keys", why);
 }

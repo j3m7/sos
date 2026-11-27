@@ -5,7 +5,7 @@
 // started on it (core/keyprov.h):
 //
 //   - OTP, if a secret has been written there (core/roototp.h);
-//   - else nothing at all on a sealed-only board (core/sealedonly.h): its flash is never read
+//   - else nothing at all on a console-only board (core/consoleonly.h): its flash is never read
 //     for a root secret, and none is made there;
 //   - else the flash record of an open board (core/rootflash.h), made at first boot.
 //
@@ -22,7 +22,7 @@
 
 #include "core/roototp.h"
 
-// At boot, after sealedonly_init() and wolfCrypt_Init(), before anything derives a key.
+// At boot, after consoleonly_init() and wolfCrypt_Init(), before anything derives a key.
 void rootsource_init(void);
 
 rootsrc_t rootsource(void);

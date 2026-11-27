@@ -143,17 +143,17 @@ bool roototp_locks_ok(const roototp_reader_t *r, unsigned index, unsigned *open_
 }
 
 rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool locks_ok,
-                         bool sealed_only) {
+                         bool console_only) {
     if (found == ROOTOTP_FOUND) {
         // A secret was written to OTP. If it can't be used, nothing else stands in for it:
-        // not on a sealed-only board, and not on an open one either.
+        // not on a console-only board, and not on an open one either.
         if (!otp_secret_ok)
             return ROOTSRC_NONE;
         // With a page of the list still writable from the bootloader, the secret found may be
-        // one somebody completed from a spent page. A sealed-only board doesn't use it.
-        return sealed_only && !locks_ok ? ROOTSRC_NONE : ROOTSRC_OTP;
+        // one somebody completed from a spent page. A console-only board doesn't use it.
+        return console_only && !locks_ok ? ROOTSRC_NONE : ROOTSRC_OTP;
     }
-    if (sealed_only)
+    if (console_only)
         return ROOTSRC_NONE;            // OTP or not at all
     if (found == ROOTOTP_CANT_READ || found == ROOTOTP_BAD_MARKER)
         return ROOTSRC_NONE;

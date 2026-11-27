@@ -110,11 +110,11 @@ bool hostrec_owner_key(uint8_t out[HOSTREC_KEY_LEN], const uint8_t base[HOSTREC_
     return ok;
 }
 
-hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool sealed_only) {
+hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool console_only) {
     if (!have_base)
         // No root secret: nothing sealed opens and nothing new could be sealed. An open
         // board with a plain key from old firmware goes on using it.
-        return kind == HOSTREC_PLAIN && !sealed_only ? HOSTKEY_USE_PLAIN_UNSEALED
+        return kind == HOSTREC_PLAIN && !console_only ? HOSTKEY_USE_PLAIN_UNSEALED
                                                      : HOSTKEY_NONE_NO_KEYS;
     if (!have_owner)
         // Not set up yet. A key made now couldn't be tied to an owner; one is made when the
@@ -124,11 +124,11 @@ hostkey_action_t hostrec_decide(int kind, bool have_base, bool have_owner, bool 
     case HOSTREC_SEALED:
         return HOSTKEY_OPEN;
     case HOSTREC_SEALED_OLD:
-        // Sealed under the board's key alone, so it would have survived a wipe: a sealed-only
+        // Sealed under the board's key alone, so it would have survived a wipe: a console-only
         // board doesn't carry it over to what may be a new owner.
-        return sealed_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_OLD;
+        return console_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_OLD;
     case HOSTREC_PLAIN:
-        return sealed_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_PLAIN;
+        return console_only ? HOSTKEY_MAKE_NEW : HOSTKEY_TAKE_OVER_PLAIN;
     default:
         return HOSTKEY_MAKE_NEW;
     }

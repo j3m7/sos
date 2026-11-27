@@ -7,7 +7,7 @@
 // image used once per board (the burn image); the format here is what that image must write.
 //
 // The page list. The firmware knows three OTP pages, tried in order: pages 4, 5 and 6 (page 3
-// holds SOS's own flags, core/sealedonly.h). A page is 64 rows:
+// holds SOS's own flags, core/consoleonly.h). A page is 64 rows:
 //
 //   rows  0..15   the secret: 32 bytes, 16 bits a row with error correction, row k holding
 //                 bytes 2k (low half) and 2k+1
@@ -43,7 +43,7 @@
 // the board's root secret: one they know. So every page of the list up to and including the
 // secret's must be locked against the bootloader's writes (the page's permanent lock word,
 // LOCK_BL not "read-write"; the burn image sets it). The firmware reads those lock words at
-// boot (roototp_locks_ok). A sealed-only board whose pages aren't locked so has no source; an
+// boot (roototp_locks_ok). A console-only board whose pages aren't locked so has no source; an
 // open board is warned.
 //
 // What that check is worth: it catches a board that was LEFT unlocked. It is no proof of the
@@ -53,9 +53,9 @@
 // spent, before the board is out of its owner's hands.
 //
 // Which source a board uses (roototp_choose):
-//   - a secret in OTP: OTP (but not on a sealed-only board whose list pages the bootloader can
+//   - a secret in OTP: OTP (but not on a console-only board whose list pages the bootloader can
 //     still write: see "Locks" above);
-//   - a sealed-only board (core/sealedonly.h) with none: NO source. Never the flash record:
+//   - a console-only board (core/consoleonly.h) with none: NO source. Never the flash record:
 //     anyone with a cable can write one, with a configuration sealed under it;
 //   - an open board with none (blank, or the list spent): the flash record (core/rootflash.h),
 //     as before;
@@ -147,6 +147,6 @@ bool roototp_locks_ok(const roototp_reader_t *r, unsigned index, unsigned *open_
 // Which source this board uses. `otp_secret_ok`: for ROOTOTP_FOUND, whether roototp_read()
 // succeeded; `locks_ok`: for ROOTOTP_FOUND, roototp_locks_ok() for that page.
 rootsrc_t roototp_choose(roototp_find_t found, bool otp_secret_ok, bool locks_ok,
-                         bool sealed_only);
+                         bool console_only);
 
 #endif

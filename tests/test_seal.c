@@ -533,14 +533,14 @@ TEST(hostkey_decisions) {
     // A board that isn't set up (no owner secret) never gets a host key and never touches what
     // is stored, whatever that is: the key belongs to an owner.
     for (unsigned k = 0; k < 4; k++)
-        for (int sealed_only = 0; sealed_only <= 1; sealed_only++)
-            CHECK_EQ(hostrec_decide(kinds[k], true, false, sealed_only), HOSTKEY_NONE_NO_OWNER);
+        for (int console_only = 0; console_only <= 1; console_only++)
+            CHECK_EQ(hostrec_decide(kinds[k], true, false, console_only), HOSTKEY_NONE_NO_OWNER);
     // Set up, with keys.
     CHECK_EQ(hostrec_decide(HOSTREC_SEALED, true, true, false), HOSTKEY_OPEN);
     CHECK_EQ(hostrec_decide(HOSTREC_SEALED, true, true, true), HOSTKEY_OPEN);
     CHECK_EQ(hostrec_decide(HOSTREC_NONE, true, true, false), HOSTKEY_MAKE_NEW);
     CHECK_EQ(hostrec_decide(HOSTREC_NONE, true, true, true), HOSTKEY_MAKE_NEW);
-    // Records from older firmware: an open board takes them over; a sealed-only board
+    // Records from older firmware: an open board takes them over; a console-only board
     // doesn't, since neither is tied to an owner and either could have been planted or
     // carried across a wipe.
     CHECK_EQ(hostrec_decide(HOSTREC_SEALED_OLD, true, true, false), HOSTKEY_TAKE_OVER_OLD);
@@ -555,7 +555,7 @@ TEST(hostkey_decisions) {
         CHECK_EQ(hostrec_decide(HOSTREC_SEALED_OLD, false, owner, true), HOSTKEY_NONE_NO_KEYS);
         CHECK_EQ(hostrec_decide(HOSTREC_NONE, false, owner, false), HOSTKEY_NONE_NO_KEYS);
     }
-    // A sealed-only board never takes over a record that isn't tied to its owner.
+    // A console-only board never takes over a record that isn't tied to its owner.
     for (unsigned k = 0; k < 4; k++)
         for (int base = 0; base <= 1; base++)
             for (int owner = 0; owner <= 1; owner++) {

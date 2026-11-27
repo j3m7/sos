@@ -63,7 +63,7 @@ private key never leaves the device. The flash write goes through `flash_safe_ex
   console gets its host key then, without a reboot.
 - **What it does with what it finds** is `hostrec_decide()`, a table tested on the host. An
   open board takes over a record from older firmware once (plain, or sealed under the base
-  key alone), keeping the key and its fingerprint. A sealed-only board doesn't: such a record
+  key alone), keeping the key and its fingerprint. A console-only board doesn't: such a record
   isn't tied to an owner, and it makes a new key.
 - **Upgrade:** taking a record over rewrites the key sector (erase, then program), with
   the same power-cut window as any change to it.
