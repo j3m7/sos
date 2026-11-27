@@ -1,7 +1,7 @@
 # The sections of docs/commands.md, in order, each with its pages (topics) in the order they
 # are listed. tools/man-docs.py renders the pages into docs/commands.md from this; every page
 # in man/ must appear here exactly once, and every topic here must have a page.
-System: intro help uptime temp version mem net ssh dmesg logger log logout reboot crash
+System: intro help uptime temp power version mem net ssh dmesg logger log logout reboot crash
 Messages: who wall chat
 Configuration: config glitch bootkey rootsecret passwd setup hostname key
 Wi-Fi: wifi ping

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
@@ -22,7 +23,6 @@
 #include "chat/chat.h"
 #include "core/bootkey.h"
 #include "core/chipinfo.h"
-#include "core/chiptemp.h"
 #include "core/config.h"
 #include "core/failflash.h"
 #include "core/fault.h"
@@ -31,11 +31,13 @@
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/logfile.h"
 #include "core/otpread.h"
 #include "core/rootflash.h"
 #include "core/rootsecret.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
+#include "core/sensors.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
 #include "core/version.h"
@@ -227,6 +229,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "help              this list\n");
     shell_printf(sh, "uptime            time since boot\n");
     shell_printf(sh, "temp              chip temperature, lowest and highest since boot\n");
+    shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
@@ -265,7 +268,8 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
-        shell_printf(sh, "log console|history <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log console|history|file <level>  set log levels (until reboot)\n");
+        shell_printf(sh, "log rotate [every <N>d|at <HH:MM>]  rotate the log files now / when\n");
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
         shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
@@ -310,25 +314,49 @@ static void cmd_uptime(shell_t *sh) {
                      (unsigned long)(f.max_us / 100 % 10));
 }
 
-// `temp`: the chip's temperature now, and the lowest and highest since boot (core/chiptemp.h).
+// "since boot: lowest ... (... ago), highest ... (... ago), read every 10 s", from a reading's
+// stats and its text function (core/sensors.h).
+static void print_since_boot(shell_t *sh, const sensors_stats_t *st,
+                             void (*format)(char *, size_t, int)) {
+    if (!st->count)
+        return;
+    char lo[SENSORS_TEXT_MAX], hi[SENSORS_TEXT_MAX], lo_age[24], hi_age[24];
+    format(lo, sizeof(lo), st->min);
+    format(hi, sizeof(hi), st->max);
+    sensors_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
+    sensors_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
+    shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
+                 lo, lo_age, hi, hi_age, SENSORS_SAMPLE_S);
+}
+
+// `temp`: the chip's temperature now, and the lowest and highest since boot (core/sensors.h).
 static void cmd_temp(shell_t *sh) {
-    int now = chiptemp_read();
-    const chiptemp_stats_t *st = chiptemp_stats();
-    char t[CHIPTEMP_TEXT_MAX], lo[CHIPTEMP_TEXT_MAX], hi[CHIPTEMP_TEXT_MAX];
-    char lo_age[24], hi_age[24];
-    chiptemp_format(t, sizeof(t), now);
+    char t[SENSORS_TEXT_MAX];
+    sensors_format_temp(t, sizeof(t), sensors_read_temp());
     shell_printf(sh, "chip temperature: %s\n", t);
-    if (st->count) {
-        chiptemp_format(lo, sizeof(lo), st->min);
-        chiptemp_format(hi, sizeof(hi), st->max);
-        chiptemp_format_age(lo_age, sizeof(lo_age), st->last_s - st->min_s);
-        chiptemp_format_age(hi_age, sizeof(hi_age), st->last_s - st->max_s);
-        shell_printf(sh, "since boot: lowest %s (%s ago), highest %s (%s ago), read every %u s\n",
-                     lo, lo_age, hi, hi_age, CHIPTEMP_SAMPLE_S);
-    }
+    print_since_boot(sh, sensors_temp_stats(), sensors_format_temp);
     shell_printf(sh, "This is the chip's temperature, not the room's (warmer than the air, more "
                      "under Wi-Fi load).\nUncalibrated: a few degrees off, good for change over "
                      "time on this board.\n");
+}
+
+// `power`: the supply voltage (VSYS) now, the lowest and highest since boot, and USB power.
+static void cmd_power(shell_t *sh) {
+    int mv = sensors_read_vsys();
+    if (mv == SENSORS_NONE) {
+        shell_printf(sh, "this board has no supply voltage reading\n");
+        return;
+    }
+    char v[SENSORS_TEXT_MAX];
+    sensors_format_mv(v, sizeof(v), mv);
+    int usb = sensors_usb_power();
+    shell_printf(sh, "supply (VSYS): %s, %s\n", v,
+                 usb > 0 ? "USB power present" : usb == 0 ? "no USB power" : "USB power unknown");
+    print_since_boot(sh, sensors_vsys_stats(), sensors_format_mv);
+    shell_printf(sh, "VSYS is the board's input: USB power through a diode (about 0.35 V below it), "
+                     "or what feeds\nthe VSYS pin. Within a few percent; a reading taken during a "
+                     "Wi-Fi transmission shows\nits dip (about 0.13 V on USB), so the lowest can "
+                     "be a brief one.\n");
 }
 
 static void cmd_mem(shell_t *sh) {
@@ -452,19 +480,116 @@ static void cmd_logger(shell_t *sh, char *args) {
         log_msg(SOS_LOG_USER | level, "logger (%s): %s", sh->io->name, msg);
 }
 
+static void utc_text(char *buf, size_t len, int64_t unix_s) {
+    time_t t = (time_t)unix_s;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    snprintf(buf, len, "%04d-%02d-%02d %02d:%02d UTC", tm.tm_year + 1900, tm.tm_mon + 1,
+             tm.tm_mday, tm.tm_hour, tm.tm_min);
+}
+
+static void show_rotation(shell_t *sh, const logfile_status_t *st) {
+    shell_printf(sh, "rotate:  every %u day%s at %02u:%02u UTC (each file to <name>.1)\n",
+                 st->rotate_days, st->rotate_days == 1 ? "" : "s", st->rotate_minute / 60,
+                 st->rotate_minute % 60);
+    if (st->rotated_known) {
+        char last[32], next[32];
+        utc_text(last, sizeof(last), st->rotated);
+        utc_text(next, sizeof(next), st->next_rotation);
+        shell_printf(sh, "         last %s, next %s\n", last, next);
+    } else {
+        shell_printf(sh, "         not counting yet (needs the card mounted and the clock set)\n");
+    }
+}
+
+// `log rotate [every <days>d | at <HH:MM>]`: rotate the log files now, or set when they rotate
+// (saved in the configuration). Console only: a rotation deletes the oldest files.
+static void cmd_log_rotate(shell_t *sh, char *what, char *value) {
+    if (!require_admin(sh))
+        return;
+    sos_config_t *cfg = settings();
+    if (!what) {
+        const char *err = logfile_rotate();
+        if (err)
+            shell_printf(sh, "not rotated: %s\n", err);
+        else
+            shell_printf(sh, "rotated: each file in %s is now <name>.1\n", LOGFILE_DIR);
+        return;
+    }
+    char *end = NULL;
+    if (!strcmp(what, "every") && value) {
+        unsigned long days = strtoul(value, &end, 10);
+        if (end == value || (*end && strcmp(end, "d")) || days < 1 ||
+            days > CONFIG_LOG_ROTATE_DAYS_MAX) {
+            shell_printf(sh, "not changed: give days from 1 to %u, e.g. 'log rotate every 7d'\n",
+                         CONFIG_LOG_ROTATE_DAYS_MAX);
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation every %lu day%s", days,
+                days == 1 ? "" : "s");
+        cfg->log_rotate_days = (uint16_t)days;
+    } else if (!strcmp(what, "at") && value) {
+        unsigned long h = strtoul(value, &end, 10), m = 0;
+        bool ok = end != value && *end == ':' && end - value <= 2;
+        if (ok) {
+            char *mm = end + 1;
+            m = strtoul(mm, &end, 10);
+            ok = end - mm == 2 && !*end && h < 24 && m < 60;
+        }
+        if (!ok) {
+            shell_printf(sh, "not changed: give a UTC time of day as HH:MM, e.g. 'log rotate at "
+                             "03:30'\n");
+            return;
+        }
+        log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log rotation at %02lu:%02lu UTC", h, m);
+        cfg->log_rotate_minute = (uint16_t)(h * 60 + m);
+    } else {
+        shell_printf(sh, "usage: log rotate [every <days>d | at <HH:MM>]\n");
+        return;
+    }
+    save(sh);
+    logfile_apply_settings();
+    logfile_status_t st;
+    logfile_status(&st);
+    show_rotation(sh, &st);
+}
+
 static void cmd_log(shell_t *sh, char *args) {
     char *what = args ? strtok(args, " ") : NULL;
     char *level = what ? strtok(NULL, " ") : NULL;
+    if (what && !strcmp(what, "rotate")) {
+        cmd_log_rotate(sh, level, level ? strtok(NULL, " ") : NULL);
+        return;
+    }
     if (!what) {
         shell_printf(sh, "console: %s (printed on the serial console)\n",
                      log_level_name(log_console_level()));
         shell_printf(sh, "history: %s (kept for dmesg)\n", log_level_name(log_history_level()));
+        shell_printf(sh, "file:    %s (written to %s on the SD card)\n",
+                     log_level_name(logfile_level()), LOGFILE_DIR);
         shell_printf(sh, "levels:  err warning notice info debug\n");
+        logfile_status_t st;
+        logfile_status(&st);
+        if (st.state == LOGFILE_STOPPED)
+            shell_printf(sh, "files:   stopped: writing %s failed (%s); mount the card again "
+                             "(e.g. `sd`) to start them\n", st.error_path, st.error);
+        else
+            shell_printf(sh, "files:   %s\n", st.state == LOGFILE_WRITING ? "writing"
+                                               : st.state == LOGFILE_NO_CARD ? "no card mounted; "
+                                                 "messages wait in the history"
+                                               : "not started");
+        shell_printf(sh, "written: %lu lines, %lu bytes this boot; %u bytes waiting\n",
+                     (unsigned long)st.lines, (unsigned long)st.bytes, (unsigned)st.buffered);
+        if (st.lost)
+            shell_printf(sh, "lost:    %lu messages dropped from the history before they were "
+                             "written\n", (unsigned long)st.lost);
+        show_rotation(sh, &st);
         return;
     }
     int l = level ? log_level_parse(level) : -1;
-    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history"))) {
-        shell_printf(sh, "usage: log [console|history err|warning|notice|info|debug]\n");
+    if (l < 0 || (strcmp(what, "console") && strcmp(what, "history") && strcmp(what, "file"))) {
+        shell_printf(sh, "usage: log [console|history|file err|warning|notice|info|debug | "
+                         "rotate [every <days>d | at <HH:MM>]]\n");
         return;
     }
     // The log is the record of logins and configuration changes: a session can read it
@@ -475,8 +600,10 @@ static void cmd_log(shell_t *sh, char *args) {
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: log %s level %s (until reboot)", what, level);
     if (!strcmp(what, "console"))
         log_set_console_level(l);
-    else
+    else if (!strcmp(what, "history"))
         log_set_history_level(l);
+    else
+        logfile_set_level(l);
     shell_printf(sh, "%s level: %s (until reboot)\n", what, level);
 }
 
@@ -846,12 +973,13 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "glitch detector: watching at sensitivity %u (0 lowest, 3 highest), not "
                          "armed: a trigger is logged, the board isn't reset\n", (setting - 1) & 3u);
         if (glitchdet_watch_triggers()) {
-            char t[CHIPTEMP_TEXT_MAX];
-            chiptemp_format(t, sizeof(t), glitchdet_watch_first_temp());
-            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up, chip at "
-                             "%s. Armed, it would have reset the board\n",
+            char both[SENSORS_BOTH_MAX];
+            sensors_format_both(both, sizeof(both), glitchdet_watch_first_temp(),
+                                glitchdet_watch_first_vsys());
+            shell_printf(sh, "TRIGGERED since boot: detectors 0x%x, first after %lu s up (%s). "
+                             "Armed, it would have reset the board\n",
                          (unsigned)glitchdet_watch_triggers(),
-                         (unsigned long)glitchdet_watch_first_s(), t);
+                         (unsigned long)glitchdet_watch_first_s(), both);
         } else
             shell_printf(sh, "no trigger since boot\n");
     } else
@@ -868,13 +996,14 @@ static void glitch_status(shell_t *sh) {
         shell_printf(sh, "the last reset was the detector's: detectors 0x%x fired, after %lu s up\n",
                      (unsigned)glitchdet_last_triggers(),
                      (unsigned long)glitchdet_last_uptime_s());
-        char t[CHIPTEMP_TEXT_MAX];
-        chiptemp_format(t, sizeof(t), glitchdet_last_temp());
-        if (glitchdet_last_temp() != CHIPTEMP_NONE)
-            shell_printf(sh, "chip at %s before that reset (last reading, taken every %u s)\n",
-                         t, CHIPTEMP_SAMPLE_S);
+        char both[SENSORS_BOTH_MAX];
+        sensors_format_both(both, sizeof(both), glitchdet_last_temp(), glitchdet_last_vsys());
+        if (glitchdet_last_temp() != SENSORS_NONE || glitchdet_last_vsys() != SENSORS_NONE)
+            shell_printf(sh, "before that reset: %s (last readings, taken every %u s)\n", both,
+                         SENSORS_SAMPLE_S);
         else
-            shell_printf(sh, "no chip temperature was kept from before that reset\n");
+            shell_printf(sh, "no chip temperature or supply reading was kept from before that "
+                             "reset\n");
     }
 }
 
@@ -1232,6 +1361,10 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    unsigned days = c->log_rotate_days ? c->log_rotate_days : CONFIG_LOG_ROTATE_DAYS_DEFAULT;
+    shell_printf(sh, "log rotation:  every %u day%s at %02u:%02u UTC%s\n", days,
+                 days == 1 ? "" : "s", c->log_rotate_minute / 60u, c->log_rotate_minute % 60u,
+                 c->log_rotate_days || c->log_rotate_minute ? "" : " (default)");
     if (!settings_persistent())
         shell_printf(sh, "warning:       flash storage unavailable; changes aren't saved\n");
 }
@@ -1731,6 +1864,8 @@ void shell_execute(shell_t *sh, char *cmd) {
         cmd_uptime(sh);
     else if (!strcmp(cmd, "temp"))
         cmd_temp(sh);
+    else if (!strcmp(cmd, "power"))
+        cmd_power(sh);
     else if (!strcmp(cmd, "version"))
         cmd_version(sh);
     else if (!strcmp(cmd, "time"))
@@ -1801,6 +1936,11 @@ void shell_execute(shell_t *sh, char *cmd) {
         shell_printf(sh, "usage: crash fault|stack|panic|hang  (testing: stops the firmware)\n");
     } else if (!strcmp(cmd, "reboot")) {
         shell_printf(sh, "rebooting...\n");
+        const char *who = chat_name(sh);
+        log_msg(SOS_LOG_KERN | SOS_LOG_NOTICE, "reboot (from %s%s%s)", sh->io->name,
+                who && strcmp(who, sh->io->name) ? " " : "",
+                who && strcmp(who, sh->io->name) ? who : "");
+        logfile_flush();                    // what the log files haven't written yet
         sleep_ms(100);
         watchdog_reboot(0, 0, 0);
     } else if (!files_command(sh, cmd, args))

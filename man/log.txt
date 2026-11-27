@@ -1,17 +1,55 @@
 NAME
-    log - show or set the log levels
+    log - the log levels, the log files on the card and their rotation
 
 SYNOPSIS
     log
-    log console <level>      (console only)
-    log history <level>      (console only)
+    log console <level>           (console only)
+    log history <level>           (console only)
+    log file <level>              (console only)
+    log rotate                    (console only)
+    log rotate every <N>d         (console only)
+    log rotate at <HH:MM>         (console only)
 
 DESCRIPTION
-    Two levels decide what the log does with a message: 'console' is what the
-    serial console prints as it happens (default notice), 'history' what is
-    kept in memory for 'dmesg' (default info). Levels, from most to least
-    important: err, warning, notice, info, debug. A change lasts until reboot
-    and is itself logged (facility auth).
+    Three levels decide what the log does with a message: 'console' is what
+    the serial console prints as it happens (default notice), 'history' what
+    is kept in memory for 'dmesg' (default info), 'file' what is written to
+    the log files on the card (default info). Levels, from most to least
+    important: err, warning, notice, info, debug. A level change lasts until
+    reboot and is itself logged (facility auth) before it applies.
+
+    'log' shows the levels and the log files' state: writing, no card mounted
+    (messages wait in the history), or stopped after a failed write (with the
+    file and the error); lines and bytes written this boot, bytes waiting to
+    be written, messages dropped from the history before they could be
+    written; and the rotation: how often and when, the last and the next.
+
+    Every message the history keeps is also written to the card, one file per
+    facility: /var/log/kern.log, auth.log, daemon.log, user.log, and syslog
+    for messages without a facility. Lines read
+
+        2026-11-26T14:03:12.345Z notice console: logged in
+
+    (UTC; '+12.345', seconds since boot, while the clock isn't set), and each
+    boot starts with a '--- boot: SOS <commit>, last reset: <why> ---' line.
+    Warnings and errors are written at once, the rest within 5 s. Without a
+    card, messages wait in the 4 KB history and a mount is tried every minute
+    (not after 'sd unmount'); once a card is in they are written, with a line
+    saying how many were dropped meanwhile. A failed write stops the files
+    until the card is mounted again.
+
+    Rotation: every 7 days at 00:00 UTC by default, each file becomes
+    <name>.1 (replacing the previous one) and a new one starts, so the card
+    holds the current period and the one before. 'log rotate' rotates now;
+    'log rotate every <N>d' (1 to 365) and 'log rotate at <HH:MM>' change
+    when, saved in the configuration. The time of the last rotation is kept
+    on the card (/var/log/.rotated), so a reboot keeps the count and a
+    rotation missed while the board was off happens at the first chance;
+    without the clock set nothing rotates.
+
+    Like /certs, /var/log can be read from anywhere (SSH, SFTP, Lua) but
+    changed only on the console, so a session that gets in can't erase its
+    traces; /var itself is protected too.
 
 SEE ALSO
-    dmesg, logger
+    dmesg, logger, sd

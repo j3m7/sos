@@ -85,10 +85,11 @@ add_executable(test_chipinfo test_chipinfo.c ${SOS_ROOT}/src/core/chipinfo.c)
 target_include_directories(test_chipinfo PRIVATE ${SOS_ROOT}/src)
 add_test(NAME chipinfo COMMAND test_chipinfo)
 
-# src/core/chiptemp.c: the chip temperature's conversion, text, lowest and highest, and when to log.
-add_executable(test_chiptemp test_chiptemp.c ${SOS_ROOT}/src/core/chiptemp.c)
-target_include_directories(test_chiptemp PRIVATE ${SOS_ROOT}/src)
-add_test(NAME chiptemp COMMAND test_chiptemp)
+# src/core/sensors.c: chip temperature and supply voltage: conversions, text, lowest and highest,
+# when to log, and the scratch register form.
+add_executable(test_sensors test_sensors.c ${SOS_ROOT}/src/core/sensors.c)
+target_include_directories(test_sensors PRIVATE ${SOS_ROOT}/src)
+add_test(NAME sensors COMMAND test_sensors)
 
 # src/core/bootkey.c: the key an image is signed with, and its comparison with the boot keys
 # in OTP (the `bootkey` command).
@@ -117,6 +118,12 @@ add_test(NAME heaptag COMMAND test_heaptag)
 add_executable(test_log test_log.c ${SOS_ROOT}/src/core/log.c)
 target_include_directories(test_log PRIVATE ${SOS_ROOT}/src)
 add_test(NAME log COMMAND test_log)
+
+# src/core/logfile.c (with log.c): log files on the SD card.
+add_executable(test_logfile test_logfile.c ${SOS_ROOT}/src/core/logfile.c
+    ${SOS_ROOT}/src/core/log.c)
+target_include_directories(test_logfile PRIVATE ${SOS_ROOT}/src)
+add_test(NAME logfile COMMAND test_logfile)
 
 # src/time/timeconv.c: Unix time <-> calendar and PCF8523 RTC registers.
 add_executable(test_timeconv test_timeconv.c ${SOS_ROOT}/src/time/timeconv.c)

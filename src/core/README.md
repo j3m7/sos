@@ -48,6 +48,48 @@ syslog ones (`SOS_LOG_ERR` … `SOS_LOG_DEBUG`), with separate thresholds for th
   `log_flush()`, so log lines never land in the middle of a command's output.
 - **Pure C:** all platform access goes through `log_hooks_t`, so it's unit tested on the host.
 
+## Log files (`logfile.c`, `logfile_board.c`)
+
+The log's messages also go to the SD card, one file per facility in `/var/log` (`kern.log`,
+`auth.log`, `daemon.log`, `user.log`, and `syslog` for facility 0), each message to one file.
+
+- **A third cursor:** `log.c` keeps `written` beside `start` and `printed`. `log_file_next()`
+  hands the writer the next entry (priority, time since boot parsed back from the stored
+  `[    1.234] ` prefix, and the text without the level's tag); `log_file_lost()` counts the
+  entries the history dropped before the writer took them.
+- **Buffers:** `logfile_poll()` (main loop) takes entries into a 1 KB buffer per file, while
+  every buffer has room for one more line, so a busy file can't make another lose lines. A
+  buffer is written when it's nearly full, holds a warning or an error, or its oldest line is
+  5 s old; at most two files a pass. Each write opens the file for appending, writes and closes
+  (closing syncs), making `/var/log` first if needed. Nothing stays open, so `sd unmount` and
+  `sd format` are never blocked.
+- **Times:** converted to UTC when written: the clock now, less the entry's age. Before the
+  clock is set, `+<seconds since boot>`.
+- **No card, a failed write:** with no card mounted the entries wait in the history and the
+  drops are counted; the next mount writes them, with a `[log: N messages lost ...]` line in
+  every file. A failed write stops the writer (one line in the history, which can't loop since
+  it's stopped) until `sdcard_generation()` says the card was mounted again.
+- **Mounting:** `logfile_start()` mounts the card once at boot, after the configuration (so an
+  encrypted card opens). With no card mounted, `logfile_poll()` tries again every minute
+  through `sdcard_mount_retry()`, which logs nothing on failure (the library's messages
+  included), so a card put back is written to without anyone typing a command. It doesn't
+  after `sd unmount` (the card may be on its way out) until something mounts it with
+  `sdcard_mount()`. Any mount, by a file command, `sd`, SFTP or Lua, starts the files.
+- **Level:** `logfile_set_level()` takes what's waiting under the old level first, so the
+  record of `log file err` (logged just before) isn't filtered out by the change it records.
+- **Rotation:** every `log_rotate_days` days (setting; default 7) at `log_rotate_minute` after
+  midnight UTC (default 00:00), counted from the day of the last rotation. Each file becomes
+  `<name>.1`, replacing the previous one, and the new file starts with a "rotated" marker.
+  The time of the last rotation is kept on the card in `/var/log/.rotated` (Unix seconds),
+  read once per mount: a reboot keeps the count, a rotation missed while the board was off
+  happens at the first chance, and another card has its own. The first mount with the clock
+  set starts the count without rotating; a kept time more than a day ahead (saved while the
+  clock was wrong) starts it again. Nothing rotates by itself without the clock. A scheduled
+  rotation happens before new messages are taken, so they go to the new files; `log rotate`
+  (by hand) takes everything logged so far into the old ones first. A failed rename stops the
+  files like a failed write.
+- **Host tested** with the real `log.c` and a fake card (`tests/test_logfile.c`).
+
 ## Heap (`heap.c`)
 
 `heap_info()` gives the heap's size, what's allocated and malloc's high-water mark (`mem` shows
@@ -82,7 +124,8 @@ Two layers:
     Each save goes to the slot that doesn't hold the current record, so a power cut mid-save
     leaves the previous version.
   - **Append-only format:** new fields only go at the end, and the stored length says which
-    version wrote the record. `record_lengths` lists every released size (1540, 1606, 1638).
+    version wrote the record. `record_lengths` lists every released size (1540, 1606, 1638,
+    ... 2184, and 2188 with the log rotation settings).
     A record from older firmware loads with the newer fields at their defaults; firmware that
     doesn't know a record's length ignores it. `_Static_assert`s pin the offsets of released
     fields.
@@ -355,41 +398,58 @@ whether they ever reset a healthy board (`docs/securing-a-board.md`).
   resets the board on a trigger, as the OTP flag would.
 - **Not protection:** it is armed after the configuration loads, software can disarm it, and
   the guard below disarms it after repeated resets, which is what deliberate glitching causes.
-- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 3 (that reset
+- **What survives a detector reset** is kept in POWMAN scratch registers 0 to 4 (that reset
   clears the watchdog's scratch registers, and so the fault record): the number of detector
-  resets since power-on, how many came in a row soon after boot, the uptime, and the chip's
-  latest temperature (below). The uptime is rewritten about once a second, the temperature
-  at every pass of the main loop.
+  resets since power-on, how many came in a row soon after boot, the uptime, and the latest
+  chip temperature and supply voltage (below). The uptime is rewritten about once a second,
+  the readings at every pass of the main loop.
 - **Reported at boot** (log, `uptime`, `glitch`): that the last reset was the detector's, which
-  detectors fired, after how long, and how warm the chip was (the last reading before it).
-  Watching, each trigger's log line carries the temperature.
+  detectors fired, after how long, and the chip temperature and supply voltage (the last
+  readings before it). Watching, each trigger's log line is followed by one with fresh readings.
 - **The guard:** three detector resets in a row, each within three minutes of starting, and
   the next boot doesn't arm it, so the board stays reachable to turn the setting off.
 
-## Chip temperature (`chiptemp.c`, `chiptemp_board.c`)
+## Chip temperature and supply voltage (`sensors.c`, `sensors_board.c`)
 
-The RP2350's own temperature sensor, read through the ADC (datasheet section 12.4.6), for the
-week-long glitch detector test (issue #92) and for `temp`. Nothing else uses the ADC.
+The board's own readings, for the week-long glitch detector test (issue #92), `temp` and
+`power`: the chip's temperature from the RP2350's sensor (datasheet section 12.4.6), the supply
+voltage VSYS through the Pico 2 W's divider on ADC 3, and whether USB power is present, from
+the Wi-Fi chip's VBUS sense pin. Nothing else uses the ADC; each reading selects its own input.
 
-- **A reading every 10 s** from the main loop: 64 conversions averaged (about 130 us), in tenths
-  of a degree. The lowest and highest since boot are kept with their uptimes, for `temp`.
-- **The first reading waits 10 ms** after the sensor is switched on. Read at once it is about
+- **A reading of each every 10 s** from the main loop: 64 conversions averaged (about 130 us),
+  in tenths of a degree and millivolts. The lowest and highest since boot are kept with their
+  uptimes, for `temp` and `power`.
+- **VSYS shares its pin with the Wi-Fi chip's SPI clock.** The divider reaches the pin through
+  a FET that conducts only while the Wi-Fi chip is deselected, so VSYS is read under the Wi-Fi
+  driver's lock (`cyw43_thread_enter`), as the SDK's board header says. The pin is switched to
+  the ADC for the reading; the driver gives it back to PIO at the start of its next transfer.
+  The first conversions after the switch read low (on dev-1 the first by up to 15%, the second
+  by 0.5%), so four are thrown away. Tried at 45 readings a second under heavy ping traffic:
+  no more packets lost than without. VSYS can't be read before the Wi-Fi chip is running, so
+  the main loop takes the first reading.
+- **The first temperature reading waits 10 ms** after the sensor is switched on. Read at once it is about
   4 degrees high, settling within 2 ms (measured on dev-1). That first reading, taken before
   Wi-Fi starts, is kept for the glitch detector until the main loop's first, but isn't counted
   in the lowest and highest: on dev-1 it reads 0.6 to 0.8 degree above every reading after
   the Wi-Fi chip starts (most likely its load on the 3.3 V supply, the ADC's reference).
-- **The log** gets a line at boot, then whenever the reading has moved a degree from the last
-  line (at most one a minute), and at least one an hour: `chip temperature 31.2 C (since boot:
-  lowest 29.8 C, highest 33.1 C)`. At notice level, so a serial logger on the console records
-  the curve for a long test; the 4 KB history would not hold a week of it.
-- **For the glitch detector**, `glitchdet.c` copies the latest reading into a POWMAN scratch
-  register, and reads a fresh one when a detector triggers while watching.
-- **Limits**, stated by `temp`: it's the chip's temperature, not the room's (warmer than the
-  air, more so under Wi-Fi load); and it's uncalibrated. The conversion assumes the ADC
-  reference is exactly 3.3 V, and 1% off moves the reading by about 4 degrees; the sensor also
-  varies from chip to chip. Good for change over time on one board, not for an absolute
-  figure or for comparing boards.
-- `chiptemp.c` (the conversion, text, lowest and highest, when to log, the scratch register
+- **The log** gets one line with both readings: at boot; then whenever the temperature has
+  moved a degree or the supply 0.2 V from the last line (at most one a minute); at once when
+  USB power comes or goes; and at least one an hour: `chip temperature 26.2 C, supply 4.57 V,
+  USB power (since boot: 26.2 C to 26.8 C, 4.56 V to 4.57 V)`. At notice level, so a serial
+  logger on the console records the curve for a long test; the 4 KB history would not hold a
+  week of it. The supply's step is above the dips a Wi-Fi transmission causes on USB power
+  (about 0.13 V on dev-1), so traffic alone doesn't add lines.
+- **For the glitch detector**, `glitchdet.c` copies the latest readings into POWMAN scratch
+  registers 3 and 4, and takes fresh ones when a detector triggers while watching.
+- **Limits**, stated by `temp` and `power`. The temperature is the chip's, not the room's
+  (warmer than the air, more so under Wi-Fi load), and uncalibrated: the conversion assumes
+  the ADC reference is exactly 3.3 V, and 1% off moves the reading by about 4 degrees; the
+  sensor also varies from chip to chip. Good for change over time on one board, not for an
+  absolute figure or for comparing boards. The supply is VSYS, the board's input: on USB power
+  it's the USB voltage less a diode's drop (about 0.35 V). Measured through a 1% divider
+  against the same reference, it's within a few percent. A reading taken during a Wi-Fi
+  transmission catches its dip, so the lowest since boot can be a brief one.
+- `sensors.c` (the conversions, text, lowest and highest, when to log, the scratch register
   form) has no hardware in it and is unit tested on the host.
 
 ## Watchdog (`wdog.c`)

@@ -16,7 +16,9 @@ DESCRIPTION
         none     messages not tagged with one (there should be none)
 
     The console prints messages as they happen (at the 'console' level, see
-    'log'); 'history' decides what is kept for dmesg. Messages are not printed
+    'log'); 'history' decides what is kept for dmesg, and every message kept
+    is also written to the log files on the card, /var/log/<facility>.log
+    (see 'log'). Messages are not printed
     while the console is locked or runs a full-screen program; they wait and
     appear afterwards, and are in dmesg meanwhile. Only printable ASCII is
     logged: other bytes in quoted text become spaces or '?'.

@@ -37,13 +37,14 @@ Full-screen programs: 'edit <file>' edits a file, 'more <file>' reads one a scre
 | `help`<br>`?` | any | list the commands this channel may use ([page](../man/help.txt)) |
 | `uptime` | any | time since boot, and what the last reset was ([page](../man/uptime.txt)) |
 | `temp` | any | the chip's temperature, and the lowest and highest since boot ([page](../man/temp.txt)) |
+| `power` | any | the supply voltage, and whether USB power is present ([page](../man/power.txt)) |
 | `version` | any | firmware commit, board serial, chip revision, how it is secured ([page](../man/version.txt)) |
 | `mem` | any | heap and stack use, by feature ([page](../man/mem.txt)) |
 | `net` | any | Wi-Fi link state, address and ARP counters ([page](../man/net.txt)) |
 | `ssh` | any | the SSH server: host key, sessions and refused connections ([page](../man/ssh.txt)) |
 | `dmesg`<br>`dmesg -f <facility>` | any | the system log kept in memory ([page](../man/dmesg.txt)) |
 | `logger [-p <level>] <message>` | any | add a line to the system log ([page](../man/logger.txt)) |
-| `log`<br>`log console <level>` *(console only)*<br>`log history <level>` *(console only)* | any (marked forms: console only) | show or set the log levels ([page](../man/log.txt)) |
+| `log`<br>`log console <level>` *(console only)*<br>`log history <level>` *(console only)*<br>`log file <level>` *(console only)*<br>`log rotate` *(console only)*<br>`log rotate every <N>d` *(console only)*<br>`log rotate at <HH:MM>` *(console only)* | any (marked forms: console only) | the log levels, the log files on the card and their rotation ([page](../man/log.txt)) |
 | `logout`<br>`exit`<br>`Ctrl-D (on an empty line)` | any | end this session, or lock the console ([page](../man/logout.txt)) |
 | `reboot` | any | restart the device ([page](../man/reboot.txt)) |
 | `crash fault \| stack \| panic \| hang` *(console only)* | console only | stop the firmware on purpose, to test the reset reporting ([page](../man/crash.txt)) |

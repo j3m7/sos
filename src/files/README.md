@@ -76,15 +76,17 @@ its own working directory (`shell_t.cwd`).
   can't be formatted or unmounted.
 - **`files_write_allowed(sh, path)`:** every change to the card passes this one check: the
   file commands, SFTP (`ssh/sftp_fs.c`) and Lua's `sos.write` etc. Everything is allowed except
-  changes under `/certs`, which need the console (`sh->io->admin`). SFTP and Lua pass no shell
-  (`NULL`), so they're refused there.
+  changes under `/certs` (TLS roots) and `/var/log` (the log files, #104), and to `/var`
+  itself (renaming it would take `/var/log` along), which need the console
+  (`sh->io->admin`). SFTP and Lua pass no shell (`NULL`), so they're refused there. The log
+  writer itself writes through FatFs directly.
 
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`
   resolved against the working directory.
-- **`path_is_protected()`** decides whether a path is inside `/certs` the way FatFs would read
-  it. `\` separates like `/`, names match case-insensitively (ASCII only, as FatFs folds
+- **`path_is_protected()`** decides whether a path is protected (`/certs` and what's in it,
+  `/var/log` and what's in it, `/var` itself) the way FatFs would read it. `\` separates like `/`, names match case-insensitively (ASCII only, as FatFs folds
   them), and trailing spaces and dots are ignored. So `/CERTS.`, `\certs\x` and
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as

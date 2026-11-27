@@ -14,8 +14,8 @@ DESCRIPTION
     disturbed, which is what a fault-injection attack does. 'glitch' shows its
     setting, whether it is armed now, how many times it has reset the board
     since power-on, and for the last such reset which detectors fired, how
-    long the board had been up and the chip's temperature then (the last
-    reading before the reset, taken every 10 s).
+    long the board had been up, and the chip temperature and supply voltage
+    then (the last readings before the reset, taken every 10 s).
 
     'glitch on <0-3>' arms it by software, now and at every boot, at that
     sensitivity (0 lowest, 3 highest). 'on 3' is the default: a board is armed
@@ -27,8 +27,9 @@ DESCRIPTION
     so. A detector reset loses the fault record.
 
     'glitch watch <0-3>' runs the circuits at that sensitivity without arming
-    them: a trigger is logged with the chip's temperature and shown by
-    'glitch' ("armed, it would have reset the board"), nothing is reset. A
+    them: a trigger is logged, followed by a line with the chip temperature
+    and supply voltage, and shown by 'glitch' ("armed, it would have reset the
+    board"); nothing is reset. A
     detector that has triggered may stay triggered until the next reset, so
     each of the four is reported once per boot.
 
@@ -38,4 +39,4 @@ DESCRIPTION
     reported; it resets the board if the detector is armed.
 
 SEE ALSO
-    uptime, temp, version
+    uptime, temp, power, version

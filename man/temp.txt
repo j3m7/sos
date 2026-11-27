@@ -7,8 +7,9 @@ SYNOPSIS
 DESCRIPTION
     The RP2350's own temperature sensor, read every 10 s, with the lowest and
     highest readings since boot and how long ago each was taken. It is logged
-    at boot, when it has moved a degree (at most once a minute) and at least
-    once an hour.
+    with the supply voltage (see 'power'): at boot, when it has moved a degree
+    or the supply 0.2 V (at most once a minute), when USB power comes or goes,
+    and at least once an hour.
 
     It is the chip's temperature, not the room's: the chip runs warmer than
     the air, more so under Wi-Fi load. The sensor is uncalibrated and can be a
@@ -17,4 +18,4 @@ DESCRIPTION
     detector reset.
 
 SEE ALSO
-    glitch, dmesg
+    power, glitch, dmesg
