@@ -62,4 +62,6 @@ FRESULT f_closedir(DIR *dp);
 FRESULT f_mkdir(const char *path);
 FRESULT f_unlink(const char *path);
 FRESULT f_rename(const char *path_old, const char *path_new);
+// The firmware builds FatFs with FF_USE_CHMOD 1 (config/fatfs/ffconf.h); tar.c checks it.
+#define FF_USE_CHMOD 1
 FRESULT f_utime(const char *path, const FILINFO *fno);
