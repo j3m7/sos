@@ -9,6 +9,10 @@
 // Certificate dates are checked only when the clock is set (timesync); before that, a chain
 // that is otherwise valid is accepted and the fact is logged, since the clock may be what this
 // connection is about to set (NTS).
+//
+// tls_open_plain() opens the same kind of connection without TLS (plain TCP, for plain http in
+// fetch): the same DNS, connect, timeouts, receive buffering and flow control, and the same
+// connection slots (tls_admit.h), so the transport under net/http.c is one interface.
 
 #ifndef SOS_TLS_H
 #define SOS_TLS_H
@@ -26,8 +30,9 @@ typedef enum {
     TLS_CONNECTING,     // TCP connect
     TLS_HANDSHAKE,      // TLS handshake and certificate check
     TLS_READY,          // tls_read()/tls_write() can be used
-    TLS_CLOSED,         // the server closed the connection cleanly
-    TLS_FAILED,         // see tls_error()
+    TLS_CLOSED,         // the server closed the connection cleanly: close_notify, or for a plain
+                        // connection the TCP close (FIN) once everything before it was read
+    TLS_FAILED,         // see tls_error(); for a plain connection also a reset
 } tls_state_t;
 
 typedef struct {
@@ -70,6 +75,13 @@ int tls_load_root(struct WOLFSSL_CTX *ctx, const uint8_t *der, size_t len);
 // handshake together.
 tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
                      tls_use_t use);
+
+// The same, without TLS: plain TCP to host:port. Never TLS_HANDSHAKE; TLS_READY once connected.
+// tls_stats() gives nothing of interest (no handshake, no certificate) and tls_session() NULL.
+tls_conn_t *tls_open_plain(const char *host, uint16_t port, uint32_t timeout_ms, tls_use_t use);
+
+// True if c was opened by tls_open_plain().
+bool tls_is_plain(const tls_conn_t *c);
 
 // Advance the connection; returns its state.
 tls_state_t tls_poll(tls_conn_t *c);
