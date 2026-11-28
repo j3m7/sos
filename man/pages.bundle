@@ -1392,6 +1392,119 @@ DESCRIPTION
 
 SEE ALSO
     passwd, wifi, key, config, ssh
+@@ sha1sum
+NAME
+    sha1sum - print or check SHA-1 checksums of files
+
+SYNOPSIS
+    sha1sum <file>...
+    sha1sum -c [--ignore-missing] <list>
+
+DESCRIPTION
+    Like sha256sum, with SHA-1: 40 hex digits, and BSD list lines start
+    with 'SHA1 ('. 'man sha256sum' describes the forms, the list format and
+    the results.
+
+    SHA-1 is broken for collisions: someone who makes a file can make
+    another with the same SHA-1. sha1sum is here for old published lists;
+    don't rely on it for files from others. Use sha256sum where the list
+    offers it.
+
+SEE ALSO
+    sha256sum, sha512sum
+@@ sha256sum
+NAME
+    sha256sum - print or check SHA-256 checksums of files
+
+SYNOPSIS
+    sha256sum <file>...
+    sha256sum -c [--ignore-missing] <list>
+
+DESCRIPTION
+    Prints each file's SHA-256 and its name, one line per file, as GNU
+    sha256sum does:
+
+        e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  empty
+
+    The name is printed as given, relative to the working directory. A file
+    that can't be read says why ('sha256sum: <name>: no such file') and the
+    others go on. 'sha256sum *.tar.gz > SHA256SUMS' needs the names written
+    out (the shell has no wildcards), and the list it makes is one '-c'
+    reads. sha1sum and sha512sum work the same way with their algorithms.
+
+    -c <list> reads a list of checksums and checks each file it names,
+    one line per file:
+
+        pkg-1.2.tar.gz: OK
+        other.bin: FAILED
+        old.tgz: missing
+        ../etc/x: unsafe path
+
+    and a last line with the counts: '2 OK, 1 FAILED, 1 missing'. The shell
+    has no exit status, so that line is the result: anything other than
+    'OK' means a file wasn't verified. 'unreadable' counts files that exist
+    but couldn't be read, 'unsafe' names refused, and 'improperly formatted'
+    lines that aren't a checksum line (they aren't printed one by one). A
+    list with no checksum line for this algorithm says 'no checksums
+    found'.
+
+    --ignore-missing (with -c) skips files that aren't on the card and
+    leaves them out of the counts: for a SHA256SUMS that lists the files of
+    every platform when only one was downloaded. When none of the files is
+    there, it says 'no file was verified'.
+
+LIST FORMAT
+    Each line is one of:
+
+        <hex>  <name>              GNU, as sha256sum prints it
+        <hex> *<name>              GNU binary mode (the same on SOS)
+        SHA256 (<name>) = <hex>    BSD ('shasum --tag', 'openssl dgst')
+
+    The hex may be upper or lower case and must be the algorithm's length
+    (64 digits for SHA-256). A BSD line must name this command's algorithm:
+    a 'SHA1 (...)' line counts as improperly formatted for sha256sum.
+    Blank lines and lines starting with '#' are skipped. A line may be up
+    to 4 KB long ('line <n>: too long' otherwise); lists written on Windows
+    (CR LF) work.
+
+    The names are relative to the list's directory, not the working
+    directory: 'sha256sum -c /apps/SHA256SUMS' checks the files in /apps
+    from anywhere. A name that is absolute or holds '..' is refused
+    ('<name>: unsafe path'), so a list from a server can't make the board
+    read outside the list's directory.
+
+NAMES
+    A name holding a newline or a backslash is printed the GNU way: the
+    line starts with '\' and the name has '\n' for the newline and '\\' for
+    the backslash. '-c' reads that form back. A name with another control
+    character isn't hashed ('<name>: name has control characters'), since
+    the line would go to the terminal; in '-c' output such characters are
+    shown as '?'. A file named like an option is given after '--':
+    'sha256sum -- -c'.
+
+NOTES
+    A job: one file at a time, 4 KB read and hashed per step, so other
+    shells and SSH keep going; Ctrl-C stops it ('-c' then says 'stopped'
+    instead of the counts). Hashing runs in software (wolfCrypt), not on
+    the RP2350's SHA-256 block.
+
+SEE ALSO
+    sha1sum, sha512sum, cat, ls, http
+@@ sha512sum
+NAME
+    sha512sum - print or check SHA-512 checksums of files
+
+SYNOPSIS
+    sha512sum <file>...
+    sha512sum -c [--ignore-missing] <list>
+
+DESCRIPTION
+    Like sha256sum, with SHA-512: 128 hex digits, and BSD list lines start
+    with 'SHA512 ('. 'man sha256sum' describes the forms, the list format
+    and the results. SHA-512 runs slower than SHA-256 on the board.
+
+SEE ALSO
+    sha256sum, sha1sum
 @@ ssh
 NAME
     ssh - the SSH server: host key, sessions and refused connections

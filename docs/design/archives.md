@@ -158,9 +158,11 @@ sha256sum -c <list>
   refused (`<name>: unsafe path`): a list from a server can't make the board read outside its
   directory.
 - One line per file: `<name>: OK`, `<name>: FAILED`, `<name>: missing`, `<name>: <error>`.
-- Last line: `<n> OK` and, when any, `, <n> FAILED, <n> missing, <n> improperly formatted`. Since
-  the shell has no exit status, the result is that line. A list with no usable line says
-  `no checksums found`.
+- Last line: `<n> OK` and, when any, `, <n> FAILED, <n> missing, <n> unreadable, <n> unsafe,
+  <n> improperly formatted` (`unreadable`: a file there but not read, `<name>: <error>`;
+  `unsafe`: names refused). Since the shell has no exit status, the result is that line. A list
+  with no usable line says `no checksums found`; one whose files were all skipped by
+  `--ignore-missing` says `no file was verified`. Ctrl-C prints `stopped` instead of the counts.
 - `--ignore-missing` (GNU's name): files not on the card are skipped and not counted. Useful for
   a `SHA256SUMS` listing every platform's file.
 
