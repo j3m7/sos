@@ -290,6 +290,20 @@ Keep one SSH session open beside the console.
     the word after the mode).
 16. `tar xf /review/bad.tar -C /review/out`
     You should see: the entry skipped as `unsafe path`, then `0 files, 0 directories, 1 skipped`.
+17. `tar czvf /review/back.tgz -C /review/out pkg`
+    You should see: each name as it is added, stored as `pkg/...` (relative to `-C`), then
+    `/review/back.tgz: <n> files, <n> directories, <size> bytes (0 skipped)`.
+18. `tar tf /review/back.tgz`
+    You should see: the same tree, `pkg/` first.
+19. The same `tar czf` again.
+    You should see: refused because `/review/back.tgz` exists; with `-f` it is replaced.
+20. `tar cf /review/bad2.tar ../review` and `tar cf /review/none.tar /review/nothing-here`
+    You should see: the first path refused (`..`); the second skipped as missing, then `nothing
+    to archive`. Neither leaves a `.tar` or `.part` behind (`ls /review`).
+21. **[host]** In `~/sos-review`: `sftp $B`, `get /review/back.tgz`, `bye`, then
+    `tar tzvf back.tgz`
+    You should see: the tree read by your computer's tar: files `-rw-r--r--`, directories
+    `drwxr-xr-x`, owner 0, the card's dates.
 
 ## 13. Time
 
@@ -516,7 +530,6 @@ at a time, and tell the Reviewer before you start this section.
 
 Review these once they merge; their PRs describe what to try:
 
-- `tar cf` / `tar czf`: create archives (#277).
 - Pager search: matches highlighted, `n` past the last match, smart case (#278). Then redo
   section 9 step 2 with `/quoting`.
 - Build feature options: leave features out of an image at build time (#250, design #279).
