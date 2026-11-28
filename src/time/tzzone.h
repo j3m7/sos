@@ -28,6 +28,11 @@
 // zone is set; nothing when none is.
 void tzzone_print_local(shell_t *sh, int64_t t);
 
+// Tab after `time zone`: list and install; on the console, utc and the names of the zones in the
+// card's bundle (read whole each time, about 100 ms; nothing if no card is mounted, since Tab
+// doesn't mount one).
+void tzzone_tab(shell_t *sh, shell_value_fn fn, void *arg);
+
 // `time zone ...`: args is what follows "zone" (may start with spaces, may be empty).
 void tzzone_command(shell_t *sh, const char *args);
 

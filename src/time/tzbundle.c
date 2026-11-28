@@ -200,3 +200,18 @@ tzbundle_result_t tzbundle_find(tzbundle_read_fn read, void *ctx, const char *na
     }
     return TZBUNDLE_NOT_FOUND;
 }
+
+bool tzbundle_names(tzbundle_read_fn read, void *ctx, void (*fn)(const char *name, void *arg),
+                    void *arg) {
+    tzbundle_lines_t lines = {.read = read, .ctx = ctx};
+    char line[TZBUNDLE_READ_MAX], version[TZBUNDLE_VERSION_MAX + 1];
+    bool too_long;
+    if (!tzbundle_next_line(&lines, line, &too_long) || too_long || !tzbundle_version(line, version))
+        return false;
+    while (tzbundle_next_line(&lines, line, &too_long)) {
+        char *n, *r;
+        if (!too_long && tzbundle_split(line, &n, &r))
+            fn(n, arg);
+    }
+    return true;
+}

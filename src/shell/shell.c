@@ -2472,6 +2472,7 @@ static const shell_values_t nts_hosts = SHELL_VALUES_INIT(tab_nts_hosts);
 static const shell_values_t time_servers = SHELL_VALUES_INIT(tab_time_server);
 static const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);
 static const shell_values_t man_topics = SHELL_VALUES_INIT(man_tab_topics);
+static const shell_values_t time_zones = SHELL_VALUES_INIT(tzzone_tab);
 
 // `health run <name>`: the checks' names, with their latest status.
 static void tab_health_names(shell_t *sh, shell_value_fn fn, void *arg) {
@@ -2503,7 +2504,7 @@ static const shell_word_t time_words[] = {
     {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
     {"server", SHELL_VALUES_OF(time_servers), 0},
     {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
-    {"zone", (const shell_word_t[]){W("list"), W("install"), {"utc", NULL, SHELL_ADMIN}, END}, 0},
+    {"zone", SHELL_VALUES_OF(time_zones), 0},
     END};
 static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},

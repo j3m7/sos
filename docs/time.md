@@ -117,7 +117,9 @@ local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
 - **`time zone <name>`** (console only) sets it by IANA name (`Europe/Madrid`,
   `America/New_York`). Case doesn't matter, and a space can stand for `_`. The name is looked up
   in `/tz/zones.bundle` on the card. A name that isn't there gets the closest ones (`madrid`
-  offers `Europe/Madrid`). The name and the zone's rule, a POSIX TZ string such as
+  offers `Europe/Madrid`). On the console, Tab completes zone names from the card's bundle:
+  `time zone Europe/Ma` and Tab offers `Europe/Madrid`, `Europe/Malta` and `Europe/Mariehamn`.
+  Case matters there, as in the bundle. Each Tab reads the bundle, about 100 ms. The name and the zone's rule, a POSIX TZ string such as
   `CET-1CEST,M3.5.0,M10.5.0/3`, are saved in the configuration, so local time shows with the
   card out too.
 - **`time zone utc`** (console only) clears it.
