@@ -79,12 +79,20 @@ signed`). To see which key an image is really signed with, `tools/flash.sh -n <d
 prints the hash of its key and flashes nothing.
 
 `picotool` then hashes and signs the image after linking: `sos.elf`, `sos.uf2` and the `flash`
-target are the signed image. Without `SOS_SIGN_KEY` the image is unsigned, as before; CMake
-prints which it is when it configures. To check an image:
+target are the signed image. Without `SOS_SIGN_KEY` the image is unsigned; CMake prints which it
+is when it configures. To check an image:
 
 ```sh
 picotool info -a build/sos.elf      # look for "hash: verified" and "signature: verified"
 ```
+
+**Every image is hashed, signed or not** (`pico_hash_binary`, since the `image` health check,
+[design/health.md](design/health.md) §9.7). picotool adds a SHA-256 of the image to its
+metadata block. So an unsigned image now carries a hash too (`hash: verified` without
+`signature:`), and the boot ROM checks it at every reset, on any board: an image whose flash was
+damaged after it was written is refused, and the board comes up in the USB boot loader instead
+of running damaged code. Reflashing it is the cure. `health full`'s `image` check compares the
+running flash with the same hash while the board is up.
 
 - **The key decides who can update a secured board.** Once a board has secure boot enabled, it
   runs only images signed with the key whose hash was written to its one-time-programmable (OTP)
@@ -99,8 +107,8 @@ picotool info -a build/sos.elf      # look for "hash: verified" and "signature: 
   From then on the board refuses every image not signed with that key. The SOS build switches
   the file off. Securing a board is a separate step with its own written procedure; don't
   improvise it with `picotool seal`, which produces the same file if given a name for it.
-- Signing doesn't change what the firmware does: `picotool` adds the hash and signature to the
-  image's metadata after the firmware is linked.
+- Signing doesn't change what the firmware does: `picotool` adds the signature (and the hash
+  every image has) to the image's metadata after the firmware is linked.
 
 ## Flashing, and the flash guard
 
