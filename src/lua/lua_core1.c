@@ -1185,7 +1185,9 @@ static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
 #endif
 static int l_sd_info(lua_State *L) { return info(L, LH_SD); }
+#if SOS_HAVE_CHAT
 static int l_who(lua_State *L) { return info(L, LH_WHO); }
+#endif
 #if SOS_HAVE_SSH
 static int l_ssh_status(lua_State *L) { return info(L, LH_SSH); }
 #endif
@@ -1193,6 +1195,7 @@ static int l_ssh_status(lua_State *L) { return info(L, LH_SSH); }
 static int l_tls_roots(lua_State *L) { return info(L, LH_TLS); }
 #endif
 
+#if SOS_HAVE_CHAT
 // sos.wall(msg): to every shell; returns how many (0: nobody is logged in), or nil and why.
 static int l_wall(lua_State *L) {
     size_t len;
@@ -1208,6 +1211,7 @@ static int l_wall(lua_State *L) {
     lua_pushinteger(L, (lua_Integer)lua_req.result);
     return 1;
 }
+#endif
 
 // sos.clock_sync(): start an NTS sync, as `time sync` does; true, or nil and why. The result shows
 // in sos.clock() once the sync is done.
@@ -1375,6 +1379,8 @@ static int l_features(lua_State *L) {
     } f[] = {
         {"NET", SOS_HAVE_NET}, {"TLS", SOS_HAVE_TLS}, {"HTTP", SOS_HAVE_HTTP},
         {"NTS", SOS_HAVE_NTS}, {"SSH", SOS_HAVE_SSH}, {"LUA", SOS_HAVE_LUA},
+        {"CHAT", SOS_HAVE_CHAT}, {"PAGER", SOS_HAVE_PAGER}, {"EDITOR", SOS_HAVE_EDITOR},
+        {"MAN", SOS_HAVE_MAN}, {"FSCK", SOS_HAVE_FSCK}, {"ARCHIVE", SOS_HAVE_ARCHIVE},
     };
     lua_createtable(L, 0, (int)(sizeof(f) / sizeof(f[0])) + 1);
     for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
@@ -1394,7 +1400,10 @@ static const luaL_Reg sos_lib[] = {
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
     {"localdate", l_localdate},                 {"localtime", l_localtime}, {"zone", l_zone},
-    {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
+    {"hmac", l_hmac},     {"health", l_health},
+#if SOS_HAVE_CHAT
+    {"who", l_who},       {"wall", l_wall},
+#endif
     {"hashfile", l_hashfile},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
     {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"features", l_features},

@@ -63,6 +63,12 @@ sos_feature(HTTP "HTTP(S) client: http, fetch" NEEDS TLS)
 sos_feature(NTS  "Authenticated time (NTS): nts, time server" NEEDS TLS)
 sos_feature(SSH  "SSH server and SFTP: ssh, key" NEEDS NET)
 sos_feature(LUA  "Lua scripts on core 1: lua")
+sos_feature(CHAT    "Messages between the people logged in: who, wall, chat")
+sos_feature(PAGER   "The pager: more, | more")
+sos_feature(EDITOR  "The full-screen editor: edit" NEEDS PAGER)
+sos_feature(MAN     "Manual pages on the card: man" NEEDS PAGER)
+sos_feature(FSCK    "The card's file system checker: sd check, the sd-check health check")
+sos_feature(ARCHIVE "gzip, gunzip, zcat, tar, and zlib")
 
 # Check every rule, then define SOS_HAVE_<NAME> on <target> and SOS_FEATURE_LIST (the features
 # line: what's in, then what's out).

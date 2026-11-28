@@ -338,6 +338,7 @@ static void serve_hash(void) {
     lua_req.len = (uint32_t)n;
 }
 
+#if SOS_HAVE_CHAT
 // sos.wall(msg): to every shell, from the script (its tag as the sender). It shares the log's
 // limit of SCRIPT_LOG_PER_SEC, and never waits: a full ring of unread messages is an error.
 static void serve_wall(void) {
@@ -356,6 +357,7 @@ static void serve_wall(void) {
     else
         lua_req.result = n;
 }
+#endif
 
 // sos.time.sync(): as `time sync` (which any shell may run), but at most one started by scripts
 // every LUA_TIMESYNC_MIN_S, so a script in a loop can't hammer the NTS server.
@@ -608,7 +610,9 @@ static void serve(bool main_loop) {
         case LR_RENAME: serve_rename(); break;
         case LR_STAT:   serve_stat(); break;
         case LR_INFO:   serve_info(); break;
+#if SOS_HAVE_CHAT
         case LR_WALL:   serve_wall(); break;
+#endif
         case LR_TIMESYNC: serve_timesync(); break;
         case LR_RANDOM: serve_random(); break;
         case LR_REBOOT: serve_reboot(); break;

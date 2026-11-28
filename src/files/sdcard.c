@@ -465,8 +465,10 @@ static bool checking;
 // The configuration was erased during the check (sdcard_owner_gone()): the layer is off, so the
 // check would read ciphertext. Tested before every step.
 static bool check_stop;
+#if SOS_HAVE_FSCK
 // The check is `sd check fix`'s (design §10.3): it may write, and it logs as "sd: check fix:".
 static bool check_fix;
+#endif
 static void check_orphaned(void);
 
 typedef enum {
@@ -1024,6 +1026,7 @@ static void cmd_format(shell_t *sh, const char *type, const char *mode) {
     shell_ask(sh, "Erase the card? Type 'yes': ", false, on_format_confirm, NULL);
 }
 
+#if SOS_HAVE_FSCK
 // --- check (sd check, sd check fix) ------------------------------------------------------------
 //
 // docs/design/sd-check.md has the design. The check runs only on an unmounted card, as a shell
@@ -1478,6 +1481,15 @@ int sdcard_check_health_step(bool cancel, fsck_result_t *res, bool *encrypted) {
                   res->why ? res->why : "?");
     return r;
 }
+#else
+// No checker in this image (SOS_FEATURE_FSCK off): `checking` stays false.
+static void check_orphaned(void) {}
+
+static void cmd_check(shell_t *sh, const char *arg, const char *arg2) {
+    (void)arg, (void)arg2;
+    shell_printf(sh, "sd check: not in this build (no file system checker)\n");
+}
+#endif
 
 // --- owner change -------------------------------------------------------------------------------
 

@@ -19,6 +19,11 @@ if (SOS_TEST_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
 endif()
+# The host tests test the full build: every feature on (cmake/features.cmake,
+# docs/design/build-features.md decision 4: SOS_HAVE_<NAME> is always defined).
+foreach(f NET TLS HTTP NTS SSH LUA CHAT PAGER EDITOR MAN FSCK ARCHIVE)
+    add_compile_definitions(SOS_HAVE_${f}=1)
+endforeach()
 
 # src/ssh/pico-sshd/ringbuffer.c: buffers for all SSH session I/O.
 add_executable(test_ringbuffer test_ringbuffer.c ${SOS_ROOT}/src/ssh/pico-sshd/ringbuffer.c

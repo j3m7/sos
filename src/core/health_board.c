@@ -46,7 +46,9 @@
 #include "core/stackmon.h"
 #include "core/statecheck.h"
 #include "files/card_check.h"
+#if SOS_HAVE_FSCK
 #include "files/fsck_check.h"
+#endif
 #if SOS_HAVE_LUA
 #include "lua/lua_check.h"
 #endif
@@ -413,7 +415,9 @@ static const health_check_t checks[] = {
     // Phase 5 (§9.7): only on `health full` or `health run <name>`, last, in this order.
     {"ram", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_ram_step},
     {"image", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_image_step},
+#if SOS_HAVE_FSCK
     {"sd-check", HEALTH_FULL, 0, 0, 0, fsck_check_step},
+#endif
 };
 
 void health_boot(void) {

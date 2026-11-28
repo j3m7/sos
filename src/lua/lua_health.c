@@ -297,6 +297,7 @@ static void clock_table(lua_info_t *w) {
     lua_info_close(w);
 }
 
+#if SOS_HAVE_CHAT
 // What `who` lists: one entry per shell, in slot order.
 static void who_table(lua_info_t *w) {
     chat_peer_t p[CHAT_MAX_PEERS];
@@ -311,6 +312,7 @@ static void who_table(lua_info_t *w) {
         lua_info_close(w);
     }
 }
+#endif
 
 #if SOS_HAVE_SSH
 // What `ssh` shows. The sessions are a list: login, address, state, sftp, seconds.
@@ -452,7 +454,9 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_WIFI:    wifi_table(&w); break;
 #endif
     case LH_CLOCK:   clock_table(&w); break;
+#if SOS_HAVE_CHAT
     case LH_WHO:     who_table(&w); break;
+#endif
 #if SOS_HAVE_SSH
     case LH_SSH:     ssh_table(&w); break;
 #endif

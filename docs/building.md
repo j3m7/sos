@@ -90,9 +90,15 @@ Parts of SOS can be left out of the image at compile time
 | `SOS_FEATURE_NTS` | authenticated time: `nts`, `time sync`, `time server` | TLS |
 | `SOS_FEATURE_SSH` | the SSH server and SFTP, `ssh`, `key` | NET |
 | `SOS_FEATURE_LUA` | Lua scripts on core 1, `lua` | |
+| `SOS_FEATURE_CHAT` | `who`, `wall`, `chat`; `sos.who`, `sos.wall` | |
+| `SOS_FEATURE_PAGER` | `more`, `<command> \| more` | |
+| `SOS_FEATURE_EDITOR` | `edit` | PAGER |
+| `SOS_FEATURE_MAN` | `man` | PAGER |
+| `SOS_FEATURE_FSCK` | `sd check`, the `sd-check` health check | |
+| `SOS_FEATURE_ARCHIVE` | `gzip`, `gunzip`, `zcat`, `tar` (and zlib) | |
 
 The security core (root secret, sealed configuration, console password, health checks,
-watchdog) is always built. Turning on a feature whose dependency is off stops the configure
+watchdog) and the SD card's file commands are always built. Turning on a feature whose dependency is off stops the configure
 with a message saying what to turn off too; a feature left unset follows its dependencies, so
 `-DSOS_FEATURE_NET=OFF` also leaves out TLS, HTTP, NTS and SSH. Each option is `AUTO` (the
 default), `ON` or `OFF`, and a build directory remembers only what it was given, so turning NET
@@ -106,11 +112,14 @@ Presets for the usual combinations, each in its own build directory:
 cmake --preset offline && cmake --build --preset offline   # nothing over the air
 cmake --preset pico2 && cmake --build --preset pico2       # the plain Pico 2 (no Wi-Fi chip)
 cmake --preset minimal && cmake --build --preset minimal   # the security core, shell and card
+cmake --preset headless && cmake --build --preset headless # SSH, SFTP, time, HTTPS; no Lua etc.
+cmake --preset pico2-minimal && cmake --build --preset pico2-minimal
 ```
 
 On the board, `version` and `health` show the features line (`features: LUA (off: NET TLS HTTP
 NTS SSH)`), and Lua scripts read it with `sos.features()`. `help` and Tab list only what the
-image has. A Pico 2 W built without NET doesn't drive the Wi-Fi chip at all: its LED stays off,
+image has; a command left out answers as any unknown command does, and `<command> | more`
+without the pager says `more: not in this build`. A Pico 2 W built without NET doesn't drive the Wi-Fi chip at all: its LED stays off,
 and `power` can't read VSYS or USB power (they go through the chip).
 
 `just features` builds every combination worth checking into `build-features/<name>` and prints
