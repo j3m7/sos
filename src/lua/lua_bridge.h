@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/config.h"
+
 #define LUA_PATH_MAX   256
 #define LUA_REQ_DATA   4096         // payload per request (file data, directory entries)
 #define LUA_OUT_SIZE   2048         // output ring buffer
@@ -43,8 +45,8 @@ typedef struct {
     // The time zone when the script started (sos.localdate, sos.localtime, sos.zone; #240):
     // copied from the configuration here, so a change on core 0 meanwhile can't tear the rule
     // core 1 is reading. Empty: UTC.
-    char tz_name[40];
-    char tz_rule[64];
+    char tz_name[CONFIG_TZ_NAME_MAX + 1];
+    char tz_rule[CONFIG_TZ_RULE_MAX + 1];
     uint32_t mem_limit;             // bytes the script may allocate
     bool repl;                      // interactive prompt (`lua` alone) instead of code or path
     // Interactive prompt, one line at a time: core 0 fills repl_line and repl_reset, then sets
