@@ -537,6 +537,42 @@ def tzrule():
     write("tzrule", "past-24h", bytes([56]) + b"<+05>-5<+06>,J100/100,J300/-100:59:59")
 
 
+# --- gz: [piece - 1][buffer / 16 - 1] then a gzip file -----------------------------------------
+
+def gz_member(data, level=6, header=None, wbits=31):
+    if header is None:
+        c = zlib.compressobj(level, zlib.DEFLATED, wbits)
+        return c.compress(data) + c.flush()
+    # A hand-made header (all of FTEXT FHCRC FEXTRA FNAME FCOMMENT), raw deflate, the trailer.
+    c = zlib.compressobj(level, zlib.DEFLATED, -15)
+    body = c.compress(data) + c.flush()
+    h = b"\x1f\x8b\x08\x1f" + struct.pack("<I", 0) + b"\x00\x03"
+    h += struct.pack("<H", 4) + b"ab\x00\x00" + b"name.txt\x00" + b"comment\x00"
+    h += struct.pack("<H", zlib.crc32(h) & 0xffff)
+    return h + body + struct.pack("<II", zlib.crc32(data), len(data) & 0xffffffff)
+
+
+def gz():
+    text = b"".join(b"%d\n" % i for i in range(1, 700))
+    one = gz_member(text)
+    write("gz", "one", bytes([255, 255]) + one)
+    write("gz", "small-pieces", bytes([0, 0]) + one)
+    write("gz", "members", bytes([6, 3]) + gz_member(text[:900]) + gz_member(b"") +
+          gz_member(text[900:], 1))
+    write("gz", "zeros", bytes([30, 10]) + one + bytes(600))
+    write("gz", "junk", bytes([30, 10]) + one + b"junk")
+    write("gz", "zeros-junk", bytes([30, 10]) + one + bytes(20) + b"\x1f\x8b")
+    write("gz", "stored", bytes([100, 255]) + gz_member(bytes(range(256)) * 4, 0))
+    write("gz", "fixed", bytes([1, 0]) + gz_member(b"hello, hello, hello", 9))
+    write("gz", "header", bytes([3, 7]) + gz_member(text[:500], 6, header=True))
+    bad = bytearray(one)
+    bad[-8] ^= 0xff
+    write("gz", "bad-crc", bytes([50, 50]) + bytes(bad))
+    write("gz", "cut", bytes([50, 50]) + one[:len(one) // 2])
+    write("gz", "zlib-not-gzip", bytes([50, 50]) + gz_member(text[:300], 6, wbits=15))
+    write("gz", "bomb", bytes([255, 255]) + gz_member(bytes(200000), 9))
+
+
 for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat,
-          tzrule):
+          tzrule, gz):
     f()
