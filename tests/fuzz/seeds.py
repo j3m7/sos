@@ -601,6 +601,23 @@ def sums():
     write("sums", "long", bytes([255]) + b"x" * 4097 + b"\n" + h1 + b"  ok\n" + b"y" * 5000)
 
 
+# --- tar: [piece / 3] then an archive (tests/data/archives/tar, tools/make-archive-fixtures.sh) --
+
+def tar():
+    d = os.path.join(HERE, "..", "data", "archives", "tar")
+    for name, piece in (("ustar.tar", 255), ("gnu.tar", 0), ("pax.tar", 7), ("v7.tar", 170),
+                        ("evil.tar", 3), ("pax-evil.tar", 1), ("global.tar", 100),
+                        ("b256.tar", 20), ("old.tar", 50), ("signed.tar", 2),
+                        ("toolong.tar", 30), ("paxbig.tar", 11), ("links.tar", 90),
+                        ("noend.tar", 13), ("badsum.tar", 171)):
+        with open(os.path.join(d, name), "rb") as f:
+            data = f.read()
+        # The end's zero blocks and padding past the first two add nothing for the fuzzer.
+        while len(data) > 1024 and data[-1536:] == bytes(1536):
+            data = data[:-512]
+        write("tar", name.replace(".tar", ""), bytes([piece]) + data)
+
+
 for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat,
-          tzrule, sums, gz):
+          tzrule, sums, gz, tar):
     f()

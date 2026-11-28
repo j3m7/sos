@@ -33,6 +33,9 @@ bool sdcard_mount_retry(void);
 // Is a card mounted now? Never mounts one.
 bool sdcard_mounted(void);
 
+// Is the mounted card exFAT (files over 4 GB minus 1 allowed)? False if none is mounted.
+bool sdcard_exfat(void);
+
 // When the last mount attempt ended (time since boot, us; 0: none yet), whoever asked and
 // however it ended: the log writer's quiet retry waits a minute after it (core/logfile.h).
 uint64_t sdcard_last_mount_us(void);

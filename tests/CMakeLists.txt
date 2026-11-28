@@ -578,6 +578,25 @@ target_compile_definitions(test_gzip PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
 target_link_libraries(test_gzip PRIVATE zlib_host)
 add_test(NAME gzip COMMAND test_gzip)
 
+# src/files/tar_parse.c: tar's reader and name rules, over archives made by GNU tar, bsdtar and
+# python's tarfile (tests/data/archives/tar, tools/make-archive-fixtures.sh).
+add_executable(test_tar_parse test_tar_parse.c ${SOS_ROOT}/src/files/tar_parse.c
+    ${SOS_ROOT}/src/files/path.c)
+target_include_directories(test_tar_parse PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_tar_parse PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+add_test(NAME tar_parse COMMAND test_tar_parse)
+
+# src/files/tar.c: tar tf and tar xf as commands, over a card in memory (tests/stubs; names
+# compared ignoring case), with the real tar_parse.c, gz.c, files.c and bigjob.c.
+add_executable(test_tar test_tar.c ${SOS_ROOT}/src/files/tar.c ${SOS_ROOT}/src/files/tar_parse.c
+    ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c
+    ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/shell/cmdcheck.c
+    ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_tar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
+target_compile_definitions(test_tar PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+target_link_libraries(test_tar PRIVATE zlib_host)
+add_test(NAME tar COMMAND test_tar)
+
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
 add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
 target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
@@ -638,3 +657,4 @@ target_link_libraries(replay_gz PRIVATE zlib_host)
 if (SOS_FUZZ)
     target_link_libraries(fuzz_gz PRIVATE zlib_host)
 endif()
+sos_fuzz(tar ${SOS_ROOT}/src/files/tar_parse.c ${SOS_ROOT}/src/files/path.c)   # tar's input

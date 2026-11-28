@@ -95,7 +95,11 @@ target_sources(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
     ${SDCARD_ROOT}/src/src/util.c
 )
 # SYSTEM: third-party headers, kept out of SOS's warnings (cmake/warnings.cmake).
+# config/fatfs first: its ffconf.h wraps the library's (in src/include) with FF_USE_CHMOD 1 for
+# f_utime() (tar's dates). The library's sources are compiled in the sos target with this same
+# path, so FatFs and SOS see one configuration.
 target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/config/fatfs
     ${SDCARD_ROOT}/src/ff15/source
     ${SDCARD_ROOT}/src/sd_driver
     ${SDCARD_ROOT}/src/include
@@ -322,6 +326,8 @@ set(SOS_SOURCES
     src/files/path.c
     src/files/sums.c
     src/files/sums_parse.c
+    src/files/tar.c
+    src/files/tar_parse.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c

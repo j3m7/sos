@@ -16,6 +16,7 @@ working directory:
 | `sha256sum <file>...`, `sha256sum -c <list>` | print files' SHA-256, or check files against a checksum list (also `sha1sum`, `sha512sum`; [below](#checksums)) |
 | `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |
 | `gzip [-k] [-f] [-1..-9] <file>...` | compress `x` to `x.gz` ([below](#gzip-files)) |
+| `tar tf <archive>`, `tar xf <archive> [-C <dir>] [-f]` | list or extract a tar archive, plain or gzipped ([below](#tar-archives)) |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
@@ -23,8 +24,8 @@ working directory:
 | `sd check` | console only, on an unmounted card: check its file system (exFAT or FAT32), reporting problems without writing |
 | `sd check fix` | console only, on an unmounted card: check, show what it would repair, and after `yes` repair what loses no data (FAT32 for now) |
 
-- **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip`, `zcat` and `gzip` do a little
-  work per pass of the main loop, so SSH sessions, the console and the watchdog keep going;
+- **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip`, `zcat`, `gzip` and `tar` do a
+  little work per pass of the main loop, so SSH sessions, the console and the watchdog keep going;
   Ctrl-C stops them (a stopped `cp` removes its partial copy). Commands typed meanwhile run
   afterwards.
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
@@ -91,6 +92,26 @@ run as jobs (Ctrl-C stops them) and read what GNU gzip writes, including joined 
   gzip settings would take 262 KB. Files come out larger than with `gzip` on a computer: about
   5 % for logs, up to 20 % for prose and source code
   ([measurements](design/archives.md#54-gzip)).
+
+## tar archives
+
+`tar tf pkg.tar.gz` lists an archive, `tar xf pkg.tar.gz -C /apps` extracts it (into the working
+directory without `-C`; the directory must exist). `.tar`, `.tar.gz` and `.tgz` are read alike:
+gzip is recognised by its first bytes and decompressed in the same pass. GNU tar, bsdtar and pax
+archives work, long names included. The listing goes through pipes (`tar tf x.tgz | grep src/`).
+Full rules in `man tar`; design: [docs/design/archives.md](design/archives.md) §6.
+
+- **Names are checked first.** A leading `/` is removed; names with `..`, names FAT can't store,
+  a name differing only in case from one already extracted, links, devices and FIFOs are skipped
+  with the reason, and the rest is extracted. Protected paths need the console, as for `cp`.
+- **Nothing half-written, nothing replaced silently:** each file is written to `<name>.part`
+  and renamed at its end; Ctrl-C, a damaged archive or a full card stops with `stopped: <why>`,
+  removing only the current `.part`. An existing file is skipped unless `-f` (which here means
+  overwrite, not "archive file" as on Unix).
+- **Dates are kept:** files and directories get the archive's dates (UTC, like every file
+  date on the card). Modes and owners are ignored.
+- **Memory:** about 21 KB, plus 40 KB for a gzipped archive; one of `tar`, `gunzip`, `zcat`
+  and `fetch` runs at a time.
 
 ## Checking the card
 
