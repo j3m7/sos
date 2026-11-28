@@ -537,7 +537,7 @@ function(sos_fuzz name)
         target_link_options(fuzz_${name} PRIVATE -fsanitize=fuzzer)
     endif()
 endfunction()
-sos_fuzz(http ${SOS_ROOT}/src/net/http_msg.c)
+sos_fuzz(http ${SOS_ROOT}/src/net/http_msg.c ${SOS_ROOT}/src/files/path.c)
 sos_fuzz(nts_ke ${SOS_ROOT}/src/time/nts_ke.c)
 sos_fuzz(nts_ntp ${SOS_ROOT}/src/time/nts_ntp.c)
 sos_fuzz(certbundle ${SOS_ROOT}/src/tls/certbundle.c ${SOS_ROOT}/src/core/heaptag.c

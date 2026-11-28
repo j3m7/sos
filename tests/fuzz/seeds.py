@@ -39,6 +39,10 @@ def http():
         flags = 1 if name == "head" else 2
         write("http", name, bytes([flags, 64, 7]) + r)
     write("http", "url", b"https://user@example.org:8443/a/b?c=d#e")
+    # Redirect targets (fetch): relative with dots, scheme-relative, and a download's name.
+    write("http", "location", b"../x/./pkg%201.2.tar.gz?q=/a/../b#frag")
+    write("http", "location-host", b"//cdn.example.org:444/d/SHA256SUMS")
+    write("http", "name", b"https://example.org/dl/caf%C3%A9%2Etar.gz?raw=1")
 
 
 # --- nts_ke: the server's records --------------------------------------------------------------

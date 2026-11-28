@@ -20,6 +20,13 @@ const char *path_basename(const char *path);
 // Append "/<name>" to the directory `dir` (absolute, normalized) in `out`; false if too long.
 bool path_join(const char *dir, const char *name, char *out, size_t n);
 
+// Check one file name (a single component, as UTF-8) that came from outside, such as the name a
+// download's URL suggests, before anything is created under it. Returns NULL if FatFs can store
+// it as given, or why not: empty, "." or "..", a '/' or '\\', control characters, one of
+// "*:<>?|, ending in a space or a dot (FatFs would drop those, so the file would be named
+// otherwise), invalid UTF-8, or over 255 UTF-16 units (FF_MAX_LFN).
+const char *path_name_check(const char *name);
+
 // The protected paths, which only the console may change (files_write_allowed()):
 // - /certs: the TLS trust anchors (root certificates);
 // - /var/log: the log files (core/logfile.h), so a session that gets in can't erase its own
