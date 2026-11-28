@@ -242,7 +242,7 @@ Keep one SSH session open beside the console.
 5. **[host]** `sftp $B`, then `put r.bin /certs/x.bin`, `bye`
    You should see: refused: only the console changes `/certs`.
 
-## 12. Checksums and gzip
+## 12. Checksums, gzip and tar
 
 1. **[host]** In `~/sos-review`: `sha256sum r.bin > SUMS && printf '%064d  missing.bin\n' 0 >> SUMS`,
    then `sftp $B` and `put SUMS /review/SUMS`.
@@ -263,6 +263,31 @@ Keep one SSH session open beside the console.
    You should see: refused because `d.log.gz` exists; `gzip -f` replaces it.
 9. **[host]** In `~/sos-review`: `sftp $B`, `get /review/d.log.gz`, `bye`, then `gunzip -t d.log.gz`
    You should see: no error (the board's gzip is standard).
+10. **[host]** Make two archives in `~/sos-review`: a normal one, with a symlink and two names
+    that differ only in case, and one with a `..` name:
+    ```sh
+    mkdir -p pkg/docs && echo hi > pkg/README && echo x > pkg/readme && echo hello > pkg/docs/a.txt
+    ln -sf README pkg/link
+    tar -czf pkg.tgz pkg && tar -cf bad.tar -P ../sos-review/pkg/docs/a.txt
+    ```
+    then `sftp $B`, `put pkg.tgz /review/pkg.tgz`, `put bad.tar /review/bad.tar`, `bye`.
+11. **[console]** `tar tf /review/pkg.tgz`
+    You should see: one line per entry with its type (`d`, `-`, `l`), size, UTC date and name;
+    the link shows its target and, in brackets, why `tar xf` would skip it. The gzip is
+    recognised without `z`.
+12. `tar tf /review/pkg.tgz | grep README`
+    You should see: only the `pkg/README` line.
+13. `mkdir /review/out`, then `tar xvf /review/pkg.tgz -C /review/out`
+    You should see: each name as it is extracted; the link skipped; one of `README`/`readme`
+    skipped as `same name as ... on FAT`; then `<n> files, <n> directories, <n> skipped`.
+14. `cat /review/out/pkg/docs/a.txt`
+    You should see: `hello`.
+15. The same `tar xvf` again.
+    You should see: each file skipped with `exists (-f replaces it)`. With `-f` added after
+    the archive they are replaced (on this board `-f` means overwrite; the archive is always
+    the word after the mode).
+16. `tar xf /review/bad.tar -C /review/out`
+    You should see: the entry skipped as `unsafe path`, and the count of skipped entries.
 
 ## 13. Time
 
@@ -486,7 +511,6 @@ at a time, and tell the Reviewer before you start this section.
 
 Review these once they merge; their PRs describe what to try:
 
-- `tar tf` / `tar xf`: list and extract archives (#274).
 - `tar cf` / `tar czf`: create archives (#277).
 - Pager search: matches highlighted, `n` past the last match, smart case (#278). Then redo
   section 9 step 2 with `/quoting`.
