@@ -79,7 +79,7 @@ static bool same_value(const bootkey_hash_t *a, const bootkey_hash_t *b) {
 
 void fullcheck_judge_image(const fullcheck_image_t *in, health_result_t *out) {
     if (in->boot == BOOTKEY_HASH_NONE && in->now == BOOTKEY_HASH_NONE) {
-        set(out, HEALTH_SKIP, "image has no hash (built before phase 5?): not checked");
+        set(out, HEALTH_SKIP, "image has no hash: not checked");
         return;
     }
     if (in->boot == in->now && in->boot != BOOTKEY_HASH_OK) {

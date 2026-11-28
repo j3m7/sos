@@ -1804,7 +1804,7 @@ hashed in place, not copied). So the check covers what happens after boot:
 | FAIL | the computed hash differs from the copy taken at boot: the body changed | `flash image changed: reflash; keys, seals off until reset` |
 | FAIL | the flash's HASH_VALUE differs from the copy taken at boot: the block changed (judged first, a different finding from a changed body) | `image hash item changed: reflash; keys, seals off until reset` |
 | WARN | the block loop, the load map or HASH_DEF isn't one this code understands (the boot ROM accepted it, so the parser is behind, not the image) | `image's hash block not understood: not checked` |
-| SKIP | the image has no HASH_VALUE (built without `pico_hash_binary`: an image from before phase 5, or built another way) | `image has no hash (built before phase 5?): not checked` |
+| SKIP | the image has no HASH_VALUE (built without `pico_hash_binary`: an image from before phase 5, or built another way) | `image has no hash: not checked` (a text that won't age once every build is hashed) |
 
 **What a FAIL does (decided on review): KEYS and CRYPTO, on the two FAILs only.** The WARN and
 the SKIP hold no gate. The code in flash isn't what was

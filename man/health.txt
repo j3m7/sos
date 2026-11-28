@@ -92,7 +92,7 @@ DESCRIPTION
                     card: unmounted by hand, sd check, a format, open files
     The slow checks run only on 'health full' or 'health run <name>':
         ram         a march test (March C-, six data patterns) over free heap,
-                    taken a 4 KB block at a time while at least 96 KB stays
+                    taken a 4 KB block at a time while about 96 KB stays
                     free, and over the free 4 KB scratch bank, put back as it
                     was. A wrong read is tested again: WARN if it doesn't come
                     back, FAIL if the same address is wrong twice (power-cycle;

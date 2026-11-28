@@ -134,7 +134,7 @@ TEST(image_skip_and_warn) {
     fullcheck_image_t in = {BOOTKEY_HASH_NONE, BOOTKEY_HASH_NONE, NULL, NULL, NULL, 0, 0};
     fullcheck_judge_image(&in, &r);
     CHECK_EQ(r.status, HEALTH_SKIP);
-    CHECK(is("image has no hash (built before phase 5?): not checked"));
+    CHECK(is("image has no hash: not checked"));
     in.boot = in.now = BOOTKEY_HASH_UNKNOWN;
     fullcheck_judge_image(&in, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
