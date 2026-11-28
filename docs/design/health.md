@@ -15,7 +15,8 @@ built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in �
 the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
 waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
 changes, #255), built (§9.6), waiting for its board run. Phase 5, the full tier: designed in
-§9.7 (approved, #262, with the image hash source decided by the user).
+§9.7 (approved, #262, with the image hash source decided by the user), built (§9.8), waiting
+for its board run.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -1957,6 +1958,81 @@ Decided (Reviewer, and the user for the build rule, on #262):
    documented exception, like `crypto-ssh`'s 60 ms steps. The SKIP texts say how to run it.
 6. **Registry:** 25 of 32 is fine.
 
+### 9.8 As built (phase 5)
+
+Built as §9.7 decides, with these details settled by the code. The march test is in `memtest.c`
+(`tests/test_memtest.c`: a simulated memory, one fault at a time: stuck-at in every bit,
+transition faults, inversion and idempotent coupling between two words and between bits of one
+word, an address decoder fault), the judging in `fullcheck.c` (`tests/test_fullcheck.c`, 13
+tests), the hash items in `bootkey.c` (`bootkey_image_hash()`, three more tests in
+`tests/test_bootkey.c`); the work on the board in `fullcheck_board.c`, and `sd check`'s job
+split in `sdcard.c` (`check_begin()`, `check_work()`, used by `sd check` and by
+`sdcard_check_health_begin()` and `sdcard_check_health_step()`).
+
+**The hash, checked against real images.** A host program built from `bootkey.c` and
+`fullcheck.c` (the walk `fullcheck_hash_next()` the board uses, with OpenSSL's SHA-256) found
+the items in `build/sos.bin` and computed picotool's `hash value` for it: 1 256 156 bytes hashed
+for the phase 5 debug image, signed. An unsigned build (`-DSOS_SIGN_KEY=none`) now carries a
+hash too (`picotool info -a`: `hash: verified`, no signature), whose block hashes 11 of its
+words, and the same program matched it.
+
+**Texts.** As in §9.7, but where they differ:
+
+| Check | §9.7 | As built |
+|---|---|---|
+| `ram` | `184 KB of free heap in 0.11 s; SCRATCH_Y in use: not tested` | `184 KB free heap in 0.11 s; SCRATCH_Y in use: not tested` (room for the longer reasons `SCRATCH_Y DMA 15 busy`, `SCRATCH_Y holds the stack`, `SCRATCH_Y no memory`) |
+| `ram` | (heap under 96 KB, SCRATCH_Y tested) | `free heap 80 KB, under 96 KB: SCRATCH_Y only, no faults` |
+| `ram`, `image`, `sd-check` | (no memory for the check's own state) | SKIP `no memory to run the test`, `no memory to hash the image`, `no memory to check the card` |
+| `sd-check` | `3 problems, 512 KB lost: sd check lists, sd check fix repairs` | `3 problems, 512 KB lost: sd check fix repairs them`, and without lost clusters `1 problem: sd check lists it, sd check fix repairs` |
+| `sd-check` | `2 problems, 4 cross-linked: sd check fix before writing to it` | `4 cross-linked clusters: sd check fix before writing`, and `5 clusters used but free: sd check fix before writing` (counts of up to ten digits fit) |
+| `sd-check` | `check stopped in pass 2: read error at sector 81920` | the same, the reason cut to fit; `not checked: <why>` (WARN) when fsck found no volume to check |
+
+**Also settled:**
+
+- **`ram`'s steps:** the first only plans (the free heap, SCRATCH_Y's state); then one 4 KB
+  block a step while `heap_free()` stays above 96 KB plus the block, then the four 1 KB pieces
+  of SCRATCH_Y, then the release. The blocks' pointers are kept in an array sized from the free
+  heap at the start (about 300 bytes). A piece of SCRATCH_Y is saved into the first heap block
+  tested (or a 1 KB buffer when none was), tested and put back with interrupts off on core 0.
+  SCRATCH_Y counts as free when `__scratch_y_start__` equals `__scratch_y_end__` and neither the
+  core 0 stack (`__StackBottom` to `__StackTop`) nor MSPLIM is inside it.
+- **A mismatch** is tested again in the next step, over the same region; the log line (warning,
+  or err when it repeated) gives the address, what was written and read, the element, the
+  background, a busy DMA channel writing into the region if there was one, and, for a FAIL,
+  `keys and seals refused until reset; power-cycle, and if it fails again the board's RAM is
+  faulty`. A FAIL ends the test at once (the blocks are freed). `health state-dump` keeps the
+  last one.
+- **SCRATCH_X:** `fullcheck_board.c` asserts at build time that the in-place range
+  (`SRAM_SCRATCH_Y_BASE`, 4 KB) doesn't reach `SRAM_SCRATCH_X_BASE`'s 4 KB.
+- **`image`:** `fullcheck_boot()` reads the items through the cached alias in `health_boot()`,
+  before the boot tier; the check reads the items again, and the flash, through
+  `XIP_NOCACHE_NOALLOC_BASE`. The image is taken, as `bootkey` takes it, from
+  `__flash_binary_start` to 4 KB past `__flash_binary_end`, where picotool's block lies. The
+  step that hashes the last bytes also finishes (one more step only when they end exactly on a
+  16 KB step): 78 steps for the phase 5 debug image's 1 256 156 bytes. A FAIL's log line gives
+  the first 8 bytes of the computed hash and the first two words of the one booted, and says the
+  boot ROM won't start the image after a reset.
+- **`sd-check`:** the job without a shell skips the report lines (fsck still counts them) and
+  the progress lines, but logs the header and the summary as `sd check` does. A `config reset`
+  during it ends it as `sd check` ends (WARN `check stopped in pass N: the configuration was
+  erased ...`). Its start refuses a card that `sd check` or a format owns (SKIP with which).
+- **`health fault ram once|twice`, `health fault image`** (test builds, console): the
+  disturbance is a flip of bit 10 in the middle word of the region, between the first element's
+  writes and the second element's reads (`memtest_march()`'s `disturb` hook); for `image`, byte
+  17 of a copy of the first 64 bytes hashed. Each is used by one run.
+- **`HEAP_HEALTH`** is the tag `health` in `mem` and `sos.health()`'s heap table.
+- **The registry:** 23 checks, 25 with the test-only gate checks, of 32.
+
+**Step times** (estimates; the PASS texts carry the measured totals): `ram` about 2 ms a block
+and 0.5 ms a piece; `image` 16 KB of SHA-256 a step, about 5 to 6.5 ms; `sd-check` aimed at 6
+ms, its first step the card's opening.
+
+**Cost** (`arm-none-eabi-size -A`, debug build, against main 11112a8): `.text` +5.2 KB,
+`.rodata` +1.9 KB, `.bss` +160 bytes (the hash items copied at boot, the last mismatch, the test
+faults). An unsigned image gains picotool's hashed block.
+
+**Board run:** as §9.7 lists.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -1977,7 +2053,7 @@ Decided (Reviewer, and the user for the build rule, on #262):
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check. Design: §9.7 (the hash is the image's own HASH_VALUE, with
    every build hashed; `ram` and `image` hold KEYS and CRYPTO on their FAILs; `sd check` runs
-   only on a card unmounted by hand).
+   only on a card unmounted by hand); as built: §9.8.
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
 
 ## 11. Left open for later phases
