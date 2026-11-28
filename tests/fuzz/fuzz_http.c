@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // src/net/http_msg.c: what an HTTP server sends back (net/http.c feeds it as TCP delivers it),
-// and URLs as typed. The first bytes choose HEAD or not, the body limit and how the response
-// is split into pieces; the rest is the response. The same bytes are also a redirect's Location
+// and URLs as typed (https only, and with plain http as fetch takes them). The first bytes
+// choose HEAD or not, the body limit, how the response is split into pieces and how the
+// connection ends (http_resp_end()); the rest is the response. The same bytes are also a redirect's Location
 // (resolved against a fixed URL and against themselves as a URL) and a URL path whose last
 // segment names a download (fetch), checked as a file name (files/path.c).
 
@@ -18,15 +19,18 @@
 static char text[HTTP_URL_MAX + 1];
 static char name[HTTP_PATH_MAX + 1];
 
-// Follow `loc` from `base` as http.c does; the result, when taken, must be a URL that parses.
-static void redirect(const http_url_t *base, const char *loc, bool downgrade) {
+// Follow `loc` from `base` as http.c does; the result, when taken, must be a URL that parses
+// to the same, and plain http only where it was allowed.
+static void redirect(const http_url_t *base, const char *loc, bool plain, bool downgrade) {
     http_url_t u = *base;
     if (http_url_resolve(base, loc, text, sizeof(text)) == NULL && strlen(text) > HTTP_URL_MAX)
         abort();
-    if (http_redirect_target(&u, loc, downgrade, text, sizeof(text)) == NULL) {
+    if (http_redirect_target(&u, loc, plain, downgrade, text, sizeof(text)) == NULL) {
         http_url_t again;
-        if (http_url_parse(text, &again) || strcmp(again.host, u.host) ||
-            strcmp(again.path, u.path) || again.port != u.port)
+        if (http_url_parse_any(text, &again, plain) || strcmp(again.host, u.host) ||
+            strcmp(again.path, u.path) || again.port != u.port || again.plain != u.plain)
+            abort();
+        if (u.plain && (!plain || (!base->plain && !downgrade)))
             abort();
     }
 }
@@ -45,16 +49,21 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     memcpy(url, data, size);
     url[size] = '\0';
     http_url_t u, base;
-    bool url_ok = http_url_parse(url, &u) == NULL;
-    if (url_ok)
+    bool url_ok = http_url_parse_any(url, &u, true) == NULL;
+    if (url_ok) {
         url_name(u.path);
-    url_name(url);
-    if (http_url_parse("https://a.example:8443/d/e/f?q=1", &base) == NULL) {
-        redirect(&base, url, false);
-        redirect(&base, url, true);
+        http_url_t https;
+        if ((http_url_parse(url, &https) == NULL) == u.plain)
+            abort();                                    // https-only must refuse exactly http
     }
+    url_name(url);
+    static const char *const bases[] = {"https://a.example:8443/d/e/f?q=1", "http://b.example/d/"};
+    for (size_t i = 0; i < 2; i++)
+        if (http_url_parse_any(bases[i], &base, true) == NULL)
+            for (unsigned m = 0; m < 4; m++)
+                redirect(&base, url, m & 1, m & 2);
     if (url_ok)
-        redirect(&u, "../x/./y?z#f", false);
+        redirect(&u, "../x/./y?z#f", true, false);
     free(url);
 
     uint8_t flags = fuzz_byte(&data, &size);
@@ -76,8 +85,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         data += used;
         size -= used;
     }
-    if (flags & 2)
-        http_resp_eof(&p);
+    if (flags & 2) {
+        http_parse_state_t before = p.state;
+        const char *why = http_resp_end(&p, flags & 4, (http_end_t)((flags >> 3) % 3));
+        if ((why == NULL) != (p.state == HTTP_P_DONE) || (before == HTTP_P_DONE && why))
+            abort();
+    }
     if (http_resp_headers_done(&p)) {
         char buf[256];
         http_resp_header(&p, "content-length", buf, sizeof(buf));

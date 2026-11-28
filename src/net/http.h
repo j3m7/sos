@@ -7,10 +7,13 @@
 // fast as the caller takes it, so a slow consumer slows the server down (TCP flow control)
 // instead of filling memory.
 //
-// Only https://. The server certificate is checked as for every TLS connection (tls/: built-in
-// roots, the approved /certs/roots.pem, the host name). Redirects are followed only when the
-// caller asks (http_opts_t.max_redirects); otherwise the caller sees the 3xx status and the
-// Location header. Compressed responses aren't requested.
+// https://, and plain http:// only for a caller that asks (http_opts_t.allow_plain: fetch,
+// which prints the hash of what it saved). The server certificate is checked as for every TLS
+// connection (tls/: built-in roots, the approved /certs/roots.pem, the host name). A plain
+// request goes over a plain TCP connection from tls/ (tls_open_plain()): the same DNS, timeouts,
+// flow control and connection slots, nothing protecting the bytes. Redirects are followed only
+// when the caller asks (http_opts_t.max_redirects); otherwise the caller sees the 3xx status and
+// the Location header. Compressed responses aren't requested.
 
 #ifndef SOS_HTTP_H
 #define SOS_HTTP_H
@@ -28,7 +31,7 @@
 #define HTTP_DEFAULT_TIMEOUT 30000          // ms
 
 typedef enum {
-    HTTP_CONNECTING,    // DNS, TCP, TLS handshake
+    HTTP_CONNECTING,    // DNS, TCP, TLS handshake (https)
     HTTP_SENDING,       // request going out
     HTTP_WAITING,       // waiting for the status line and headers
     HTTP_BODY,          // headers in (http_response()); read the body with http_read()
@@ -38,7 +41,7 @@ typedef enum {
 
 typedef struct {
     const char *method;             // "GET", "POST", "HEAD", ...
-    const char *url;                // https://host[:port]/path?query
+    const char *url;                // https://host[:port]/path?query (or http://, allow_plain)
     const char *content_type;       // for the body; NULL for none
     const char *const *headers;     // extra "Name: value" lines, NULL-terminated, or NULL
     const void *body;
@@ -52,8 +55,11 @@ typedef struct {
     // whatever host a server names). A Location that can't be followed (http_redirect_target())
     // fails the request. http_redirects() and http_url() tell the caller where it went.
     uint8_t max_redirects;
-    bool allow_downgrade;           // a redirect from https to plain http may be followed (once
-                                    // plain http exists: until then it's refused either way)
+    // Plain http: the URL, and redirects, may be http://. Nothing protects the bytes, nor the end
+    // of a body without a length, which is taken at the TCP close (http_resp_t.ended_by_close).
+    bool allow_plain;
+    bool allow_downgrade;           // with allow_plain: a redirect from https to plain http may be
+                                    // followed (otherwise it's refused; http to https always is)
 } http_opts_t;
 
 typedef struct http_req http_req_t;
@@ -75,8 +81,12 @@ const http_resp_t *http_response(const http_req_t *r);
 
 const char *http_error(const http_req_t *r);
 
-// TLS statistics (handshake time, wolfSSL heap peak), or NULL before the connection exists.
+// TLS statistics (handshake time, wolfSSL heap peak), or NULL before the connection exists or
+// when it's plain http.
 const tls_stats_t *http_tls_stats(const http_req_t *r);
+
+// True if the URL being requested now (the last hop's) is plain http.
+bool http_plain(const http_req_t *r);
 
 // Milliseconds from http_start() to the headers, and to the end (or now).
 uint32_t http_headers_ms(const http_req_t *r);

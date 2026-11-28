@@ -217,24 +217,30 @@ TEST(redirect_target) {
     char text[HTTP_URL_MAX + 1];
 
     CHECK(http_url_parse("https://a/dir/file", &u) == NULL);
-    CHECK(http_redirect_target(&u, "../other/f.tgz?x=1", false, text, sizeof(text)) == NULL);
+    CHECK(http_redirect_target(&u, "../other/f.tgz?x=1", false, false, text, sizeof(text)) ==
+          NULL);
     CHECK(!strcmp(text, "https://a/other/f.tgz?x=1"));
     CHECK(!strcmp(u.host, "a"));
     CHECK(!strcmp(u.path, "/other/f.tgz?x=1"));
 
-    CHECK(http_redirect_target(&u, "https://cdn.example:444/x", false, text, sizeof(text)) ==
-          NULL);
+    CHECK(http_redirect_target(&u, "https://cdn.example:444/x", false, false, text,
+                               sizeof(text)) == NULL);
     CHECK(!strcmp(u.host, "cdn.example"));
     CHECK_EQ(u.port, 444);
 
-    // Down to plain http: refused, with -k or without (plain http isn't there yet); the
-    // messages differ.
+    // Down to plain http: refused for a caller that doesn't take plain http, even with
+    // allow_downgrade; refused without -k for one that does (fetch); followed with both.
     CHECK(http_url_parse("https://a/f", &u) == NULL);
-    const char *no_k = http_redirect_target(&u, "http://a/f", false, text, sizeof(text));
+    const char *no_plain = http_redirect_target(&u, "http://a/f", false, true, text, sizeof(text));
     CHECK(http_url_parse("https://a/f", &u) == NULL);
-    const char *with_k = http_redirect_target(&u, "HTTP://a/f", true, text, sizeof(text));
-    CHECK(no_k && with_k && strcmp(no_k, with_k));
+    const char *no_k = http_redirect_target(&u, "http://a/f", true, false, text, sizeof(text));
+    CHECK(no_plain && no_k && strcmp(no_plain, no_k));
     CHECK(strstr(no_k, "-k") != NULL);
+    CHECK(http_url_parse("https://a/f", &u) == NULL);
+    CHECK(http_redirect_target(&u, "HTTP://a/f", true, true, text, sizeof(text)) == NULL);
+    CHECK(u.plain);
+    CHECK_EQ(u.port, 80);
+    CHECK(!strcmp(text, "HTTP://a/f"));
 
     static const char *const refused[] = {
         "ftp://a/f", "mailto:x@y", "https://user:pw@a/f", "//user@a/f", "https://[::1]/f",
@@ -242,7 +248,9 @@ TEST(redirect_target) {
     };
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
         CHECK(http_url_parse("https://a/f", &u) == NULL);
-        CHECK(http_redirect_target(&u, refused[i], false, text, sizeof(text)) != NULL);
+        CHECK(http_redirect_target(&u, refused[i], false, false, text, sizeof(text)) != NULL);
+        CHECK(http_url_parse("https://a/f", &u) == NULL);
+        CHECK(http_redirect_target(&u, refused[i], true, true, text, sizeof(text)) != NULL);
     }
     // A target whose path is over the parser's limit (the whole fits HTTP_URL_MAX).
     static char loc[HTTP_URL_MAX + 1];
@@ -250,7 +258,85 @@ TEST(redirect_target) {
     memset(loc + 1, 'p', HTTP_PATH_MAX);
     loc[HTTP_PATH_MAX + 1] = '\0';
     CHECK(http_url_parse("https://a/f", &u) == NULL);
-    CHECK(http_redirect_target(&u, loc, false, text, sizeof(text)) != NULL);
+    CHECK(http_redirect_target(&u, loc, false, false, text, sizeof(text)) != NULL);
+}
+
+TEST(redirect_from_plain) {
+    http_url_t u;
+    char text[HTTP_URL_MAX + 1];
+
+    // http to https: always allowed, -k or not.
+    CHECK(http_url_parse_any("http://a/f", &u, true) == NULL);
+    CHECK(http_redirect_target(&u, "https://a/f", true, false, text, sizeof(text)) == NULL);
+    CHECK(!u.plain);
+    CHECK_EQ(u.port, 443);
+
+    // http to http: no -k needed (nothing is downgraded). A relative Location keeps the scheme
+    // and the port; one without the scheme keeps the scheme.
+    CHECK(http_url_parse_any("http://a:8080/d/f", &u, true) == NULL);
+    CHECK(http_redirect_target(&u, "g?x=1", true, false, text, sizeof(text)) == NULL);
+    CHECK(!strcmp(text, "http://a:8080/d/g?x=1"));
+    CHECK(u.plain);
+    CHECK_EQ(u.port, 8080);
+    CHECK(http_redirect_target(&u, "//b/h", true, false, text, sizeof(text)) == NULL);
+    CHECK(!strcmp(text, "http://b/h"));
+    CHECK(u.plain);
+    CHECK_EQ(u.port, 80);
+    CHECK(http_redirect_target(&u, "/x", true, false, text, sizeof(text)) == NULL);
+    CHECK(!strcmp(text, "http://b/x"));
+
+    // Then on to https, and back down to http: that hop is a downgrade again.
+    CHECK(http_redirect_target(&u, "https://c/y", true, false, text, sizeof(text)) == NULL);
+    CHECK(!u.plain);
+    CHECK(http_redirect_target(&u, "http://c/z", true, false, text, sizeof(text)) != NULL);
+}
+
+TEST(url_plain) {
+    http_url_t u;
+    char out[HTTP_URL_MAX + 1];
+    // Refused unless the caller takes plain http, with the message http get has always given.
+    const char *why = http_url_parse("http://example.com/", &u);
+    CHECK(why && strstr(why, "use https://") != NULL);
+    CHECK(http_url_parse_any("http://example.com/", &u, false) != NULL);
+    CHECK(http_url_parse_any("ftp://example.com/", &u, true) != NULL);
+
+    CHECK(http_url_parse_any("HTTP://Example.COM/a?b=1#f", &u, true) == NULL);
+    CHECK(u.plain);
+    CHECK_EQ(u.port, 80);
+    CHECK(!strcmp(u.host, "example.com"));
+    CHECK(!strcmp(u.path, "/a?b=1"));
+    http_url_format(&u, out, sizeof(out));
+    CHECK(!strcmp(out, "http://example.com/a?b=1"));
+
+    CHECK(http_url_parse_any("http://h:8080", &u, true) == NULL);
+    CHECK_EQ(u.port, 8080);
+    http_url_format(&u, out, sizeof(out));
+    CHECK(!strcmp(out, "http://h:8080/"));
+    CHECK(http_url_parse_any("http://h:443/", &u, true) == NULL);    // not the default here
+    http_url_format(&u, out, sizeof(out));
+    CHECK(!strcmp(out, "http://h:443/"));
+    CHECK(http_url_parse_any("https://h:80/", &u, true) == NULL);
+    CHECK(!u.plain);
+    http_url_format(&u, out, sizeof(out));
+    CHECK(!strcmp(out, "https://h:80/"));
+
+    // The same limits as https.
+    CHECK(http_url_parse_any("http://user:pw@h/", &u, true) != NULL);
+    CHECK(http_url_parse_any("http://[::1]/", &u, true) != NULL);
+    CHECK(http_url_parse_any("http://", &u, true) != NULL);
+    CHECK(http_url_parse_any("http://h/a b", &u, true) != NULL);
+    CHECK(http_url_parse_any("http:/h/", &u, true) != NULL);
+
+    // The Host header names the port only when it isn't 80.
+    char buf[256];
+    const char *err;
+    CHECK(http_url_parse_any("http://h/x", &u, true) == NULL);
+    http_request_t req = {"GET", &u, NULL, NULL, 0};
+    CHECK(http_request_build(&req, buf, sizeof(buf), &err) > 0);
+    CHECK(strstr(buf, "\r\nHost: h\r\n") != NULL);
+    CHECK(http_url_parse_any("http://h:8080/x", &u, true) == NULL);
+    CHECK(http_request_build(&req, buf, sizeof(buf), &err) > 0);
+    CHECK(strstr(buf, "\r\nHost: h:8080\r\n") != NULL);
 }
 
 TEST(url_name) {
@@ -526,6 +612,56 @@ TEST(resp_to_close) {
     CHECK_EQ(r->p.state, HTTP_P_DONE);
 }
 
+// http_resp_end(): which way of ending completes which body.
+static http_parse_state_t end_with(const char *resp, bool plain, http_end_t how,
+                                   const char **why, bool *by_close) {
+    result_t *r = run_all(resp, false, false);
+    *why = http_resp_end(&r->p, plain, how);
+    *by_close = r->p.ended_by_close;
+    return r->p.state;
+}
+
+TEST(resp_end_rules) {
+    static const char to_close[] = "HTTP/1.1 200 OK\r\n\r\nall of it";
+    static const char length[] = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhalf";
+    static const char chunked[] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                  "5\r\nhello\r\n";
+    static const char whole[] = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nfull";
+    const char *why;
+    bool by_close;
+
+    // No length: complete at close_notify (https) or the FIN (plain http), and marked as such.
+    CHECK_EQ(end_with(to_close, false, HTTP_END_CLOSE_NOTIFY, &why, &by_close), HTTP_P_DONE);
+    CHECK(why == NULL && by_close);
+    CHECK_EQ(end_with(to_close, true, HTTP_END_FIN, &why, &by_close), HTTP_P_DONE);
+    CHECK(why == NULL && by_close);
+    // ... but not at a FIN on https (no close_notify), nor at a reset on either.
+    CHECK_EQ(end_with(to_close, false, HTTP_END_FIN, &why, &by_close), HTTP_P_ERROR);
+    CHECK(why && strstr(why, "close_notify") != NULL && !by_close);
+    CHECK_EQ(end_with(to_close, true, HTTP_END_RESET, &why, &by_close), HTTP_P_ERROR);
+    CHECK(why && strstr(why, "reset") != NULL);
+    CHECK_EQ(end_with(to_close, false, HTTP_END_RESET, &why, &by_close), HTTP_P_ERROR);
+
+    // A length or chunks not all in: cut short, however the connection ended.
+    static const char *const cut[] = {length, chunked};
+    for (size_t i = 0; i < 2; i++) {
+        CHECK_EQ(end_with(cut[i], true, HTTP_END_FIN, &why, &by_close), HTTP_P_ERROR);
+        CHECK(why != NULL && !by_close);
+        CHECK_EQ(end_with(cut[i], false, HTTP_END_CLOSE_NOTIFY, &why, &by_close), HTTP_P_ERROR);
+        CHECK_EQ(end_with(cut[i], true, HTTP_END_RESET, &why, &by_close), HTTP_P_ERROR);
+        CHECK_EQ(end_with(cut[i], false, HTTP_END_FIN, &why, &by_close), HTTP_P_ERROR);
+    }
+
+    // Already complete: nothing changes, whatever follows; the length was known.
+    CHECK_EQ(end_with(whole, true, HTTP_END_RESET, &why, &by_close), HTTP_P_DONE);
+    CHECK(why == NULL && !by_close);
+
+    // Headers cut off.
+    CHECK_EQ(end_with("HTTP/1.1 200 OK\r\nContent-Le", true, HTTP_END_FIN, &why, &by_close),
+             HTTP_P_ERROR);
+    CHECK(why != NULL);
+}
+
 TEST(resp_no_body) {
     result_t *r = run_all("HTTP/1.1 204 No Content\r\nContent-Length: 50\r\n\r\n", false, false);
     CHECK_EQ(r->p.state, HTTP_P_DONE);
@@ -714,6 +850,8 @@ TEST_MAIN(
     RUN(resolve_absolute_and_ports);
     RUN(resolve_refused);
     RUN(redirect_target);
+    RUN(redirect_from_plain);
+    RUN(url_plain);
     RUN(url_name);
     RUN(resp_has_header);
     RUN(request_get);
@@ -724,6 +862,7 @@ TEST_MAIN(
     RUN(resp_chunked);
     RUN(resp_bare_lf);
     RUN(resp_to_close);
+    RUN(resp_end_rules);
     RUN(resp_no_body);
     RUN(resp_interim);
     RUN(resp_status_lines);
