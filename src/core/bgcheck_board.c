@@ -23,6 +23,7 @@
 #include "core/resetwhy.h"
 #include "lua/lua_bridge.h"
 #include "lua/lua_host.h"
+#include "time/rtc.h"
 #include "time/timesync.h"
 
 _Static_assert((int)BGCHECK_WAIT_CORE0 == (int)LUA_WAIT_CORE0 &&
@@ -279,8 +280,9 @@ static void dump_history(health_print_fn print, void *arg) {
     for (unsigned i = 0; i < n; i++) {
         const history_rec_t *r = &recs[i];
         if (r->kind == HISTORY_KIND_RTC)
-            dump(print, arg, "history: rtc set to %lu, cal steps %d, %s", (unsigned long)r->wall,
-                 r->cal_steps, r->confirmed ? "confirmed" : "unconfirmed");
+            dump(print, arg, "history: rtc set to %lu, cal steps %d, load %u, %s",
+                 (unsigned long)r->wall, r->cal_steps, r->rtc_load,
+                 r->confirmed ? "confirmed" : "unconfirmed");
         else if (r->kind == HISTORY_KIND_BOOT)
         {
             // "?" for what isn't known, as `uptime history` shows it (a brownout, power-on or
@@ -312,9 +314,10 @@ void bgcheck_board_dump(health_print_fn print, void *arg) {
 
     timeconv_drift_t d;
     timesync_drift(&d);
-    dump(print, arg, "drift: rtc present %d, state %d, err %lld ms +- %lu over %lu s, cal steps %d; "
-         "xosc %d, err %lld ms +- %lu over %lu s", d.rtc_present, d.rtc, (long long)d.rtc_err_ms,
-         (unsigned long)d.rtc_unc_ms, (unsigned long)d.rtc_interval_s, d.cal_steps, d.xosc,
+    dump(print, arg, "drift: rtc present %d, state %d, err %lld ms +- %lu over %lu s, cal steps %d, "
+         "load %u (board %u); xosc %d, err %lld ms +- %lu over %lu s", d.rtc_present, d.rtc,
+         (long long)d.rtc_err_ms, (unsigned long)d.rtc_unc_ms, (unsigned long)d.rtc_interval_s,
+         d.cal_steps, d.load, rtc_load_board(), d.xosc,
          (long long)d.xosc_err_ms, (unsigned long)d.xosc_unc_ms, (unsigned long)d.xosc_interval_s);
 
     bgcheck_heap_t h;

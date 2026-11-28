@@ -242,6 +242,31 @@ TEST(cal_steps) {
     CHECK_EQ(n, 5);
 }
 
+TEST(crystal_load) {
+    char b[40];
+    timeconv_format_load(b, sizeof(b), 125);    CHECK(!strcmp(b, "12.5 pF"));
+    timeconv_format_load(b, sizeof(b), 70);     CHECK(!strcmp(b, "7 pF"));
+    timeconv_format_load(b, sizeof(b), 0);      CHECK(!strcmp(b, "load not recorded"));
+    timeconv_format_setup(b, sizeof(b), 0, 125);    CHECK(!strcmp(b, "no cal, 12.5 pF"));
+    timeconv_format_setup(b, sizeof(b), 21, 70);    CHECK(!strcmp(b, "cal 91.1, 7 pF"));
+    timeconv_format_setup(b, sizeof(b), 21, 0);     CHECK(!strcmp(b, "cal 91.1"));
+}
+
+TEST(baseline_restarts_on_a_change) {
+    // The same calibration and load: the baseline can be measured from.
+    CHECK_EQ(timeconv_baseline(0, 125, 0, 125), TIMECONV_DRIFT_BASELINE);
+    CHECK_EQ(timeconv_baseline(21, 70, 21, 70), TIMECONV_DRIFT_BASELINE);
+    // The calibration changed.
+    CHECK_EQ(timeconv_baseline(0, 125, 21, 125), TIMECONV_DRIFT_CAL_CHANGED);
+    // The load changed (7 pF as found, then the build's 12.5 pF), with or without the calibration.
+    CHECK_EQ(timeconv_baseline(0, 70, 0, 125), TIMECONV_DRIFT_LOAD_CHANGED);
+    CHECK_EQ(timeconv_baseline(0, 125, 0, 70), TIMECONV_DRIFT_LOAD_CHANGED);
+    CHECK_EQ(timeconv_baseline(5, 70, 0, 125), TIMECONV_DRIFT_LOAD_CHANGED);
+    // A baseline from firmware before #275 recorded no load: never measured from.
+    CHECK_EQ(timeconv_baseline(0, 0, 0, 125), TIMECONV_DRIFT_LOAD_CHANGED);
+    CHECK_EQ(timeconv_baseline(0, 0, 0, 70), TIMECONV_DRIFT_LOAD_CHANGED);
+}
+
 TEST_MAIN(
     RUN(known_dates);
     RUN(invalid_calendar);
@@ -254,4 +279,6 @@ TEST_MAIN(
     RUN(format);
     RUN(parse_ppm);
     RUN(cal_steps);
+    RUN(crystal_load);
+    RUN(baseline_restarts_on_a_change);
 )

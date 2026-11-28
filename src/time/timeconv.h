@@ -74,6 +74,8 @@ typedef enum {
     TIMECONV_DRIFT_BASELINE,        // set at a sync (rtc_interval_s: how long ago, 0 unknown)
     TIMECONV_DRIFT_CAL_CHANGED,     // the last sync couldn't measure: the calibration had changed
     TIMECONV_DRIFT_MEASURED,        // the last sync measured it
+    TIMECONV_DRIFT_LOAD_CHANGED,    // ...couldn't measure: the crystal load had changed (or the
+                                    // baseline's firmware didn't record it)
 } timeconv_drift_state_t;
 
 typedef struct {
@@ -83,6 +85,7 @@ typedef struct {
     uint32_t rtc_unc_ms;            // ...its uncertainty
     uint32_t rtc_interval_s;        // MEASURED: since the RTC was set; BASELINE: its age
     int cal_steps;                  // the calibration in force (TIMECONV_CAL_* steps)
+    uint8_t load;                   // the RTC crystal's load in force, tenths of a pF (0 unknown)
     bool xosc;                      // two syncs in one uptime: the crystal measured
     int64_t xosc_err_ms;            // the system clock's lead over NTS (minus the step)
     uint32_t xosc_unc_ms;
@@ -109,10 +112,19 @@ int timeconv_verdict(int64_t rate_mppm, int64_t unc_mppm, int64_t limit_mppm);
 // it, as `time cal` takes it.
 int32_t timeconv_cal_mppm(int steps);
 
+// Whether an RTC baseline set under (base_cal, base_load) can be measured from under (cal, load):
+// TIMECONV_DRIFT_BASELINE if both are the same, else what changed, the load first (a base_load of
+// 0, not recorded, is a change). Loads in tenths of a pF.
+timeconv_drift_state_t timeconv_baseline(int base_cal, uint8_t base_load, int cal, uint8_t load);
+
 // Texts for the check and `time`: "+92.1+-13 ppm" (one decimal under 100 ppm, the uncertainty
 // with one decimal under 10); "no cal" or "cal 91.1"; "45 min", "22 h", "3 d".
 void timeconv_format_rate(char *buf, unsigned len, int64_t rate_mppm, int64_t unc_mppm);
 void timeconv_format_cal(char *buf, unsigned len, int steps);
+// A crystal load in tenths of a pF: "12.5 pF", "7 pF"; "load not recorded" for 0.
+void timeconv_format_load(char *buf, unsigned len, uint8_t load);
+// The calibration and the load: "no cal, 12.5 pF"; the calibration alone if the load is 0.
+void timeconv_format_setup(char *buf, unsigned len, int steps, uint8_t load);
 void timeconv_format_span(char *buf, unsigned len, uint32_t s);
 // A rate in ppm with one decimal, the ".0" dropped: "92", "-13.4", "114.5".
 void timeconv_format_ppm(char *buf, unsigned len, int64_t mppm);

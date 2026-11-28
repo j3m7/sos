@@ -72,6 +72,7 @@
 #include "ssh/hostkey.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
+#include "time/rtc.h"
 #include "time/timeconv.h"
 #include "time/timesync.h"
 #include "time/tzzone.h"
@@ -2049,6 +2050,37 @@ static void cmd_time_server(shell_t *sh, const char *value) {
     shell_printf(sh, "used from the next sync ('time sync' to sync now)\n");
 }
 
+#ifdef SOS_TEST_COMMANDS
+// `time load [7 | 12.5]` (test builds): the RTC crystal's load capacitance (CAP_SEL), set until
+// the next boot puts the build's (SOS_RTC_LOAD_PF) back. Not a setting: the configuration is
+// left alone.
+static void cmd_time_load(shell_t *sh, const char *value) {
+    char load[24];
+    while (*value == ' ')
+        value++;
+    if (*value) {
+        if (!require_admin(sh))
+            return;
+        uint8_t want = !strcmp(value, "7") ? RTC_LOAD_7PF
+                       : !strcmp(value, "12.5") ? RTC_LOAD_12_5PF : 0;
+        if (!want) {
+            shell_printf(sh, "usage: time load [7 | 12.5]\n");
+            return;
+        }
+        if (!timesync_set_load(want))
+            shell_printf(sh, "the RTC didn't take it\n");
+    }
+    if (!rtc_load()) {
+        shell_printf(sh, "rtc crystal load: no rtc\n");
+        return;
+    }
+    timeconv_format_load(load, sizeof(load), rtc_load());
+    shell_printf(sh, "rtc crystal load: %s", load);
+    timeconv_format_load(load, sizeof(load), rtc_load_board());
+    shell_printf(sh, " (the build's: %s, set again at boot)\n", load);
+}
+#endif
+
 // Clock sync is allowed from SSH too: it can't lock anyone out, and the RTC drifts.
 static void cmd_time(shell_t *sh, char *args) {
     if (!args)
@@ -2074,6 +2106,10 @@ static void cmd_time(shell_t *sh, char *args) {
         cmd_time_cal(sh, args + 3);
     else if (!strncmp(args, "zone", 4) && (args[4] == ' ' || !args[4]))
         tzzone_command(sh, args + 4);
+#ifdef SOS_TEST_COMMANDS
+    else if (!strncmp(args, "load", 4) && (args[4] == ' ' || !args[4]))
+        cmd_time_load(sh, args + 4);
+#endif
     else
         shell_printf(sh, "usage: time [sync [sntp] | auto [off | <hours>] | server [<name> | default] | "
                          "cal [off | <ppm>] | zone [<name> | utc | list [<prefix>] | install]]\n");
@@ -2171,11 +2207,11 @@ static void cmd_uptime_history(shell_t *sh) {
             shell_printf(sh, "    -  (damaged record)\n");
             continue;
         }
-        char when[24] = "(clock not set)", up[16], cal[16];
+        char when[24] = "(clock not set)", up[16], cal[40];
         if (r.wall != HISTORY_NONE)
             timeconv_format(r.wall, when, sizeof(when));
         if (r.kind == HISTORY_KIND_RTC) {
-            timeconv_format_cal(cal, sizeof(cal), r.cal_steps);
+            timeconv_format_setup(cal, sizeof(cal), r.cal_steps, r.rtc_load);
             shell_printf(sh, "    -  %-19s  rtc set (%s)%s\n", when, cal,
                          r.confirmed ? "" : ", not taken");
         } else if (r.kind == HISTORY_KIND_BOOT) {
@@ -2547,6 +2583,9 @@ static const shell_word_t time_words[] = {
     {"server", SHELL_VALUES_OF(time_servers), 0},
     {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
     {"zone", SHELL_VALUES_OF(time_zones), 0},
+#ifdef SOS_TEST_COMMANDS
+    {"load", (const shell_word_t[]){W("7"), W("12.5"), END}, SHELL_ADMIN | SHELL_HIDDEN},
+#endif
     END};
 static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},

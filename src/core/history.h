@@ -38,8 +38,15 @@ typedef enum {
 // One record. Bytes on flash: 0 kind (0xff free); 1 reason (boot: resetwhy_t) or the RTC
 // calibration's steps (int8); 2-3 the boot number (wraps); 4-7 the uptime before the reset, s;
 // 8-11 the wall time (boot: at boot; RTC: what was written to it), Unix s; 12 extra (boot: the
-// glitch detectors fired); 13 0xff, programmed to 0 once confirmed (an RTC record, after the RTC
-// took the time; outside the CRC); 14-15 CRC-16/CCITT over bytes 0-12, little-endian.
+// glitch detectors fired; RTC: the crystal load in force, RTC_LOAD_* in tenths of a pF, 0 in the
+// records of firmware before #275, which wrote 0 there and never read it); 13 0xff, programmed to
+// 0 once confirmed (an RTC record, after the RTC took the time; outside the CRC); 14-15
+// CRC-16/CCITT over bytes 0-12, little-endian.
+//
+// The crystal load went into byte 12 without a new HISTORY_VERSION: older firmware's RTC records
+// read as "load not recorded", which the drift check takes as a change of load (a new baseline),
+// and older firmware ignores the byte in ours. A new version would only make older firmware stop
+// recording boots.
 typedef struct {
     uint8_t kind;
     uint8_t reason;                     // boot: resetwhy_t
@@ -48,6 +55,8 @@ typedef struct {
     uint32_t uptime_s;                  // HISTORY_NONE: unknown
     uint32_t wall;                      // HISTORY_NONE: the clock wasn't set
     uint8_t extra;
+    uint8_t rtc_load;                   // RTC: the crystal load (the same byte as extra); 0: not
+                                        // recorded (older firmware)
     bool confirmed;
 } history_rec_t;
 
@@ -118,10 +127,11 @@ void history_boot(void);
 // The sector, NULL if the image overlaps it (then nothing is read or written).
 const uint8_t *history_sector(void);
 
-// A time sync is about to write the RTC with `t` under the calibration `cal_steps`: append its
-// record, unconfirmed. Returns the slot, or -1. history_rtc_done() confirms it once the RTC has
-// taken the time; a record left unconfirmed ends the drift baseline.
-int history_rtc_begin(uint32_t t, int cal_steps);
+// A time sync is about to write the RTC with `t` under the calibration `cal_steps` and the
+// crystal load `load` (rtc_load()): append its record, unconfirmed. Returns the slot, or -1.
+// history_rtc_done() confirms it once the RTC has taken the time; a record left unconfirmed ends
+// the drift baseline.
+int history_rtc_begin(uint32_t t, int cal_steps, uint8_t load);
 void history_rtc_done(int slot);
 
 #ifdef SOS_TEST_COMMANDS

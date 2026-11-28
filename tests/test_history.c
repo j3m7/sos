@@ -108,9 +108,58 @@ TEST(confirm_rtc_record) {
     CHECK(!history_confirm(&store, HISTORY_SLOTS));
 }
 
+TEST(rtc_record_keeps_the_crystal_load) {
+    reset();
+    history_rec_t t = {.kind = HISTORY_KIND_RTC, .cal_steps = -2, .rtc_load = 125,
+                       .wall = 1764000000u};
+    CHECK_EQ(history_append(&store, &t), 0);
+    uint8_t bytes[HISTORY_RECORD];
+    history_encode(&t, bytes);
+    CHECK_EQ(bytes[12], 125);                       // byte 12, under the CRC
+    history_rec_t got;
+    CHECK(history_get(flash, 0, &got));
+    CHECK_EQ(got.rtc_load, 125);
+    CHECK_EQ(got.cal_steps, -2);
+    // A boot record's byte 12 is still its extra.
+    history_rec_t b = boot(RESETWHY_GLITCH, 1, 10, HISTORY_NONE);
+    b.extra = 0x0c;
+    b.rtc_load = 70;                                // not an RTC record: ignored
+    CHECK_EQ(history_append(&store, &b), 1);
+    CHECK(history_get(flash, 1, &got));
+    CHECK_EQ(got.extra, 0x0c);
+}
+
+TEST(rtc_record_from_older_firmware) {
+    // An RTC record as firmware before #275 wrote it: cal 21 steps, set to 1764000000,
+    // confirmed, byte 12 zero. It reads with no load recorded, under the same version.
+    static const uint8_t old[HISTORY_RECORD] = {
+        0x02, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x81, 0x24, 0x69, 0x00, 0x00, 0x03, 0xdb};
+    reset();
+    history_rec_t r = boot(RESETWHY_POWER_ON, 0, HISTORY_NONE, HISTORY_NONE);
+    CHECK_EQ(history_append(&store, &r), 0);            // the header, version 1
+    memcpy(flash + HISTORY_PAGE + HISTORY_RECORD, old, sizeof(old));
+    history_scan_t s;
+    history_scan(flash, &s);
+    CHECK_EQ(s.state, HISTORY_OURS);
+    CHECK_EQ(s.valid, 2);
+    CHECK_EQ(s.damaged, 0);
+    history_rec_t got;
+    CHECK_EQ(history_list(flash, HISTORY_KIND_RTC, &got, 1), 1);
+    CHECK(got.confirmed);
+    CHECK_EQ(got.cal_steps, 21);
+    CHECK_EQ(got.wall, 1764000000u);
+    CHECK_EQ(got.rtc_load, 0);
+    // Our encoding of the same record with no load is the older firmware's, byte for byte.
+    uint8_t bytes[HISTORY_RECORD];
+    got.rtc_load = 0;
+    history_encode(&got, bytes);
+    CHECK(!memcmp(bytes, old, sizeof(old)));
+}
+
 TEST(full_sector_starts_again_with_the_newest) {
     reset();
-    history_rec_t t = {.kind = HISTORY_KIND_RTC, .cal_steps = 5, .wall = 777u};
+    history_rec_t t = {.kind = HISTORY_KIND_RTC, .cal_steps = 5, .rtc_load = 125, .wall = 777u};
     int slot = history_append(&store, &t);
     CHECK(history_confirm(&store, (unsigned)slot));
     history_rec_t u = {.kind = HISTORY_KIND_RTC, .cal_steps = 6, .wall = 888u};   // unconfirmed
@@ -134,6 +183,7 @@ TEST(full_sector_starts_again_with_the_newest) {
     CHECK_EQ(history_list(flash, HISTORY_KIND_RTC, out, 20), 1);
     CHECK_EQ(out[0].wall, 777u);
     CHECK(out[0].confirmed);
+    CHECK_EQ(out[0].rtc_load, 125);                 // copied back as it was
     CHECK_EQ(history_list(flash, HISTORY_KIND_BOOT, out, 20), HISTORY_CARRY_BOOTS + 1);
     CHECK_EQ(out[0].boot_no, 999);
     CHECK_EQ(out[1].boot_no, HISTORY_SLOTS - 1);
@@ -235,6 +285,8 @@ TEST_MAIN(
     RUN(erased_then_first_record);
     RUN(list_newest_first_by_kind);
     RUN(confirm_rtc_record);
+    RUN(rtc_record_keeps_the_crystal_load);
+    RUN(rtc_record_from_older_firmware);
     RUN(full_sector_starts_again_with_the_newest);
     RUN(damaged_and_stray);
     RUN(newer_version_never_written);

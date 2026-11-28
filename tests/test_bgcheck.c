@@ -256,6 +256,48 @@ TEST(drift_rtc_not_measured) {
     CHECK(is("calibration changed since the RTC was set; next sync"));
 }
 
+TEST(drift_rtc_names_the_load) {
+    // dev-1 at 12.5 pF: the load follows the calibration where the text has room.
+    timeconv_drift_t d = measured(7286, 22 * 3600, 0);
+    d.load = 125;
+    bgcheck_judge_drift(&d, &r);
+    CHECK(is("RTC +92.0+-13 ppm in 22 h, no cal, 12.5 pF: try time cal 92"));
+    d = measured(156, 48 * 3600, 21);
+    d.load = 125;
+    bgcheck_judge_drift(&d, &r);
+    CHECK_EQ(r.status, HEALTH_PASS);
+    CHECK(is("RTC +0.9+-9.7 ppm in 48 h, cal 91.1, 12.5 pF"));
+    // ...and is left out where it would make the text too long.
+    d = measured(6048, 48 * 3600, 21);
+    d.load = 125;
+    bgcheck_judge_drift(&d, &r);
+    CHECK(is("RTC +35.0+-9.7 ppm in 48 h, cal 91.1: try time cal 126.1"));
+    d = (timeconv_drift_t){0};
+    d.rtc_present = true;
+    d.load = 70;
+    bgcheck_judge_drift(&d, &r);
+    CHECK(is("RTC: no baseline; drift after two syncs (no cal, 7 pF)"));
+    d.rtc = TIMECONV_DRIFT_BASELINE;
+    d.rtc_interval_s = 3 * 3600;
+    bgcheck_judge_drift(&d, &r);
+    CHECK(is("RTC set 3 h ago (no cal, 7 pF): drift at the next sync"));
+    d.cal_steps = -64;
+    d.rtc_interval_s = 45 * 60;
+    d.load = 125;
+    bgcheck_judge_drift(&d, &r);
+    CHECK(is("RTC set 45 min ago (cal -277.8): drift at the next sync"));
+}
+
+TEST(drift_rtc_load_changed) {
+    timeconv_drift_t d = {0};
+    d.rtc_present = true;
+    d.rtc = TIMECONV_DRIFT_LOAD_CHANGED;
+    d.load = 125;
+    bgcheck_judge_drift(&d, &r);
+    CHECK_EQ(r.status, HEALTH_SKIP);
+    CHECK(is("crystal load changed since the RTC was set; next sync"));
+}
+
 TEST(drift_xosc) {
     timeconv_drift_t d = measured(156, 48 * 3600, 21);
     d.xosc = true;
@@ -482,6 +524,8 @@ TEST_MAIN(
     RUN(drift_rtc_pass);
     RUN(drift_rtc_too_short);
     RUN(drift_rtc_not_measured);
+    RUN(drift_rtc_names_the_load);
+    RUN(drift_rtc_load_changed);
     RUN(drift_xosc);
     RUN(drift_no_rtc);
     RUN(heap_pass);

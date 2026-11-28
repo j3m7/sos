@@ -43,6 +43,13 @@ bool timesync_apply_cal(void);
 // "off", "slowed by 91.1 ppm" or "sped up by 13.0 ppm": what the saved calibration does to the RTC.
 void timesync_cal_str(char *buf, unsigned len);
 
+#ifdef SOS_TEST_COMMANDS
+// `time load 7|12.5` (test builds): set the RTC's crystal load (RTC_LOAD_*) until the next boot
+// sets the build's again; the configuration is not touched. A change is logged and makes the
+// drift measurement start again. False if the RTC didn't take it.
+bool timesync_set_load(uint8_t load);
+#endif
+
 // Apply a sync result, if one arrived; stop a periodic sync that was turned off. Call from the
 // main loop.
 void timesync_poll(void);
