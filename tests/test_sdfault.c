@@ -85,7 +85,34 @@ TEST(large_n_fires) {
     sdfault_off();
 }
 
+TEST(read_fault_fires_once_at_n) {
+    sdfault_off();
+    CHECK(!sdfault_read());             // none armed
+    CHECK(!sdfault_arm_read(0));
+    CHECK(!sdfault_arm_read(SDFAULT_MAX_N + 1));
+    CHECK(sdfault_arm_read(3));
+    uint32_t at, reads;
+    sdfault_read_state(&at, &reads);
+    CHECK_EQ(at, 3);
+    CHECK_EQ(reads, 0);
+    CHECK(!sdfault_read());
+    CHECK(!sdfault_read());
+    CHECK(sdfault_read());
+    CHECK(!sdfault_read());             // once
+    sdfault_read_state(&at, &reads);
+    CHECK_EQ(at, 0);
+    // Apart from the writes, and disarmed by sdfault_off() with them.
+    CHECK(sdfault_arm_read(1));
+    CHECK(sdfault_arm(SDFAULT_FAIL, 1));
+    CHECK_EQ(sdfault_write(), SDFAULT_DO_FAIL);
+    sdfault_read_state(&at, &reads);
+    CHECK_EQ(at, 1);
+    sdfault_off();
+    CHECK(!sdfault_read());
+}
+
 TEST_MAIN(
+    RUN(read_fault_fires_once_at_n);
     RUN(off_by_default_and_not_counting);
     RUN(fail_fires_once_at_n);
     RUN(first_write_is_one);

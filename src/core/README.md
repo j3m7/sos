@@ -488,7 +488,7 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
-## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`, `bgcheck.c`, `fullcheck.c`)
+## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`, `bgcheck.c`, `fullcheck.c`, `countcheck.c`)
 
 `health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
 with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
@@ -585,6 +585,19 @@ host's wolfCrypt by `tests/test_selftest.c`).
     and CRYPTO. Every build is hashed (`pico_hash_binary`).
   - `sd-check`: `sd check`'s job without a shell (`sdcard_check_health_begin()` and `_step()`),
     only on a card unmounted by hand, steps aimed at 6 ms; no gate.
+- **The counters** (phase 6, docs/design/health.md §9.9), background checks every 10 minutes,
+  judged in `countcheck.c` (`tests/test_countcheck.c`) and read in `countcheck_board.c`; none
+  holds a gate, none touches the Wi-Fi chip or the card. Errors are judged over a window of an
+  hour (`countcheck_window()`: a sample at most every 10 minutes, eight kept, from the newest
+  at least an hour old):
+  - `wifi`: the CYW43 driver's errors as `net/wifistat.c` counts them (through the driver's own
+    hooks, `config/cyw43_sos.h`), the link drops `net/wifi.c` records, its time down and the
+    chip's firmware version.
+  - `sd-bus`: `sdcard_counters()` since the card's last initialisation: failed reads and writes,
+    the driver's retried errors and timeouts (its debug lines, counted by function), the clock.
+  - `net-pools`: lwIP's packet pool, segment pool and heap failures.
+  The libraries' functions they count by are listed once, in `countcheck_names.h`, which
+  `CMakeLists.txt` checks against the libraries' sources at configure time.
 - **The history sector** (`history.c`, pure, `tests/test_history.c`; `history_board.c`): the
   sixth sector from the end (`flashlayout.h`), 240 records of 16 bytes after a header with a
   format version: one per boot (`history_boot()` in `main()`, after `timesync_boot()`) and one
@@ -607,7 +620,10 @@ host's wolfCrypt by `tests/test_selftest.c`).
   brownout reset (refused while files are open, the card is busy or a script runs); Lua gets
   `sos.spin(ms)`, a C loop without Lua instructions. `health fault ram once|twice` and
   `health fault image` arm a fault for the next run of that check (a flipped bit between a
-  write and its read, a flipped byte of what is hashed).
+  write and its read, a flipped byte of what is hashed). `health fault wifi timeout|bus <n>`
+  counts n driver errors as the driver's hooks would; `wifi fault drop` drops the link behind
+  `wifi.c`'s back (an ordinary link loss to it); `sd fault read <n>` fails a card read without
+  reading the card. `health state-dump` adds phase 6's counters.
 - **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 32 at
   most.
 

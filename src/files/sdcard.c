@@ -21,6 +21,7 @@
 #include "ff.h"
 #include "f_util.h"
 #include "hw_config.h"
+#include "my_debug.h"
 #include "sd_card.h"
 
 #include <wolfssl/wolfcrypt/settings.h>
@@ -86,6 +87,26 @@ void put_out_info_message(const char *s) {
         log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "sd: %s", s);
 }
 
+// --- the bus's counters, for the `sd-bus` health check (docs/design/health.md §9.9) -------------
+
+// The library's error lines (EMSG_PRINTF), replacing its weak version: counted by function
+// (files/sdstat.h, a block the card refused), then handed to put_out_error_message() exactly as
+// the weak version does, so the log reads as before phase 6. That path only stores the line in
+// the RAM history (log_msg() is deferred from boot on; log_flush() prints it from the main loop)
+// and never reaches the card or the log files' writer: the rule in sdstat.h. The library's
+// debug lines are counted in sdstat.c and never logged.
+int error_message_printf(const char *func, int line, const char *fmt, ...) {
+    (void)line;
+    sdstat_error_line(func);
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    put_out_error_message(buf);
+    return n;
+}
+
 // While formatting (one long FatFs call), feed the watchdog from each block write: the main loop
 // doesn't run until it returns, but every completed write is progress.
 static bool formatting;
@@ -111,12 +132,26 @@ static struct { uint32_t writes, reads, sectors, last_sector, last_count; } io_s
 
 static block_dev_err_t read_blocks_logged(sd_card_t *c, uint8_t *buf, uint32_t sector,
                                           uint32_t count) {
-    block_dev_err_t r = lib_read_blocks(c, buf, sector, count);
+    block_dev_err_t r;
+#ifdef SOS_TEST_COMMANDS
+    if (sdfault_read()) {                           // `sd fault read`: test builds only
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "sd: fault: reading %lu sectors at %lu failed "
+                "on purpose, the card not read (sd fault)", (unsigned long)count,
+                (unsigned long)sector);
+        r = SD_BLOCK_DEVICE_ERROR_CRC;
+    } else
+#endif
+    r = lib_read_blocks(c, buf, sector, count);
     io_stats.reads++;
-    if (r != SD_BLOCK_DEVICE_ERROR_NONE)
+    if (r == SD_BLOCK_DEVICE_ERROR_NONE) {
+        SDSTAT_COUNT(sectors_read, count);
+    } else {
+        SDSTAT_COUNT(failed_reads, 1);
+        sdstat.last_error = (int)r;
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
                 "sd: reading %lu sectors at %lu failed (%d)", (unsigned long)count,
                 (unsigned long)sector, (int)r);
+    }
     return r;
 }
 
@@ -129,8 +164,12 @@ static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32
                                         uint32_t count) {
 #ifdef SOS_TEST_COMMANDS
     sdfault_action_t fault = sdfault_write();      // `sd fault`: test builds only
-    if (fault != SDFAULT_PASS)
-        return fault_fire(c, fault, sector, count);
+    if (fault != SDFAULT_PASS) {
+        block_dev_err_t f = fault_fire(c, fault, sector, count);
+        SDSTAT_COUNT(failed_writes, 1);     // as FatFs sees it
+        sdstat.last_error = (int)f;
+        return f;
+    }
 #endif
     block_dev_err_t r = lib_write_blocks(c, buf, sector, count);
     io_stats.writes++;
@@ -139,10 +178,15 @@ static block_dev_err_t write_blocks_fed(sd_card_t *c, const uint8_t *buf, uint32
     io_stats.last_count = count;
     if (formatting)
         wdog_feed();
-    if (r != SD_BLOCK_DEVICE_ERROR_NONE)
+    if (r == SD_BLOCK_DEVICE_ERROR_NONE) {
+        SDSTAT_COUNT(sectors_written, count);
+    } else {
+        SDSTAT_COUNT(failed_writes, 1);
+        sdstat.last_error = (int)r;
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,
                 "sd: writing %lu sectors at %lu failed (%d)", (unsigned long)count,
                 (unsigned long)sector, (int)r);
+    }
     return r;
 }
 
@@ -350,7 +394,22 @@ static DSTATUS init_layer(sd_card_t *c) {
     // detect only on a real initialization (or if the kind was forgotten), so a locked card is
     // logged once per insertion rather than at every try.
     bool was_up = !(c->state.m_Status & STA_NOINIT);
+    if (!was_up) {
+        // A real initialisation: the `sd-bus` window starts again, with this one's own errors.
+        memset(&sdstat.since_init, 0, sizeof(sdstat.since_init));
+        sdstat.inits++;
+        sdstat.init_at_s = (uint32_t)(time_us_64() / 1000000);
+    }
+    sdstat_initialising = true;
     DSTATUS st = lib_init(c);
+    sdstat_initialising = false;
+    if (!was_up) {
+        sdstat.last_init_failed = (st & STA_NOINIT) != 0;
+        if (sdstat.last_init_failed)
+            sdstat.init_fails++;
+        else
+            sdstat.ever_ok = true;
+    }
     if (st & STA_NOINIT) {
         crypt_off();
         c->state.sectors = 0;               // no card: its size isn't known (sd format's test)
@@ -445,16 +504,25 @@ static card_open_t card_open(shell_t *sh) {
     return CARD_READY;
 }
 
+static uint64_t last_mount_us;          // when the last mount attempt ended
+
+uint64_t sdcard_last_mount_us(void) {
+    return last_mount_us;
+}
+
 static bool mount(shell_t *sh) {
     if (card.state.mounted)
         return true;
     if (checking)                           // the callers say so (sdcard_mount(), the commands)
         return false;
     uint64_t t0 = time_us_64();
-    if (card_open(sh) == CARD_REFUSED)      // no card: f_mount says so below
+    if (card_open(sh) == CARD_REFUSED) {    // no card: f_mount says so below
+        last_mount_us = time_us_64();
         return false;
+    }
     FRESULT fr = f_mount(&card.state.fatfs, sd_get_drive_prefix(&card), 1);
-    uint32_t ms = (uint32_t)((time_us_64() - t0) / 1000);
+    last_mount_us = time_us_64();
+    uint32_t ms = (uint32_t)((last_mount_us - t0) / 1000);
     if (fr != FR_OK) {
         if (sh)
             shell_printf(sh, "mount failed: %s (%d) after %lu ms\n", FRESULT_str(fr), fr,
@@ -483,6 +551,15 @@ static void cmd_info(shell_t *sh) {
     uint64_t card_mb = (uint64_t)card.state.sectors * 512 / (1024 * 1024);
     shell_printf(sh, "card:   %s, %llu MB, SPI clock %lu kHz\n", card_type(),
                  (unsigned long long)card_mb, (unsigned long)(spi_get_baudrate(spi.hw_inst) / 1000));
+    const sdcard_ctr_t *i = &sdstat.since_init, *b = &sdstat.since_boot;
+    unsigned long i_failed = (unsigned long)i->failed_reads + i->failed_writes;
+    unsigned long i_retried = (unsigned long)i->crc + i->cmd + i->write;
+    unsigned long b_failed = (unsigned long)b->failed_reads + b->failed_writes;
+    unsigned long b_retried = (unsigned long)b->crc + b->cmd + b->write;
+    shell_printf(sh, "errors: since init %lu failed, %lu retried, %lu timeouts; since boot %lu "
+                     "failed, %lu retried, %lu timeouts (health state-dump: by kind)\n",
+                 i_failed, i_retried, (unsigned long)i->timeout, b_failed, b_retried,
+                 (unsigned long)b->timeout);
     if (card_kind == KIND_ENCRYPTED) {
         char id[2 * SDCRYPT_ID_LEN + 1];
         hex(id, card_id, SDCRYPT_ID_LEN);
@@ -1452,8 +1529,14 @@ static bool fault_count(const char *s, uint32_t *n) {
 
 static void fault_show(shell_t *sh) {
     const sdfault_state_t *f = sdfault_state();
+    uint32_t read_at, reads;
+    sdfault_read_state(&read_at, &reads);
+    if (read_at)
+        shell_printf(sh, "armed: read %lu fails; %lu since arming\n", (unsigned long)read_at,
+                     (unsigned long)reads);
     if (!f->counting) {
-        shell_printf(sh, "no fault armed\n");
+        if (!read_at)
+            shell_printf(sh, "no fault armed\n");
         return;
     }
     if (f->armed != SDFAULT_OFF)
@@ -1465,7 +1548,7 @@ static void fault_show(shell_t *sh) {
                      (unsigned long)f->at, (unsigned long)f->writes);
 }
 
-// `sd fault [fail <N>|reboot <N>|off]`.
+// `sd fault [fail <N>|reboot <N>|read <N>|off]`.
 static void cmd_fault(shell_t *sh, const char *what, const char *count) {
     if (!sh->io->admin) {
         shell_printf(sh, "sd fault works only on the serial console\n");
@@ -1482,12 +1565,25 @@ static void cmd_fault(shell_t *sh, const char *what, const char *count) {
         shell_printf(sh, "no fault armed\n");
         return;
     }
+    if (what && !strcmp(what, "read") && !extra) {
+        if (!fault_count(count, &n) || !sdfault_arm_read(n)) {
+            shell_printf(sh, "usage: sd fault read <N>  (N: 1 to %lu, counting card reads from "
+                             "now)\n", (unsigned long)SDFAULT_MAX_N);
+            return;
+        }
+        shell_printf(sh, "armed: card read %lu from now fails, the card not read\n",
+                     (unsigned long)n);
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: fault: read armed at card read %lu "
+                "(test command)", (unsigned long)n);
+        return;
+    }
     sdfault_mode_t mode = !what ? SDFAULT_OFF
                         : !strcmp(what, "fail") ? SDFAULT_FAIL
                         : !strcmp(what, "reboot") ? SDFAULT_REBOOT : SDFAULT_OFF;
     if (mode == SDFAULT_OFF || extra || !fault_count(count, &n) || !sdfault_arm(mode, n)) {
-        shell_printf(sh, "usage: sd fault [fail <N>|reboot <N>|off]  (N: 1 to %lu, counting card "
-                         "writes from now)\n", (unsigned long)SDFAULT_MAX_N);
+        shell_printf(sh, "usage: sd fault [fail <N>|reboot <N>|read <N>|off]  (N: 1 to %lu, "
+                         "counting card writes, or reads, from now)\n",
+                     (unsigned long)SDFAULT_MAX_N);
         return;
     }
     if (mode == SDFAULT_FAIL)
@@ -1499,7 +1595,7 @@ static void cmd_fault(shell_t *sh, const char *what, const char *count) {
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "sd: fault: %s armed at card write %lu (test command)",
             what, (unsigned long)n);
 }
-#define SD_USAGE_FAULT "|fault [fail N|reboot N|off]"
+#define SD_USAGE_FAULT "|fault [fail N|reboot N|read N|off]"
 #else
 #define SD_USAGE_FAULT ""
 #endif
@@ -1555,6 +1651,15 @@ void sdcard_command(shell_t *sh, char *args) {
 }
 
 // --- for the `card` health check ----------------------------------------------------------------
+
+void sdcard_counters(sdcard_counters_t *out) {
+    *out = sdstat;
+    out->khz_set = spi.baud_rate / 1000;
+    // The SPI block's divider, once the driver has set it up (a block still in reset isn't read);
+    // after a failed initialisation, the clock asked for.
+    out->khz = sdstat.inits && !sdstat.last_init_failed ? spi_get_baudrate(spi.hw_inst) / 1000
+                                                  : out->khz_set;
+}
 
 void sdcard_health_state(sdcard_health_t *out) {
     out->mounted = card.state.mounted;

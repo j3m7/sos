@@ -130,6 +130,30 @@ power. By the chip's counters a third to a half of its transmissions went unackn
 the loss is in the air at the access point's end (the network was on channel 5, which
 overlaps channels 1 and 6). `LWIP_TCP_RTO_TIME` (1 s) is what keeps TCP working through it.
 
+### The driver's errors (`wifistat.c`) and the `wifi` health check
+
+The CYW43 driver counts nothing itself, but leaves two macros to its port: `CYW43_FAIL_FAST_CHECK`,
+which wraps every error it returns at its origin, and `CYW43_WARN`. `config/cyw43_sos.h`, which
+`CMakeLists.txt` names as the driver's configuration file (`CYW43_CONFIG_FILE`; it includes the
+SDK's own first), points them at `wifistat.c`, so nothing in the driver is changed:
+
+- **Error returns** are counted by code: timeouts (an ioctl's reply, or the chip's transmit
+  credit, not within 1 s), I/O errors (`F2 not ready`), other.
+- **Warnings** are counted by the function they come from, never by their text
+  (`core/countcheck_names.h`): bus errors and corrupt frame headers, a frame not sent, or other
+  (a timeout's warning counts nothing more: its error return was counted). They go to the log at
+  warning (`wifi: driver: ...`), at most one line per site every 10 s, the next line saying how
+  many were held back; before, they were `printf`ed raw onto the serial console, even while it
+  was locked. They can come from the driver's background context: `log_msg()` only stores a line
+  logged from an interrupt.
+
+`wifi.c` adds the link drops nobody asked for (the `W_UP` path's `link lost`; `wifi_reconnect()`
+doesn't pass there), since when the link has been down, and the chip's `ver` line, read once by
+`wifi_start()`. `wifi stats` shows the counts, and the `wifi` health check judges them
+(docs/design/health.md §9.9). In test builds `wifi fault drop` drops the link with
+`cyw43_wifi_leave()` behind `wifi.c`'s back: the chip's `DISASSOC` event takes the link down in
+the driver, and `wifi_poll()` sees an ordinary link loss, counts it and reconnects.
+
 ## HTTP client
 
 `http.c` makes one HTTPS request per connection (HTTP/1.1, `Connection: close`) over `tls/`, or

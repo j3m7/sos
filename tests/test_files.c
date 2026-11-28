@@ -6,7 +6,8 @@
 // stands in for FatFs (tests/stubs/ff.h). And the command tables' rule (shell_tables_check(),
 // src/shell/cmdcheck.c) over files_commands and over tables made to break it. ls's listing, and
 // when a file that tee, `>` or cp is writing gets synced (#218), with the real src/shell/pipe.c
-// for the redirect.
+// for the redirect. And files_install_part() (fetch's and gunzip's .part put in place), with
+// renames and deletes made to fail.
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -198,7 +199,14 @@ FRESULT f_mkdir(const char *path) {
     return card_add(path, true, NULL) >= 0 ? FR_OK : FR_DENIED;
 }
 
+// Renames and deletes that fail on demand (files_install_part()): bit n of rename_fail fails the
+// n-th f_rename() since setup() (from 0) with FR_DENIED; unlink_fail fails every f_unlink().
+static unsigned rename_calls, rename_fail;
+static bool unlink_fail;
+
 FRESULT f_unlink(const char *path) {
+    if (unlink_fail)
+        return FR_DENIED;
     int i = card_find(path);
     if (i < 0)
         return FR_NO_FILE;
@@ -207,6 +215,8 @@ FRESULT f_unlink(const char *path) {
 }
 
 FRESULT f_rename(const char *path_old, const char *path_new) {
+    if (rename_fail & (1u << rename_calls++))
+        return FR_DENIED;
     int i = card_find(path_old);
     if (i < 0)
         return FR_NO_FILE;
@@ -337,6 +347,8 @@ static void setup(void) {
     nsyncs = 0;
     sync_result = FR_OK;
     read_max = 0;
+    rename_calls = rename_fail = 0;
+    unlink_fail = false;
     tick = 1000;
     memset(&sh, 0, sizeof(sh));
     sh.io = &io_console;
@@ -619,6 +631,117 @@ TEST(echo_and_pwd_still_get_the_joined_text) {
     CHECK_OUT("/\n");
 }
 
+// --- files_install_part(): a finished .part put in place --------------------------------------
+
+static const char *card_data(const char *path) {
+    int i = card_find(path);
+    return i >= 0 ? card[i].data : NULL;
+}
+
+static files_install_t install(bool replace, const char **why) {
+    out_clear();
+    return files_install_part(&sh, "cmd", "output", "/f.part", "/f", replace, why);
+}
+
+TEST(install_puts_the_part_in_place) {
+    const char *why;
+    setup();
+    card_add("/f.part", false, "new");
+    CHECK_EQ(install(false, &why), FILES_INSTALLED);
+    CHECK(why == NULL);
+    CHECK(!strcmp(card_data("/f"), "new"));
+    CHECK(card_find("/f.part") < 0);
+    CHECK_OUT("");
+
+    setup();                                // replacing: moved aside, then removed
+    card_add("/f", false, "old");
+    card_add("/f.part", false, "new");
+    CHECK_EQ(install(true, &why), FILES_INSTALLED);
+    CHECK(!strcmp(card_data("/f"), "new"));
+    CHECK(card_find("/f.old") < 0 && card_find("/f.part") < 0);
+    CHECK_EQ(rename_calls, 2);
+    CHECK_OUT("");
+}
+
+TEST(install_refuses_without_replace_or_onto_a_directory) {
+    const char *why;
+    setup();
+    card_add("/f", false, "old");
+    card_add("/f.part", false, "new");
+    CHECK_EQ(install(false, &why), FILES_NOT_INSTALLED);
+    CHECK(!strcmp(why, "exists (-f replaces it)"));
+    CHECK(!strcmp(card_data("/f"), "old") && !strcmp(card_data("/f.part"), "new"));
+
+    setup();
+    card_add("/f", true, NULL);
+    card_add("/f.part", false, "new");
+    CHECK_EQ(install(true, &why), FILES_NOT_INSTALLED);
+    CHECK(!strcmp(why, "is a directory"));
+    CHECK_EQ(rename_calls, 0);
+}
+
+// Step 1 fails (here because a .old is already there, which is never overwritten): both kept,
+// both named.
+TEST(install_keeps_both_when_the_old_file_cant_move_aside) {
+    const char *why;
+    setup();
+    card_add("/f", false, "old");
+    card_add("/f.old", false, "older");
+    card_add("/f.part", false, "new");
+    CHECK_EQ(install(true, &why), FILES_KEPT);
+    CHECK(!strcmp(why, "not replaced"));
+    CHECK(!strcmp(card_data("/f"), "old") && !strcmp(card_data("/f.old"), "older") &&
+          !strcmp(card_data("/f.part"), "new"));
+    CHECK_OUT("cmd: /f: can't move it aside to /f.old: already exists\n"
+              "cmd: the output is in /f.part\n");
+}
+
+// Step 2 fails: the old file is put back, and the caller may delete the .part.
+TEST(install_puts_the_old_file_back_when_the_part_cant_take_its_name) {
+    const char *why;
+    setup();
+    card_add("/f", false, "old");
+    card_add("/f.part", false, "new");
+    rename_fail = 1u << 1;
+    CHECK_EQ(install(true, &why), FILES_NOT_INSTALLED);
+    CHECK(why != NULL);
+    CHECK(!strcmp(card_data("/f"), "old") && card_find("/f.old") < 0);
+    CHECK(!strcmp(card_data("/f.part"), "new"));
+    CHECK_OUT("");
+
+    setup();                                // and without an old file
+    card_add("/f.part", false, "new");
+    rename_fail = 1u << 0;
+    CHECK_EQ(install(true, &why), FILES_NOT_INSTALLED);
+    CHECK(card_find("/f") < 0 && !strcmp(card_data("/f.part"), "new"));
+}
+
+// Steps 2 and the putting back both fail: the old file at .old, the new one in the .part.
+TEST(install_keeps_both_when_the_old_file_cant_be_put_back) {
+    const char *why;
+    setup();
+    card_add("/f", false, "old");
+    card_add("/f.part", false, "new");
+    rename_fail = (1u << 1) | (1u << 2);
+    CHECK_EQ(install(true, &why), FILES_KEPT);
+    CHECK(!strcmp(card_data("/f.old"), "old") && !strcmp(card_data("/f.part"), "new"));
+    CHECK(card_find("/f") < 0);
+    CHECK_OUT("cmd: the old file is in /f.old\ncmd: the output is in /f.part\n");
+}
+
+// Step 3 fails: the new file is in place; the .old is only reported.
+TEST(install_says_when_the_old_file_cant_be_removed) {
+    const char *why;
+    setup();
+    card_add("/f", false, "old");
+    card_add("/f.part", false, "new");
+    unlink_fail = true;
+    CHECK_EQ(install(true, &why), FILES_INSTALLED);
+    CHECK(!strcmp(card_data("/f"), "new") && !strcmp(card_data("/f.old"), "old"));
+    CHECK_OUT("cmd: /f.old: denied (directory not empty, read-only, or the card is full) "
+              "(the old file; remove it by hand)\n");
+}
+
 TEST_MAIN(
     RUN(files_commands_follow_the_table_rule);
     RUN(table_check_finds_the_entry_that_breaks_the_rule);
@@ -635,4 +758,10 @@ TEST_MAIN(
     RUN(cp_syncs_a_long_copy_once_a_second);
     RUN(cp_fails_when_the_sync_fails);
     RUN(echo_and_pwd_still_get_the_joined_text);
+    RUN(install_puts_the_part_in_place);
+    RUN(install_refuses_without_replace_or_onto_a_directory);
+    RUN(install_keeps_both_when_the_old_file_cant_move_aside);
+    RUN(install_puts_the_old_file_back_when_the_part_cant_take_its_name);
+    RUN(install_keeps_both_when_the_old_file_cant_be_put_back);
+    RUN(install_says_when_the_old_file_cant_be_removed);
 )

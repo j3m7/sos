@@ -232,8 +232,9 @@ or resets the board just before one, the nearest thing to a power cut that can b
 |---|---|
 | `sd fault fail <N>` | Card write N from now returns an error, and its data isn't written. Later writes go through. |
 | `sd fault reboot <N>` | The board resets before card write N from now reaches the card. |
+| `sd fault read <N>` | Card read N from now returns a CRC error, and the card isn't read: for the `sd-bus` health check ([health §9.9](design/health.md)). Counted apart from the writes. |
 | `sd fault` | What's armed, or what fired, and the card writes counted since arming. |
-| `sd fault off` | Disarms it and stops counting. |
+| `sd fault off` | Disarms both and stops counting. |
 
 N is 1 to 100000000; 1 is the next write. Arming again replaces what was armed and restarts
 the count. These commands work on the console only.
@@ -264,6 +265,11 @@ the reset.
 
 What a real power cut can do and this can't: lose the write the card was still programming,
 or tear a sector in half (design §10.4, "Not simulated").
+
+**read:** the read request (one per FatFs or checker read reaching the driver, of any size)
+returns `SD_BLOCK_DEVICE_ERROR_CRC` to its caller without reaching the driver, logged as
+`sd: fault: reading N sectors at S failed on purpose`. A read changes nothing on the card, so
+there is nothing to repair afterwards; FatFs reports the error to the command that read.
 
 ## Editor
 
@@ -347,8 +353,9 @@ replies and errors), `terminal` (key sequences and text for display), `words` (t
 tokenizer: a typed line split into words, quotes removed in place), `fsck` (the card
 checker, on a sparse disk image: `tests/fuzz/fsck_image.h`; each input is checked with two
 window sizes, which must agree), `fsck_exfat` (a card's exFAT boot region, directory entries
-and up-case table, as the checker's exFAT parts read them) and `sums` (a checksum list for
-`sha256sum -c`, split into lines and each line parsed).
+and up-case table, as the checker's exFAT parts read them), `sums` (a checksum list for
+`sha256sum -c`, split into lines and each line parsed) and `gz` (what `gunzip` and `zcat` read:
+each input is decoded in one piece and in pieces, which must agree).
 
 ```sh
 just fuzz nts_ntp 300        # five minutes; needs clang

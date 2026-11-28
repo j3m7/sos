@@ -15,7 +15,9 @@
 // detector's setting in `supply`) are read in bgcheck_board.c and judged in bgcheck.c; none holds
 // a gate either. Phase 5's full tier (§9.7: `ram`, `image`, `sd-check`) runs only on `health
 // full` or `health run <name>`; its steps are in fullcheck_board.c, judged in fullcheck.c. `ram`
-// and `image` hold KEYS and CRYPTO, closed by their FAILs only; `sd-check` holds none.
+// and `image` hold KEYS and CRYPTO, closed by their FAILs only; `sd-check` holds none. Phase 6's
+// counters (§9.9: `wifi`, `sd-bus`, `net-pools`) judge what the Wi-Fi driver's hooks, wifi.c,
+// sdcard.c and lwIP counted, in countcheck_board.c, judged in countcheck.c; none holds a gate.
 
 #include "core/health.h"
 
@@ -32,6 +34,7 @@
 
 #include "core/bgcheck.h"
 #include "core/bgcheck_board.h"
+#include "core/countcheck_board.h"
 #include "core/fullcheck_board.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
@@ -349,6 +352,8 @@ static health_step_t check_crypto_ssh(void **state, bool cancel, health_result_t
 #define CORE1_PERIOD_S      10
 #define HEAPSUM_PERIOD_S    300
 #define DRIFT_PERIOD_S      600
+// Phase 6 (§9.9): the counters every 10 minutes, after phase 4's first runs and Wi-Fi's connect.
+#define COUNT_PERIOD_S      600
 
 static const health_check_t checks[] = {
     {"resets", HEALTH_BOOT, 0, 0, 0, bgcheck_resets_step},
@@ -372,6 +377,9 @@ static const health_check_t checks[] = {
     {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, bgcheck_core1_step},
     {"heap-sum", HEALTH_BACKGROUND, HEAPSUM_PERIOD_S, 70, 0, bgcheck_heap_step},
     {"rtc-drift", HEALTH_BACKGROUND, DRIFT_PERIOD_S, 100, 0, bgcheck_drift_step},
+    {"wifi", HEALTH_BACKGROUND, COUNT_PERIOD_S, 110, 0, countcheck_wifi_step},
+    {"sd-bus", HEALTH_BACKGROUND, COUNT_PERIOD_S, 115, 0, countcheck_sd_step},
+    {"net-pools", HEALTH_BACKGROUND, COUNT_PERIOD_S, 120, 0, countcheck_pools_step},
     // Phase 5 (§9.7): only on `health full` or `health run <name>`, last, in this order.
     {"ram", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_ram_step},
     {"image", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_image_step},

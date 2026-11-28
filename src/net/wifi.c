@@ -111,6 +111,13 @@ static uint8_t join_bssid[6];
 static bool keepalive = true;
 static absolute_time_t next_keepalive;
 static bool started;                    // wifi_start() has run: the chip can scan
+// For the `wifi` health check (wifi_counts()).
+static uint32_t down_since_s;           // uptime the link was last lost, or Wi-Fi started
+static uint32_t drops;                  // link lost while connected, since boot
+static uint32_t drop_at_s[WIFI_DROP_TIMES];
+static unsigned drop_next, drop_n;
+static int32_t join_rssi;
+static char chip_ver[128];              // the chip's `ver` answer, read by wifi_start()
 
 // The names of all the networks a scan hears, for Tab at an SSID question (wifi_names_start()).
 // Allocated only while one wants them, and freed NAMES_KEEP_MS after the last use if nobody
@@ -356,6 +363,7 @@ static void connected(void) {
     int32_t rssi = 0;
     cyw43_wifi_get_bssid(&cyw43_state, b);
     cyw43_wifi_get_rssi(&cyw43_state, &rssi);
+    join_rssi = rssi;
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "wifi: connected to '%s', ip %s (access point "
             "%02x:%02x:%02x:%02x:%02x:%02x, %d dBm)", nets[cur].ssid, ip, b[0], b[1], b[2], b[3],
             b[4], b[5], (int)rssi);
@@ -427,9 +435,32 @@ static void check_country(void) {
                 (got >> 8 & 0x7f) >= 0x20 ? (int)(got >> 8 & 0x7f) : '?');
 }
 
+static uint32_t uptime_s(void) {
+    return (uint32_t)(time_us_64() / 1000000);
+}
+
+// The chip's build line ("wl0: Nov 29 2021 22:50:20 version 7.95.49 (2271bb6 CY) FWID 01-..."),
+// once: the `wifi` health check shows the version. The request goes in the buffer the answer uses.
+static void read_version(void) {
+    uint8_t buf[sizeof(chip_ver)] = "ver";
+    if (cyw43_ioctl(&cyw43_state, CYW43_IOCTL_GET_VAR, sizeof(buf), buf, CYW43_ITF_STA) != 0) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
+                "wifi: the chip didn't give its firmware version");
+        return;
+    }
+    buf[sizeof(buf) - 1] = '\0';
+    size_t n = 0;
+    while (buf[n] >= 0x20 && buf[n] < 0x7f)     // one line, printable
+        n++;
+    memcpy(chip_ver, buf, n);
+    chip_ver[n] = '\0';
+}
+
 void wifi_start(void) {
     cyw43_arch_enable_sta_mode();   // sets the SDK's default power mode
     started = true;
+    down_since_s = uptime_s();
+    read_version();
     check_country();
     wifi_apply_power();
     attempt = 0;
@@ -440,6 +471,8 @@ void wifi_start(void) {
 }
 
 void wifi_reconnect(void) {
+    if (state == W_UP)
+        down_since_s = uptime_s();  // asked for: not a drop
     if (state != W_OFF)
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     attempt = 0;
@@ -560,6 +593,13 @@ void wifi_poll(void) {
         if (link != CYW43_LINK_UP) {
             log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
                     "wifi: link lost (status %d), reconnecting", link);
+            // Not asked for (wifi_reconnect() leaves W_UP without coming here): a drop.
+            down_since_s = uptime_s();
+            drops++;
+            drop_at_s[drop_next] = down_since_s;
+            drop_next = (drop_next + 1) % WIFI_DROP_TIMES;
+            if (drop_n < WIFI_DROP_TIMES)
+                drop_n++;
             cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
             switch_tries = 0;
             begin_attempt();
@@ -612,6 +652,31 @@ const char *wifi_state(void) {
     }
     return "?";
 }
+
+void wifi_counts(wifi_counts_t *out) {
+    *out = (wifi_counts_t){
+        .configured = settings()->wifi_ssid[0] != '\0',
+        .running = state != W_OFF,
+        .up = state == W_UP,
+        .down_since_s = down_since_s,
+        .drops = drops,
+        .drop_n = drop_n,
+        .join_rssi = join_rssi,
+        .ver = chip_ver,
+    };
+    memcpy(out->drop_at_s, drop_at_s, sizeof(drop_at_s));
+}
+
+#ifdef SOS_TEST_COMMANDS
+bool wifi_fault_drop(void) {
+    if (state != W_UP)
+        return false;
+    // The chip answers with its DISASSOC event, on which the driver sets the link down and clears
+    // its join state (cyw43_ctrl.c); wifi_poll()'s W_UP case then sees the link lost.
+    cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
+    return true;
+}
+#endif
 
 bool wifi_radio(wifi_radio_t *r) {
     memset(r, 0, sizeof(*r));

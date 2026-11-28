@@ -422,6 +422,57 @@ NOTES
 
 SEE ALSO
     head, tail, wc, more
+@@ gunzip
+NAME
+    gunzip - decompress gzip files on the card
+
+SYNOPSIS
+    gunzip [-k] [-f] <file>...
+
+DESCRIPTION
+    Decompresses each file: 'x.gz' gives 'x' and 'x.tgz' gives 'x.tar'
+    (the suffix in any case). Other names are refused ('unknown suffix'),
+    as GNU gunzip does, and so is a name that is only the suffix ('.gz').
+    The name and date stored in the gzip header are ignored: the output's
+    name comes from the input's, and it is dated now.
+
+    The output is written to '<name>.part' and renamed to '<name>' only when
+    the whole input has been read and checked: each part's CRC-32 and length
+    must match. Any error deletes the .part and keeps the input, so a
+    'gunzip' that didn't finish leaves nothing half-written behind. The
+    input is deleted after success unless -k is given. With several files,
+    a file that fails is reported and the next one is decompressed.
+
+    Files made by joining gzip files ('cat a.gz b.gz > c.gz' on a computer)
+    decompress to the parts one after the other. Zero bytes after the end
+    (padding from tape and block tools) are skipped with a line saying
+    'ignoring trailing zeros'; any other bytes there are an error.
+
+    A job: Ctrl-C stops it and removes the .part, as does the session
+    ending. It writes 4 KB at a time, so a small file that decompresses to a
+    lot only takes longer; a full card stops it with 'card full'. The .part
+    is synced to the card about once a second, so 'ls' shows how far it has
+    got.
+
+OPTIONS
+    -k    keep the input file
+    -f    replace an existing output file (without it, gunzip refuses:
+          'already exists'). The old file is moved aside to '<name>.old'
+          until the output has taken its name, so a failed rename loses
+          neither; if a '<name>.old' is already there, nothing is replaced
+          and the output stays in the .part, as gunzip then says.
+    Options come before the files, alone or together (-kf); '--' ends
+    them, for a file whose name starts with '-'.
+
+MEMORY
+    About 50 KB of heap while it runs (zlib's 32 KB window and its state
+    show as 'zlib' in 'mem'). It is refused when that would leave less than
+    64 KB free, so a TLS handshake still fits. One of gunzip and zcat runs
+    at a time across all shells; another is refused with 'busy: gunzip is
+    running in another shell'.
+
+SEE ALSO
+    zcat, cp, ls, mem
 @@ head
 NAME
     head - the first lines of a command's output, then stop it
@@ -513,6 +564,25 @@ DESCRIPTION
                     (with the 'time cal' value to correct it), or the board's
                     crystal more than 65 ppm; FAIL beyond 1000 ppm. SKIP until
                     two syncs, and while the uncertainty is too large to say
+    and these count what the Wi-Fi driver, the card's bus and the network
+    stack report, every 10 minutes, judged as rates (errors in the last hour,
+    drops in a day, since the card's last start):
+        wifi        the Wi-Fi chip's firmware version, and the driver's errors
+                    (replies that never came, bus errors): WARN at 3 in an
+                    hour, FAIL at 30 (the chip isn't answering); WARN at 4 link
+                    drops in a day not asked for ('wifi connect' doesn't
+                    count), and after 30 minutes without a connection. SKIP
+                    while Wi-Fi isn't set up. 'wifi stats' gives the counts
+        sd-bus      the SD card's SPI bus since the card was last started:
+                    WARN on a read or write that failed after the driver's
+                    retries ('sd check' it), FAIL at 10; WARN when a start
+                    failed after one had worked, on a timeout, and on errors
+                    the driver retried: any above 25 MHz ('sd speed'), else
+                    3 or more and one per 10 MB. SKIP with no card. 'sd' gives
+                    the counts
+        net-pools   lwIP's packet pool, segment pool and heap: WARN on any
+                    failure in the last hour (frames dropped, sends refused:
+                    the load outgrew them)
     and these compare what is stored with what the board uses, hourly (the
     card every 6 hours), the first a minute or so after boot. They read
     only: none writes flash, OTP or the card, or repairs anything:
@@ -583,7 +653,7 @@ CONSOLE ONLY
 
 SEE ALSO
     uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
-    bootkey, tls, time
+    bootkey, tls, time, wifi, sd
 @@ help
 NAME
     help - list the commands this channel may use
@@ -1000,14 +1070,15 @@ SYNOPSIS
 
 DESCRIPTION
     The heap: in use, peak and total, then what each feature holds and its
-    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, and
-    'other' for the rest), lwIP's own pool, and core 0's peak stack use.
+    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, zlib,
+    and 'other' for the rest), lwIP's own pool, and core 0's peak stack use.
     After a Lua script has run, also how deep the last script went into core
     1's 32 KB stack.
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script
-    may take 128 KB, and the editor takes the file plus 32 KB of room.
+    may take 128 KB, the editor takes the file plus 32 KB of room, and
+    gunzip or zcat about 50 KB.
 
 SEE ALSO
     ssh, lua, edit
@@ -1342,9 +1413,13 @@ SYNOPSIS
 
 DESCRIPTION
     'sd' (or 'sd info') shows the card and volume information, the SPI clock,
-    and whether the card is encrypted, with its card id. 'sd speed' shows the
-    SPI clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
-    reinitializes the card; not saved.
+    and whether the card is encrypted, with its card id, then the bus's errors
+    since the card was last started and since boot: reads and writes that
+    failed after the driver's retries, errors it retried, and timeouts (what
+    the sd-bus health check judges; see 'health'). 'sd speed' shows the SPI
+    clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
+    reinitializes the card; not saved. Above 25 MHz, the SD standard's limit,
+    any error the driver has to retry is a health warning.
 
     'sd unmount' unmounts the card before it is taken out; refused while a
     file is open. No card-detect switch is wired by default, so the board
@@ -2036,7 +2111,11 @@ DESCRIPTION
 
     'wifi stats' is for chasing packet loss: signal, noise floor, channel,
     access point and transmit rate; packets sent, received and dropped per
-    protocol since boot; TCP segments resent; and how full lwIP's pools got.
+    protocol since boot; TCP segments resent; how full lwIP's pools got; and
+    the Wi-Fi driver's errors since boot (timeouts, bus errors), the link
+    drops nobody asked for and the chip's firmware version, which the 'wifi'
+    health check judges (see 'health'). The driver's warnings go to the log
+    ('dmesg'), at most one line per kind every 10 s.
     'wifi stats chip' adds the Wi-Fi chip's own counters, raw (index: value);
     their layout isn't published, so compare two readings.
 
@@ -2047,4 +2126,25 @@ DESCRIPTION
     (see 'net').
 
 SEE ALSO
-    net, setup, hostname, config
+    net, setup, hostname, config, health
+@@ zcat
+NAME
+    zcat - print a gzip file decompressed
+
+SYNOPSIS
+    zcat <file>
+
+DESCRIPTION
+    Prints the file decompressed, as 'cat' prints a file, and leaves it as
+    it is: 'zcat /var/log/old.log.gz | grep error'. Any name is accepted.
+    The decoding is gunzip's: joined gzip files print one after the other,
+    and a corrupt file prints what came before the damage, then the error.
+    Zero bytes after the end are skipped without a note, so that the output
+    is only the data.
+
+    A job: Ctrl-C stops it, and a slow SSH client slows it down instead of
+    losing output. It takes the same memory as gunzip, and one of the two
+    runs at a time across all shells ('man gunzip').
+
+SEE ALSO
+    gunzip, cat, more

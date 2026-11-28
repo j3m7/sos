@@ -164,53 +164,19 @@ static FRESULT flush(fetch_job_t *j) {
     return files_sync_if_due(&j->f, &j->synced_at);
 }
 
-// The .part is complete and closed: put it in place of <file>. NULL, or why not. With -f an
-// existing <file> is first renamed aside to <file>.old and removed only once the .part has
-// taken its name, and put back if that rename fails: neither the old file nor the download is
-// lost whichever step fails. When the .part must be kept (the old file couldn't be moved
-// aside, or couldn't be put back), j->created is cleared and j->kept set, so finish() neither
-// deletes it nor says "nothing saved", and the message says where the download is. (Not host
-// tested: fetch.c needs the SDK and wolfCrypt, and no fake FatFs fails a rename on demand; each
-// failing f_rename() below is one of those cases.)
+// The .part is complete and closed: put it in place of <file> (files_install_part(), which moves
+// an old <file> aside with -f). NULL, or why not. When the .part must be kept, j->created is
+// cleared and j->kept set, so finish() neither deletes it nor says "nothing saved"; the helper
+// has said where the download is.
 static const char *install(shell_t *sh, fetch_job_t *j) {
-    FILINFO fi;
-    char old[PATH_LEN];
-    bool aside = false;
-    if (f_stat(j->path, &fi) == FR_OK) {
-        if (fi.fattrib & AM_DIR)
-            return "is a directory";
-        if (!j->force)
-            return "exists (-f replaces it)";   // made while the download ran
-        // j->part (path + ".part") fits PATH_LEN, so path + ".old" does too.
-        size_t len = strlen(j->path);
-        memcpy(old, j->path, len);
-        memcpy(old + len, ".old", sizeof(".old"));
-        FRESULT fr = f_rename(j->path, old);
-        if (fr != FR_OK) {
-            j->created = false;                 // keep the download
-            j->kept = true;
-            shell_printf(sh, "fetch: %s: can't move it aside to %s: %s\n", j->path, old,
-                         files_error(fr));
-            shell_printf(sh, "fetch: the download is in %s\n", j->part);
-            return "not replaced";
-        }
-        aside = true;
+    const char *why;
+    files_install_t r = files_install_part(sh, "fetch", "download", j->part, j->path, j->force,
+                                           &why);
+    if (r == FILES_KEPT) {
+        j->created = false;
+        j->kept = true;
     }
-    FRESULT fr = f_rename(j->part, j->path);
-    if (fr != FR_OK) {
-        const char *why = files_error(fr);
-        if (aside && f_rename(old, j->path) != FR_OK) {
-            j->created = false;                 // the old file is at .old: keep the download
-            j->kept = true;
-            shell_printf(sh, "fetch: the old file is in %s\n", old);
-            shell_printf(sh, "fetch: the download is in %s\n", j->part);
-        }
-        return why;
-    }
-    if (aside && (fr = f_unlink(old)) != FR_OK)
-        shell_printf(sh, "fetch: %s: %s (the old file; remove it by hand)\n", old,
-                     files_error(fr));
-    return NULL;
+    return r == FILES_INSTALLED ? NULL : why;
 }
 
 static void print_summary(shell_t *sh, fetch_job_t *j) {

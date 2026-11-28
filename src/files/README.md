@@ -149,6 +149,29 @@ length), and `sums_name_safe()`: no absolute name, no `..` component (split at `
 FatFs splits, and dots-and-spaces components FatFs may read as `..`), no `:` or control
 character. `tests/test_sums_parse.c`; fuzz target `sums`.
 
+## `gzip.c`, `gz.c`, `bigjob.c`: gunzip and zcat
+
+[Design](../../docs/design/archives.md) §5. zlib is the submodule `lib/zlib`, built from the list
+in `cmake/zlib.cmake` for both the firmware and the host tests (`Z_SOLO`, `ZLIB_CONST`, SYSTEM
+includes, no SOS warnings).
+
+- **`gz.c` (pure C, host tested and fuzzed):** a gzip file's bytes in, the data out, on
+  `inflate` (windowBits 15 + 16). It reads the members one after the other, looks at the bytes
+  between them itself (another member's `1f 8b`, zero padding, or garbage), and never makes more
+  output per call than the caller's buffer holds, whatever the pieces the input comes in. zlib's
+  memory (~40 KB: its state and 32 KB window) comes from `gz_zalloc()`, under `HEAP_ZLIB`.
+  `tests/test_gz.c` decodes the files GNU gzip made in `tests/data/archives/`
+  (`tools/make-archive-fixtures.sh`) in pieces of many sizes; `tests/fuzz/fuzz_gz.c` checks that
+  any input decodes the same in one piece and in pieces.
+- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates into 4 KB, or writes
+  that out (gunzip: to `<name>.part`, synced once a second; zcat: as `shell_write_space()`
+  allows), until `STEP_US`, at least one of them a step. The .part is renamed into place only
+  after `gz_finish()`; an error, Ctrl-C or the session ending deletes it. Refused when the heap
+  would keep less than 64 KB free. `tests/test_gzip.c` runs both over a card in memory.
+- **`bigjob.c`** (shared with `fetch`): one archive job at a time across the shells.
+  `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
+  caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).
+
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`
@@ -264,13 +287,29 @@ the plan on one log line, `fsck_done_line()` what a repair wrote. They follow
 `fsck_plan_writes()`'s rules (frees and trims skipped when the tree wasn't all read, trims when
 anything is cross-linked). `tests/test_fsck_plan.c` checks the lines.
 
-## `sdfault.c`: injected write faults (test builds only, host tested)
+## `sdstat.c`: the bus's counters (pure, host tested)
 
-`sd fault fail <N>` and `sd fault reboot <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
+The `sd-bus` health check's counters (docs/design/health.md §9.9, §9.10): `sdcard.c` adds what
+passes its wrappers, and the driver's own report lines are counted here, by the function they
+come from: its debug lines (`debug_message_printf()`, with `USE_DBG_PRINTF` on `sd_card_spi.c`
+alone) and its error lines (`sdstat_error_line()`, from `sdcard.c`'s `error_message_printf()`).
+**What the driver calls from inside itself counts and returns**: no formatting, no log, no call
+into `sdcard.c`, FatFs or the log files, no waiting. The `sdstat-leaf` host test checks that
+`sdstat.c` references nothing but `countcheck_sd_kind()`.
+
+The log writer's quiet remount waits a minute after any mount attempt
+(`sdcard_last_mount_us()`), so a failed mount (about 4 s on a card that won't initialise) and
+the retry never fall in one main-loop pass: together they reached the 8 s watchdog on dev-1.
+
+## `sdfault.c`: injected write and read faults (test builds only, host tested)
+
+`sd fault fail <N>`, `sd fault reboot <N>` and `sd fault read <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
 only, for testing repair on a board ([design §10.4](../../docs/design/sd-check.md#104-fault-injection),
 usage in [development.md](../../docs/development.md#test-commands-sd-card-write-faults)).
 `sdfault.c` counts writes and decides. `write_blocks_fed()` in `sdcard.c`, through which every
 card write reaches the driver (FatFs's, the layer's chunks, the header writes), asks it once per
 write. It fails the write, or closes the driver's open multi-block write and resets the board
-(`fault_test_reset()` in `core/fault.c`, so the next boot says why). In other images, neither
-the hook nor the file is built. `tests/test_sdfault.c` covers the counting.
+(`fault_test_reset()` in `core/fault.c`, so the next boot says why). `read_blocks_logged()`
+asks it once per read too: `sd fault read <N>` fails read N with a CRC error without reading
+the card, for the `sd-bus` health check. In other images, neither the hook nor the file is
+built. `tests/test_sdfault.c` covers the counting.
