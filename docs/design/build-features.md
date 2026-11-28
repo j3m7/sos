@@ -130,9 +130,11 @@ without the network stack, the SSH server and the TLS client cannot be reached o
 7. **`main.c` stays explicit.** Boot order is security-relevant (`health_boot()` before any key,
    every key derived before `keyprov_lock()`), so it remains one readable sequence with
    `#if SOS_HAVE_...` around the optional steps, not a module registry that hides the order.
-8. **Commands belong to their features.** Each feature exports a command table, as
-   `files_commands[]`, `sums_commands[]` and `gzip_commands[]` already do, and the shell's list
-   of tables is the one place that says which exist (§4.1).
+8. **Commands belong to their features; their order belongs to the shell.** Each feature
+   holds its commands' code and word lists. The main command table stays one ordered list,
+   in `shell/commands.c`, with each feature's entries fenced by `#if`, because Tab offers
+   commands in table order and that order is chosen, not accidental (§4.1). The tables that
+   already exist (`files_commands[]`, `sums_commands[]`, `gzip_commands[]`) stay as they are.
 9. **The plain Pico 2 is a target** (decided by the user, 2026-11-27), alongside the Pico 2 W.
    Same RP2350 chip, so the same security core (OTP, secure boot, glitch detector); the board
    just has no Wi-Fi chip, so its images are built with NET off. Board differences live in
@@ -192,32 +194,45 @@ SSH steps of `setup`, `run_ssh`. Three subsystems already export their own table
 PRs may add more. `fetch` has its body in `net/fetch.c` but its entry in `commands[]`. The
 change:
 
-- Move each subsystem's command bodies, word lists and entries into that subsystem
-  (`net/wifi_cmd.c`, `time/time_cmd.c`, `tls/tls_cmd.c`, `ssh/ssh_cmd.c`...), each exporting a
-  table, as `files.c`, `sums.c` and `gzip.c` already do. Worth doing even without features: it
+- Move each subsystem's command bodies and word lists into that subsystem
+  (`net/wifi_cmd.c`, `time/time_cmd.c`, `tls/tls_cmd.c`, `ssh/ssh_cmd.c`...), exported through
+  the subsystem's header (`cmd_wifi()`, `wifi_words[]`). Worth doing even without features: it
   shrinks `shell.c` and puts a command next to the code it drives.
-- One file, `shell/commands.c`, lists the tables:
+- The `commands[]` table moves, unchanged, to `shell/commands.c`: same entries, same order.
+  Tab completion (`complete.c`) offers commands in table order, so splitting it into one table
+  per feature would reorder what Tab lists. Later phases fence entries in place:
 
   ```c
-  const shell_cmd_t *const command_tables[] = {
-      core_commands, files_commands, sums_commands,
+  static const shell_cmd_t commands[] = {
+      {"help", run_help, NULL, NULL, 0},
+      ...
+  #if SOS_HAVE_NTS
+      {"nts", cmd_nts, NULL, nts_words, 0},
+  #endif
+      {"mem", run_mem, NULL, NULL, 0},
+  #if SOS_HAVE_NET
+      {"net", run_net, NULL, NULL, 0},
+      {"ping", ping_command, NULL, SHELL_VALUES_OF(ping_hosts), 0},
+  #endif
+      ...
+  };
+  const shell_cmd_t *const command_tables[] = {commands, files_commands, sums_commands,
   #if SOS_HAVE_ARCHIVE
       gzip_commands,
   #endif
-  #if SOS_HAVE_NET
-      wifi_commands,
-  #endif
-  #if SOS_HAVE_SSH
-      ssh_commands,
-  #endif
-      ...
       NULL};
   ```
 
-  `help`, Tab completion and dispatch already walk `shell_command_tables()`, so they follow
-  with no change. A linker-section registry (each table placing itself) was considered and
-  rejected: it needs the linker scripts SOS already overrides, and the explicit list is easier
-  to read.
+  Dispatch, Tab completion and `shell_command_tables()` follow with no change. A
+  linker-section registry (each table placing itself) was considered and rejected: it needs the
+  linker scripts SOS already overrides, its order would be the link order, and the explicit
+  list is easier to read.
+- `help` is text written out in `cmd_help()`, not generated from the table, so it is fenced
+  the same way: each feature's help lines go under its `#if`. (`files_help()` and
+  `gzip_help()` already live with their subsystems.)
+- **Phase 1 is a pure move** (§10): no behaviour change, the table's order the same, `help`'s
+  text identical byte for byte, `docs/commands.md` regenerated identical, every command still
+  dispatching. That makes its review a mechanical check.
 - `setup` asks its Wi-Fi and SSH questions only when those features exist; the steps move to
   their subsystems as functions `setup` calls.
 - `mem` stays in the core but leaves out the lines of features that are off (lwIP's pools,
@@ -532,8 +547,10 @@ Each phase leaves the default image the same and is useful on its own.
 | #265 phase 8 (planned) | `pico_sha256`; Lua `sos.hashfile`, redirects in `sos.http`, gunzip/untar from Lua | more LUA + FILES and LUA + ARCHIVE glue (§3) |
 | #275 RTC CAP_SEL (planned, waits for the user) | `time/rtc.c`, `timesync.c` | none: time is not optional |
 
-**Phase 1 can start once #273, #274, #277 and #278 have merged.** They are the only open
-changes in files phase 1 moves (`shell.c`'s table, `files/`). The two planned items don't
+**Phase 1 can start once #273, #274, #277 and #278 have merged** (the user, 2026-11-28: go
+ahead then; every PR reviewed by Reviewer and board-tested, **none merged until the user has
+looked at the stack**, this note included). #274 and #277 touch `shell.c`'s table and help;
+#278 doesn't, but the user asked for all four first. The two planned items don't
 block it: their code lands in its new place if they come later.
 
 Before phase 1, and again before each later phase, bring this note up to date against main:
@@ -560,8 +577,8 @@ at flash (0x10000000-0x103fffff) and SRAM (0x20000000-0x2008ffff) addresses, gro
 listed under whichever object comes first; leave it out. Debug sections have address 0 and
 other ranges; leave those out too.
 
-1. **Commands move to their subsystems** (§4.1), no options yet. Pure refactor; `shell.c`
-   shrinks by roughly half. The riskiest phase for conflicts with other work, so it goes
+1. **Commands move to their subsystems** (§4.1), no options yet. A pure move: same table
+   order, same `help` text, same `docs/commands.md`; `shell.c` shrinks by roughly half. The riskiest phase for conflicts with other work, so it goes
    first, while shell work is quiet.
 2. **Seams** (§4.3, §4.4): the health checks' read steps moved to their features, the
    stand-in headers, the owner-gone hooks, the Lua health table moved, `tls_init()` moved to
@@ -586,7 +603,8 @@ Decided by the user, 2026-11-27:
 
 Open:
 
-1. **Starting phase 1**: after #273, #274, #277 and #278 merge (§10). Needs the user's go.
+1. **Starting phase 1**: approved by the user, 2026-11-28, once #273, #274, #277 and #278
+   have merged (§10). Nothing in the stack merges before the user has looked at it.
 2. **A plain Pico 2 board** for testing §4.8. Until there is one, the `pico2` presets are
    build-checked only (§8).
-3. **Merging this refresh:** docs only; needs Reviewer's review and the user's word.
+3. **Merging this refresh:** reviewed; waits for the user, with the rest of the stack.
