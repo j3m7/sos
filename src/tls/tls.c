@@ -337,6 +337,33 @@ static void note_leaf(tls_conn_t *c, const WOLFSSL_X509_STORE_CTX *store) {
     heap_release(HEAP_NET, dc);
 }
 
+// A certificate in the chain has no trusted signer: note its issuer (the first one wolfSSL
+// reports, which is the highest in the chain, as it checks from the top down), so a failure can
+// say which root is missing. store->certs[error_depth] is the certificate being checked (0: the
+// leaf).
+static void note_untrusted(tls_conn_t *c, const WOLFSSL_X509_STORE_CTX *store) {
+    tls_stats_t *s = &c->stats;
+    if (s->untrusted)
+        return;
+    s->untrusted = true;
+    int depth = store->error_depth;
+    if (!store->certs || depth < 0 || depth >= store->totalCerts)
+        return;
+    DecodedCert *dc = heap_alloc(HEAP_NET, sizeof(*dc));
+    if (!dc)
+        return;
+    wc_InitDecodedCert(dc, store->certs[depth].buffer, store->certs[depth].length, NULL);
+    if (wc_ParseCert(dc, CERT_TYPE, NO_VERIFY, NULL) == 0) {
+        size_t m = strnlen(dc->issuer, sizeof(dc->issuer));
+        if (m >= sizeof(s->untrusted_issuer))
+            m = sizeof(s->untrusted_issuer) - 1;
+        memcpy(s->untrusted_issuer, dc->issuer, m);
+        s->untrusted_issuer[m] = '\0';
+    }
+    wc_FreeDecodedCert(dc);
+    heap_release(HEAP_NET, dc);
+}
+
 // wolfSSL calls this for every certificate that fails, and (WOLFSSL_ALWAYS_VERIFY_CB) for the
 // leaf even when it passed. The verdict is wolfSSL's, except that dates are let through while
 // the clock isn't set. The leaf, if accepted, is noted for the stats.
@@ -350,6 +377,8 @@ static int verify_cb(int preverify, WOLFSSL_X509_STORE_CTX *store) {
     }
     if (ok && verifying && store->error_depth == 0)
         note_leaf(verifying, store);
+    if (!ok && verifying && store->error == ASN_NO_SIGNER_E)
+        note_untrusted(verifying, store);
     return ok;
 }
 

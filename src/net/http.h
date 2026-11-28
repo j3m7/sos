@@ -8,8 +8,9 @@
 // instead of filling memory.
 //
 // Only https://. The server certificate is checked as for every TLS connection (tls/: built-in
-// roots, the approved /certs/roots.pem, the host name). Redirects aren't followed: the caller
-// sees the 3xx status and the Location header. Compressed responses aren't requested.
+// roots, the approved /certs/roots.pem, the host name). Redirects are followed only when the
+// caller asks (http_opts_t.max_redirects); otherwise the caller sees the 3xx status and the
+// Location header. Compressed responses aren't requested.
 
 #ifndef SOS_HTTP_H
 #define SOS_HTTP_H
@@ -44,6 +45,15 @@ typedef struct {
     size_t body_len;                // up to HTTP_BODY_MAX
     uint32_t timeout_ms;            // until the headers arrive, then between pieces of the
                                     // body; 0: HTTP_DEFAULT_TIMEOUT
+    // Redirects: 0 (the default) hands the caller a 3xx as it is. Otherwise a 301, 302, 303,
+    // 307 or 308 with a Location is followed, up to this many hops (HTTP_REDIRECTS_MAX at
+    // most): each a new connection, with its own certificate check and timeout. Only for GET
+    // and HEAD without extra headers or a body (a header such as Authorization mustn't go to
+    // whatever host a server names). A Location that can't be followed (http_redirect_target())
+    // fails the request. http_redirects() and http_url() tell the caller where it went.
+    uint8_t max_redirects;
+    bool allow_downgrade;           // a redirect from https to plain http may be followed (once
+                                    // plain http exists: until then it's refused either way)
 } http_opts_t;
 
 typedef struct http_req http_req_t;
@@ -71,6 +81,10 @@ const tls_stats_t *http_tls_stats(const http_req_t *r);
 // Milliseconds from http_start() to the headers, and to the end (or now).
 uint32_t http_headers_ms(const http_req_t *r);
 uint32_t http_elapsed_ms(const http_req_t *r);
+
+// Redirects followed so far, and the URL being requested now (the last hop's), as text.
+unsigned http_redirects(const http_req_t *r);
+const char *http_url(const http_req_t *r);
 
 // Close the connection and free everything. r may be NULL.
 void http_close(http_req_t *r);
