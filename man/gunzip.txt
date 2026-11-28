@@ -7,8 +7,9 @@ SYNOPSIS
 DESCRIPTION
     Decompresses each file: 'x.gz' gives 'x' and 'x.tgz' gives 'x.tar'
     (the suffix in any case). Other names are refused ('unknown suffix'),
-    as GNU gunzip does. The name and date stored in the gzip header are
-    ignored: the output's name comes from the input's, and it is dated now.
+    as GNU gunzip does, and so is a name that is only the suffix ('.gz').
+    The name and date stored in the gzip header are ignored: the output's
+    name comes from the input's, and it is dated now.
 
     The output is written to '<name>.part' and renamed to '<name>' only when
     the whole input has been read and checked: each part's CRC-32 and length
@@ -31,7 +32,10 @@ DESCRIPTION
 OPTIONS
     -k    keep the input file
     -f    replace an existing output file (without it, gunzip refuses:
-          'already exists')
+          'already exists'). The old file is moved aside to '<name>.old'
+          until the output has taken its name, so a failed rename loses
+          neither; if a '<name>.old' is already there, nothing is replaced
+          and the output stays in the .part, as gunzip then says.
     Options come before the files, alone or together (-kf); '--' ends
     them, for a file whose name starts with '-'.
 

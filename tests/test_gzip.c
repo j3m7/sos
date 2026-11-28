@@ -366,6 +366,16 @@ TEST(gunzip_does_not_replace_without_f) {
     run("gunzip -f a.gz");
     CHECK(card_is("/a", "text.txt"));
     CHECK(card_find("/a.gz") < 0);
+    card_put("/c.gz", "text.txt.gz");       // -f never overwrites a .old: both kept
+    card_add("/c", false, "old", 3);
+    card_add("/c.old", false, "older", 5);
+    run("gunzip -f c.gz");
+    CHECK_HAS("gunzip: /c: can't move it aside to /c.old: already exists\n"
+              "gunzip: the output is in /c.part\ngunzip: /c: not replaced\n");
+    CHECK(card_is("/c.part", "text.txt"));
+    CHECK_EQ(card[card_find("/c")].len, 3);
+    CHECK_EQ(card[card_find("/c.old")].len, 5);
+    CHECK(card_find("/c.gz") >= 0);
     card_put("/b.gz", "text.txt.gz");
     card_add("/b", true, "", 0);
     run("gunzip -kf b.gz");

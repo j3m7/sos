@@ -44,6 +44,22 @@ bool files_write_allowed(const shell_t *sh, const char *path);
 // Returns f_sync()'s result, or FR_OK when no sync was due.
 FRESULT files_sync_if_due(FIL *f, uint64_t *synced_at);
 
+// A finished `<dest>.part` (closed) put in place of `dest`: fetch's download, gunzip's output.
+// Returns FILES_INSTALLED when `part` is `dest` now. On a failure *why says why (static text),
+// and the result says what became of `part`:
+// - FILES_NOT_INSTALLED: nothing on the card changed (an old `dest` is still there); the caller
+//   deletes `part`. Refusals: `dest` is a directory, or exists and `replace` is false.
+// - FILES_KEPT: `part` must not be deleted, and where things are has been printed (see .c).
+// Messages start with `cmd`; `what` names the new file in them ("download", "output").
+typedef enum {
+    FILES_INSTALLED,
+    FILES_NOT_INSTALLED,
+    FILES_KEPT,
+} files_install_t;
+files_install_t files_install_part(shell_t *sh, const char *cmd, const char *what,
+                                   const char *part, const char *dest, bool replace,
+                                   const char **why);
+
 // A short description of a FatFs result (FRESULT), e.g. "no such file".
 const char *files_error(int fr);
 

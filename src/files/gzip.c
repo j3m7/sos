@@ -10,7 +10,8 @@
 // only makes many steps; the card's free space is the limit, and a full card stops gunzip with
 // "card full". The output is renamed from <name>.part to <name> only when the input ended
 // cleanly; any error, Ctrl-C or the session ending deletes the .part. The input is deleted after
-// success unless -k. An existing <name> is not replaced without -f.
+// success unless -k. An existing <name> is not replaced without -f, and with -f it is moved
+// aside while the output takes its name (files_install_part()).
 //
 // Memory: the job (two FatFs files, three paths, the two buffers: ~10 KB) and zlib's ~40 KB.
 // Refused when that would leave less than HEAP_KEEP free, so time sync, a TLS handshake and an
@@ -51,7 +52,6 @@ typedef struct {
     const char *arg;                // as typed, for messages
     FIL in, out;
     char out_path[PATH_LEN], part_path[PATH_LEN], in_path[PATH_LEN];
-    bool out_exists;                // <name> was there (and -f given): replaced at the end
     gz_t gz;
     const char *failed;             // zcat: the decoder's error, said once its output is printed
     bool eof;                       // the input file has been read to its end
@@ -94,13 +94,14 @@ static void file_done(shell_t *sh, gzjob_t *j) {
         shell_printf(sh, "gunzip: %s: %s\n", j->arg, files_error((int)fr));
         return;
     }
-    if (j->out_exists)
-        f_unlink(j->out_path);              // -f: what was there goes
-    fr = f_rename(j->part_path, j->out_path);
-    if (fr != FR_OK) {
-        f_unlink(j->part_path);
-        shell_printf(sh, "gunzip: %s: %s\n", j->out_path, files_error((int)fr));
-        return;
+    const char *why;
+    files_install_t r = files_install_part(sh, "gunzip", "output", j->part_path, j->out_path,
+                                           j->force, &why);
+    if (r != FILES_INSTALLED) {
+        if (r == FILES_NOT_INSTALLED)
+            f_unlink(j->part_path);
+        shell_printf(sh, "gunzip: %s: %s\n", j->out_path, why);
+        return;                             // the input is kept
     }
     if (zeros)
         shell_printf(sh, "gunzip: %s: ignoring trailing zeros\n", j->arg);
@@ -143,13 +144,13 @@ static bool start_file(shell_t *sh, gzjob_t *j) {
         if (!may_write(sh, j->out_path) || !may_write(sh, j->part_path) ||
             (!j->keep && !may_write(sh, j->in_path)))
             return false;
-        FILINFO fi;
-        j->out_exists = f_stat(j->out_path, &fi) == FR_OK;
-        if (j->out_exists && (fi.fattrib & AM_DIR)) {
+        FILINFO fi;                         // checked again at the end (files_install_part())
+        bool exists = f_stat(j->out_path, &fi) == FR_OK;
+        if (exists && (fi.fattrib & AM_DIR)) {
             shell_printf(sh, "gunzip: %s: is a directory\n", path_basename(j->out_path));
             return false;
         }
-        if (j->out_exists && !j->force) {
+        if (exists && !j->force) {
             shell_printf(sh, "gunzip: %s: already exists (-f replaces it)\n",
                          path_basename(j->out_path));
             return false;
