@@ -488,7 +488,7 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
-## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`, `bgcheck.c`)
+## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`, `bgcheck.c`, `fullcheck.c`)
 
 `health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
 with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
@@ -569,6 +569,22 @@ host's wolfCrypt by `tests/test_selftest.c`).
     against the tags' sum, the arena and the stack guard (MSPLIM).
   - `rtc-drift` (every 10 min): `timesync_drift()`, what the last sync measured
     (`timeconv.c` has the arithmetic).
+- **The full tier** (phase 5, docs/design/health.md §9.7), run only by `health full` or
+  `health run <name>`, judged in `fullcheck.c` (`tests/test_fullcheck.c`) and run in
+  `fullcheck_board.c`:
+  - `ram`: `memtest.c`'s March C- over six data backgrounds (pure, `tests/test_memtest.c` over a
+    simulated memory with faults), on 4 KB heap blocks allocated under `HEAP_HEALTH` while 96 KB
+    stays free (interrupts on), then SCRATCH_Y in place, 1 KB at a time with interrupts off,
+    saved and put back, unless the linker put something there or a busy DMA channel writes
+    there. A wrong read is tested again: WARN once, FAIL twice at one address. Holds KEYS and
+    CRYPTO. SCRATCH_X, the linker's core 1 stack, is never tested (a `_Static_assert`).
+  - `image`: the image's hash items (`bootkey_image_hash()`: LOAD_MAP, HASH_DEF, HASH_VALUE of
+    the last image definition) copied at boot (`fullcheck_boot()` in `health_boot()`), then the
+    flash hashed with wolfCrypt's SHA-256 through the uncached, no-allocate XIP alias, 16 KB a
+    step, and compared: a changed hash item and a changed body are separate FAILs. Holds KEYS
+    and CRYPTO. Every build is hashed (`pico_hash_binary`).
+  - `sd-check`: `sd check`'s job without a shell (`sdcard_check_health_begin()` and `_step()`),
+    only on a card unmounted by hand, steps aimed at 6 ms; no gate.
 - **The history sector** (`history.c`, pure, `tests/test_history.c`; `history_board.c`): the
   sixth sector from the end (`flashlayout.h`), 240 records of 16 bytes after a header with a
   format version: one per boot (`history_boot()` in `main()`, after `timesync_boot()`) and one
@@ -589,7 +605,9 @@ host's wolfCrypt by `tests/test_selftest.c`).
   `tests/test_heapwalk.c`) under the allocator's lock, at most 8 ms, after a known answer;
   `health history-fill` fills the history sector with test records; `crash brownout` makes a real
   brownout reset (refused while files are open, the card is busy or a script runs); Lua gets
-  `sos.spin(ms)`, a C loop without Lua instructions.
+  `sos.spin(ms)`, a C loop without Lua instructions. `health fault ram once|twice` and
+  `health fault image` arm a fault for the next run of that check (a flipped bit between a
+  write and its read, a flipped byte of what is hashed).
 - **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 32 at
   most.
 

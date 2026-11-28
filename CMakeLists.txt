@@ -198,6 +198,9 @@ set(SOS_SOURCES
     src/core/statecheck_board.c
     src/core/bgcheck.c
     src/core/bgcheck_board.c
+    src/core/fullcheck.c
+    src/core/fullcheck_board.c
+    src/core/memtest.c
     src/core/heapwalk.c
     src/core/selftest.c
     src/core/logfile.c

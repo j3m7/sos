@@ -40,6 +40,44 @@ typedef enum {
 // read.
 bootkey_image_t bootkey_image_pubkey(const uint8_t *image, size_t len, const uint8_t **pubkey);
 
+// The image's hash, as the boot ROM checks it (datasheet sections 5.1.8, 5.9.2.2-5.9.2.4 and
+// 5.9.3.2): in the last image definition of the loop, the most recent LOAD_MAP before the
+// HASH_DEF says what is hashed, the HASH_DEF how many of the block's own words follow, and the
+// HASH_VALUE holds the SHA-256 (or its first words). The `image` health check recomputes it.
+#define BOOTKEY_LOAD_MAX   8            // load map entries kept; picotool writes one to three
+
+typedef struct {
+    uint32_t storage;                   // offset of the stored bytes from the image's start;
+                                        // BOOTKEY_ZERO_FILL: none (the size word is hashed)
+    uint32_t size;                      // bytes, a multiple of 4
+} bootkey_load_t;
+#define BOOTKEY_ZERO_FILL UINT32_MAX
+
+typedef struct {
+    unsigned loads;
+    bootkey_load_t load[BOOTKEY_LOAD_MAX];
+    size_t block;                       // the block's offset from the image's start
+    uint32_t block_words;               // words of the block hashed after the load map's data
+    uint32_t value[8];                  // HASH_VALUE's words, lowest first
+    unsigned value_words;               // 1 to 8
+    bool signed_image;                  // the block also has a signature
+} bootkey_hash_t;
+
+typedef enum {
+    BOOTKEY_HASH_OK,
+    BOOTKEY_HASH_NONE,                  // a well-formed image with no HASH_VALUE
+    BOOTKEY_HASH_UNKNOWN,               // a HASH_VALUE, but items this code doesn't follow: no
+                                        // HASH_DEF or LOAD_MAP before it, a hash other than
+                                        // SHA-256, an entry outside the image or not aligned
+    BOOTKEY_HASH_NO_BLOCKS,             // as BOOTKEY_IMAGE_NO_BLOCKS
+} bootkey_hash_kind_t;
+
+// Find the image's hash items, as bootkey_image_pubkey() finds the key. `base` is the image's
+// address as the load map's absolute entries give it (0x10000000 for a flash image). Nothing
+// beyond `len` bytes is read; a storage range must lie inside them.
+bootkey_hash_kind_t bootkey_image_hash(const uint8_t *image, size_t len, uint32_t base,
+                                       bootkey_hash_t *out);
+
 // OTP flag rows are stored several times over and read by vote: a bit counts as set when at
 // least `need` of the `n` raw rows have it (3 of 8 for CRIT1, 2 of 3 for the boot flags).
 uint32_t bootkey_vote(const uint32_t *rows, unsigned n, unsigned need);

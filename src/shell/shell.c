@@ -37,6 +37,7 @@
 #include "core/heaptag.h"
 #include "core/history.h"
 #include "core/bgcheck_board.h"
+#include "core/fullcheck_board.h"
 #include "core/log.h"
 #ifdef SOS_TEST_COMMANDS
 #include "core/memhold.h"
@@ -2336,15 +2337,17 @@ static void cmd_health(shell_t *sh, char *args) {
     if (w1 && !strcmp(w1, "state-dump") && !w2) {
         statecheck_board_dump(health_print_wrapped, sh);
         bgcheck_board_dump(health_print_wrapped, sh);
+        fullcheck_board_dump(health_print_wrapped, sh);
         return;
     }
     bool walk = w1 && !strcmp(w1, "heap-walk") && !w2;
     bool fill = w1 && !strcmp(w1, "history-fill") && !w2;
+    bool fault = w1 && !strcmp(w1, "fault") && w2 && !w4;
 #else
-    bool inject = false, times = false, diag = false, walk = false, fill = false;
+    bool inject = false, times = false, diag = false, walk = false, fill = false, fault = false;
     (void)w4;
 #endif
-    if (!run && !full && !inject && !times && !diag && !walk && !fill) {
+    if (!run && !full && !inject && !times && !diag && !walk && !fill && !fault) {
         shell_printf(sh, "usage: health [run [<name>] | full]\n");
         return;
     }
@@ -2356,6 +2359,14 @@ static void cmd_health(shell_t *sh, char *args) {
 #ifdef SOS_TEST_COMMANDS
     if (inject) {
         health_inject_cmd(sh, w2, w3);
+        return;
+    }
+    // §9.7: a fault for the next run of `ram` or `image` only.
+    if (fault) {
+        if (fullcheck_board_arm_fault(w2, w3))
+            shell_printf(sh, "armed for the next run of %s\n", w2);
+        else
+            shell_printf(sh, "usage: health fault ram once|twice | health fault image\n");
         return;
     }
     // Measurements for a board run (docs/design/health.md §9.2): they hold the loop a moment.

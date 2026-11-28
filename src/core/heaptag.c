@@ -26,6 +26,7 @@ static const char *const names[HEAP_TAGS] = {
     [HEAP_TIME] = "time",
     [HEAP_PING] = "ping",
     [HEAP_WIFI] = "wifi",
+    [HEAP_HEALTH] = "health",
 };
 
 static void grew(heap_tag_t tag, size_t n) {
