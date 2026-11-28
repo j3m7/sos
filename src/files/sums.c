@@ -6,8 +6,11 @@
 //   <cmd> -c [--ignore-missing] <list>     check the files a list names
 //
 // A shell job, like cat: 4 KB read and hashed at a time, for STEP_US per main-loop pass, one
-// file at a time; Ctrl-C stops it. Hashing is wolfCrypt's, on core 0 (the main loop). The text
-// (names shown, the list's lines, which names a list may give) is sums_parse.c's.
+// file at a time; Ctrl-C stops it. Hashing is wolfCrypt's, on core 0 (the main loop), except
+// that sha256sum hashes a file on the RP2350's SHA-256 block when it's free (sha256hw.h): the
+// block is taken when a file is opened and released when it's closed, which every end path
+// goes through (close_file()). The text (names shown, the list's lines, which names a list may
+// give) is sums_parse.c's.
 
 #include "files/sums.h"
 
@@ -25,6 +28,7 @@
 #include "files/files.h"
 #include "files/path.h"
 #include "files/sdcard.h"
+#include "files/sha256hw.h"
 #include "files/sums_parse.h"
 
 #define PATH_LEN    256         // FatFs long names are up to 255 characters
@@ -52,6 +56,7 @@ typedef struct {
     // The file being hashed.
     bool open;
     FIL f;
+    bool hw;                    // hashed on the SHA-256 block, not with `hash`
     wc_HashAlg hash;
     const char *name;           // as given (an argument) or as listed (in lines.buf)
     // Printing: the arguments left, copied into names[] one after another.
@@ -66,7 +71,7 @@ typedef struct {
     sums_line_t entry;
     unsigned ok, failed, missing, unreadable, unsafe, bad;
     unsigned ignored;           // missing, with --ignore-missing
-    uint8_t buf[CHUNK];
+    _Alignas(4) uint8_t buf[CHUNK];     // the block takes aligned data a word at a time
     char names[];
 } sums_job_t;
 
@@ -105,7 +110,11 @@ static void close_file(sums_job_t *j) {
     if (!j->open)
         return;
     f_close(&j->f);
-    wc_HashFree(&j->hash, j->alg->type);
+    if (j->hw)
+        sha256hw_abort();               // released (a no-op after sha256hw_finish())
+    else
+        wc_HashFree(&j->hash, j->alg->type);
+    j->hw = false;
     j->open = false;
 }
 
@@ -123,7 +132,8 @@ static const char *open_file(sums_job_t *j, const char *path, bool *missing) {
         *missing = fr == FR_NO_FILE || fr == FR_NO_PATH;
         return files_error(fr);
     }
-    if (wc_HashInit(&j->hash, j->alg->type) != 0) {
+    j->hw = j->alg->type == WC_HASH_TYPE_SHA256 && sha256hw_begin();
+    if (!j->hw && wc_HashInit(&j->hash, j->alg->type) != 0) {
         f_close(&j->f);
         return "the hash couldn't start";
     }
@@ -146,7 +156,9 @@ static hash_step_t hash_some(sums_job_t *j, uint64_t t0, const char **why) {
         }
         if (br == 0)
             return HASH_DONE;
-        if (wc_HashUpdate(&j->hash, j->alg->type, j->buf, br) != 0) {
+        if (j->hw)
+            sha256hw_update(j->buf, br);
+        else if (wc_HashUpdate(&j->hash, j->alg->type, j->buf, br) != 0) {
             *why = "the hash failed";
             close_file(j);
             return HASH_ERROR;
@@ -157,7 +169,11 @@ static hash_step_t hash_some(sums_job_t *j, uint64_t t0, const char **why) {
 
 // The open file's digest into out; the file is closed. False if the hash failed.
 static bool finish_file(sums_job_t *j, uint8_t *out) {
-    bool ok = wc_HashFinal(&j->hash, j->alg->type, out) == 0;
+    bool ok = true;
+    if (j->hw)
+        sha256hw_finish(out);
+    else
+        ok = wc_HashFinal(&j->hash, j->alg->type, out) == 0;
     close_file(j);
     return ok;
 }
