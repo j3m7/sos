@@ -45,8 +45,9 @@ stays unset until NTS works. `time sync sntp` (console only) does one plain SNTP
 from the build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the time as
 unauthenticated.
 
-- `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading
-  and backup-battery state, the RTC calibration, the drift the last sync measured (below), the
+- `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading,
+  backup-battery state and crystal load (`rtc:    2026-11-28 12:31:02 UTC; crystal load 12.5 pF`),
+  the RTC calibration, the drift the last sync measured (below), the
   last sync with its correction and round trip, a failed attempt and when it's retried, and the
   server and periodic settings.
 - `time auto`, `time server` and `time cal` (without a value) show those settings; `config`
@@ -54,6 +55,29 @@ unauthenticated.
 - `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
   `nts query` run the two steps by hand, for diagnosis; they don't set the clock. Naming another
   host is console only.
+
+## RTC crystal load
+
+A quartz crystal runs at its marked frequency only with the load capacitance it is made for; with
+less it runs fast. The PCF8523 has the load built in, in two sizes chosen by the CAP_SEL bit of
+its Control_1 register: 7 pF (the chip's power-on default) or 12.5 pF. The Adalogger's
+32.768 kHz crystal is a 12.5 pF part, so at the default it runs fast: dev-1 measured 70 to 92 ppm
+fast that way (issue #275).
+
+At boot SOS sets CAP_SEL to the board's crystal if the chip has the other, and logs it once:
+`rtc: crystal load set to 12.5 pF (was 7 pF)`. The board's crystal is a build setting,
+`SOS_RTC_LOAD_PF` (`12.5` by default, or `7`; see
+[building.md](building.md#the-boards-rtc-crystal)), not a device setting. `time` shows the load in
+force on its `rtc:` line, with `(the board's is 12.5 pF)` if the chip didn't take it.
+
+CAP_SEL is kept in the RTC while its coin cell lasts, like the time, so the next boot finds it set
+and logs nothing; older firmware, which leaves the bit as it finds it, keeps the load set too.
+A coin cell that runs out with the board unpowered resets it to 7 pF, and the next boot sets it
+again.
+
+A change of load changes the RTC's rate, so it starts a new drift measurement, as a change of
+calibration does (below). Set the load first and calibrate after: a calibration measured at the
+wrong load is wrong at the right one.
 
 ## RTC calibration
 
@@ -63,7 +87,7 @@ developed on ran 92 ppm fast, about 8 s a day. The PCF8523 can correct its own r
 
 1. **Measure.** Run `time sync`, leave the board for a day or more (restarting it in between
    is fine), and run `time sync` once more. `time`'s `drift:` line then shows the RTC's rate,
-   for example `rtc +92.0+-13 ppm in 22 h (no cal)`: positive means fast, and the figure after
+   for example `rtc +92.0+-13 ppm in 22 h (no cal, 12.5 pF)`: positive means fast, and the figure after
    `+-` is how far off the measurement may be. The RTC counts whole seconds, so each
    measurement is good to about a second: the longer the wait, the better (about 15 hours
    for 20 ppm).
@@ -83,9 +107,10 @@ corrections every two hours.
 
 Every sync that sets the RTC reads it first, at the second boundary it is about to be set on,
 and compares the reading with the time it was set to at the sync before. That time, with the
-calibration then in force, is kept in the history sector of flash (`src/core/history.h`), so the
-measurement survives restarts and power cuts; a change of calibration, or an RTC that lost its
-time, starts again. The uncertainty is the RTC's whole second, plus 32 ms per calibration step
+calibration and the crystal load then in force, is kept in the history sector of flash
+(`src/core/history.h`), so the measurement survives restarts and power cuts; a change of
+calibration or load, or an RTC that lost its time, starts again (`time` then says
+`rtc measured after the next sync (crystal load changed)`, or `calibration changed`). The uncertainty is the RTC's whole second, plus 32 ms per calibration step
 (the PCF8523 applies the correction once every two hours, so in between it runs at its own rate),
 plus the sync's round trip.
 
@@ -101,7 +126,9 @@ never judges while the uncertainty straddles a line.
 
 After running older firmware: an older image's sync sets the RTC without recording it, so the
 first measurement back reads too small (nearer zero) once; that sync starts a new baseline. Sync
-twice after running older firmware before trusting the figure.
+twice after running older firmware before trusting the figure. A baseline recorded by firmware
+from before the crystal load was kept (#275) has no load, and counts as another load: the first
+sync back is a new baseline.
 
 ## Time zones
 

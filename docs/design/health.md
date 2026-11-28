@@ -1095,7 +1095,7 @@ later phase can change the format without the downgrade problem the config recor
 | 2-3 | boot number (wraps at 65536) | 0 |
 | 4-7 | uptime before the reset, s; 0xffffffff unknown | 0 |
 | 8-11 | wall time at boot (Unix s), 0xffffffff if the RTC had none | the time written to the RTC (Unix s) |
-| 12 | glitch detectors fired, or the fault kind | 0 |
+| 12 | glitch detectors fired, or the fault kind | 0; since #275 the crystal load in force, tenths of a pF (70 or 125; §9.6) |
 | 13 | 0xff | 0xff when written; programmed to 0x00 once the RTC took the time |
 | 14-15 | CRC-16 (CCITT) over bytes 0-12 | the same |
 
@@ -1524,6 +1524,14 @@ characters; `health state-dump` prints both in full.
   `RTC set 5 min ago (no cal): drift at the next sync`, the age counted from that sync.
 - **`time cal`** marks a measurement taken under the old calibration as `calibration changed`, and
   before any sync since boot the check reads the baseline's calibration from the history sector.
+- **The RTC crystal's load** (PCF8523 CAP_SEL, 7 or 12.5 pF; set at boot from `SOS_RTC_LOAD_PF`,
+  #275) restarts the baseline the same way: each RTC record keeps the load in force in byte 12
+  (`extra`, unused in RTC records before), and a measurement whose baseline had another load says
+  `crystal load changed since the RTC was set; next sync` (state 4,
+  `TIMECONV_DRIFT_LOAD_CHANGED`). Records from older firmware have 0 there, "not recorded", and
+  count as another load, so the first sync after the change is a new baseline. No new
+  `HISTORY_VERSION`: older firmware writes 0 and ignores the byte. The texts name the load after
+  the calibration (`no cal, 12.5 pF`) when the result has room, and leave it out otherwise.
 - **`uptime`** now always names the reason (`(last reset: power-on)`); a fault keeps its own line.
   `sos.health()`'s `reset` table gains `reason`, the same names (`cause` is unchanged).
 - **`resets`' history** is read in place: the newest 16 boot records, judged with

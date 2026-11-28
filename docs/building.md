@@ -81,6 +81,19 @@ The [`justfile`](../justfile) has shortcuts for these and the other everyday com
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
 is installed: `just` lists them. It is optional: each recipe runs the commands documented here.
 
+### The board's RTC crystal
+
+`SOS_RTC_LOAD_PF` names the load capacitance of the RTC's 32.768 kHz crystal: `12.5` (the default,
+the PiCowbell Adalogger's) or `7`, the two the PCF8523 can give it. A crystal loaded below its
+rating runs fast. At boot SOS sets the chip to this if it has the other (see
+[RTC crystal load](time.md#rtc-crystal-load)). For a board with a 7 pF crystal:
+
+```sh
+cmake --preset debug -DSOS_RTC_LOAD_PF=7
+```
+
+Any other value stops the configure step.
+
 ## Flashing
 
 ```sh

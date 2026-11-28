@@ -266,7 +266,7 @@ print(t - now)
 | `syncing`, `syncing_sntp` | the server of a sync running now, and whether it's plain SNTP |
 | `last_sync` | `{ago=, step_ms=, delay_ms=}`: seconds since the last sync, how far it moved the clock (`nil` if it set an unset clock) and its round trip (NTS) |
 | `last_failure` | `{ago=, why=, retry_in=}` after a failed sync |
-| `rtc` | `{status=, time=, battery_low=, cal=}`: the RTC's state (`"ok"` or why not), its time, its battery and its calibration |
+| `rtc` | `{status=, time=, battery_low=, cal=, load=}`: the RTC's state (`"ok"` or why not), its time, its battery, its calibration and its crystal load (`"12.5 pF"`; `nil` with no RTC) |
 
 ## Board health
 
