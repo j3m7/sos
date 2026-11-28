@@ -185,6 +185,23 @@ add_executable(test_fullcheck test_fullcheck.c ${SOS_ROOT}/src/core/fullcheck.c)
 target_include_directories(test_fullcheck PRIVATE ${SOS_ROOT}/src)
 add_test(NAME fullcheck COMMAND test_fullcheck)
 
+# src/core/countcheck.c: phase 6's checks, the pure half (docs/design/health.md §9.9): the
+# windows, wifi, sd-bus and net-pools judged from made-up inputs, and the classifiers the counting
+# hooks use, by the libraries' function names.
+# With src/files/sdstat.c, the SD driver's debug-line hook, as an object of its own: the
+# `sdstat-leaf` test checks that it references nothing but countcheck_sd_kind() (sdstat.h's rule:
+# what the driver calls from inside itself counts and returns; logging there could reach the log
+# files' writer, which mounts the card, from inside the driver's own error path).
+add_library(sdstat_obj OBJECT ${SOS_ROOT}/src/files/sdstat.c)
+target_include_directories(sdstat_obj PRIVATE ${SOS_ROOT}/src)
+add_executable(test_countcheck test_countcheck.c ${SOS_ROOT}/src/core/countcheck.c
+               $<TARGET_OBJECTS:sdstat_obj>)
+target_include_directories(test_countcheck PRIVATE ${SOS_ROOT}/src)
+add_test(NAME countcheck COMMAND test_countcheck)
+add_test(NAME sdstat-leaf COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM}
+         "-DOBJ=$<TARGET_OBJECTS:sdstat_obj>" -DALLOW=countcheck_sd_kind
+         -P ${CMAKE_CURRENT_SOURCE_DIR}/leaf_check.cmake)
+
 # src/core/heapwalk.c: `health heap-walk`'s walk of newlib's chunks and free lists, over arenas
 # built in a buffer in newlib's layout.
 add_executable(test_heapwalk test_heapwalk.c ${SOS_ROOT}/src/core/heapwalk.c)
