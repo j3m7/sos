@@ -126,7 +126,7 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | Command | Where | What it does |
 |---|---|---|
 | `http get <url>`<br>`http head <url>`<br>`http post <url> <text>` | any | HTTPS requests, for testing the client ([page](../man/http.txt)) |
-| `fetch [-f] [-k] <url> [<file>]` | any | download a file over HTTPS ([page](../man/fetch.txt)) |
+| `fetch [-f] [-k] <url> [<file>]` | any | download a file over HTTPS or HTTP ([page](../man/fetch.txt)) |
 
 ## Files and SD card
 

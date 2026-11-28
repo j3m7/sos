@@ -31,15 +31,17 @@ TLS 1.3 with the server certificate checked against the trusted roots
 filters what the server sends before it reaches the terminal (no escape sequences, invisible or
 bidi characters); `sos.http` gives a script the bytes as they are.
 
-- Two HTTPS requests can run at once; a third is refused ("too many HTTPS requests at once")
-  until one finishes. One more TLS connection is always kept free for time sync (NTS).
+- Two requests (`http`, `sos.http`, `fetch` over https or plain http) can run at once; a third
+  is refused ("too many HTTP requests at once") until one finishes. One more TLS connection is
+  always kept free for time sync (NTS).
+- Only `fetch` takes plain `http://` URLs; `http` and `sos.http` refuse them.
 - A request is refused while the heap is too low for a TLS handshake (about 64 KB free).
 
 See [man/http.txt](../man/http.txt) and [`src/net/`](../src/net/README.md).
 
 ## Downloading files
 
-`fetch [-f] <url> [<file>]` saves a URL's body to a file on the card, from any shell:
+`fetch [-f] [-k] <url> [<file>]` saves a URL's body to a file on the card, from any shell:
 
 ```
 sos> fetch https://example.org/pkg-1.2.tar.gz /apps
@@ -51,17 +53,22 @@ sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 - **Name:** without `<file>`, the last part of the URL's path, percent-decoded; a directory as
   `<file>` keeps that name inside it. An existing file isn't replaced without `-f`.
 - **Never half a file:** the body goes to `<file>.part` and is renamed only when complete (the
-  announced length, the last chunk, or a clean TLS close). A failure or Ctrl-C deletes it.
+  announced length, the last chunk, or a clean TLS close; on plain http, the TCP close). A
+  failure or Ctrl-C deletes it.
 - **Only `2xx` is saved;** another status prints its line and the first 256 bytes of the body
   (filtered), and saves nothing.
 - **Redirects** are followed (at most 5, each hop printed as `-> <url>`, each with its own
-  certificate check); https to plain http is refused.
+  certificate check); https to plain http only with `-k`, http to https always.
+- **Plain http** works, unprotected: `fetch` prints `http: not encrypted; check its hash` for
+  an `http://` URL or hop, so compare the SHA-256 with one published over https. A body without
+  a length ends at the TCP close, which a cut connection also gives: the file is kept and the
+  summary adds `size not known: check its hash`. A reset connection fails as usual.
 - **The SHA-256** of what was written is printed at the end, to compare with a published hash
   without reading the file again. On the console a progress line shows the bytes, percent and
   rate; over SSH or into a pipe only the summary.
 - **Roots:** many download hosts chain to roots other than the 2 built-in ones. The request then
   fails at the handshake and `fetch` names the issuer it couldn't verify: add that root to
   `/certs/roots.pem` and approve it ([above](#trusted-root-certificates)).
-- One `fetch` runs at a time across all shells; it counts as one of the two HTTPS requests.
+- One `fetch` runs at a time across all shells; it counts as one of the two requests.
 
 See [man/fetch.txt](../man/fetch.txt).
