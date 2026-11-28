@@ -525,7 +525,7 @@ else()
     message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck, test_fsck_exfat, test_fsck_faults and test_fsck_repair are skipped")
 endif()
 
-# zlib, from the firmware's sources and list (cmake/zlib.cmake), for src/files/gz.c.
+# zlib, from the firmware's sources and list (cmake/zlib.cmake), for src/files/gz.c and gzw.c.
 include(${SOS_ROOT}/cmake/zlib.cmake)
 add_library(zlib_host STATIC ${ZLIB_SOURCES})
 target_compile_definitions(zlib_host PUBLIC ${ZLIB_DEFINITIONS})
@@ -542,9 +542,18 @@ target_compile_options(test_gz PRIVATE -O2)         # thousands of decodes, the 
 target_link_libraries(test_gz PRIVATE zlib_host)
 add_test(NAME gz COMMAND test_gz)
 
-# src/files/gzip.c: gunzip and zcat as commands, over the card in memory of tests/stubs, with the
-# real files.c, gz.c and bigjob.c.
+# src/files/gzw.c: gzip's encoder, read back by gz.c and by GNU gunzip when the host has it.
+add_executable(test_gzw test_gzw.c ${SOS_ROOT}/src/files/gzw.c ${SOS_ROOT}/src/files/gz.c
+    ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_gzw PRIVATE ${SOS_ROOT}/src)
+target_compile_options(test_gzw PRIVATE -O2)        # megabytes through deflate at every level
+target_link_libraries(test_gzw PRIVATE zlib_host)
+add_test(NAME gzw COMMAND test_gzw)
+
+# src/files/gzip.c: gunzip, zcat and gzip as commands, over the card in memory of tests/stubs,
+# with the real files.c, gz.c, gzw.c and bigjob.c.
 add_executable(test_gzip test_gzip.c ${SOS_ROOT}/src/files/gzip.c ${SOS_ROOT}/src/files/gz.c
+    ${SOS_ROOT}/src/files/gzw.c
     ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}/src/files/path.c
     ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
 target_include_directories(test_gzip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
@@ -625,7 +634,8 @@ sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
     ${SOS_ROOT}/src/files/fsck_repair.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)
 sos_fuzz(sums ${SOS_ROOT}/src/files/sums_parse.c)
-sos_fuzz(gz ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/core/heaptag.c)   # gunzip's input
+sos_fuzz(gz ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/files/gzw.c    # gunzip's input; gzip's
+    ${SOS_ROOT}/src/core/heaptag.c)                                     # round trip
 target_link_libraries(replay_gz PRIVATE zlib_host)
 if (SOS_FUZZ)
     target_link_libraries(fuzz_gz PRIVATE zlib_host)
