@@ -1497,7 +1497,7 @@ TEST(temp_offset_setting) {
     sos_config_t a, b;
     CHECK_EQ(offsetof(sos_config_t, temp_offset), 1794);
     CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);     // still where it was
-    CHECK_EQ(sizeof(sos_config_t), 2188);
+    CHECK_EQ(sizeof(sos_config_t), 2292);
     sealed_start();
     sample(&a, "HomeNet");
     CHECK_EQ(a.temp_offset, 0);
@@ -1536,7 +1536,7 @@ static void check_net(const sos_config_t *c, unsigned i, const char *ssid, const
 TEST(wifi_extra_is_appended) {
     CHECK_EQ(offsetof(sos_config_t, wifi_extra), 1796);
     CHECK_EQ(sizeof(config_wifi_net_t), 97);
-    CHECK_EQ(sizeof(sos_config_t), 2188);
+    CHECK_EQ(sizeof(sos_config_t), 2292);
 }
 
 TEST(wifi_list_add_remove_prefer) {
@@ -1660,6 +1660,48 @@ TEST(records_from_before_log_rotation_load_with_defaults) {
     CHECK(!strcmp(b.wifi_ssid, "HomeNet"));
     CHECK_EQ(b.log_rotate_days, 0);
     CHECK_EQ(b.log_rotate_minute, 0);
+}
+
+// Records from before the time zone (2188 bytes) load as UTC; the zone round-trips sealed.
+TEST(records_from_before_time_zone_load_as_utc) {
+    sos_config_t a, b;
+    CHECK_EQ(offsetof(sos_config_t, tz_name), 2188);
+    CHECK_EQ(sizeof(sos_config_t), 2292);
+    sealed_start();
+    sample(&a, "HomeNet");
+    CHECK_EQ(a.tz_name[0], 0);
+    strcpy(a.tz_name, "Europe/Madrid");
+    strcpy(a.tz_rule, "CET-1CEST,M3.5.0,M10.5.0/3");
+    CHECK(config_save(&sealed_store, &a));
+    CHECK(config_load(&sealed_store, &b, NULL));
+    CHECK(!strcmp(b.tz_name, "Europe/Madrid"));
+    CHECK(!strcmp(b.tz_rule, "CET-1CEST,M3.5.0,M10.5.0/3"));
+    blank_flash();
+    a.log_rotate_days = 3;
+    CHECK(config_save(&store, &a));
+    memset(flash.slot[0] + 16 + 2188, 0xff, CONFIG_SLOT_SIZE - 16 - 2188);
+    set_length(0, 2188);
+    CHECK(config_load(&store, &b, NULL));
+    CHECK_EQ(b.log_rotate_days, 3);
+    CHECK_EQ(b.tz_name[0], 0);
+    CHECK_EQ(b.tz_rule[0], 0);
+}
+
+// An unterminated name or rule can't be saved. (What the rule says isn't checked here: one that
+// doesn't parse shows UTC.)
+TEST(unterminated_time_zone_is_rejected) {
+    sos_config_t a;
+    blank_flash();
+    sample(&a, "HomeNet");
+    memset(a.tz_name, 'x', sizeof(a.tz_name));
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    memset(a.tz_rule, 'x', sizeof(a.tz_rule));
+    CHECK(!config_save(&store, &a));
+    sample(&a, "HomeNet");
+    memset(a.tz_name, 'x', sizeof(a.tz_name) - 1);
+    memset(a.tz_rule, 'x', sizeof(a.tz_rule) - 1);
+    CHECK(config_save(&store, &a));
 }
 
 TEST(bad_log_rotation_is_rejected) {
@@ -1891,6 +1933,8 @@ TEST_MAIN(
     RUN(wifi_extra_is_appended);
     RUN(records_from_before_log_rotation_load_with_defaults);
     RUN(bad_log_rotation_is_rejected);
+    RUN(records_from_before_time_zone_load_as_utc);
+    RUN(unterminated_time_zone_is_rejected);
     RUN(wifi_list_add_remove_prefer);
     RUN(wifi_list_capacity);
     RUN(wifi_set_first_replaces_and_drops_a_duplicate);

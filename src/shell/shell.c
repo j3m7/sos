@@ -61,6 +61,7 @@
 #include "time/nts.h"
 #include "time/timeconv.h"
 #include "time/timesync.h"
+#include "time/tzzone.h"
 #include "tls/certstore.h"
 
 // --- helpers -------------------------------------------------------------------------------------
@@ -82,6 +83,14 @@ static void save(shell_t *sh) {
                      settings_save_refused());
     else
         shell_printf(sh, "error: saving to flash failed; the change will be lost at reboot\n");
+}
+
+bool shell_require_admin(shell_t *sh) {
+    return require_admin(sh);
+}
+
+void shell_save_settings(shell_t *sh) {
+    save(sh);
 }
 
 // --- information ---------------------------------------------------------------------------------
@@ -1573,6 +1582,7 @@ static void cmd_config(shell_t *sh, char *args) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
+    shell_printf(sh, "time zone:     %s\n", c->tz_name[0] ? c->tz_name : "UTC (none set)");
     char tcal[SENSORS_TEXT_MAX + 1];
     format_temp_delta(tcal, sizeof(tcal), c->temp_offset);
     shell_printf(sh, "temp cal:      %s\n", c->temp_offset ? tcal : "off");
@@ -2021,9 +2031,11 @@ static void cmd_time(shell_t *sh, char *args) {
         cmd_time_server(sh, args + 6);
     else if (!strncmp(args, "cal", 3) && (args[3] == ' ' || !args[3]))
         cmd_time_cal(sh, args + 3);
+    else if (!strncmp(args, "zone", 4) && (args[4] == ' ' || !args[4]))
+        tzzone_command(sh, args + 4);
     else
         shell_printf(sh, "usage: time [sync [sntp] | auto [off | <hours>] | server [<name> | default] | "
-                         "cal [off | <ppm>]]\n");
+                         "cal [off | <ppm>] | zone [<name> | utc | list [<prefix>] | install]]\n");
 }
 
 // `nts` / `nts ke [host]` / `nts query`: NTS key exchange and authenticated time queries
@@ -2356,6 +2368,7 @@ static const shell_word_t time_words[] = {
     {"auto", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
     {"server", SHELL_VALUES_OF(time_servers), 0},
     {"cal", (const shell_word_t[]){{"off", NULL, SHELL_ADMIN}, END}, 0},
+    {"zone", (const shell_word_t[]){W("list"), W("install"), {"utc", NULL, SHELL_ADMIN}, END}, 0},
     END};
 static const shell_word_t tls_words[] = {
     {"roots", (const shell_word_t[]){{"approve", NULL, SHELL_ADMIN}, {"forget", NULL, SHELL_ADMIN},

@@ -33,6 +33,8 @@
 #define CONFIG_LOG_ROTATE_DAYS_MAX 365
 #define CONFIG_LOG_ROTATE_MINUTE_MAX 1439   // 23:59
 #define CONFIG_NTP_SERVER_MAX 63
+#define CONFIG_TZ_NAME_MAX 39             // tz/zones.bundle's names and rules fit (tools/tz-bundle.sh)
+#define CONFIG_TZ_RULE_MAX 63
 #define CONFIG_CERTS_HASH_LEN 32    // SHA-256
 #define CONFIG_RTC_OFFSET_MIN (-64)
 #define CONFIG_RTC_OFFSET_MAX 63
@@ -132,6 +134,11 @@ typedef struct {
     // 1439; 0 = 00:00, the default).
     uint16_t log_rotate_days;
     uint16_t log_rotate_minute;
+    // The time zone shown on screen (#240): its IANA name ("Europe/Madrid") and the POSIX rule
+    // tz/zones.bundle gave for it ("CET-1CEST,M3.5.0,M10.5.0/3", time/tzrule.h). Both empty: UTC.
+    // Only shown times use it; everything stored stays UTC. A rule that doesn't parse shows UTC.
+    char tz_name[CONFIG_TZ_NAME_MAX + 1];
+    char tz_rule[CONFIG_TZ_RULE_MAX + 1];
 } sos_config_t;
 
 // The stored setting as glitchdet_start() and glitchdet_apply() take it: 0 = off, 1..4 = armed

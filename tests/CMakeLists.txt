@@ -202,6 +202,13 @@ target_include_directories(test_tzrule PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_tzrule PRIVATE TZ_BUNDLE="${SOS_ROOT}/tz/zones.bundle")
 add_test(NAME tzrule COMMAND test_tzrule)
 
+# src/time/tzbundle.c: looking zones up in tz/zones.bundle, and the names offered for a typo
+add_executable(test_tzbundle test_tzbundle.c ${SOS_ROOT}/src/time/tzbundle.c
+               ${SOS_ROOT}/src/time/tzrule.c ${SOS_ROOT}/src/time/timeconv.c)
+target_include_directories(test_tzbundle PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_tzbundle PRIVATE TZ_BUNDLE="${SOS_ROOT}/tz/zones.bundle")
+add_test(NAME tzbundle COMMAND test_tzbundle)
+
 # src/time/nts_ke.c: NTS-KE request encoding and response parsing (RFC 8915).
 add_executable(test_nts_ke test_nts_ke.c ${SOS_ROOT}/src/time/nts_ke.c)
 target_include_directories(test_nts_ke PRIVATE ${SOS_ROOT}/src)
@@ -506,6 +513,8 @@ if (TARGET lua_host)                                # sos.json.decode: what HTTP
 endif()
 sos_fuzz(words ${SOS_ROOT}/src/shell/words.c)
 sos_fuzz(tzrule ${SOS_ROOT}/src/time/tzrule.c ${SOS_ROOT}/src/time/timeconv.c)
+sos_fuzz(tzbundle ${SOS_ROOT}/src/time/tzbundle.c ${SOS_ROOT}/src/time/tzrule.c
+    ${SOS_ROOT}/src/time/timeconv.c)
 sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
     ${SOS_ROOT}/src/files/fsck_repair.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)
