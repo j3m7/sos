@@ -79,6 +79,7 @@ flashing, provisioning and testing.
 | [Editor, pager and manual pages](docs/editor.md) | `edit`, `more` and `\| more`, `man` and installing the pages |
 | [Lua scripts](docs/lua.md) | running scripts, autorun, the `sos` library, modules, HTTPS from Lua |
 | [Logging, watchdog, temperature and memory](docs/system.md) | the system log and log files, the watchdog and crash reports, chip temperature calibration, memory layout |
+| [Feature review runbook](docs/feature-review.md) | a hands-on walk through every feature on a board, for a human review |
 | [Securing a board](docs/security/README.md) | the root secret in OTP and secure boot: design, decisions, runbooks |
 | [Development environment](docs/development.md) | dependencies outside the repository, VMs, SWD debugging, signed builds, the flash guard |
 | [Reference documentation](docs/README.md) | datasheets and manuals for the hardware and SDK |
