@@ -184,8 +184,9 @@ static void apply_time(int64_t t_us, time_source_t src) {
     int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset, rtc_load());
     if (rtc_ok)
         history_rtc_done(slot);
-    // Nothing to measure against this time: this sync is the baseline the next one measures from.
-    if (drift.rtc == TIMECONV_DRIFT_NO_BASELINE && rtc_ok && slot >= 0)
+    // Nothing measured this time (no baseline, or one under another calibration or crystal
+    // load): this sync is the baseline the next one measures from, under the settings now.
+    if (drift.rtc != TIMECONV_DRIFT_MEASURED && rtc_ok && slot >= 0)
         drift.rtc = TIMECONV_DRIFT_BASELINE;
 
     char buf[24], step[40];
