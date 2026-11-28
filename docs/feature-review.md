@@ -291,15 +291,19 @@ Keep one SSH session open beside the console.
 16. `tar xf /review/bad.tar -C /review/out`
     You should see: the entry skipped as `unsafe path`, then `0 files, 0 directories, 1 skipped`.
 17. `tar czvf /review/back.tgz -C /review/out pkg`
-    You should see: each name as it is added, stored as `pkg/...` (relative to `-C`), then
-    `/review/back.tgz: <n> files, <n> directories, <size> bytes (0 skipped)`.
+    You should see: each name as it is added, one per line, stored as `pkg/...` (relative to
+    `-C`; directories end in `/`), then `/review/back.tgz: <n> files, <n> directories, <bytes>
+    bytes (0 skipped)`.
 18. `tar tf /review/back.tgz`
     You should see: the same tree, `pkg/` first.
 19. The same `tar czf` again.
-    You should see: refused because `/review/back.tgz` exists; with `-f` it is replaced.
-20. `tar cf /review/bad2.tar ../review` and `tar cf /review/none.tar /review/nothing-here`
-    You should see: the first path refused (`..`); the second skipped as missing, then `nothing
-    to archive`. Neither leaves a `.tar` or `.part` behind (`ls /review`).
+    You should see: `tar: /review/back.tgz: already exists (-f replaces it)`; with `-f` it is
+    replaced.
+20. `cd /review`, then `tar cf bad2.tar ../review` and `tar cf none.tar nothing-here`
+    You should see: `tar: ../review: unsafe path`, then `tar: nothing to archive; bad2.tar not
+    made`; and `tar: nothing-here: no such file or directory`, then `tar: nothing to archive;
+    none.tar not made`. Neither leaves a `.tar` or `.part` behind (`ls`). (A `..` or missing
+    path beside good ones is only skipped: the archive is made from the rest.)
 21. **[host]** In `~/sos-review`: `sftp $B`, `get /review/back.tgz`, `bye`, then
     `tar tzvf back.tgz`
     You should see: the tree read by your computer's tar: files `-rw-r--r--`, directories
