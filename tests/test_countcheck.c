@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "core/countcheck.h"
+#include "files/sdstat.h"
 #include "test.h"
 
 static health_result_t r;
@@ -372,6 +373,31 @@ TEST(sd_kinds) {
     CHECK_EQ(countcheck_sd_kind(NULL, false, false), COUNTCHECK_SD_NONE);
 }
 
+// The hooks the SD driver calls from inside itself (files/sdstat.c): they only count (and the
+// `sdstat-leaf` test checks they call nothing else).
+int debug_message_printf(const char *func, int line, const char *fmt, ...);
+
+TEST(sdstat_hooks_count) {
+    memset(&sdstat, 0, sizeof(sdstat));
+    sdstat_initialising = true;             // a failed init's lines, as at 75 MHz
+    debug_message_printf("sd_cmd", 580, "No response CMD:%d\n", 9);
+    debug_message_printf("sd_card_spi_init", 1637, "SD card initialized\n");
+    debug_message_printf("in_sd_spi_sectors", 703, "Didn't get a response from the disk\n");
+    debug_message_printf("sd_wait_token", 752, "sd_wait_token: timeout\n");
+    sdstat_initialising = false;
+    CHECK_EQ(sdstat.since_init.cmd, 1);     // sd_cmd's don't count during an init
+    CHECK_EQ(sdstat.since_init.timeout, 1);
+    debug_message_printf("chk_crc16", 762, "%s: Invalid CRC received", "chk_crc16");
+    debug_message_printf("sd_cmd", 596, "CRC error CMD:%d response 0x%x\n", 17, 9u);
+    sdstat_error_line("send_block");
+    sdstat_error_line("sd_init_medium");
+    CHECK_EQ(sdstat.since_init.crc, 1);
+    CHECK_EQ(sdstat.since_init.cmd, 2);
+    CHECK_EQ(sdstat.since_init.write, 1);
+    CHECK_EQ(sdstat.since_boot.cmd, 2);
+    CHECK_EQ(sdstat.since_boot.timeout, 1);
+}
+
 // --- net-pools -----------------------------------------------------------------------------------
 
 TEST(pools) {
@@ -414,5 +440,6 @@ TEST_MAIN(
     RUN(sd_failed);
     RUN(sd_init_and_timeouts);
     RUN(sd_kinds);
+    RUN(sdstat_hooks_count);
     RUN(pools);
 )

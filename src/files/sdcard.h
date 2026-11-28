@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "files/fsck.h"
+#include "files/sdstat.h"
 #include "shell/shell.h"
 
 // `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check [fix]]`;
@@ -31,6 +32,10 @@ bool sdcard_mount_retry(void);
 
 // Is a card mounted now? Never mounts one.
 bool sdcard_mounted(void);
+
+// When the last mount attempt ended (time since boot, us; 0: none yet), whoever asked and
+// however it ended: the log writer's quiet retry waits a minute after it (core/logfile.h).
+uint64_t sdcard_last_mount_us(void);
 
 // What `sd info` shows, as values (for Lua's sos.sd.info()). Mounts the card if it can; false
 // (and *info zeroed) if there's no card or it won't mount. total and free are the volume's bytes;
@@ -69,23 +74,6 @@ void sdcard_health_state(sdcard_health_t *out);
 // CRC, commands, refused blocks, timeouts), counted by function (core/countcheck_names.h). Reads
 // RAM and the SPI block's divider: never touches the card or the driver, never mounts, so it is
 // safe while `sd check` or a format runs.
-typedef struct {
-    uint64_t sectors_read, sectors_written;
-    uint32_t failed_reads, failed_writes;   // after the driver's retries
-    uint32_t crc, cmd, write, timeout;      // retried errors, and timeouts (2 s each)
-} sdcard_ctr_t;
-
-typedef struct {
-    sdcard_ctr_t since_init;            // since the last real initialisation (its own errors in)
-    sdcard_ctr_t since_boot;
-    uint32_t inits, init_fails;         // real initialisations since boot, and those that failed
-    bool ever_ok;                       // one has worked since boot
-    bool last_init_failed;
-    uint32_t init_at_s;                 // the last one's uptime
-    int last_error;                     // the driver's code for the last failed read or write
-    uint32_t khz_set;                   // `sd speed`, as set
-    uint32_t khz;                       // in use: the SPI block's, once the driver has set it up
-} sdcard_counters_t;
 void sdcard_counters(sdcard_counters_t *out);
 
 // The `sd-check` health check (docs/design/health.md §9.7): `sd check`'s job without a shell, its

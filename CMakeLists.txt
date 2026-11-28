@@ -102,7 +102,7 @@ target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico SYSTEM INTERFACE
 )
 # The `sd-bus` health check counts the driver's retried errors (docs/design/health.md §9.9): its
 # debug lines are compiled in for sd_card_spi.c alone, so no other library file starts printing,
-# and src/files/sdcard.c's debug_message_printf() counts each by the function it comes from and
+# and src/files/sdstat.c's debug_message_printf() counts each by the function it comes from and
 # prints nothing.
 set_property(SOURCE ${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c APPEND PROPERTY
     COMPILE_DEFINITIONS USE_DBG_PRINTF=1)
@@ -301,6 +301,7 @@ set(SOS_SOURCES
     src/ssh/sftp_fs.c
     src/files/sd_stubs.c
     src/files/sdcard.c
+    src/files/sdstat.c
     src/files/fsck.c
     src/files/fsck_exfat.c
     src/files/fsck_plan.c

@@ -4,6 +4,14 @@
 // See wifistat.h. The two hooks config/cyw43_sos.h gives the driver: counting, and the driver's
 // warnings into the log (never printf, which would print them raw on the serial console, even
 // while it is locked).
+//
+// THE RULE, as for the SD driver's hooks (files/sdstat.h): what a driver calls from inside its
+// own paths counts and returns. wifistat_fail() only counts. wifistat_warn() counts, then stores
+// one line (rate-limited) with log_msg(). In interrupt context that only stores the line; in
+// thread context, once main() has set the log deferred (after cyw43_arch_init()), it only stores
+// too, and before that it prints to the console. Never the card: only logfile_poll(), from the
+// main loop, writes the log files. It never calls back into the driver, never allocates, never
+// waits.
 
 #include "net/wifistat.h"
 

@@ -229,7 +229,12 @@ void logfile_poll(void) {
     }
     if (!hooks->card_ready()) {
         uint64_t now = hooks->now_us();
-        if (hooks->retry_mount && now - last_retry_us >= (uint64_t)LOGFILE_RETRY_MS * 1000) {
+        // Not within LOGFILE_RETRY_MS of any mount attempt (logfile.h, last_mount_us): never a
+        // second blocking card init in the main-loop pass of another.
+        uint64_t last = last_retry_us;
+        if (hooks->last_mount_us && hooks->last_mount_us() > last)
+            last = hooks->last_mount_us();
+        if (hooks->retry_mount && now - last >= (uint64_t)LOGFILE_RETRY_MS * 1000) {
             last_retry_us = now;
             hooks->retry_mount();
         }

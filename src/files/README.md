@@ -264,6 +264,20 @@ the plan on one log line, `fsck_done_line()` what a repair wrote. They follow
 `fsck_plan_writes()`'s rules (frees and trims skipped when the tree wasn't all read, trims when
 anything is cross-linked). `tests/test_fsck_plan.c` checks the lines.
 
+## `sdstat.c`: the bus's counters (pure, host tested)
+
+The `sd-bus` health check's counters (docs/design/health.md §9.9, §9.10): `sdcard.c` adds what
+passes its wrappers, and the driver's own report lines are counted here, by the function they
+come from: its debug lines (`debug_message_printf()`, with `USE_DBG_PRINTF` on `sd_card_spi.c`
+alone) and its error lines (`sdstat_error_line()`, from `sdcard.c`'s `error_message_printf()`).
+**What the driver calls from inside itself counts and returns**: no formatting, no log, no call
+into `sdcard.c`, FatFs or the log files, no waiting. The `sdstat-leaf` host test checks that
+`sdstat.c` references nothing but `countcheck_sd_kind()`.
+
+The log writer's quiet remount waits a minute after any mount attempt
+(`sdcard_last_mount_us()`), so a failed mount (about 4 s on a card that won't initialise) and
+the retry never fall in one main-loop pass: together they reached the 8 s watchdog on dev-1.
+
 ## `sdfault.c`: injected write and read faults (test builds only, host tested)
 
 `sd fault fail <N>`, `sd fault reboot <N>` and `sd fault read <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`

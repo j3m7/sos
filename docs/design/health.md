@@ -2541,6 +2541,64 @@ touched; release keeps 8 warnings in `chat.c` (`-Wformat-truncation`), which it 
 
 **Board run:** as §9.9 lists (steps 1 to 7; the 24-hour baseline is the later follow-up).
 
+#### The driver's own paths: count and return (a reset found on dev-1)
+
+**What happened.** On the first phase 6 test image, `sd speed 75` printed `mount failed: The
+physical drive cannot work (3) after 4005 ms` and the board reset on the watchdog (8 s) a few
+seconds later; main (f62c556) printed the same and carried on.
+
+**What reading the code shows.** A failed mount at 75 MHz costs about 4 s: `mount()` initialises
+the card twice (`card_open()`'s `disk_initialize()`, then `f_mount()`'s own), and each init dies in
+one of the driver's time-based waits (`sd_wait_ready()` or `sd_wait_token()`, `sd_command` 2000 ms)
+after `sd_spi_go_high_frequency()`. The command runs in `shell_poll()`, and in the same main-loop
+pass `logfile_poll()` (`main.c`) sees no card mounted and, a minute or more after its last
+retry, calls `retry_mount()` (`logfile.c`, the retry in `logfile_poll()`): `sdcard_mount_retry()`
+runs the same two inits again, about 4 s more, before the loop comes back to `wdog_feed()`.
+4 + 4 s is the watchdog's 8 s. That path is the same on main, so main sits on the same edge, and
+whether a given run crosses it depends on how quickly the card answers in each wait; the code
+doesn't say why the main run stayed under (if its retry wasn't due, e.g. within a minute of
+boot, it would). What phase 6 adds inside the init is the driver's debug lines (`USE_DBG_PRINTF`
+on `sd_card_spi.c`): about a dozen calls in a failed init, each a few string compares and a
+counter, microseconds against the 2 s waits. None of the hooks formats, logs or calls back into
+`sdcard.c`, FatFs or the log files: `debug_message_printf()` only counts, and
+`error_message_printf()` hands its line to `put_out_error_message()` as the library's own weak
+version does on main, which only stores it (`log_msg()` is deferred from boot on; only
+`logfile_poll()`, from the main loop, writes the card). So there is no recursion into the driver
+from its error path.
+
+**The fix: never two blocking card inits in one pass.** The log writer's quiet retry now waits
+`LOGFILE_RETRY_MS` (a minute) after any mount attempt, not only its own: `sdcard.c` records when
+each attempt ended (`sdcard_last_mount_us()`), and `logfile.c` takes the later of that and its own
+last retry (`logfile_hooks_t.last_mount_us`). After `sd speed 75` the pass ends after the one
+failed mount (about 4 s, as on main), and the retry comes a minute later, alone. Host test:
+`no_retry_right_after_another_mount` in `tests/test_logfile.c`.
+
+**The rule, written down** (`files/sdstat.h`, `net/wifistat.c`): what a driver calls from inside
+its own paths (the SD library's debug and error lines, the CYW43 driver's error returns and
+warnings) counts and returns. It never formats a debug line, never logs to the card, never calls
+into `sdcard.c`, FatFs, the log files or the driver, never allocates and never waits; the finding
+is logged by the check's step, from the main loop. Two exceptions, argued:
+
+- `error_message_printf()` keeps logging the library's error lines through
+  `put_out_error_message()`, as on main: that only stores the line in the RAM history.
+- `wifistat_warn()` keeps storing its rate-limited line with `log_msg()`: from interrupt context
+  that only stores, and from thread context too once the log is deferred (before that, at
+  `cyw43_arch_init()`, it prints to the console). Moving the line to the `wifi` check's step
+  would lose the warning's own text (the step runs every 10 minutes and keeps counts only), and
+  the store-only path can't reach the card.
+
+To keep the SD rule checked, the counting moved from `sdcard.c` to a file of its own,
+`files/sdstat.c` (the counters, `debug_message_printf()`, `sdstat_error_line()`), and the host
+tests build it as an object and run `nm -u` on it (`sdstat-leaf`, `tests/leaf_check.cmake`): it may
+reference `countcheck_sd_kind()` and nothing else (the sanitizers' symbols aside). Adding a
+`log_msg()` call to it fails that test; tried by hand. `tests/test_countcheck.c` checks what the
+hooks count for a failed init's lines.
+
+**The board run confirms it:** `sd speed 75`: `mount failed ... after about 4000 ms`, then no
+reset (`uptime` keeps counting; `uptime history` has no new watchdog boot); a minute later the
+log writer's quiet retry runs alone (another few seconds, no reset). `sd speed 25` mounts again.
+Then the rest of the plan: `sd fault read 1` with a `cat` and a remount, the flood ping.
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
