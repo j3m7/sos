@@ -127,6 +127,28 @@ its own working directory (`shell_t.cwd`).
   (`sh->io->admin`). SFTP and Lua pass no shell (`NULL`), so they're refused there. The log
   writer itself writes through FatFs directly.
 
+## `sums.c`: `sha1sum`, `sha256sum`, `sha512sum`
+
+[Design](../../docs/design/archives.md) §4. Its own command table (`sums_commands`, after
+`files_commands` in `shell.c`); one `runv` handler for the three, picking the algorithm by
+`argv[0]`. A shell job like `cat`: 4 KB read and hashed (wolfCrypt's `wc_Hash*`, on core 0) per
+read, for `STEP_US` per pass, one file at a time, holding files (`files_hold()`). The job (two
+`FIL`s, the 4 KB read buffer, the list's line buffer, the hash state: about 10 KB) comes from
+`HEAP_FILES`. Each output line waits for `shell_write_space()` (up to 1 KB). `-c` reads the list
+a block at a time into `sums_parse.c`'s line splitter (not `f_gets()`, whose UTF-8 build fills
+fewer bytes than asked), resolves each name against the list's directory, and counts each
+result. `tests/test_sums.c` runs it from typed lines over a card in memory, with the host's
+wolfCrypt.
+
+## `sums_parse.c`: checksum lists (pure C, host tested and fuzzed)
+
+How a name is shown (GNU's `\` escape for `\n` and `\\`; other control characters as `?`), a
+list split into lines of up to 4 KB (`line <n>: too long` beyond), each line parsed (GNU text and
+binary, the escape form, BSD with the command's own tag, hex of either case and the right
+length), and `sums_name_safe()`: no absolute name, no `..` component (split at `/` and `\` as
+FatFs splits, and dots-and-spaces components FatFs may read as `..`), no `:` or control
+character. `tests/test_sums_parse.c`; fuzz target `sums`.
+
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`
