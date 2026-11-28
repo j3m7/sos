@@ -55,7 +55,7 @@ void history_encode(const history_rec_t *rec, uint8_t out[HISTORY_RECORD]) {
     out[3] = (uint8_t)(rec->boot_no >> 8);
     put32(out + 4, rec->uptime_s);
     put32(out + 8, rec->wall);
-    out[12] = rec->extra;
+    out[12] = rec->kind == HISTORY_KIND_RTC ? rec->rtc_load : rec->extra;
     out[CONFIRM_BYTE] = rec->confirmed ? 0x00 : 0xff;
     uint16_t crc = crc16(out, 13);
     out[14] = (uint8_t)crc;
@@ -75,6 +75,7 @@ static bool decode(const uint8_t *in, history_rec_t *out) {
     out->uptime_s = get32(in + 4);
     out->wall = get32(in + 8);
     out->extra = in[12];
+    out->rtc_load = in[12];
     out->confirmed = in[CONFIRM_BYTE] == 0x00;
     return true;
 }

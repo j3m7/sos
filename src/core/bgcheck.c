@@ -78,9 +78,9 @@ static void put_text(health_result_t *out, const char *src) {
     out->text[n] = '\0';
 }
 
-static void rtc_part(const timeconv_drift_t *d, part_t *p) {
-    char cal[16], rate[24], span[12];
-    timeconv_format_cal(cal, sizeof(cal), d->cal_steps);
+// `cal`: the calibration, with the crystal load when the text has room for it.
+static void rtc_part_with(const timeconv_drift_t *d, const char *cal, part_t *p) {
+    char rate[24], span[12];
     switch (d->rtc) {
     case TIMECONV_DRIFT_NO_BASELINE:
         p->status = HEALTH_SKIP;
@@ -99,6 +99,10 @@ static void rtc_part(const timeconv_drift_t *d, part_t *p) {
     case TIMECONV_DRIFT_CAL_CHANGED:
         p->status = HEALTH_SKIP;
         snprintf(p->text, sizeof(p->text), "calibration changed since the RTC was set; next sync");
+        return;
+    case TIMECONV_DRIFT_LOAD_CHANGED:
+        p->status = HEALTH_SKIP;
+        snprintf(p->text, sizeof(p->text), "crystal load changed since the RTC was set; next sync");
         return;
     case TIMECONV_DRIFT_MEASURED:
         break;
@@ -128,6 +132,18 @@ static void rtc_part(const timeconv_drift_t *d, part_t *p) {
             snprintf(p->text, sizeof(p->text), "RTC %s in %s, %s: try time cal %s", rate, span,
                      cal, ppm);
         }
+    }
+}
+
+// The calibration and the crystal load are named ("no cal, 12.5 pF"); the load is left out of a
+// text it would make too long for a result (63 characters, see join()).
+static void rtc_part(const timeconv_drift_t *d, part_t *p) {
+    char setup[40];
+    timeconv_format_setup(setup, sizeof(setup), d->cal_steps, d->load);
+    rtc_part_with(d, setup, p);
+    if (strlen(p->text) >= HEALTH_TEXT_MAX - 1) {
+        timeconv_format_cal(setup, sizeof(setup), d->cal_steps);
+        rtc_part_with(d, setup, p);
     }
 }
 

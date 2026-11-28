@@ -1985,10 +1985,10 @@ DESCRIPTION
     an RTC time, the clock stays unset.
 
     'time' shows the date and time and where it came from (RTC, NTS or SNTP),
-    the RTC's reading and backup-battery state, the calibration, the drift
-    the last sync measured, the last sync with its correction and round trip,
-    a failed attempt and when it is retried, the server and the periodic
-    setting.
+    the RTC's reading, backup-battery state and crystal load, the
+    calibration, the drift the last sync measured, the last sync with its
+    correction and round trip, a failed attempt and when it is retried, the
+    server and the periodic setting.
 
     'time sync' syncs the clock and the RTC from NTS now. The board also syncs
     by itself when the RTC has no valid time (retrying with doubling delays),
@@ -2004,11 +2004,21 @@ DESCRIPTION
     The 'drift:' line: every sync reads the RTC just before setting it, and
     compares it with the time it was set to at the sync before (kept in flash
     across restarts and power cuts). So after two syncs it shows the RTC's
-    rate, e.g. 'rtc +92.0+-13 ppm in 22 h (no cal)': positive means fast, and
-    the figure after +- is how far off the measurement may be (the RTC counts
-    whole seconds, so the longer between the syncs, the better: about 15
-    hours for 20 ppm). When the two syncs fell in one uptime it also shows the
-    board's own crystal ('xosc'). The 'rtc-drift' health check judges both.
+    rate, e.g. 'rtc +92.0+-13 ppm in 22 h (no cal, 12.5 pF)': positive means
+    fast, and the figure after +- is how far off the measurement may be (the
+    RTC counts whole seconds, so the longer between the syncs, the better:
+    about 15 hours for 20 ppm). When the two syncs fell in one uptime it also
+    shows the board's own crystal ('xosc'). The 'rtc-drift' health check
+    judges both.
+
+    The crystal load: the RTC's 32.768 kHz crystal keeps time only with the
+    load capacitance it is made for, and runs fast with less. The PCF8523
+    offers 7 pF (its default) or 12.5 pF (the Adalogger's crystal); at boot
+    the board sets the one the firmware was built for (SOS_RTC_LOAD_PF) and
+    logs the change once. The RTC keeps it on its coin cell, so older
+    firmware keeps it too. 'time' shows it on the 'rtc:' line. A change of
+    load, like one of calibration, starts a new drift measurement at the
+    next sync.
 
     'time cal <ppm>' corrects the RTC's rate: 'time sync', a day or more,
     'time sync' again, then give the rate 'drift:' shows, e.g. 'time cal 92'

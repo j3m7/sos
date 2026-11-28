@@ -279,6 +279,11 @@ static void clock_table(lua_info_t *w) {
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     lua_info_str(w, "cal", cal);
+    if (rtc_load()) {
+        char load[24];
+        timeconv_format_load(load, sizeof(load), rtc_load());
+        lua_info_str(w, "load", load);
+    }
     lua_info_close(w);
 }
 
