@@ -40,7 +40,11 @@ DESCRIPTION
 
     'wifi stats' is for chasing packet loss: signal, noise floor, channel,
     access point and transmit rate; packets sent, received and dropped per
-    protocol since boot; TCP segments resent; and how full lwIP's pools got.
+    protocol since boot; TCP segments resent; how full lwIP's pools got; and
+    the Wi-Fi driver's errors since boot (timeouts, bus errors), the link
+    drops nobody asked for and the chip's firmware version, which the 'wifi'
+    health check judges (see 'health'). The driver's warnings go to the log
+    ('dmesg'), at most one line per kind every 10 s.
     'wifi stats chip' adds the Wi-Fi chip's own counters, raw (index: value);
     their layout isn't published, so compare two readings.
 
@@ -51,4 +55,4 @@ DESCRIPTION
     (see 'net').
 
 SEE ALSO
-    net, setup, hostname, config
+    net, setup, hostname, config, health

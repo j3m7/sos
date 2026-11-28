@@ -63,6 +63,31 @@ typedef struct {
 } sdcard_health_t;
 void sdcard_health_state(sdcard_health_t *out);
 
+// The card's bus, counted for the `sd-bus` health check (docs/design/health.md §9.9). From
+// sdcard.c's own wrappers around the driver (sectors moved, reads and writes that failed after the
+// driver's retries, initialisations) and from the driver's report lines (the retried errors:
+// CRC, commands, refused blocks, timeouts), counted by function (core/countcheck_names.h). Reads
+// RAM and the SPI block's divider: never touches the card or the driver, never mounts, so it is
+// safe while `sd check` or a format runs.
+typedef struct {
+    uint64_t sectors_read, sectors_written;
+    uint32_t failed_reads, failed_writes;   // after the driver's retries
+    uint32_t crc, cmd, write, timeout;      // retried errors, and timeouts (2 s each)
+} sdcard_ctr_t;
+
+typedef struct {
+    sdcard_ctr_t since_init;            // since the last real initialisation (its own errors in)
+    sdcard_ctr_t since_boot;
+    uint32_t inits, init_fails;         // real initialisations since boot, and those that failed
+    bool ever_ok;                       // one has worked since boot
+    bool last_init_failed;
+    uint32_t init_at_s;                 // the last one's uptime
+    int last_error;                     // the driver's code for the last failed read or write
+    uint32_t khz_set;                   // `sd speed`, as set
+    uint32_t khz;                       // in use: the SPI block's, once the driver has set it up
+} sdcard_counters_t;
+void sdcard_counters(sdcard_counters_t *out);
+
 // The `sd-check` health check (docs/design/health.md §9.7): `sd check`'s job without a shell, its
 // report lines counted but not printed, its steps aimed at 6 ms. It starts only on a card that
 // was unmounted by hand (`sd unmount`, or an earlier `sd check`) and never unmounts one; it ends

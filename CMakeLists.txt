@@ -100,6 +100,12 @@ target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico SYSTEM INTERFACE
     ${SDCARD_ROOT}/src/sd_driver
     ${SDCARD_ROOT}/src/include
 )
+# The `sd-bus` health check counts the driver's retried errors (docs/design/health.md §9.9): its
+# debug lines are compiled in for sd_card_spi.c alone, so no other library file starts printing,
+# and src/files/sdcard.c's debug_message_printf() counts each by the function it comes from and
+# prints nothing.
+set_property(SOURCE ${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c APPEND PROPERTY
+    COMPILE_DEFINITIONS USE_DBG_PRINTF=1)
 target_link_libraries(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
     hardware_dma
     hardware_pio
@@ -162,6 +168,53 @@ target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
     PROPERTIES COMPILE_OPTIONS "-Wformat")
 
+# --- The libraries' reports counted by function (docs/design/health.md §9.9) --------------------
+# Phase 6's counters count the SD card library's debug and error lines, and the CYW43 driver's
+# warnings, by the name of the function they come from (src/core/countcheck_names.h). A library
+# update that renames one of those functions, or adds or removes debug lines in sd_card_spi.c,
+# stops the configuration here, so the list is looked at again instead of counting nothing.
+if (NOT PICO_CYW43_DRIVER_PATH)
+    set(PICO_CYW43_DRIVER_PATH ${PICO_SDK_PATH}/lib/cyw43-driver)
+endif()
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/core/countcheck_names.h sos_count_names)
+file(READ ${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c sos_sd_spi)
+file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c sos_cyw43_ll)
+file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_lwip.c sos_cyw43_lwip)
+file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_config.h sos_cyw43_config)
+function(sos_count_guard what names source where)
+    string(REGEX MATCHALL "${what}\\(\"[a-z0-9_]+\"" found "${names}")
+    if (NOT found)
+        message(FATAL_ERROR "src/core/countcheck_names.h lists no ${what} entries")
+    endif()
+    foreach(entry ${found})
+        string(REGEX REPLACE ".*\"([a-z0-9_]+)\"" "\\1" fn "${entry}")
+        # A definition: the name, its parameters (no ';' or '{' among them), then the body.
+        if (NOT source MATCHES "[ *]${fn}\\([^;{]*\\)[ \t\r\n]*{")
+            message(FATAL_ERROR "${where} no longer defines ${fn}(), which the health counters "
+                "count by name (src/core/countcheck_names.h, docs/design/health.md §9.9): review "
+                "the list for this version of the library")
+        endif()
+    endforeach()
+endfunction()
+sos_count_guard(SD_FN "${sos_count_names}" "${sos_sd_spi}"
+    "${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c")
+sos_count_guard(WIFI_FN "${sos_count_names}" "${sos_cyw43_ll}${sos_cyw43_lwip}"
+    "${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c or cyw43_lwip.c")
+string(REGEX MATCHALL "DBG_PRINTF\\(" sos_dbg_calls "${sos_sd_spi}")
+list(LENGTH sos_dbg_calls sos_dbg_count)
+string(REGEX MATCH "COUNTCHECK_SD_DBG_PRINTF_CALLS ([0-9]+)" _ "${sos_count_names}")
+if (NOT sos_dbg_count EQUAL CMAKE_MATCH_1)
+    message(FATAL_ERROR "sd_card_spi.c has ${sos_dbg_count} DBG_PRINTF( calls, not "
+        "${CMAKE_MATCH_1}: the SD card library changed; review src/core/countcheck_names.h "
+        "(docs/design/health.md §9.9) and update COUNTCHECK_SD_DBG_PRINTF_CALLS")
+endif()
+foreach(hook CYW43_FAIL_FAST_CHECK CYW43_WARN)
+    if (NOT sos_cyw43_config MATCHES "#ifndef ${hook}\n")
+        message(FATAL_ERROR "the CYW43 driver no longer leaves ${hook} to its port "
+            "(cyw43_config.h): config/cyw43_sos.h's hook wouldn't be used")
+    endif()
+endforeach()
+
 # --- SOS firmware ------------------------------------------------------------
 # One directory per subsystem; see src/README.md.
 set(SOS_SOURCES
@@ -203,6 +256,8 @@ set(SOS_SOURCES
     src/core/bgcheck_board.c
     src/core/fullcheck.c
     src/core/fullcheck_board.c
+    src/core/countcheck.c
+    src/core/countcheck_board.c
     src/core/memtest.c
     src/core/heapwalk.c
     src/core/selftest.c
@@ -232,6 +287,7 @@ set(SOS_SOURCES
     src/man/man_topic.c
     src/chat/chat.c
     src/net/wifi.c
+    src/net/wifistat.c
     src/net/wifi_pick.c
     src/net/wifi_names.c
     src/net/http.c
@@ -353,6 +409,9 @@ target_compile_definitions(sos PRIVATE
     PICO_PANIC_FUNCTION=sos_panic   # src/core/fault.c: record why, reset at once
     PICO_MALLOC_PANIC=0             # a failed malloc returns NULL (the code handles it) instead of
                                     # the SDK default: panic, i.e. halt until the watchdog resets
+    # The CYW43 driver's port configuration: the SDK's, plus its error and warning hooks counted
+    # for the `wifi` health check and its warnings logged, never printed (config/cyw43_sos.h).
+    CYW43_CONFIG_FILE="cyw43_sos.h"
 )
 pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
 # The board keeps UTC: localtime_r() and mktime() go to src/time/utc_libc.c, so the C library's

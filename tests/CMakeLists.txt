@@ -174,6 +174,13 @@ add_executable(test_fullcheck test_fullcheck.c ${SOS_ROOT}/src/core/fullcheck.c)
 target_include_directories(test_fullcheck PRIVATE ${SOS_ROOT}/src)
 add_test(NAME fullcheck COMMAND test_fullcheck)
 
+# src/core/countcheck.c: phase 6's checks, the pure half (docs/design/health.md §9.9): the
+# windows, wifi, sd-bus and net-pools judged from made-up inputs, and the classifiers the counting
+# hooks use, by the libraries' function names.
+add_executable(test_countcheck test_countcheck.c ${SOS_ROOT}/src/core/countcheck.c)
+target_include_directories(test_countcheck PRIVATE ${SOS_ROOT}/src)
+add_test(NAME countcheck COMMAND test_countcheck)
+
 # src/core/heapwalk.c: `health heap-walk`'s walk of newlib's chunks and free lists, over arenas
 # built in a buffer in newlib's layout.
 add_executable(test_heapwalk test_heapwalk.c ${SOS_ROOT}/src/core/heapwalk.c)

@@ -25,6 +25,7 @@
 #include "core/chipinfo.h"
 #include "core/config.h"
 #include "core/consoleonly.h"
+#include "core/countcheck.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/health.h"
@@ -46,6 +47,7 @@
 #include "tls/tls_roots.h"
 #include "lua/lua_core1.h"
 #include "net/wifi.h"
+#include "net/wifistat.h"
 #include "time/rtc.h"
 #include "time/timesync.h"
 
@@ -101,8 +103,20 @@ static void mem_table(lua_info_t *w) {
     lua_info_close(w);
     cyw43_arch_lwip_begin();
     struct stats_mem net = lwip_stats.mem;
+    unsigned pool_err = lwip_stats.memp[MEMP_PBUF_POOL]->err;
+    unsigned seg_err = lwip_stats.memp[MEMP_TCP_SEG]->err;
     cyw43_arch_lwip_end();
-    used_peak_total(w, "lwip", net.used, net.max, net.avail);
+    lua_info_open(w, "lwip");
+    lua_info_int(w, "used", (int64_t)net.used);
+    lua_info_int(w, "peak", (int64_t)net.max);
+    lua_info_int(w, "total", (int64_t)net.avail);
+    // What the `net-pools` check judges, since boot (lwIP's counters, which wrap at 65536).
+    lua_info_open(w, "failures");
+    lua_info_int(w, "packets", pool_err);
+    lua_info_int(w, "segments", seg_err);
+    lua_info_int(w, "heap", net.err);
+    lua_info_close(w);
+    lua_info_close(w);
     lua_info_open(w, "stack");
     lua_info_int(w, "peak", (int64_t)stackmon_peak());
     lua_info_int(w, "size", (int64_t)stackmon_size());
@@ -201,6 +215,22 @@ static void wifi_table(lua_info_t *w) {
     wifi_arp_counts(&arp_in, &arp_out);
     lua_info_int(w, "arp_received", arp_in);
     lua_info_int(w, "arp_sent", arp_out);
+    // What the `wifi` check judges, since boot (docs/design/health.md §9.9).
+    wifi_counts_t wc;
+    wifi_counts(&wc);
+    char fw[16];
+    if (countcheck_fw_version(wc.ver, fw, sizeof(fw)))
+        lua_info_str(w, "firmware", fw);
+    lua_info_int(w, "drops", wc.drops);
+    wifistat_t ws;
+    wifistat_get(&ws);
+    lua_info_open(w, "errors");
+    lua_info_int(w, "timeout", ws.timeout);
+    lua_info_int(w, "io", ws.io);
+    lua_info_int(w, "bus", ws.bus);
+    lua_info_int(w, "tx", ws.tx);
+    lua_info_int(w, "other", ws.other);
+    lua_info_close(w);
 }
 
 // What `time` shows. The RTC is read (an I2C transfer of a few bytes).
@@ -321,6 +351,21 @@ static void tls_table(lua_info_t *w) {
 static void sd_table(lua_info_t *w) {
     sdcard_info_t i;
     lua_info_bool(w, "mounted", sdcard_info(&i));
+    // What the `sd-bus` check judges: since the card's last initialisation (§9.9). From RAM.
+    sdcard_counters_t c;
+    sdcard_counters(&c);
+    if (c.ever_ok) {
+        const sdcard_ctr_t *e = &c.since_init;
+        lua_info_open(w, "errors");
+        lua_info_int(w, "failed_reads", e->failed_reads);
+        lua_info_int(w, "failed_writes", e->failed_writes);
+        lua_info_int(w, "crc", e->crc);
+        lua_info_int(w, "cmd", e->cmd);
+        lua_info_int(w, "write", e->write);
+        lua_info_int(w, "timeouts", e->timeout);
+        lua_info_close(w);
+        lua_info_int(w, "spi_khz", c.khz);
+    }
     if (!i.card)
         return;
     lua_info_str(w, "card", i.card);
