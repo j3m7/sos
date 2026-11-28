@@ -18,6 +18,11 @@
 # disk. Without arguments it listens on port 8080 on all addresses.
 #
 #   tools/test/http-test-server.py [--port 8080] [--bind 0.0.0.0]
+#
+# It isn't run by ctest: it is for the board test of `fetch http://` (PR #272). The machine running
+# it must be reachable from the board (same LAN, not behind NAT): on the board, run
+# `fetch http://<this machine's LAN address>:8080/length/5000000 x.bin` and the other paths above,
+# and compare each `sha256:` line `fetch` prints with the one this server printed.
 
 import argparse
 import hashlib
