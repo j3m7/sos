@@ -106,7 +106,9 @@ local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
   renames it into place, so a failed download leaves the old bundle. It then says whether the
   saved zone's rule changed. It works from any shell, SSH included, because the card can be
   written over SFTP anyway and only `time zone <name>` on the console changes the setting. It
-  isn't available while `sd check` has the card.
+  isn't available while `sd check` has the card. On dev-1 (an encrypted exFAT card) it took
+  about 0.8 s in all. Each pass over the bundle (the check here, or a `time zone` lookup) is
+  about 100 ms, done in one go.
 - **`tools/tz-install.sh [user@]<host>`** copies the same file over SFTP.
 - **`tz = <name>`** in the provisioning file sets it when provisioning: `tools/provision.sh`
   looks the name up in the repository's `tz/zones.bundle`, so a new board shows local time
