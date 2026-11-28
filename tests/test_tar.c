@@ -26,6 +26,7 @@
 #include "files/sdcard.h"
 #include "files/tar.h"
 #include "shell/shell.h"
+#include "tar_tools.h"
 #include "test.h"
 
 #ifndef ARCHIVES_DIR
@@ -34,11 +35,13 @@
 
 // --- a card in memory -------------------------------------------------------------------------
 
-#define CARD_FILES 64
+#define CARD_FILES 256
+#define CARD_PATH  1100
 
 static struct {
-    char path[300];             // absolute; "" for a free slot
+    char path[CARD_PATH];       // absolute; "" for a free slot
     bool dir;
+    bool locked;                // open for writing elsewhere: f_open() says FR_LOCKED
     uint8_t *data;
     size_t len;
     uint16_t fdate, ftime;
@@ -78,7 +81,7 @@ static int card_exact(const char *path) {
 
 // Does the parent of `path` exist as a directory?
 static bool parent_ok(const char *path) {
-    char p[300];
+    char p[CARD_PATH];
     snprintf(p, sizeof(p), "%s", path);
     char *slash = strrchr(p, '/');
     if (slash == p)
@@ -98,6 +101,7 @@ static int card_add(const char *path, bool dir, const void *data, size_t len) {
             memcpy(card[i].data, data, len);
             card[i].len = len;
             card[i].fdate = card[i].ftime = 0;
+            card[i].locked = false;
             return i;
         }
     fprintf(stderr, "  the card is out of slots\n");
@@ -162,6 +166,8 @@ FRESULT f_open(FIL *fp, const char *path, uint8_t mode) {
     int i = card_find(path);
     if (i >= 0 && card[i].dir)
         return FR_DENIED;
+    if (i >= 0 && card[i].locked)
+        return FR_LOCKED;
     if (mode & FA_WRITE) {
         if (!parent_ok(path))
             return FR_NO_PATH;
@@ -179,8 +185,13 @@ FRESULT f_open(FIL *fp, const char *path, uint8_t mode) {
     return FR_OK;
 }
 
+#define NOW_DATE ((2026 - 1980) << 9 | 11 << 5 | 27)    // what FatFs dates a file it closes
+
 FRESULT f_close(FIL *fp) {
-    (void)fp;
+    if ((fp->mode & FA_WRITE) && card[fp->slot].path[0]) {
+        card[fp->slot].fdate = NOW_DATE;
+        card[fp->slot].ftime = 0;
+    }
     return FR_OK;
 }
 
@@ -189,7 +200,13 @@ FRESULT f_sync(FIL *fp) {
     return FR_OK;
 }
 
+static int short_read = -1;     // f_read of this slot gives nothing (a file that shrank)
+
 FRESULT f_read(FIL *fp, void *buf, UINT btr, UINT *br) {
+    if (fp->slot == short_read) {
+        *br = 0;
+        return FR_OK;
+    }
     size_t left = card[fp->slot].len - fp->pos;
     *br = btr < left ? btr : (UINT)left;
     memcpy(buf, card[fp->slot].data + fp->pos, *br);
@@ -217,8 +234,71 @@ FRESULT f_stat(const char *path, FILINFO *fno) {
     memset(fno, 0, sizeof(*fno));
     fno->fsize = card[i].len;
     fno->fattrib = card[i].dir ? AM_DIR : 0;
+    fno->fdate = card[i].fdate;
+    fno->ftime = card[i].ftime;
     snprintf(fno->fname, sizeof(fno->fname), "%s", strrchr(card[i].path, '/') + 1);
     return FR_OK;
+}
+
+// Directories: the slots whose parent is the directory, in slot order. The DIR holds where the
+// next one is looked for; the directory's path is kept here by DIR.
+#define OPEN_DIRS 20
+static struct {
+    const DIR *dp;
+    char path[CARD_PATH];
+} open_dirs[OPEN_DIRS];
+static int dirs_open, dirs_open_max;
+static int readdir_fail_at = -1;   // f_readdir fails when it reaches this slot (-1: never)
+
+FRESULT f_opendir(DIR *dp, const char *path) {
+    int i = card_find(path);
+    if (strcmp(path, "/") && (i < 0 || !card[i].dir))
+        return FR_NO_PATH;
+    for (int k = 0; k < OPEN_DIRS; k++)
+        if (!open_dirs[k].dp) {
+            open_dirs[k].dp = dp;
+            snprintf(open_dirs[k].path, sizeof(open_dirs[k].path), "%s", path);
+            dp->next = 0;
+            dirs_open++;
+            if (dirs_open > dirs_open_max)
+                dirs_open_max = dirs_open;
+            return FR_OK;
+        }
+    return FR_TOO_MANY_OPEN_FILES;
+}
+
+FRESULT f_readdir(DIR *dp, FILINFO *fno) {
+    int k = 0;
+    while (k < OPEN_DIRS && open_dirs[k].dp != dp)
+        k++;
+    CHECK(k < OPEN_DIRS);
+    if (k == OPEN_DIRS)
+        return FR_INVALID_OBJECT;
+    const char *dir = open_dirs[k].path;
+    size_t dl = strcmp(dir, "/") ? strlen(dir) : 0;
+    for (; dp->next < CARD_FILES; dp->next++) {
+        const char *p = card[dp->next].path;
+        if (!p[0] || strncasecmp(p, dir, dl) || p[dl] != '/' || strchr(p + dl + 1, '/'))
+            continue;
+        if (dp->next == readdir_fail_at)
+            return FR_DISK_ERR;
+        f_stat(p, fno);
+        dp->next++;
+        return FR_OK;
+    }
+    fno->fname[0] = '\0';
+    return FR_OK;
+}
+
+FRESULT f_closedir(DIR *dp) {
+    for (int k = 0; k < OPEN_DIRS; k++)
+        if (open_dirs[k].dp == dp) {
+            open_dirs[k].dp = NULL;
+            dirs_open--;
+            return FR_OK;
+        }
+    CHECK(!"closedir of a directory not open");
+    return FR_INVALID_OBJECT;
 }
 
 FRESULT f_unlink(const char *path) {
@@ -258,9 +338,6 @@ FRESULT f_utime(const char *path, const FILINFO *fno) {
 
 // files.c's other commands aren't run here.
 FRESULT f_lseek(FIL *fp, FSIZE_t ofs) { fp->pos = ofs; return FR_OK; }
-FRESULT f_opendir(DIR *dp, const char *path) { (void)dp; (void)path; return FR_NO_PATH; }
-FRESULT f_readdir(DIR *dp, FILINFO *fno) { (void)dp; fno->fname[0] = '\0'; return FR_OK; }
-FRESULT f_closedir(DIR *dp) { (void)dp; return FR_OK; }
 
 const char *FRESULT_str(FRESULT i) {
     (void)i;
@@ -390,6 +467,7 @@ static void check_released(void) {
     CHECK_EQ(heap_tag_used(HEAP_ZLIB), 0);
     CHECK(!files_busy());
     CHECK(bigjob_running() == NULL);
+    CHECK_EQ(dirs_open, 0);
 }
 
 static char deep[256];          // dir/d<88 x>/f<48 y>.txt
@@ -495,7 +573,7 @@ TEST(xf_v7_b256_signed_global) {
     CHECK(card_dir("/g"));
     run("tar xf o.tar");                    // 1901: FAT can't hold it; extraction time kept
     int i = card_exact("/old.txt");
-    CHECK(i >= 0 && card[i].fdate == 0);
+    CHECK(i >= 0 && card[i].fdate == NOW_DATE);
     check_released();
 }
 
@@ -735,7 +813,7 @@ TEST(usage_dirs_memory_one_at_a_time) {
     setup();
     card_put("/u.tar", "tar/ustar.tar");
     static const char *const bad[] = {"tar", "tar tf", "tar t u.tar", "tar xtf u.tar",
-                                      "tar cf u.tar x", "tar tf u.tar -f", "tar xf u.tar -C",
+                                      "tar cf u.tar", "tar ctf u.tar x", "tar cf u.tar -C", "tar tf u.tar -f", "tar xf u.tar -C",
                                       "tar xf u.tar -q", "tar xf u.tar -C /a -C /b"};
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         run(bad[i]);
@@ -765,6 +843,336 @@ TEST(usage_dirs_memory_one_at_a_time) {
     check_released();
 }
 
+// --- creating ------------------------------------------------------------------------------------
+
+#define C_DATE ((2026 - 1980) << 9 | 3 << 5 | 4)   // 2026-03-04 05:06:06 UTC
+#define C_TIME (5 << 11 | 6 << 5 | 3)
+#define C_T0   1772600766
+
+// A file or directory as a finished one is: dated (a file without a date is being written).
+static int card_mk(const char *path, bool dir, const void *data, size_t len) {
+    int i = card_add(path, dir, data, len);
+    if (i >= 0) {
+        card[i].fdate = C_DATE;
+        card[i].ftime = C_TIME;
+    }
+    return i;
+}
+
+static uint8_t c_random[10000];
+static char c_long[300];        // t/<120 L>/<110 M>.txt: a pax name
+static char c_deep[300];        // t/deep/d1/.../d12/f.txt
+
+// The tree under /t, and the entries a tar made of `t` from / holds (names from "t").
+static size_t c_tree(tt_entry_t *e) {
+    for (size_t i = 0; i < sizeof(c_random); i++)
+        c_random[i] = (uint8_t)(i * 7919 >> 3 ^ i);
+    char *p = c_long + sprintf(c_long, "t/");
+    memset(p, 'L', 120);
+    p += 120;
+    *p++ = '/';
+    memset(p, 'M', 110);
+    strcpy(p + 110, ".txt");
+    p = c_deep + sprintf(c_deep, "t/deep");
+    size_t n = 0;
+    char path[CARD_PATH];
+    e[n++] = (tt_entry_t){"t", true, NULL, 0, 0};
+    card_mk("/t", true, "", 0);
+    e[n++] = (tt_entry_t){"t/a.txt", false, (const uint8_t *)"hello\n", 6, C_T0};
+    card_mk("/t/a.txt", false, "hello\n", 6);
+    e[n++] = (tt_entry_t){"t/empty", false, (const uint8_t *)"", 0, C_T0};
+    card_mk("/t/empty", false, "", 0);
+    e[n++] = (tt_entry_t){"t/emptydir", true, NULL, 0, 0};
+    card_mk("/t/emptydir", true, "", 0);
+    e[n++] = (tt_entry_t){"t/rnd.bin", false, c_random, sizeof(c_random), C_T0};
+    card_mk("/t/rnd.bin", false, c_random, sizeof(c_random));
+    e[n++] = (tt_entry_t){"t/caf\xc3\xa9.txt", false, (const uint8_t *)"caf\xc3\xa9\n", 6, C_T0};
+    card_mk("/t/caf\xc3\xa9.txt", false, "caf\xc3\xa9\n", 6);
+    static char dirs[13][300];
+    for (int d = 0; d <= 12; d++) {
+        if (d)
+            p += sprintf(p, "/d%d", d);
+        strcpy(dirs[d], c_deep);
+        e[n++] = (tt_entry_t){dirs[d], true, NULL, 0, 0};
+        snprintf(path, sizeof(path), "/%s", c_deep);
+        card_mk(path, true, "", 0);
+    }
+    strcpy(p, "/f.txt");
+    e[n++] = (tt_entry_t){c_deep, false, (const uint8_t *)"deep\n", 5, C_T0};
+    snprintf(path, sizeof(path), "/%s", c_deep);
+    card_mk(path, false, "deep\n", 5);
+    static char long_dir[300];
+    snprintf(long_dir, sizeof(long_dir), "%.122s", c_long);
+    e[n++] = (tt_entry_t){long_dir, true, NULL, 0, 0};
+    snprintf(path, sizeof(path), "/%s", long_dir);
+    card_mk(path, true, "", 0);
+    e[n++] = (tt_entry_t){c_long, false, (const uint8_t *)"long\n", 5, C_T0};
+    snprintf(path, sizeof(path), "/%s", c_long);
+    card_mk(path, false, "long\n", 5);
+    return n;
+}
+
+// Every file and directory under `from` is under `to` too, with the same contents and dates.
+static bool same_tree(const char *from, const char *to) {
+    size_t fl = strlen(from);
+    bool ok = true;
+    for (int i = 0; i < CARD_FILES && ok; i++) {
+        if (!card[i].path[0] || strncmp(card[i].path, from, fl) ||
+            (card[i].path[fl] && card[i].path[fl] != '/'))
+            continue;
+        char p[CARD_PATH];
+        snprintf(p, sizeof(p), "%s%s", to, card[i].path + fl);
+        int k = card_exact(p);
+        ok = k >= 0 && card[k].dir == card[i].dir && card[k].len == card[i].len &&
+             (!card[i].len || !memcmp(card[k].data, card[i].data, card[i].len)) &&
+             card[k].fdate == card[i].fdate && card[k].ftime == card[i].ftime;
+        if (!ok)
+            fprintf(stderr, "  %s: not the same as %s\n", p, card[i].path);
+    }
+    return ok;
+}
+
+static const uint8_t *card_data(const char *path, size_t *len) {
+    int i = card_exact(path);
+    *len = i >= 0 ? card[i].len : 0;
+    return i >= 0 ? card[i].data : NULL;
+}
+
+TEST(cf_round_trip) {
+    setup();
+    static tt_entry_t e[32];
+    size_t n = c_tree(e);
+    run("tar cf a.tar t");
+    char want[96];
+    snprintf(want, sizeof(want), "a.tar: %zu files, %zu directories, ", (size_t)6, n - 6);
+    CHECK_HAS(want);
+    CHECK_HAS(" bytes (0 skipped)\n");
+    size_t len;
+    const uint8_t *a = card_data("/a.tar", &len);
+    CHECK(a && len % 10240 == 0 && len >= 10240);
+    snprintf(want, sizeof(want), ", %zu bytes (", len);
+    CHECK_HAS(want);
+    CHECK(!card_has_part());
+    check_released();
+    CHECK(tt_check("tar", a, len, e, n));
+    CHECK(tt_check("bsdtar", a, len, e, n));
+    // Ours, back: the same files with the same dates.
+    card_mk("/out", true, "", 0);
+    run("tar xf a.tar -C /out");
+    CHECK_HAS("6 files, 16 directories, 0 skipped\n");
+    CHECK(same_tree("/t", "/out/t"));
+    check_released();
+}
+
+TEST(czf_round_trip) {
+    setup();
+    static tt_entry_t e[32];
+    size_t n = c_tree(e);
+    run("tar -czvf /a.tgz t");
+    CHECK_HAS("t/\nt/a.txt\n");
+    CHECK_HAS("a.tgz: 6 files, 16 directories, ");
+    size_t len;
+    const uint8_t *a = card_data("/a.tgz", &len);
+    CHECK(a && len > 2 && a[0] == 0x1f && a[1] == 0x8b && len < 10240);
+    check_released();
+    CHECK(tt_check("tar", a, len, e, n));
+    CHECK(tt_check("bsdtar", a, len, e, n));
+    card_mk("/out", true, "", 0);
+    run("tar xzf a.tgz -C /out");
+    CHECK_HAS("6 files, 16 directories, 0 skipped\n");
+    CHECK(same_tree("/t", "/out/t"));
+    // Not enough memory for gzip's encoder, enough for plain.
+    heap_free_now = 100 * 1024;
+    run("tar czf b.tgz t");
+    CHECK_HAS("tar: not enough memory: needs ");
+    run("tar cf b.tar t");
+    CHECK_HAS("b.tar: 6 files");
+    check_released();
+}
+
+TEST(cf_names_as_given) {
+    setup();
+    static tt_entry_t e[32];
+    c_tree(e);
+    // -C: names relative to it; v lists them.
+    run("tar cvf /b.tar -C /t a.txt emptydir");
+    CHECK_HAS("a.txt\nemptydir/\n/b.tar: 1 files, 1 directories, ");
+    size_t len;
+    const uint8_t *a = card_data("/b.tar", &len);
+    const tt_entry_t b[] = {{"a.txt", false, (const uint8_t *)"hello\n", 6, C_T0},
+                            {"emptydir", true, NULL, 0, 0}};
+    CHECK(tt_check("tar", a, len, b, 2));
+    // A leading '/' is removed, and said once; "." is -C's directory, with no entry of its own.
+    strcpy(sh.cwd, "/t");
+    run("tar cf /c.tar /t/a.txt /t/empty");
+    CHECK_HAS("tar: removing leading / from names\n/c.tar: 2 files, 0 directories, ");
+    a = card_data("/c.tar", &len);
+    const tt_entry_t c[] = {{"t/a.txt", false, (const uint8_t *)"hello\n", 6, C_T0},
+                            {"t/empty", false, (const uint8_t *)"", 0, C_T0}};
+    CHECK(tt_check("tar", a, len, c, 2));
+    run("tar cf /d.tar -C deep/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11 .");
+    CHECK_HAS("d.tar: 1 files, 1 directories, ");
+    a = card_data("/d.tar", &len);
+    const tt_entry_t d[] = {{"d12", true, NULL, 0, 0},
+                            {"d12/f.txt", false, (const uint8_t *)"deep\n", 5, C_T0}};
+    CHECK(tt_check("tar", a, len, d, 2));
+    // ".." is refused, as tar xf would refuse it; a missing path is said; the rest goes in.
+    run("tar cf /e.tar ../t/a.txt nope a.txt");
+    CHECK_HAS("tar: ../t/a.txt: unsafe path\n");
+    CHECK_HAS("tar: nope: no such file or directory\n");
+    CHECK_HAS("e.tar: 1 files, 0 directories, ");
+    CHECK_HAS(" (2 skipped)\n");
+    // The whole card from the root.
+    strcpy(sh.cwd, "/");
+    run("tar cf /t/emptydir/all.tar /");
+    CHECK_HAS("tar: t/emptydir/all.tar.part: the archive itself, skipped\n");
+    CHECK_HAS("/t/emptydir/all.tar: 10 files, 16 directories, ");
+    check_released();
+}
+
+TEST(cf_skips) {
+    setup();
+    static tt_entry_t e[32];
+    size_t n = c_tree(e);
+    // Being written: no date yet, or locked by FatFs while open for writing; the archive itself
+    // (an old one replaced with -f, and the .part); a directory that can't be read on.
+    card_add("/t/new.log", false, "growing", 7);
+    int i = card_mk("/t/open.log", false, "open", 4);
+    card[i].locked = true;
+    card_mk("/t/self.tar", false, "old", 3);
+    run("tar cf t/self.tar t");
+    CHECK_HAS("tar: t/self.tar: already exists (-f replaces it)\n");
+    run("tar cf t/self.tar t -f");
+    CHECK_HAS("tar: t/new.log: being written, skipped\n");
+    CHECK_HAS("tar: t/open.log: being written, skipped\n");
+    CHECK_HAS("tar: t/self.tar: the archive itself, skipped\n");
+    CHECK_HAS("tar: t/self.tar.part: the archive itself, skipped\n");
+    CHECK_HAS("self.tar: 6 files, ");
+    CHECK_HAS(" (4 skipped)\n");
+    size_t len;
+    const uint8_t *a = card_data("/t/self.tar", &len);
+    CHECK(len > 3);
+    CHECK(tt_check("tar", a, len, e, n));
+    CHECK(!card_has_part());
+    check_released();
+    // A directory read error: said, the rest archived.
+    readdir_fail_at = card_find("/t/rnd.bin");
+    run("tar cf x.tar t");
+    readdir_fail_at = -1;
+    CHECK_HAS("tar: t: error\n");
+    CHECK_HAS("x.tar: 2 files, 2 directories, 10240 bytes (1 skipped)\n");
+    check_released();
+    // Nothing to archive: nothing made.
+    run("tar cf y.tar nope t/new.log");
+    CHECK_HAS("tar: nothing to archive; y.tar not made\n");
+    CHECK(card_find("/y.tar") < 0 && !card_has_part());
+    check_released();
+}
+
+TEST(cf_depth_and_name_limits) {
+    setup();
+    char path[CARD_PATH] = "/z";
+    card_mk(path, true, "", 0);
+    for (int d = 1; d <= 17; d++) {
+        sprintf(path + strlen(path), "/l%d", d);
+        card_mk(path, true, "", 0);
+    }
+    strcat(path, "/f");
+    card_mk(path, false, "x", 1);
+    run("tar cf a.tar z");
+    CHECK_HAS("tar: z/l1/l2/l3/l4/l5/l6/l7/l8/l9/l10/l11/l12/l13/l14/l15/l16: more than 16 "
+              "directories deep, skipped\n");
+    CHECK_HAS("a.tar: 0 files, 16 directories, ");
+    CHECK_EQ(dirs_open, 0);
+    CHECK_EQ(dirs_open_max, 4);             // FatFs's lock table is shared: 4 at most
+    // Levels closed to keep to that are opened again and read on past what was taken.
+    card_mk("/w", true, "", 0);
+    char want_path[64] = "/w";
+    for (const char *d = "abcde"; *d; d++) {
+        sprintf(want_path + strlen(want_path), "/%c", *d);
+        card_mk(want_path, true, "", 0);
+    }
+    card_mk("/w/a/b/c/d/e/f.txt", false, "f", 1);
+    card_mk("/w/a/b/c/d/after", false, "4", 1);
+    card_mk("/w/a/after", false, "1", 1);
+    card_mk("/w/after", false, "0", 1);
+    run("tar cf w.tar w");
+    CHECK_HAS("w.tar: 4 files, 6 directories, ");
+    size_t len;
+    const uint8_t *a = card_data("/w.tar", &len);
+    const tt_entry_t w[] = {{"w", true, NULL, 0, 0},
+                            {"w/a", true, NULL, 0, 0},
+                            {"w/a/b", true, NULL, 0, 0},
+                            {"w/a/b/c", true, NULL, 0, 0},
+                            {"w/a/b/c/d", true, NULL, 0, 0},
+                            {"w/a/b/c/d/e", true, NULL, 0, 0},
+                            {"w/a/b/c/d/e/f.txt", false, (const uint8_t *)"f", 1, C_T0},
+                            {"w/a/b/c/d/after", false, (const uint8_t *)"4", 1, C_T0},
+                            {"w/a/after", false, (const uint8_t *)"1", 1, C_T0},
+                            {"w/after", false, (const uint8_t *)"0", 1, C_T0}};
+    CHECK(tt_check("tar", a, len, w, sizeof(w) / sizeof(w[0])));
+    // A name longer than the reader takes: skipped. (Components of 250: the third makes 764.)
+    char name[CARD_PATH] = "/n";
+    card_mk(name, true, "", 0);
+    for (int d = 0; d < 3; d++) {
+        strcat(name, "/");
+        memset(name + strlen(name), 'a' + d, 250);
+        card_mk(name, true, "", 0);
+    }
+    strcat(name, "/ffffffffffff");
+    card_mk(name, false, "x", 1);
+    run("tar cf b.tar n");
+    CHECK_HAS("tar: n/aaaa");
+    CHECK_HAS("/ffffffffff: name too long, skipped\n");
+    CHECK_HAS("b.tar: 0 files, 4 directories, ");
+    check_released();
+}
+
+TEST(cf_stops) {
+    setup();
+    static tt_entry_t e[32];
+    c_tree(e);
+    // A file that shrinks while read: zeros to its header's size.
+    short_read = card_find("/t/rnd.bin");
+    run("tar cf a.tar t/rnd.bin");
+    short_read = -1;
+    CHECK_HAS("tar: t/rnd.bin: shrank while read\ntar: t/rnd.bin: padded with zeros to its size\n");
+    size_t len;
+    const uint8_t *a = card_data("/a.tar", &len);
+    static const uint8_t zeros10k[10000];
+    const tt_entry_t z[] = {{"t/rnd.bin", false, zeros10k, sizeof(zeros10k), C_T0}};
+    CHECK(tt_check("tar", a, len, z, 1));
+    // Ctrl-C, a full card: no .part, no archive.
+    cancel_after = 3;
+    tick = 30000;                           // a piece of work a step
+    run("tar czf b.tgz t");
+    tick = 1000;
+    CHECK_HAS("stopped: Ctrl-C; b.tgz not made\n");
+    CHECK(card_find("/b.tgz") < 0 && !card_has_part());
+    check_released();
+    cancel_after = 0;
+    card_room = card_used() + 3000;
+    run("tar cf b.tar t");
+    CHECK_HAS("stopped: card full; b.tar not made\n");
+    CHECK(card_find("/b.tar") < 0 && !card_has_part());
+    check_released();
+    card_room = 64u << 20;
+    // Busy; protected paths; no -C directory; a directory in the archive's place.
+    CHECK(bigjob_try_begin("gzip") == NULL);
+    run("tar cf b.tar t");
+    CHECK_HAS("busy: gzip is running in another shell\n");
+    bigjob_end();
+    sh.io = &io_ssh;
+    run("tar cf /certs/x.tar t");
+    CHECK_HAS("tar: /certs/x.tar: not allowed to change this path\n");
+    sh.io = &io_console;
+    run("tar cf b.tar -C /nowhere t");
+    CHECK_HAS("tar: /nowhere: no such directory\n");
+    run("tar cf t t");
+    CHECK_HAS("tar: t: is a directory\n");
+    check_released();
+}
+
 TEST_MAIN(
     names();
     RUN(the_table_follows_the_rule);
@@ -778,6 +1186,12 @@ TEST_MAIN(
     RUN(stops_leave_no_part);
     RUN(fat32_size_limit);
     RUN(usage_dirs_memory_one_at_a_time);
+    RUN(cf_round_trip);
+    RUN(czf_round_trip);
+    RUN(cf_names_as_given);
+    RUN(cf_skips);
+    RUN(cf_depth_and_name_limits);
+    RUN(cf_stops);
     card_clear();
     free(out);
 )

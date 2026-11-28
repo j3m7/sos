@@ -579,7 +579,8 @@ add_test(NAME tar_write COMMAND test_tar_write)
 # src/files/tar.c: tar tf, xf, cf and czf as commands, over a card in memory (tests/stubs; names
 # compared ignoring case), with the real tar_parse.c, tar_write.c, gz.c, gzw.c, files.c and
 # bigjob.c; archives it makes are also listed and extracted by GNU tar and bsdtar.
-add_executable(test_tar test_tar.c ${SOS_ROOT}/src/files/tar.c ${SOS_ROOT}/src/files/tar_parse.c
+add_executable(test_tar test_tar.c ${SOS_ROOT}/src/files/tar.c ${SOS_ROOT}/src/files/tar_create.c
+    ${SOS_ROOT}/src/files/tar_parse.c
     ${SOS_ROOT}/src/files/tar_write.c ${SOS_ROOT}/src/files/gzw.c
     ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c
     ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/shell/cmdcheck.c

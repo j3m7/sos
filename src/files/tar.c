@@ -3,7 +3,7 @@
 //
 // tar tf and tar xf (docs/design/archives.md §6): an archive on the card, plain or gzipped (known
 // by its first two bytes, decoded in the same pass by files/gz.h), read by files/tar_parse.h as a
-// shell job.
+// shell job. The command's words are read here for tar cf and czf too, which tar_create.c runs.
 //
 // Each step does a bounded amount of work for STEP_US: a 4 KB read from the card, inflate into a
 // 4 KB buffer, a header, or a piece of an entry's data written to its file. `tf` prints a line per
@@ -566,48 +566,65 @@ static bool tar_step(shell_t *sh, void *arg, bool cancel) {
 
 static void usage(shell_t *sh) {
     shell_printf(sh, "usage: tar tf <archive>\n"
-                     "       tar xf <archive> [-C <dir>] [-f]\n");
+                     "       tar xf <archive> [-C <dir>] [-f]\n"
+                     "       tar cf <archive> [-C <dir>] [-f] <path>...\n"
+                     "       tar czf <archive> [-C <dir>] [-f] <path>...\n");
 }
 
-// The mode word: t or x, f, and z or v, in any order, with or without a leading '-'.
-static bool parse_mode(const char *w, bool *list, bool *verbose) {
-    bool t = false, x = false, f = false;
+// The mode word: one of t, x and c; f; and z or v; in any order, with or without a leading '-'.
+// `mode` is set to 't', 'x' or 'c'.
+static bool parse_mode(const char *w, char *mode, bool *gz, bool *verbose) {
+    bool f = false;
+    int modes = 0;
     if (*w == '-')
         w++;
     if (!*w)
         return false;
     for (; *w; w++) {
-        if (*w == 't')
-            t = true;
-        else if (*w == 'x')
-            x = true;
-        else if (*w == 'f')
+        if (*w == 't' || *w == 'x' || *w == 'c') {
+            *mode = *w;
+            modes++;
+        } else if (*w == 'f') {
             f = true;
-        else if (*w == 'v')
+        } else if (*w == 'v') {
             *verbose = true;
-        else if (*w != 'z')
+        } else if (*w == 'z') {
+            *gz = true;
+        } else {
             return false;
+        }
     }
-    *list = t;
-    return f && t != x;
+    return f && modes == 1;
 }
 
 static void run_tar(shell_t *sh, int argc, char **argv) {
-    bool list = false, verbose = false, force = false;
+    bool gz = false, verbose = false, force = false;
+    char mode = 0;
     const char *dir = NULL;
-    if (argc < 3 || !parse_mode(argv[1], &list, &verbose) || !argv[2][0]) {
+    if (argc < 3 || !parse_mode(argv[1], &mode, &gz, &verbose) || !argv[2][0]) {
         usage(sh);
         return;
     }
+    bool list = mode == 't';
+    int n = 0;                              // c: the paths, moved to the front of argv + 3
     for (int i = 3; i < argc; i++) {
         if (!list && !strcmp(argv[i], "-C") && i + 1 < argc && argv[i + 1][0] && !dir) {
             dir = argv[++i];
         } else if (!list && !strcmp(argv[i], "-f")) {
             force = true;
+        } else if (mode == 'c' && argv[i][0] && strcmp(argv[i], "-C")) {
+            argv[3 + n++] = argv[i];
         } else {
             usage(sh);
             return;
         }
+    }
+    if (mode == 'c') {
+        if (!n)
+            usage(sh);
+        else
+            tar_create(sh, argv[2], dir, gz, force, verbose, n, argv + 3);
+        return;
     }
     char arc[PATH_LEN], target[PATH_LEN];
     if (!path_resolve(sh->cwd, argv[2], arc, sizeof(arc)) ||
@@ -687,4 +704,5 @@ const shell_cmd_t tar_commands[] = {
 void tar_help(shell_t *sh) {
     shell_printf(sh, "tar tf <archive>  list a tar archive (.tar, .tar.gz, .tgz)\n");
     shell_printf(sh, "tar xf <archive> [-C <dir>] [-f]  extract it (-f replaces existing files)\n");
+    shell_printf(sh, "tar cf|czf <archive> [-C <dir>] <path>...  make one (czf: gzipped)\n");
 }
