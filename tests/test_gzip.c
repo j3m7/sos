@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Unit tests for src/files/gzip.c: gunzip and zcat as the shell runs them, over a card in memory
-// that stands in for FatFs (tests/stubs/ff.h), with the real files.c, gz.c, bigjob.c and zlib,
-// on the files of tests/data/archives/. The output name, -k and -f, the .part renamed only on
-// success and deleted on an error, Ctrl-C and a full card; trailing zeros; zcat's output paced
-// by the terminal's space; the memory check, the one-at-a-time rule, and the heap given back.
+// Unit tests for src/files/gzip.c: gunzip, zcat and gzip as the shell runs them, over a card in
+// memory that stands in for FatFs (tests/stubs/ff.h), with the real files.c, gz.c, gzw.c,
+// bigjob.c and zlib, on the files of tests/data/archives/. The output name, -k and -f, the .part
+// renamed only on success and deleted on an error, Ctrl-C and a full card; trailing zeros;
+// zcat's output paced by the terminal's space; gzip's levels, its refusals (.gz names,
+// directories) and its output read back by gunzip; the memory check, the one-at-a-time rule,
+// and the heap given back.
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -516,6 +518,163 @@ TEST(protected_paths_and_usage) {
     check_released();
 }
 
+// --- gzip ---------------------------------------------------------------------------------------
+
+// The card's `path` (a gzip file) gunzipped back by the command: does it give `fixture`?
+static bool gunzips_to(const char *path, const char *fixture) {
+    char line[300];
+    snprintf(line, sizeof(line), "gunzip -k %s", path);
+    run(line);
+    size_t len = strlen(path) - 3;
+    char back[256];
+    snprintf(back, sizeof(back), "%.*s", (int)len, path);
+    bool same = card_is(back, fixture);
+    int i = card_find(back);
+    if (i >= 0)
+        card[i].path[0] = '\0';
+    return same;
+}
+
+TEST(gzip_replaces_x_with_x_gz) {
+    setup();
+    card_put("/text.txt", "text.txt");
+    run("gzip text.txt");
+    CHECK_HAS("text.txt.gz: ");
+    CHECK_HAS(" bytes from 28893 (");
+    CHECK(card_find("/text.txt") < 0);
+    CHECK(card_find("/text.txt.gz.part") < 0);
+    CHECK(card_find("/text.txt.gz") >= 0);
+    CHECK(steps > 1);                       // in steps, not all at once
+    check_released();
+    CHECK(gunzips_to("/text.txt.gz", "text.txt"));
+    check_released();
+}
+
+TEST(gzip_levels_and_k) {
+    size_t size[10] = {0};
+    static const char *const lines[] = {"gzip -k1 /t", "gzip -k -6 /t", "gzip -9 -k /t",
+                                        "gzip -k5 -9 /t"};
+    static const int levels[] = {1, 6, 9, 9};
+    for (size_t i = 0; i < 4; i++) {
+        setup();
+        card_put("/t", "text.txt");
+        run(lines[i]);
+        CHECK(card_is("/t", "text.txt"));   // kept
+        int g = card_find("/t.gz");
+        CHECK(g >= 0);
+        if (g < 0)
+            continue;
+        if (size[levels[i]])
+            CHECK_EQ(card[g].len, size[levels[i]]);     // the last level given counts
+        size[levels[i]] = card[g].len;
+        CHECK(gunzips_to("/t.gz", "text.txt"));
+        check_released();
+    }
+    CHECK(size[1] > size[6] && size[6] >= size[9]);
+}
+
+TEST(gzip_empty_and_many_files) {
+    setup();
+    card_add("/e", false, "", 0);
+    card_put("/a", "text.txt");
+    card_put("/b.gz", "text.txt.gz");
+    card_add("/dir", true, "", 0);
+    run("gzip e b.gz dir missing a");
+    CHECK_HAS("e.gz: 20 bytes from 0 (100%)");
+    CHECK_HAS("gzip: b.gz: already has a .gz suffix\n");
+    CHECK_HAS("gzip: dir: is a directory\n");
+    CHECK_HAS("gzip: missing: no such file\n");
+    CHECK(card_find("/e") < 0 && card[card_find("/e.gz")].len == 20);
+    CHECK(card_find("/a") < 0 && card_find("/a.gz") >= 0);
+    CHECK(card_find("/b.gz.gz") < 0 && card_find("/b.gz") >= 0);
+    check_released();
+    CHECK(gunzips_to("/a.gz", "text.txt"));
+    run("gzip X.TGZ");
+    CHECK_HAS("gzip: X.TGZ: already has a .gz suffix\n");
+    check_released();
+}
+
+TEST(gzip_does_not_replace_without_f) {
+    setup();
+    card_put("/a", "text.txt");
+    card_add("/a.gz", false, "old", 3);
+    run("gzip a");
+    CHECK_HAS("gzip: a.gz: already exists (-f replaces it)\n");
+    CHECK(card_is("/a", "text.txt"));
+    CHECK_EQ(card[card_find("/a.gz")].len, 3);
+    run("gzip -f a");
+    CHECK(card_find("/a") < 0);
+    CHECK(card[card_find("/a.gz")].len > 3);
+    CHECK(gunzips_to("/a.gz", "text.txt"));
+    card_put("/b", "text.txt");
+    card_add("/b.gz", true, "", 0);
+    run("gzip -f b");
+    CHECK_HAS("gzip: b.gz: is a directory\n");
+    CHECK(card_is("/b", "text.txt"));
+    check_released();
+}
+
+TEST(gzip_ctrl_c_and_card_full_leave_no_part) {
+    setup();
+    static uint8_t big[1 << 20];
+    uint32_t x = 2463534242u;
+    for (size_t i = 0; i < sizeof(big); i++) {  // random letters: ~2:1
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        big[i] = (uint8_t)("abcdefgh\n"[x % 9]);
+    }
+    card_add("/big", false, big, sizeof(big));
+    cancel_after = 3;
+    run("gzip big");
+    CHECK_HAS("gzip: stopped; big.gz.part removed\n");
+    CHECK(card_find("/big.gz.part") < 0 && card_find("/big.gz") < 0);
+    CHECK(card_find("/big") >= 0);
+    check_released();
+
+    cancel_after = 0;
+    card_room = card_used() + 50000;
+    run("gzip big");
+    CHECK_HAS("gzip: big: card full\n");
+    CHECK(card_find("/big.gz.part") < 0 && card_find("/big.gz") < 0);
+    CHECK(card_find("/big") >= 0 && card[card_find("/big")].len == sizeof(big));
+    check_released();
+}
+
+TEST(gzip_memory_protection_and_usage) {
+    setup();
+    card_put("/a", "text.txt");
+    heap_free_now = 120 * 1024;             // gunzip would fit; gzip needs more
+    run("gzip a");
+    CHECK_HAS("gzip: not enough memory: needs ");
+    CHECK(card_find("/a") >= 0 && card_find("/a.gz") < 0);
+    heap_free_now = 300 * 1024;
+    CHECK(bigjob_try_begin("tar") == NULL);
+    run("gzip a");
+    CHECK_HAS("busy: tar is running in another shell\n");
+    bigjob_end();
+    CHECK(card_find("/a") >= 0 && card_find("/a.gz") < 0);
+    card_put("/certs/r", "text.txt");
+    sh.io = &io_ssh;
+    run("gzip /certs/r");
+    CHECK_HAS("gzip: /certs/r.gz: not allowed to change this path\n");
+    run("gzip -k /certs/r");
+    CHECK_HAS("gzip: /certs/r.gz: not allowed to change this path\n");
+    sh.io = &io_console;
+    run("gzip");
+    CHECK_HAS("usage: gzip [-k] [-f] [-1..-9] <file>...\n");
+    run("gzip -0 a");
+    CHECK_HAS("usage: gzip");
+    run("gzip -x a");
+    CHECK_HAS("usage: gzip");
+    run("gunzip -9 a.gz");                  // levels are gzip's only
+    CHECK_HAS("usage: gunzip");
+    card_put("/-k", "text.txt");
+    run("gzip -- -k");
+    CHECK(card_find("/-k.gz") >= 0 && card_find("/-k") < 0);
+    check_released();
+}
+
 TEST_MAIN(
     RUN(the_table_follows_the_rule);
     RUN(gunzip_replaces_x_gz_with_x);
@@ -529,6 +688,12 @@ TEST_MAIN(
     RUN(zcat_prints_paced_by_the_terminal);
     RUN(memory_and_one_at_a_time);
     RUN(protected_paths_and_usage);
+    RUN(gzip_replaces_x_with_x_gz);
+    RUN(gzip_levels_and_k);
+    RUN(gzip_empty_and_many_files);
+    RUN(gzip_does_not_replace_without_f);
+    RUN(gzip_ctrl_c_and_card_full_leave_no_part);
+    RUN(gzip_memory_protection_and_usage);
     card_clear();
     free(out);
 )

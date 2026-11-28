@@ -133,7 +133,8 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES
 # so it uses the C library's snprintf too.
 set_property(SOURCE src/lua/lua_json.c APPEND PROPERTY COMPILE_DEFINITIONS snprintf=__real_snprintf)
 
-# zlib (lib/zlib by default; cmake/zlib.cmake): gunzip and zcat (src/files/gz.c).
+# zlib (lib/zlib by default; cmake/zlib.cmake): gunzip and zcat (src/files/gz.c), gzip
+# (src/files/gzw.c).
 include(cmake/zlib.cmake)
 add_library(zlib INTERFACE)
 target_sources(zlib INTERFACE ${ZLIB_SOURCES})
@@ -260,6 +261,7 @@ set(SOS_SOURCES
     src/files/files.c
     src/files/gz.c
     src/files/gzip.c
+    src/files/gzw.c
     src/files/path.c
     src/files/sums.c
     src/files/sums_parse.c
