@@ -163,13 +163,16 @@ without the network stack, the SSH server and the TLS client cannot be reached o
 | `ARCHIVE` | `gzip`, `gunzip`, `zcat` (`files/gz*.c`), `tar` (#274, #277), zlib | FILES |
 | `FILES` | SD card, FatFs, file commands, `sha*sum`, `/var/log`, encrypted cards; the `card` and `sd-bus` checks | later: see §4.7 |
 
-Not options: the time zones (`time/tz*`, 6 KB, the database is on the card: they come and go
-with FILES), the checksum commands (`files/sums*.c`, under 7 KB together with gzip's glue, and
-the hashes are in the core anyway), and everything in decision 6.
+Not options: the time zones, the checksum commands (`files/sums*.c`, under 7 KB together with gzip's glue, and
+the hashes are in the core anyway), and everything in decision 6. The time zones split in two: the zone's
+rule is saved in the configuration (`tz_name` and its POSIX rule), and `time/tzrule.c`, which
+turns it into local time, needs nothing from `files/`, so local time is shown with the card out:
+that part is core. Only `time zone <name>` and `time zone list` read the database on the card
+(`time/tzzone.c`): FILES glue.
 
 Glue that follows its parents (decision 3): SFTP (SSH + FILES), approved roots on the card
-(TLS + FILES), `fetch` to a file (HTTP + FILES), downloading the time zone database
-(HTTP + FILES), `man install` (MAN + HTTP), and in Lua: `sos.http` (LUA + HTTP), `sos.wifi` and
+(TLS + FILES), `fetch` to a file (HTTP + FILES), choosing and listing time zones from the
+database on the card (FILES), downloading the database (`time zone install`, HTTP + FILES), `man install` (MAN + HTTP), and in Lua: `sos.http` (LUA + HTTP), `sos.wifi` and
 `sos.net` (LUA + NET), `sos.ssh` (LUA + SSH), `sos.tls` (LUA + TLS), `sos.sd` and the file
 functions (LUA + FILES), `wall` from a script (LUA + CHAT).
 
@@ -241,9 +244,13 @@ About eight such blocks. The LED blink goes through `board_led_set()` (§4.8): t
 chip's GPIO on the Pico 2 W, GPIO 25 on the Pico 2.
 
 One call is misplaced for this: `tls_init()` runs before `wolfCrypt_Init()` and only installs
-wolfSSL's counting allocators (`wolfSSL_SetAllocators`), which every wolfCrypt user needs for
-heap accounting, the core's sealing included. It moves to the core (with the heap tags) so
-that an image without TLS still counts wolfCrypt's memory.
+wolfSSL's counting allocators (`wolfSSL_SetAllocators(count_malloc, count_free,
+count_realloc)`). That hook counts every wolfCrypt allocation, not only TLS's: the core's own
+users go through it too (sealing, the boot known-answer tests, `sos.hash` on core 0, making the
+host key). A build without TLS still needs the hook and the counting functions, so they move
+to the core with the heap tags. Their counts are tagged `HEAP_NET` today; in a build without
+NET that name is wrong, so the tag is renamed (`HEAP_CRYPTO`, say) or split between crypto and
+the network.
 
 ### 4.3 Health checks
 
@@ -380,7 +387,7 @@ features must keep it last, and `sd test` should be re-measured after the CMake 
 
 Making the SD card optional cascades furthest, and further than at #250: `/var/log`
 (`logfile`), approved TLS roots (`certstore`), man pages, the editor, Lua file functions and
-`sos.sd`, SFTP, `tee` and `>`, `fetch` to a file, the time zone database, the checksum and
+`sos.sd`, SFTP, `tee` and `>`, `fetch` to a file, choosing a time zone from the database (local time itself stays), the checksum and
 archive commands, and the `card`, `sd-bus` and `sd-check` checks. Since the card can already be
 missing at run time, most of these cope with no card, but how well each one does hasn't been
 checked for this note. It should come after the others have shown the pattern works. Until
