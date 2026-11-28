@@ -140,6 +140,27 @@ fewer bytes than asked), resolves each name against the list's directory, and co
 result. `tests/test_sums.c` runs it from typed lines over a card in memory, with the host's
 wolfCrypt.
 
+`sha256sum` hashes each file on the SHA-256 block when `sha256hw_begin()` gets it (the job's
+`hw` flag), else with wolfCrypt. The block is taken in `open_file()` and released in
+`close_file()`, which finishing, a read error, Ctrl-C and the end of the session all go
+through. `tests/test_sums.c` runs most tests with the block taken by "someone else" (wolfCrypt,
+as before) and some with it free.
+
+## `sha256hw.c`: the SHA-256 block (sha256sum, fetch)
+
+[Design](../../docs/design/archives.md) §4.3. A wrapper over the SDK's `pico_sha256`:
+`sha256hw_begin()` takes the block without waiting (the bootrom's SHA-256 boot lock, a hardware
+lock that both cores and the bootrom respect) and starts a hash; `sha256hw_update()`,
+`sha256hw_finish()`, `sha256hw_abort()`. One holder at a time, for a whole hash (the block keeps
+the state between job steps); a `held` flag is tested first, since `pico_sha256_try_start()`
+clears its state before trying the lock. Fed by the CPU a word at a time (4-byte aligned
+buffers), no DMA: the job waits for each 4 KB chunk anyway, and DMA would claim a channel.
+The first successful begin hashes two FIPS 180-2 vectors on the block; a wrong answer is logged
+once (`sha256: the SHA-256 block gave a wrong answer; hashing in software`) and the block is
+never used again. Core 0 only; TLS, SSH and Lua's `sos.hash` stay on wolfCrypt. Host tests:
+`tests/test_sha256hw.c` (and `test_sha256hw_broken`, the same file built for a broken block)
+over `tests/fake_sha256.c`, a fake `pico_sha256` made with wolfCrypt.
+
 ## `sums_parse.c`: checksum lists (pure C, host tested and fuzzed)
 
 How a name is shown (GNU's `\` escape for `\n` and `\\`; other control characters as `?`), a

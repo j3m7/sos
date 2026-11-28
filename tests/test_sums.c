@@ -5,15 +5,21 @@
 // way the shell runs them, with wolfCrypt built for the host, over a card in memory standing in
 // for FatFs (tests/stubs/ff.h). Digests against FIPS 180 vectors; -c with each result, names
 // relative to the list, --ignore-missing, waiting for output room, Ctrl-C, and the files
-// released at the end.
+// released at the end. The SHA-256 block (files/sha256hw.c over tests/fake_sha256.c) is taken
+// by "someone else" unless a test frees it, so most tests hash with wolfCrypt as before; the
+// block's own tests check sha256sum uses it when free, only for SHA-256, and releases it on
+// every end.
 
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "fake_sha256.h"
+
 #include "ff.h"
 #include "pico/stdlib.h"
 
+#include "core/log.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "files/sums.h"
@@ -152,6 +158,11 @@ bool sdcard_mount(shell_t *sh) {
     return true;
 }
 
+void log_msg(int priority, const char *fmt, ...) {
+    (void)priority;
+    (void)fmt;
+}
+
 // --- a shell: its output, and jobs stepped to the end --------------------------------------------
 
 static char out[16384];
@@ -210,6 +221,7 @@ static void run(const char *line) {
             c->runv(&sh, w.n, w.v);
             CHECK_EQ(holders, 0);           // released at the end
             CHECK_EQ(open_files, 0);
+            CHECK(!fake_sha256.locked);     // the block released too
             return;
         }
     CHECK(!"no such command");
@@ -239,6 +251,8 @@ static void setup(void) {
     memset(&sh, 0, sizeof(sh));
     sh.io = &io_console;
     strcpy(sh.cwd, "/");
+    fake_sha256_reset();
+    fake_sha256.taken = true;           // wolfCrypt, unless a test frees the block
     card_add("/abc", "abc");
     card_add("/empty", "");
     card_add("/apps", NULL);
@@ -469,6 +483,75 @@ TEST(check_read_error_of_a_listed_file) {
     CHECK_OUT("long: disk error\nsha256sum: SUMS: disk error\n0 OK, 1 unreadable\n");
 }
 
+// --- the SHA-256 block --------------------------------------------------------------------------
+
+TEST(the_block_is_used_by_sha256sum_when_free) {
+    setup();
+    fake_sha256.taken = false;
+    static char million[1000000];
+    memset(million, 'a', sizeof(million));
+    card_put("/big", million, sizeof(million));
+    run("sha256sum abc big empty");
+    CHECK_OUT(ABC256 "  abc\n" MILLION256 "  big\n" EMPTY256 "  empty\n");
+    CHECK_EQ(fake_sha256.starts, 2 + 3);    // the self-check's two vectors, then one per file
+    CHECK_EQ(fake_sha256.finished, 2 + 3);
+    CHECK_EQ(fake_sha256.abandoned, 0);
+    card_add("/SUMS", ABC256 "  abc\n" ABC256 "  big\n");
+    run("sha256sum -c SUMS");
+    CHECK_OUT("abc: OK\nbig: FAILED\n1 OK, 1 FAILED\n");
+    CHECK_EQ(fake_sha256.starts, 7);
+}
+
+TEST(the_block_is_not_used_for_sha1_or_sha512) {
+    setup();
+    fake_sha256.taken = false;
+    run("sha1sum abc");
+    CHECK_OUT(ABC1 "  abc\n");
+    run("sha512sum abc");
+    CHECK_OUT(ABC512 "  abc\n");
+    CHECK_EQ(fake_sha256.starts, 0);
+    CHECK_EQ(fake_sha256.refused, 0);
+}
+
+TEST(a_taken_block_means_wolfcrypt_with_the_same_answer) {
+    setup();                            // taken: another shell's sha256sum or fetch
+    run("sha256sum abc");
+    CHECK_OUT(ABC256 "  abc\n");
+    CHECK(fake_sha256.refused >= 1);
+    CHECK_EQ(fake_sha256.starts, 0);
+}
+
+TEST(ctrl_c_releases_the_block) {
+    setup();
+    fake_sha256.taken = false;
+    static char million[1000000];
+    card_put("/big", million, sizeof(million));
+    cancel_at = 3;
+    run("sha256sum big abc");           // run() checks the block was released
+    CHECK_OUT("");
+    CHECK_EQ(fake_sha256.abandoned, 1);
+    card_add("/SUMS", ABC256 "  big\n");
+    run("sha256sum -c SUMS");
+    CHECK_OUT("sha256sum: stopped\n");
+    CHECK_EQ(fake_sha256.abandoned, 2);
+    cancel_at = 0;
+    run("sha256sum abc");               // and it's free for the next one
+    CHECK_OUT(ABC256 "  abc\n");
+    CHECK_EQ(fake_sha256.finished, 1);      // (the self-check ran in an earlier test)
+}
+
+TEST(a_read_error_releases_the_block) {
+    setup();
+    fake_sha256.taken = false;
+    static char data[10000];
+    card_put("/long", data, sizeof(data));
+    read_result = FR_DISK_ERR;
+    read_fail_after = 1;
+    run("sha256sum long");
+    CHECK_OUT("sha256sum: long: disk error\n");
+    CHECK_EQ(fake_sha256.abandoned, 1);
+}
+
 TEST_MAIN(
     RUN(commands_follow_the_table_rule);
     RUN(each_algorithm_prints_the_fips_vector);
@@ -489,5 +572,10 @@ TEST_MAIN(
     RUN(check_list_from_a_file_name_with_control_characters_is_shown_safely);
     RUN(check_ctrl_c_says_stopped);
     RUN(check_read_error_of_a_listed_file);
+    RUN(the_block_is_used_by_sha256sum_when_free);
+    RUN(the_block_is_not_used_for_sha1_or_sha512);
+    RUN(a_taken_block_means_wolfcrypt_with_the_same_answer);
+    RUN(ctrl_c_releases_the_block);
+    RUN(a_read_error_releases_the_block);
     card_clear();
 )
