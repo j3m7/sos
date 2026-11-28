@@ -139,6 +139,13 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES
 # so it uses the C library's snprintf too.
 set_property(SOURCE src/lua/lua_json.c APPEND PROPERTY COMPILE_DEFINITIONS snprintf=__real_snprintf)
 
+# zlib (lib/zlib by default; cmake/zlib.cmake): gunzip and zcat (src/files/gz.c).
+include(cmake/zlib.cmake)
+add_library(zlib INTERFACE)
+target_sources(zlib INTERFACE ${ZLIB_SOURCES})
+target_compile_definitions(zlib INTERFACE ${ZLIB_DEFINITIONS})
+target_include_directories(zlib SYSTEM INTERFACE ${ZLIB_ROOT})    # third-party: no SOS warnings
+
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
 # AES: wolfSSL's Thumb-2 assembly, the inline-assembly version (thumb2-aes-asm_c.c; issue #59),
@@ -308,6 +315,8 @@ set(SOS_SOURCES
     src/files/fsck_repair.c
     src/files/bigjob.c
     src/files/files.c
+    src/files/gz.c
+    src/files/gzip.c
     src/files/path.c
     src/files/sums.c
     src/files/sums_parse.c
@@ -437,6 +446,7 @@ target_link_libraries(sos
     hardware_adc            # chip temperature and supply voltage (core/sensors.h)
     sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
+    zlib
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)
 )
 

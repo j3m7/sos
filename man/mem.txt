@@ -6,14 +6,15 @@ SYNOPSIS
 
 DESCRIPTION
     The heap: in use, peak and total, then what each feature holds and its
-    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, and
-    'other' for the rest), lwIP's own pool, and core 0's peak stack use.
+    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, zlib,
+    and 'other' for the rest), lwIP's own pool, and core 0's peak stack use.
     After a Lua script has run, also how deep the last script went into core
     1's 32 KB stack.
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script
-    may take 128 KB, and the editor takes the file plus 32 KB of room.
+    may take 128 KB, the editor takes the file plus 32 KB of room, and
+    gunzip or zcat about 50 KB.
 
 SEE ALSO
     ssh, lua, edit

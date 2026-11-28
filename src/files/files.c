@@ -148,6 +148,63 @@ FRESULT files_sync_if_due(FIL *f, uint64_t *synced_at) {
     return f_sync(f);
 }
 
+// Replacing a file (`replace`, and `dest` exists) moves it aside first, so that whichever step
+// fails, neither the old file nor the new one is lost:
+//   1. dest -> dest.old. An existing dest.old is never overwritten: FatFs refuses to rename onto
+//      it (FR_EXIST), and that is a failure of this step. On failure the new file stays in the
+//      .part, and both names are printed (FILES_KEPT).
+//   2. part -> dest. On failure dest.old is renamed back to dest (FILES_NOT_INSTALLED, the
+//      caller deletes the .part); if even that fails, the old file is at dest.old and the new
+//      one in the .part, and both are printed (FILES_KEPT).
+//   3. dest.old removed; if that fails it is only said (the new file is in place).
+// Without an old file only step 2 runs, and its failure is FILES_NOT_INSTALLED.
+files_install_t files_install_part(shell_t *sh, const char *cmd, const char *what,
+                                   const char *part, const char *dest, bool replace,
+                                   const char **why) {
+    FILINFO fi;
+    char old[PATH_LEN];
+    bool aside = false;
+    FRESULT fr;
+    if (f_stat(dest, &fi) == FR_OK) {
+        if (fi.fattrib & AM_DIR) {
+            *why = "is a directory";
+            return FILES_NOT_INSTALLED;
+        }
+        if (!replace) {
+            *why = "exists (-f replaces it)";
+            return FILES_NOT_INSTALLED;
+        }
+        if (snprintf(old, sizeof(old), "%s.old", dest) >= (int)sizeof(old)) {
+            *why = "path too long";
+            return FILES_NOT_INSTALLED;
+        }
+        fr = f_rename(dest, old);
+        if (fr != FR_OK) {
+            shell_printf(sh, "%s: %s: can't move it aside to %s: %s\n", cmd, dest, old,
+                         files_error((int)fr));
+            shell_printf(sh, "%s: the %s is in %s\n", cmd, what, part);
+            *why = "not replaced";
+            return FILES_KEPT;
+        }
+        aside = true;
+    }
+    fr = f_rename(part, dest);
+    if (fr != FR_OK) {
+        *why = files_error((int)fr);
+        if (aside && f_rename(old, dest) != FR_OK) {
+            shell_printf(sh, "%s: the old file is in %s\n", cmd, old);
+            shell_printf(sh, "%s: the %s is in %s\n", cmd, what, part);
+            return FILES_KEPT;
+        }
+        return FILES_NOT_INSTALLED;
+    }
+    if (aside && (fr = f_unlink(old)) != FR_OK)
+        shell_printf(sh, "%s: %s: %s (the old file; remove it by hand)\n", cmd, old,
+                     files_error((int)fr));
+    *why = NULL;
+    return FILES_INSTALLED;
+}
+
 // --- ls ----------------------------------------------------------------------------------------
 
 typedef struct {

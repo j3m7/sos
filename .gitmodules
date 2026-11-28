@@ -14,3 +14,7 @@
 	path = lib/lua
 	url = https://github.com/lua/lua.git
 	shallow = true
+[submodule "lib/zlib"]
+	path = lib/zlib
+	url = https://github.com/madler/zlib.git
+	shallow = true

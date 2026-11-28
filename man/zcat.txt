@@ -1,0 +1,20 @@
+NAME
+    zcat - print a gzip file decompressed
+
+SYNOPSIS
+    zcat <file>
+
+DESCRIPTION
+    Prints the file decompressed, as 'cat' prints a file, and leaves it as
+    it is: 'zcat /var/log/old.log.gz | grep error'. Any name is accepted.
+    The decoding is gunzip's: joined gzip files print one after the other,
+    and a corrupt file prints what came before the damage, then the error.
+    Zero bytes after the end are skipped without a note, so that the output
+    is only the data.
+
+    A job: Ctrl-C stops it, and a slow SSH client slows it down instead of
+    losing output. It takes the same memory as gunzip, and one of the two
+    runs at a time across all shells ('man gunzip').
+
+SEE ALSO
+    gunzip, cat, more

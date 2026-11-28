@@ -402,6 +402,57 @@ NOTES
 
 SEE ALSO
     head, tail, wc, more
+@@ gunzip
+NAME
+    gunzip - decompress gzip files on the card
+
+SYNOPSIS
+    gunzip [-k] [-f] <file>...
+
+DESCRIPTION
+    Decompresses each file: 'x.gz' gives 'x' and 'x.tgz' gives 'x.tar'
+    (the suffix in any case). Other names are refused ('unknown suffix'),
+    as GNU gunzip does, and so is a name that is only the suffix ('.gz').
+    The name and date stored in the gzip header are ignored: the output's
+    name comes from the input's, and it is dated now.
+
+    The output is written to '<name>.part' and renamed to '<name>' only when
+    the whole input has been read and checked: each part's CRC-32 and length
+    must match. Any error deletes the .part and keeps the input, so a
+    'gunzip' that didn't finish leaves nothing half-written behind. The
+    input is deleted after success unless -k is given. With several files,
+    a file that fails is reported and the next one is decompressed.
+
+    Files made by joining gzip files ('cat a.gz b.gz > c.gz' on a computer)
+    decompress to the parts one after the other. Zero bytes after the end
+    (padding from tape and block tools) are skipped with a line saying
+    'ignoring trailing zeros'; any other bytes there are an error.
+
+    A job: Ctrl-C stops it and removes the .part, as does the session
+    ending. It writes 4 KB at a time, so a small file that decompresses to a
+    lot only takes longer; a full card stops it with 'card full'. The .part
+    is synced to the card about once a second, so 'ls' shows how far it has
+    got.
+
+OPTIONS
+    -k    keep the input file
+    -f    replace an existing output file (without it, gunzip refuses:
+          'already exists'). The old file is moved aside to '<name>.old'
+          until the output has taken its name, so a failed rename loses
+          neither; if a '<name>.old' is already there, nothing is replaced
+          and the output stays in the .part, as gunzip then says.
+    Options come before the files, alone or together (-kf); '--' ends
+    them, for a file whose name starts with '-'.
+
+MEMORY
+    About 50 KB of heap while it runs (zlib's 32 KB window and its state
+    show as 'zlib' in 'mem'). It is refused when that would leave less than
+    64 KB free, so a TLS handshake still fits. One of gunzip and zcat runs
+    at a time across all shells; another is refused with 'busy: gunzip is
+    running in another shell'.
+
+SEE ALSO
+    zcat, cp, ls, mem
 @@ head
 NAME
     head - the first lines of a command's output, then stop it
@@ -998,14 +1049,15 @@ SYNOPSIS
 
 DESCRIPTION
     The heap: in use, peak and total, then what each feature holds and its
-    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, and
-    'other' for the rest), lwIP's own pool, and core 0's peak stack use.
+    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, zlib,
+    and 'other' for the rest), lwIP's own pool, and core 0's peak stack use.
     After a Lua script has run, also how deep the last script went into core
     1's 32 KB stack.
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script
-    may take 128 KB, and the editor takes the file plus 32 KB of room.
+    may take 128 KB, the editor takes the file plus 32 KB of room, and
+    gunzip or zcat about 50 KB.
 
 SEE ALSO
     ssh, lua, edit
@@ -2054,3 +2106,24 @@ DESCRIPTION
 
 SEE ALSO
     net, setup, hostname, config, health
+@@ zcat
+NAME
+    zcat - print a gzip file decompressed
+
+SYNOPSIS
+    zcat <file>
+
+DESCRIPTION
+    Prints the file decompressed, as 'cat' prints a file, and leaves it as
+    it is: 'zcat /var/log/old.log.gz | grep error'. Any name is accepted.
+    The decoding is gunzip's: joined gzip files print one after the other,
+    and a corrupt file prints what came before the damage, then the error.
+    Zero bytes after the end are skipped without a note, so that the output
+    is only the data.
+
+    A job: Ctrl-C stops it, and a slow SSH client slows it down instead of
+    losing output. It takes the same memory as gunzip, and one of the two
+    runs at a time across all shells ('man gunzip').
+
+SEE ALSO
+    gunzip, cat, more

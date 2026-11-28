@@ -542,6 +542,33 @@ else()
     message(WARNING "SDCARD_ROOT (${SDCARD_ROOT}) has no FatFs (src/ff15/source/ff.c): test_fsck, test_fsck_exfat, test_fsck_faults and test_fsck_repair are skipped")
 endif()
 
+# zlib, from the firmware's sources and list (cmake/zlib.cmake), for src/files/gz.c.
+include(${SOS_ROOT}/cmake/zlib.cmake)
+add_library(zlib_host STATIC ${ZLIB_SOURCES})
+target_compile_definitions(zlib_host PUBLIC ${ZLIB_DEFINITIONS})
+target_include_directories(zlib_host SYSTEM PUBLIC ${ZLIB_ROOT})
+target_compile_options(zlib_host PRIVATE -w -O2)    # not ours to warn about; test_gz runs it a lot
+
+# src/files/gz.c: gunzip's and zcat's decoder, over files made by GNU gzip (tests/data/archives,
+# tools/make-archive-fixtures.sh), fed in pieces of every size.
+set(SOS_ARCHIVES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data/archives)
+add_executable(test_gz test_gz.c ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_gz PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_gz PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+target_compile_options(test_gz PRIVATE -O2)         # thousands of decodes, the sanitizers still on
+target_link_libraries(test_gz PRIVATE zlib_host)
+add_test(NAME gz COMMAND test_gz)
+
+# src/files/gzip.c: gunzip and zcat as commands, over the card in memory of tests/stubs, with the
+# real files.c, gz.c and bigjob.c.
+add_executable(test_gzip test_gzip.c ${SOS_ROOT}/src/files/gzip.c ${SOS_ROOT}/src/files/gz.c
+    ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}/src/files/path.c
+    ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_gzip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
+target_compile_definitions(test_gzip PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+target_link_libraries(test_gzip PRIVATE zlib_host)
+add_test(NAME gzip COMMAND test_gzip)
+
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
 add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
 target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
@@ -596,3 +623,8 @@ sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
     ${SOS_ROOT}/src/files/fsck_repair.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)
 sos_fuzz(sums ${SOS_ROOT}/src/files/sums_parse.c)
+sos_fuzz(gz ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/core/heaptag.c)   # gunzip's input
+target_link_libraries(replay_gz PRIVATE zlib_host)
+if (SOS_FUZZ)
+    target_link_libraries(fuzz_gz PRIVATE zlib_host)
+endif()
