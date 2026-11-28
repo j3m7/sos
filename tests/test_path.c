@@ -153,6 +153,43 @@ TEST(protected_dir_fails_closed) {
     CHECK(path_is_protected("/docs\x7f"));
 }
 
+TEST(name_check) {
+    static const char *const ok[] = {
+        "pkg-1.2.tar.gz", "SHA256SUMS", "a", ".hidden", "my file.txt", "caf\xc3\xa9",
+        "\xe6\x97\xa5\xe6\x9c\xac", "\xf0\x9f\x98\x80", "a+b=c,d;e[f]", "x..y",
+    };
+    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+        const char *why = path_name_check(ok[i]);
+        CHECK(why == NULL);
+        if (why)
+            fprintf(stderr, "  \"%s\": %s\n", ok[i], why);
+    }
+    static const char *const bad[] = {
+        "", ".", "..", "a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b",
+        "trailing.", "trailing ", "a\x01", "\x1b[2J", "a\x7f",
+        "\xc2\x9b" "x",                     // C1 CSI, UTF-8-encoded
+        "\xff", "\xc3", "\xc3(", "\xc0\xaf", "\xe0\x80\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(path_name_check(bad[i]) != NULL);
+
+    // 255 UTF-16 units at most: 255 ASCII, or 127 emoji (2 units each) plus one.
+    static char name[1024];
+    memset(name, 'n', 255);
+    name[255] = '\0';
+    CHECK(path_name_check(name) == NULL);
+    name[255] = 'n';
+    name[256] = '\0';
+    CHECK(path_name_check(name) != NULL);
+    char *p = name;
+    for (int i = 0; i < 127; i++)
+        p += sprintf(p, "\xf0\x9f\x98\x80");
+    strcpy(p, "n");
+    CHECK(path_name_check(name) == NULL);
+    strcpy(p, "nn");
+    CHECK(path_name_check(name) != NULL);
+}
+
 TEST_MAIN(
     RUN(relative_and_absolute);
     RUN(dots_and_slashes);
@@ -164,4 +201,5 @@ TEST_MAIN(
     RUN(log_dir_fatfs_aliases);
     RUN(protected_dir_fatfs_aliases);
     RUN(protected_dir_fails_closed);
+    RUN(name_check);
 )
