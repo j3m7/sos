@@ -247,7 +247,8 @@ Keep one SSH session open beside the console.
 3. **[host]** `sha256sum r2.bin`
    You should see: the same hash as step 1.
 4. **[console]** `sha256sum /review/r.bin`
-   You should see: the same hash again.
+   You should see: the same hash again. (`sha256sum` uses the chip's SHA-256 hardware, #281,
+   so this also checks that path; `sha1sum` and `sha512sum` stay in software.)
 5. **[host]** `sftp $B`, then `put r.bin /certs/x.bin`, `bye`
    You should see: refused: only the console changes `/certs`.
 
