@@ -126,6 +126,26 @@ static void encode_values(void) {
     CHECK(holds("return json.encode('caf\\xc3\\xa9') == '\"caf\\xc3\\xa9\"'"));
 }
 
+// Numbers are formatted in C now, not by tostring: the text must stay byte for byte the same.
+static void encode_numbers_like_tostring(void) {
+    CHECK(holds("for _, x in ipairs{0, -0.0, 0.0, 1, -1, 2.0, -2.0, 0.1, 1/3, -1/3, 1e15, 1e16, 1e100, "
+                "1e-300, 5e-324, 1e+20, 123456789012345.0, 12345678901234.5, 2^53, -2^63, 2^63, "
+                "1.7976931348623157e308, -1.7976931348623157e308, 2.2250738585072014e-308, "
+                "math.maxinteger, math.mininteger, math.pi, -math.pi} do "
+                "if json.encode(x) ~= tostring(x) then return false end end return true"));
+    // Random bit patterns as doubles (NaN and infinities refused, as before), and random integers.
+    CHECK(holds("math.randomseed(208) local n = 0 for i = 1, 20000 do "
+                "local b = string.pack('<I4I4', math.random(0, 0xffffffff), math.random(0, 0xffffffff)) "
+                "local x = string.unpack('<d', b) "
+                "if x == x and x ~= math.huge and x ~= -math.huge then n = n + 1 "
+                "if json.encode(x) ~= tostring(x) then return false end end "
+                "local k = math.random(math.mininteger, math.maxinteger) "
+                "if json.encode(k) ~= tostring(k) then return false end end return n > 19000"));
+    CHECK(holds("local t = {} for i = 1, 200 do t[i] = i / 7 end "
+                "local want = '[' .. tostring(1 / 7) for i = 2, 200 do want = want .. ',' .. tostring(i / 7) end "
+                "return json.encode(t) == want .. ']'"));
+}
+
 static void encode_tables(void) {
     CHECK(holds("return json.encode({1, 2, 3}) == '[1,2,3]'"));
     CHECK(holds("return json.encode({1, json.null, 3}) == '[1,null,3]'"));
@@ -202,6 +222,7 @@ TEST_MAIN(
     RUN(decode_structures);
     RUN(decode_refusals);
     RUN(encode_values);
+    RUN(encode_numbers_like_tostring);
     RUN(encode_tables);
     RUN(encode_refusals);
     RUN(round_trips);

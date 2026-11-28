@@ -5,9 +5,11 @@
 
 #include "lua/lua_json.h"
 
+#include <locale.h>                            // lua_getlocaledecpoint on the host
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -307,6 +309,8 @@ int lua_json_decode(lua_State *L, const char *s, size_t n) {
 // The text grows in a userdata kept at a fixed stack slot (replaced by a bigger one as it grows),
 // so the collector frees it however the encoding ends: core 1 has no __gc.
 
+#define LUA_JSON_NUM_MAX 48                    // a number's text: lobject.h's MAXNUMBER2STR is 44
+
 typedef struct {
     lua_State *L;
     int slot;                                   // the stack index of the buffer's userdata
@@ -314,11 +318,13 @@ typedef struct {
     size_t len, cap;
 } enc_t;
 
+// The buffer grows by half each time: while it grows the old and new buffers are both live, 2.5
+// times the old size at once (3 times when doubling), which is what caps a large result.
 static void put(enc_t *e, const char *s, size_t n) {
     if (n > e->cap - e->len) {
-        size_t cap = e->cap * 2;
+        size_t cap = e->cap + e->cap / 2;
         while (cap - e->len < n)
-            cap *= 2;
+            cap += cap / 2;
         char *q = lua_newuserdatauv(e->L, cap, 0);
         memcpy(q, e->p, e->len);
         lua_replace(e->L, e->slot);
@@ -331,6 +337,25 @@ static void put(enc_t *e, const char *s, size_t n) {
 
 static void put_s(enc_t *e, const char *s) {
     put(e, s, strlen(s));
+}
+
+// The number at idx as Lua's tostring writes it (lobject.c's tostringbuff), into buf rather than
+// into a new Lua string: integers in LUA_INTEGER_FMT, floats in LUAI_NUMFFORMAT with ".0" added
+// when the text looks like an integer. Its length. On the board this file is built with the C
+// library's snprintf, as the Lua sources are (CMakeLists.txt): the SDK's own prints doubles
+// differently, and the host tests can't see that.
+static size_t number_text(lua_State *L, int idx, char *buf) {
+    int n;
+    if (lua_isinteger(L, idx)) {
+        n = lua_integer2str(buf, LUA_JSON_NUM_MAX, lua_tointeger(L, idx));
+    } else {
+        n = lua_number2str(buf, LUA_JSON_NUM_MAX - 2, lua_tonumber(L, idx));
+        if (n > 0 && n < LUA_JSON_NUM_MAX - 2 && buf[strspn(buf, "-0123456789")] == '\0') {
+            buf[n++] = lua_getlocaledecpoint();
+            buf[n++] = '0';
+        }
+    }
+    return n > 0 && n < LUA_JSON_NUM_MAX ? (size_t)n : 0;
 }
 
 static void put_string(enc_t *e, const char *s, size_t n) {
@@ -482,11 +507,8 @@ static void encode(enc_t *e, int idx, int depth) {
         if (!lua_isinteger(L, idx) && !isfinite(lua_tonumber(L, idx)))
             luaL_error(L, "can't encode %s in JSON", lua_tonumber(L, idx) != lua_tonumber(L, idx)
                        ? "NaN" : "an infinity");
-        size_t n;
-        lua_pushvalue(L, idx);                  // a copy: tostring changes it
-        const char *s = lua_tolstring(L, -1, &n);
-        put(e, s, n);
-        lua_pop(L, 1);
+        char buf[LUA_JSON_NUM_MAX];
+        put(e, buf, number_text(L, idx, buf));
         break;
     }
     case LUA_TSTRING: {

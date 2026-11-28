@@ -430,7 +430,7 @@ tables nested more than 32 deep (which includes a table that contains itself) ra
 Decoded values live in the script's 128 KB, and Lua tables are larger than their text: about
 180 bytes for a small object (`{"id": 1, "name": "item1", "ok": true}`), so a script can hold
 the decoded form of roughly 20 KB of JSON. Speed, measured on the board: 150 such objects (5.5 KB)
-encode in 26 ms and decode in 21 ms.
+encode in 19 ms and decode in 21 ms.
 
 ```lua
 local r = sos.http.get("https://api.example/status")
