@@ -251,6 +251,7 @@ set(SOS_SOURCES
     src/core/stackmon.c
     src/core/heap.c
     src/core/heaptag.c
+    src/core/cryptoheap.c
     src/core/glitchdet.c
     src/core/resetwhy.c
     src/core/resetwhy_board.c
@@ -359,6 +360,7 @@ set(SOS_SOURCES
     src/lua/lua_date.c
     src/lua/lua_hash.c
     src/lua/lua_health.c
+    src/lua/lua_health_table.c
     src/lua/lua_info.c
     src/lua/lua_net.c
     src/lua/lua_json.c

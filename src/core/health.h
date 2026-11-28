@@ -23,8 +23,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "lua/lua_info.h"
-
 #define HEALTH_TEXT_MAX  64             // a result's text, with its terminator
 #define HEALTH_NAME_MAX  12             // a check's name: [a-z0-9-]{1,12}
 #define HEALTH_MAX       32             // checks in the registry, test-only ones included
@@ -138,6 +136,9 @@ int health_find(const char *name);                      // index, or -1
 // The worst status of any check: PASS when none is WARN or FAIL (NONE and SKIP count as PASS).
 health_status_t health_worst(void);
 
+// Health's clock (health_init()'s), in seconds: what a result's at_s is measured on.
+uint32_t health_now_s(void);
+
 // "none", "skip", "pass", "warn", "fail"; and the tiers' "boot", "background", "full".
 const char *health_status_name(health_status_t s);
 const char *health_tier_name(health_tier_t t);
@@ -156,13 +157,6 @@ bool health_inject(const char *name, health_status_t status, const char *text);
 // Always terminated.
 void health_format_header(char *out, size_t cap);
 void health_format_row(char *out, size_t cap, unsigned index);
-
-// --- the Lua record: sos.health() ----------------------------------------------------------------
-
-// Written with lua_info.h's writer (a pure record format: no Lua here): {worst=, boot_ms=,
-// checks={ {name=, status=, tier=, text=, ago_s=, runs=, fails=}, ... }}. A check that hasn't
-// run has status "none" and no ago_s.
-void health_lua_table(lua_info_t *w);
 
 // --- judging the seed checks (pure; health_board.c reads the numbers) ----------------------------
 

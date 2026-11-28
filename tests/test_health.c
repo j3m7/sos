@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "core/health.h"
+#include "lua/lua_health_table.h"
 #include "core/log.h"
 #include "core/sensors.h"
 #include "test.h"
@@ -431,7 +432,7 @@ TEST(lua_record) {
     lua_info_t w;
     uint8_t buf[16];
     lua_info_begin(&w, buf, sizeof(buf));
-    health_lua_table(&w);
+    lua_health_table(&w);
     CHECK(!strcmp(trace,
         "worst=warn boot_ms=0 {checks "
         "{ name=trng status=pass tier=boot text=ok ago_s=10 runs=1 fails=0 } "

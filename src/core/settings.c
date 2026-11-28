@@ -348,6 +348,21 @@ bool settings_reset(void) {
     return ok;
 }
 
+static settings_owner_gone_fn owner_hooks[SETTINGS_OWNER_HOOKS];
+static unsigned owner_hook_count;
+
+bool settings_on_owner_gone(settings_owner_gone_fn fn) {
+    if (owner_hook_count == SETTINGS_OWNER_HOOKS)
+        return false;
+    owner_hooks[owner_hook_count++] = fn;
+    return true;
+}
+
+void settings_owner_gone(void) {
+    for (unsigned i = 0; i < owner_hook_count; i++)
+        owner_hooks[i]();
+}
+
 bool settings_persistent(void) {
     return persistent;
 }

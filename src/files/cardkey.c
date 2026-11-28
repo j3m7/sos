@@ -8,6 +8,7 @@
 #include "core/keyprov.h"
 #include "core/log.h"
 #include "core/settings.h"
+#include "files/sdcard.h"
 #include "files/sdcrypt.h"
 
 _Static_assert(CARDKEY_LEN == SDCRYPT_DEVKEY_LEN && CARDKEY_LEN == KEYPROV_KEY_LEN &&
@@ -19,6 +20,7 @@ static uint8_t base[KEYPROV_KEY_LEN];
 static bool have_base;
 
 void cardkey_init(void) {
+    settings_on_owner_gone(sdcard_owner_gone);     // `config reset`: close an encrypted card
     have_base = keyprov_derive(KEYPROV_SD_WRAP_BASE, base);
     if (!have_base)
         log_msg(SOS_LOG_DAEMON | SOS_LOG_ERR,

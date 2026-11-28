@@ -12,6 +12,7 @@
 // when not connected, fault_last() when there was no fault).
 
 #include "lua/lua_health.h"
+#include "lua/lua_health_table.h"
 
 #include <string.h>
 #include <sys/time.h>
@@ -436,7 +437,7 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_TLS:     tls_table(&w); break;
     case LH_SD:      sd_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
-    case LH_HEALTH:  health_lua_table(&w); break;     // results only: no check is run
+    case LH_HEALTH:  lua_health_table(&w); break;     // results only: no check is run
     default:         return 0;
     }
     return lua_info_end(&w);

@@ -149,8 +149,8 @@ overwritten), with the cursor after the last one and `more`; core 1 asks again f
 while `more` is set (at most 8 pages) and joins the pages into one list.
 
 `sos.health` is `LR_INFO` too (`LH_HEALTH`): core 0 writes the self-checks' latest results with
-`health_lua_table()` (`core/health.c`, where the record is tested on the host,
-`tests/test_health.c`). It only reads results; no check is run for a script.
+`lua_health_table()` (`lua_health_table.c`, pure C over `core/health.h`'s registry, tested on
+the host in `tests/test_health.c`). It only reads results; no check is run for a script.
 
 ## Dates: `lua_date.c`
 

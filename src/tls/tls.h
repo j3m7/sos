@@ -58,8 +58,8 @@ typedef struct {
 
 typedef struct tls_conn tls_conn_t;
 
-// Install wolfSSL heap accounting (tls_stats_t.heap_peak). Call once in main(), before any
-// wolfSSL/wolfSSH initialisation. The count covers every wolfSSL user (SSH sessions too).
+// Keep each connection's wolfSSL heap peak (tls_stats_t.heap_peak) from core/cryptoheap.h's
+// count, which covers every wolfSSL user (SSH sessions too). Call once in main().
 void tls_init(void);
 
 // Add a trust anchor (DER) to a TLS context. While the clock isn't set, a root's own dates

@@ -3,7 +3,6 @@
 
 #include "tls/tls.h"
 
-#include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,12 +16,12 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
-#include <wolfssl/wolfcrypt/memory.h>
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 
 #include "pico-sshd/ringbuffer.h"
 
+#include "core/cryptoheap.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
 #include "core/log.h"
@@ -70,15 +69,11 @@ static uint32_t next_id = 1;
 // The connection whose handshake is running, for the certificate verify callback.
 static tls_conn_t *verifying;
 
-// --- heap accounting (all wolfSSL/wolfSSH allocations) ---------------------------------------
-
-// Kept apart from HEAP_NET's counter, which these hooks also feed: that one includes the
-// application's own SSH, TLS and certificate blocks, and a connection's peak is wolfSSL's alone.
-static int64_t heap_now;
+// --- heap accounting (core/cryptoheap.h counts all wolfSSL/wolfSSH allocations) -------------
 
 // Raise each open connection's peak to what's in use now, counted from its tls_open(). Each
 // connection keeps its own, so two at once (NTS and HTTPS) don't reset each other's.
-static void note_peak(void) {
+static void note_peak(int64_t heap_now) {
     for (unsigned i = 0; i < TLS_MAX_CONNS; i++) {
         tls_conn_t *c = conns[i];
         if (c && heap_now - c->heap_base > (int64_t)c->stats.heap_peak)
@@ -86,33 +81,8 @@ static void note_peak(void) {
     }
 }
 
-static void *count_malloc(size_t n) {
-    void *p = heap_alloc(HEAP_NET, n);
-    if (p) {
-        heap_now += (int64_t)malloc_usable_size(p);
-        note_peak();
-    }
-    return p;
-}
-
-static void count_free(void *p) {
-    if (p)
-        heap_now -= (int64_t)malloc_usable_size(p);
-    heap_release(HEAP_NET, p);
-}
-
-static void *count_realloc(void *p, size_t n) {
-    size_t old = p ? malloc_usable_size(p) : 0;
-    void *q = heap_realloc(HEAP_NET, p, n);
-    if (q || n == 0) {
-        heap_now += (int64_t)(q ? malloc_usable_size(q) : 0) - (int64_t)old;
-        note_peak();
-    }
-    return q;
-}
-
 void tls_init(void) {
-    wolfSSL_SetAllocators(count_malloc, count_free, count_realloc);
+    cryptoheap_watch(note_peak);
 }
 
 // --- helpers -------------------------------------------------------------------------------------
@@ -534,7 +504,7 @@ static tls_conn_t *conn_open(const char *host, uint16_t port, const char *alpn,
     c->use = use;
     c->plain = plain;
     c->deadline_us = time_us_64() + (uint64_t)timeout_ms * 1000;
-    c->heap_base = heap_now;
+    c->heap_base = cryptoheap_in_use();
     c->state = TLS_RESOLVING;
     if (strlen(host) > TLS_HOST_MAX || (alpn && strlen(alpn) > TLS_ALPN_MAX)) {
         fail(c, "host name or ALPN too long");

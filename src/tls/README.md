@@ -68,8 +68,10 @@ which saves about 20 KB of flash. A build with `SOS_WOLF_DEBUG` keeps it.
   name. While the clock isn't set, `verify_cb()` accepts a chain whose only fault is its
   dates, and roots load without checking their own dates (`tls_load_root()`); the connection
   then logs `certificate dates not checked`.
-- **Heap accounting:** `tls_init()` installs wolfSSL allocators that track the heap in use by
-  every wolfSSL user, SSH included. Each open connection records its own peak, counted from
+- **Heap accounting:** `core/cryptoheap.c` installs wolfSSL allocators that track the heap in
+  use by every wolfSSL user, SSH and the core's own crypto included (`cryptoheap_init()`, in
+  every build); `tls_init()` registers TLS as its watcher. Each open connection records its own
+  peak, counted from
   its `tls_open()`, so two connections at once don't disturb each other's figure (it still
   includes whatever other wolfSSL users allocated meanwhile). The NTS key-exchange log line and
   the `http` command show it.
