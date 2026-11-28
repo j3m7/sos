@@ -87,4 +87,28 @@ const char *wifi_ssid(void);
 // Short description of the state, e.g. "connected", "connecting", "not configured".
 const char *wifi_state(void);
 
+// What the `wifi` health check judges (docs/design/health.md §9.9) and `wifi stats` shows: link
+// drops nobody asked for (the link lost while connected; `wifi connect` and the like don't
+// count), since when the link has been down, and the chip's firmware, read once by wifi_start().
+#define WIFI_DROP_TIMES 8
+typedef struct {
+    bool configured;                    // a network is saved
+    bool running;                       // configured, and the state machine is trying or up
+    bool up;
+    uint32_t down_since_s;              // uptime the link was last lost, or Wi-Fi started
+    uint32_t drops;                     // since boot
+    uint32_t drop_at_s[WIFI_DROP_TIMES];    // uptimes of the newest drops
+    unsigned drop_n;                    // how many of them are set
+    int32_t join_rssi;                  // dBm at the last join (0: none yet)
+    const char *ver;                    // the chip's `ver` answer, one line; "" if not read
+} wifi_counts_t;
+void wifi_counts(wifi_counts_t *out);
+
+#ifdef SOS_TEST_COMMANDS
+// `wifi fault drop`: disassociate as cyw43_wifi_leave() does, without telling the state machine,
+// which then sees an ordinary link loss: it counts a drop and reconnects. False (nothing done)
+// unless connected.
+bool wifi_fault_drop(void);
+#endif
+
 #endif
