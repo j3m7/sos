@@ -15,7 +15,7 @@ built (§9.2); its first board run (#242) failed `crypto` and `trng`, fixed in �
 the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254), built (§9.4),
 waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
 changes, #255), built (§9.6), waiting for its board run. Phase 5, the full tier: designed in
-§9.7, for review.
+§9.7 (approved, #262, with the image hash source decided by the user).
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -1552,11 +1552,12 @@ sector.
 
 ### 9.7 Phase 5 design: the full tier
 
-Status: designed, for review. Phase 5 adds the three full-tier checks that §7 promised, `ram`,
-`image` and `sd-check`, run only by `health full` (and one at a time by `health run <name>`,
-which §4 allows for a check of any tier). It settles §11's image hash question (proposed, for
-review: the HASH_VALUE item of the image's own block, with every build hashed), and changes
-one build rule: the image is hashed by picotool on every build, signed or not.
+Status: approved by Reviewer (#262), with the image hash source decided by the user; the
+decisions are listed at the end of this section. Phase 5 adds the three full-tier checks that
+§7 promised, `ram`, `image` and `sd-check`, run only by `health full` (and one at a time by
+`health run <name>`, which §4 allows for a check of any tier). It settles §11's image hash
+question (decided: the HASH_VALUE item of the image's own block), and changes one build rule:
+the image is hashed by picotool on every build, signed or not.
 
 **Common rules.**
 
@@ -1568,9 +1569,10 @@ one build rule: the image is hashed by picotool on every build, signed or not.
 - **Console only,** as `health full` already is. Lua sees their results, as for every check,
   and runs nothing.
 - **Steps of 10 ms or less** (§4), in the order of the table, after every boot and background
-  check. One documented exception: the first step of `sd-check` opens the card as a mount does
-  (below). The job's budget per call stays `HEALTH_JOB_STEP_US` (20 ms), so one call may run
-  two or three short steps back to back, as it does for the other tiers.
+  check. One documented exception, accepted on review as `crypto-ssh`'s 60 ms steps were: the
+  first step of `sd-check` opens the card as a mount does (below). The job's budget per call
+  stays `HEALTH_JOB_STEP_US` (20 ms), so one call may run two or three short steps back to back,
+  as it does for the other tiers.
 - **Read only, as in phases 3 and 4**, except the RAM test's writes into memory it owns (heap
   blocks it allocated, and SCRATCH_Y, which nothing uses; each SCRATCH_Y piece is put back
   within the step that tests it). No check writes flash or the card.
@@ -1611,7 +1613,7 @@ with no ECC or parity. In the debug build at main 11112a8:
 | Small free pieces | free chunks under 4 KB between blocks in use | no | the check allocates 4 KB blocks; smaller pieces would cost a step each for little memory |
 | Statics | `.data` and `.bss`, 125 KB: lwIP's heap (`MEM_SIZE` 32000) and pools, the CYW43 driver's buffers (written by its PIO and DMA from interrupts), FatFs's windows, the health registry, everything else | no | always in use, much of it written from interrupts or by DMA at any moment |
 | Core 0 stack | the top 8 KB of main RAM (`STACK0`) | no | in use by the code running and by every interrupt handler; its unused part is painted for `stackmon_peak()`, which a test would wipe |
-| SCRATCH_X | 0x20080000-0x20081000 (4 KB) | no (question for review) | the linker reserves it as core 1's stack (`.stack1_dummy`); SOS starts core 1 on its own heap stack (`multicore_launch_core1_with_stack()`), so nothing seems to use it, but a later `multicore_launch_core1()` would, silently |
+| SCRATCH_X | 0x20080000-0x20081000 (4 KB) | no (decided on review) | the linker reserves it as core 1's stack (`.stack1_dummy`). SOS starts core 1 on its own heap stack (`multicore_launch_core1_with_stack()`), so nothing seems to use it today, but a later `multicore_launch_core1()` would, silently; the code asserts at build time that the range it tests in place doesn't reach it |
 | USB RAM, XIP cache, boot RAM | — | no | not main memory: TinyUSB's buffers, the flash cache, the boot ROM's state |
 
 So on an idle dev-1 the check reaches about 180 KB of free heap and SCRATCH_Y's 4 KB: about a
@@ -1643,17 +1645,20 @@ on such a board every write already does that, so the test adds no new harm.
    the linker symbols say `.scratch_y` is empty, MSPLIM (core 0's stack guard) and the stack
    (`__StackBottom`) are outside it. If either fails, SCRATCH_Y is left out and the text says
    so.
-2. **Heap blocks**, one a step: allocate 4 KB under `HEAP_HEALTH`, run the six March C- passes
-   over the 4 KB asked for (not over the allocator's extra bytes), keep the block (so the next
-   allocation is other memory), and go on while the free heap stays above **96 KB**
+2. **Heap blocks**, one a step, **with interrupts on** (nothing else can reach a block the test
+   owns, so there is nothing to keep out): allocate 4 KB under `HEAP_HEALTH`, run the six March
+   C- passes over the 4 KB asked for (not over the allocator's extra bytes), keep the block (so
+   the next allocation is other memory), and go on while the free heap stays above **96 KB**
    (`HEALTH_HEAP_CLEAR`, the `heap` check's line back to PASS: a TLS handshake and an SSH login
    still fit while the blocks are held). About 2 ms a block: 60 accesses a word, about 5 cycles
    each with volatile accesses in C, 1024 words, at 150 MHz.
 3. **SCRATCH_Y**, a 1 KB piece a step: before each piece, check that no DMA channel that is busy
-   has its write address in SCRATCH_Y (16 channels' registers, a few microseconds); copy the
-   piece into a block the test already passed, run the passes on it with interrupts off on core
-   0, copy it back, interrupts on. About 0.5 ms with interrupts off. Core 1 isn't stopped:
-   nothing it runs knows the address, and stopping it would cost more than the test.
+   has its write address in SCRATCH_Y (all 16 of RP2350's channels, 0 to 15: each one's
+   CTRL_TRIG.BUSY and WRITE_ADDR, a few microseconds; a busy one there is named in the text and
+   SCRATCH_Y is left out); copy the piece into a block the test already passed, run the passes
+   on it with interrupts off on core 0, copy it back, interrupts on. About 0.5 ms with
+   interrupts off. Core 1 isn't stopped: nothing it runs knows the address, and stopping it
+   would cost more than the test.
 4. **Release** every block (last step, or on Ctrl-C).
 
 Blocks are held only while the test runs, about 0.1 to 0.2 s in all on an idle board. They are
@@ -1664,32 +1669,37 @@ was in that memory before, which does no harm.
 **A mismatch** records the address, what was written and what was read, the march element and
 the background. The same block (or piece) is tested again in the next step: a fault that comes
 back at the same address is a FAIL, one that doesn't is a WARN (a soft error, or something else
-wrote into memory it had freed). At that moment the check also looks at the DMA channels' write
-addresses, and the log line names a busy channel writing into the block, since that would be a
-use-after-free elsewhere in SOS, not a bad cell.
+wrote into memory it had freed). At that moment the check also looks at the 16 DMA channels'
+busy bits and write addresses, and the log line names a busy channel writing into the block,
+since that would be a use-after-free elsewhere in SOS, not a bad cell. **Every mismatch is
+logged** (at warning for a WARN, at err for a FAIL) with the address, what was written and what
+was read, the element and the background, so two WARNs a week apart can be compared: the same
+address twice is a weak cell, two addresses are more likely soft errors or a stray write.
 
 | Status | When | Text (example) |
 |---|---|---|
 | PASS | every pass over every block and piece read back as written | `184 KB of free heap + 4 KB SCRATCH_Y in 0.12 s: no faults` |
 | PASS | the same, SCRATCH_Y in use (the linker put something there) or a DMA channel pointed into it | `184 KB of free heap in 0.11 s; SCRATCH_Y in use: not tested` |
 | WARN | a mismatch that the second test of that block didn't repeat | `0x2004a1f0 read 00000400 for 00000000 once, not again` |
-| FAIL | the same address wrong in both tests | `RAM 0x2004a1f0 wrote 00000000 read 00000400: no keys, seals` |
+| FAIL | the same address wrong in both tests | `RAM 0x2004a1f0 bad: power-cycle; keys, seals off until reset` |
 | SKIP | free heap under 96 KB and SCRATCH_Y not testable | `free heap 80 KB, under the 96 KB kept free: not tested` |
 
 With the free heap under 96 KB but SCRATCH_Y free, it tests SCRATCH_Y alone and says so.
 
-**What a FAIL does (proposed, for review): KEYS and CRYPTO.** A stuck or coupled cell confirmed
-twice is a hardware fault in memory the heap hands out. The next key made, or the next record
-sealed, may be built in that memory, and what is then written to flash carries the flipped bit
-for good: a host key or a sealed configuration that is consistent with itself and wrong, which
-nothing would notice until it is used. Refusing those until the next reset costs little (the
-person is at the console, reading the result) and protects what is stored. Reads aren't gated,
-so the board can still be looked at, logged into and reflashed. The gate lasts until a reset
-(the result is then NONE) or a later run that passes; a reset doesn't repair the cell, so the
-text says what it found, and the log line at err adds `the board's RAM is faulty: replace it`.
-The phase 3 and 4 argument against gates (refusing blocks the repair) doesn't apply: there is
-no repair on the board for a bad cell. The alternative, no gate, is the rule of phases 3 and 4;
-a WARN holds no gate either way.
+**What a FAIL does (decided on review): KEYS and CRYPTO, on the FAIL only.** A WARN holds no
+gate. A stuck or coupled cell confirmed twice is a hardware fault in memory the heap hands out.
+The next key made, or the next record sealed, may be built in that memory, and what is then
+written to flash carries the flipped bit for good: a host key or a sealed configuration that is
+consistent with itself and wrong, which nothing would notice until it is used. Refusing those
+until the next reset costs little (the person is at the console, reading the result) and
+protects what is stored. Reads aren't gated, so the board can still be looked at, logged into
+and reflashed. The gate lasts until a reset (the result is then NONE) or a later run that
+passes; a reset doesn't repair the cell, so the text says the address, that keys and seals are
+off until a reset, and what to do: power-cycle (a cold start, which also clears what the bad
+cell may have spoiled), then `health full` again; the log line at err adds what was written and
+read, and `if it fails again, the board's RAM is faulty`. `health` and the rescue console stay
+reachable: they read results and make nothing. The phase 3 and 4 argument against gates
+(refusing blocks the repair) doesn't apply: there is no repair on the board for a bad cell.
 
 **Ctrl-C** frees every block held; a SCRATCH_Y piece is always put back within its step, so it
 is never left with a pattern in it.
@@ -1698,11 +1708,12 @@ is never left with a pattern in it.
 
 #### `image`: the running image against its own hash
 
-**Decided here (proposed, for review): the expected hash is the image's HASH_VALUE item, and
-every build is hashed.** Today `CMakeLists.txt` calls `pico_hash_binary(sos)` and
-`pico_sign_binary()` only when `SOS_SIGN_KEY` is set. Phase 5 calls `pico_hash_binary(sos)` on
-every build (`picotool seal --hash`; picotool already post-processes every RP2350 build, so
-nothing new is needed on the build machine), and signs as before when there is a key.
+**Decided (Reviewer, and the user for the build rule, on #262): the expected hash is the image's
+HASH_VALUE item, and every build is hashed.** Today `CMakeLists.txt` calls
+`pico_hash_binary(sos)` and `pico_sign_binary()` only when `SOS_SIGN_KEY` is set. Phase 5 calls
+`pico_hash_binary(sos)` on every build (`picotool seal --hash`; picotool already post-processes
+every RP2350 build, so nothing new is needed on the build machine), and signs as before when
+there is a key.
 
 **What is in the block** (datasheet §5.1.8, §5.9.2.2-§5.9.2.4, §5.9.3.2), as on dev-1's image
 (`picotool info -a build/sos.elf`): the image runs from 0x10000000 to 0x10130e1c, and the last
@@ -1745,8 +1756,11 @@ reset, and the code then runs from flash through the XIP cache (the load map's f
 hashed in place, not copied). So the check covers what happens after boot:
 
 - **Flash disturbed after boot:** a bit that changed in the flash (retention or read disturb,
-  over a long uptime), or a write that went astray. SOS's only flash writer is `flashop_run()`
-  for the stores at the end of flash; a store bug that reached the image would show here.
+  over a long uptime), or a write that went astray. A step can't overlap a flash write:
+  `flashop_run()` runs from the main loop like the check, with XIP stalled, interrupts off on
+  core 0 and core 1 paused, so the flash read between two steps is the flash as it is. SOS's
+  only flash writer is `flashop_run()` for the stores at the end of flash; a store bug that
+  reached the image would show here.
 - **The block itself changed after boot.** The block's HASH_VALUE isn't covered by the hash, so
   flash rewritten with a consistent hash would pass a check that trusted the flash's own copy.
   At boot, `health_boot()` copies the HASH_VALUE (32 bytes, read just after the boot ROM
@@ -1786,19 +1800,21 @@ hashed in place, not copied). So the check covers what happens after boot:
 | Status | When | Text (dev-1 or example) |
 |---|---|---|
 | PASS | the hash matches the HASH_VALUE copied at boot and the one in flash | `signed, sha256 43fe8126fb07af18 as booted, 1.2 MB in 0.45 s` (`hashed` for an unsigned image) |
-| FAIL | the computed hash differs | `flash image changed since boot; reflash, it won't boot again` |
-| FAIL | the flash's HASH_VALUE differs from the copy taken at boot | `image's hash item changed since boot; reflash` |
+| FAIL | the computed hash differs from the copy taken at boot: the body changed | `flash image changed: reflash; keys, seals off until reset` |
+| FAIL | the flash's HASH_VALUE differs from the copy taken at boot: the block changed (judged first, a different finding from a changed body) | `image hash item changed: reflash; keys, seals off until reset` |
 | WARN | the block loop, the load map or HASH_DEF isn't one this code understands (the boot ROM accepted it, so the parser is behind, not the image) | `image's hash block not understood: not checked` |
 | SKIP | the image has no HASH_VALUE (built without `pico_hash_binary`: an image from before phase 5, or built another way) | `image has no hash (built before phase 5?): not checked` |
 
-**What a FAIL does (proposed, for review): KEYS and CRYPTO.** The code in flash isn't what was
+**What a FAIL does (decided on review): KEYS and CRYPTO, on the two FAILs only.** The WARN and
+the SKIP hold no gate. The code in flash isn't what was
 flashed (and, on a board with secure boot, signed). The code running is read from that flash,
 16 KB of cache at a time, so the board can't trust itself: the code that makes keys and seals
 may be what changed. That is the reason `crypto` holds both gates, and it applies here with
 more force. Reads stay open, so the person can still log in, read `health`, back up and
-reflash. The text says the two things the person needs: reflash, and don't count on a reset
-(the boot ROM won't start the image again; the board would come up in the USB boot loader,
-from which a reflash works). The log line at err adds the hashes, both prefixes.
+reflash; `health` and the rescue console stay reachable. The text says what to do (reflash)
+and that keys and seals are off until a reset; the log line at err adds the hashes (both
+prefixes) and that the boot ROM won't start this image again after a reset (the board would come
+up in the USB boot loader, from which a reflash works).
 
 **Ctrl-C** frees the hash context; nothing else is held.
 
@@ -1835,7 +1851,7 @@ dev-1's encrypted exFAT card is checked as `sd check` checks it, through the dec
 **The first step opens the card** (`card_open()`: `disk_initialize()`, the encrypted card's
 header and key), as every mount and `sd check` already do in the main loop: up to hundreds of
 milliseconds once, an exception to the 10 ms rule for the same reason as theirs (it is one call
-into the driver).
+into the driver), accepted on review like `crypto-ssh`'s 60 ms steps.
 
 **Mapping the result.** `fsck_result_t` counts problems, lost clusters, cross-linked clusters
 and, on exFAT, clusters reached but free in the allocation bitmap:
@@ -1846,8 +1862,8 @@ and, on exFAT, clusters reached but free in the allocation bitmap:
 | WARN | problems, none of them cross-linked or reached-but-free clusters (lost clusters, sizes, names, a dirty flag): the card is safe to write, space or a file's tail is lost | `3 problems, 512 KB lost: sd check lists, sd check fix repairs` |
 | FAIL | cross-linked clusters, or exFAT clusters in use but free in the bitmap: the next write to the card can overwrite a file | `2 problems, 4 cross-linked: sd check fix before writing to it` |
 | WARN | the check stopped (a read error, the work bound) after it began | `check stopped in pass 2: read error at sector 81920` |
-| SKIP | the card is mounted | `card mounted: run sd unmount first` |
-| SKIP | not unmounted by hand: no card, or a mount that failed | `no card unmounted by hand (sd unmount): not checked` |
+| SKIP | the card is mounted | `card mounted: sd unmount, then health run sd-check` |
+| SKIP | not unmounted by hand: no card, or a mount that failed | `not unmounted by hand: sd unmount, then health run sd-check` |
 | SKIP | the card couldn't be opened (locked, refused, no memory), with `sd check`'s reason | `not checked: encrypted with another board's key` |
 
 **WARN or FAIL.** Most problems lose space or data that is already lost, and writing to the
@@ -1861,9 +1877,9 @@ the card, and the repair (`sd check fix`) is the person's to choose.
 **Ctrl-C** ends the check as Ctrl-C ends `sd check`: `check_end()`, the job's memory wiped and
 freed, the card left unmounted (as it was), its key forgotten. The check's old result stays.
 
-**Expected on dev-1:** SKIP `card mounted: run sd unmount first` in an ordinary `health full`;
-after `sd unmount`, PASS with the same summary `sd check` gives (about 0.5 s on the nearly empty
-card measured in sd-check.md §6.2), and the card still unmounted afterwards.
+**Expected on dev-1:** SKIP `card mounted: sd unmount, then health run sd-check` in an ordinary
+`health full`; after `sd unmount`, PASS with the same summary `sd check` gives (about 0.5 s on
+the nearly empty card measured in sd-check.md §6.2), and the card still unmounted afterwards.
 
 #### `health run` and the rest
 
@@ -1923,19 +1939,23 @@ under 100 bytes (the boot-time hash copy, the armed test faults). While `health 
 RAM test's blocks (free heap down to 96 KB, for a fraction of a second), about 200 bytes for
 the hash, and `sd check`'s 7 KB plus its 4 to 16 KB window and the card's 7.5 KB layer.
 
-#### Questions for review
+#### Decisions on review
 
-1. **The image hash source** (§11): the HASH_VALUE item, with `pico_hash_binary` on every build,
-   as above.
-2. **Gates:** KEYS and CRYPTO for a `ram` FAIL and an `image` FAIL, against no gate (the phase 3
-   and 4 rule). Either way they last until a reset, since full-tier results do.
-3. **The reserve** the RAM test leaves free: 96 KB (`HEALTH_HEAP_CLEAR`). 64 KB (the `heap`
-   check's WARN line) would test about 30 KB more and leave less room for a login during the
-   fraction of a second the blocks are held.
-4. **SCRATCH_X:** test it too, behind the same run-time guard as SCRATCH_Y, or keep it out as
-   the linker's reserved core 1 stack.
-5. **The 6 ms target** for `sd-check`'s steps, and the card's opening as an exception to the
-   10 ms rule.
+Decided (Reviewer, and the user for the build rule, on #262):
+
+1. **The image hash source** (§11): the HASH_VALUE item. **Every build is hashed** (the user):
+   `pico_hash_binary` is unconditional, signed builds keep their signature. An unsigned image
+   now carries a hash, and the boot ROM refuses to start one whose flash is corrupted;
+   `docs/development.md` says so.
+2. **Gates:** KEYS and CRYPTO on the FAIL grades only (a mismatch repeating at the same
+   address; a hash mismatch), never on a WARN. The FAIL texts say "until reset" and what to do:
+   power-cycle for `ram`, reflash for `image`.
+3. **The reserve** stays at 96 KB (`HEALTH_HEAP_CLEAR`).
+4. **SCRATCH_X is excluded**, as the linker's reserved core 1 stack, with a build-time
+   assertion that the in-place range doesn't reach it.
+5. **The 6 ms target** for `sd-check`'s steps and the card's opening are accepted as a
+   documented exception, like `crypto-ssh`'s 60 ms steps. The SKIP texts say how to run it.
+6. **Registry:** 25 of 32 is fine.
 
 ## 10. Phases
 
@@ -1956,15 +1976,15 @@ the hash, and `sd check`'s 7 KB plus its 4 to 16 KB window and the card's 7.5 KB
    the changes); as built: §9.6.
 5. **Full tier:** a RAM march test over free heap and SCRATCH_Y in steps, the running-image
    hash, and `sd check` as a check. Design: §9.7 (the hash is the image's own HASH_VALUE, with
-   every build hashed; `ram` and `image` hold KEYS and CRYPTO, proposed; `sd check` runs only
-   on a card unmounted by hand).
+   every build hashed; `ram` and `image` hold KEYS and CRYPTO on their FAILs; `sd check` runs
+   only on a card unmounted by hand).
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries.
 
 ## 11. Left open for later phases
 
 - **Image hash (phase 5):** either a post-build step that hashes the image and writes the hash
   into a known section, or the signature block of a signed build (only signed builds would
-  have one). *Proposed, for review (§9.7):* the HASH_VALUE item of the image's own block, the
+  have one). *Decided (Reviewer and the user, on #262; §9.7):* the HASH_VALUE item of the image's own block, the
   hash the boot ROM checks at every reset, with `pico_hash_binary` called on every build so
   that unsigned builds carry one too. The check recomputes it over the load map's ranges read
   through the uncached flash alias, and compares it with a copy taken at boot. A post-build
