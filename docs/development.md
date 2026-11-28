@@ -347,8 +347,9 @@ replies and errors), `terminal` (key sequences and text for display), `words` (t
 tokenizer: a typed line split into words, quotes removed in place), `fsck` (the card
 checker, on a sparse disk image: `tests/fuzz/fsck_image.h`; each input is checked with two
 window sizes, which must agree), `fsck_exfat` (a card's exFAT boot region, directory entries
-and up-case table, as the checker's exFAT parts read them) and `gz` (what `gunzip` and `zcat`
-read: each input is decoded in one piece and in pieces, which must agree).
+and up-case table, as the checker's exFAT parts read them), `sums` (a checksum list for
+`sha256sum -c`, split into lines and each line parsed) and `gz` (what `gunzip` and `zcat` read:
+each input is decoded in one piece and in pieces, which must agree).
 
 ```sh
 just fuzz nts_ntp 300        # five minutes; needs clang

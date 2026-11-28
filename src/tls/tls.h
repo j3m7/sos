@@ -43,6 +43,12 @@ typedef struct {
     char cert_subject[64];      // its common name ("letsencrypt.org")
     char cert_issuer[128];      // the issuer's name, as wolfSSL writes it ("/C=US/O=.../CN=R11"),
                                 // cut at 127 characters (a long name may end mid-component)
+    // The handshake failed because a certificate in the server's chain isn't signed by any
+    // trusted root (ASN_NO_SIGNER_E): untrusted is set, and untrusted_issuer names the issuer
+    // of the first such certificate (the highest in the chain), as cert_issuer is written, or
+    // is empty if it couldn't be read. That's the root to add (`tls roots approve`).
+    bool untrusted;
+    char untrusted_issuer[128];
 } tls_stats_t;
 
 typedef struct tls_conn tls_conn_t;

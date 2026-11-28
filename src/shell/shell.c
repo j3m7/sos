@@ -58,8 +58,10 @@
 #include "files/files.h"
 #include "files/gzip.h"
 #include "files/sdcard.h"
+#include "files/sums.h"
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
+#include "net/fetch.h"
 #include "net/http.h"
 #include "net/ping.h"
 #include "net/wifi.h"
@@ -300,6 +302,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
     shell_printf(sh, "lua ps | lua stop the running script / stop it\n");
     shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
+    shell_printf(sh, "fetch [-f] <url> [<file>]  download to a file (Ctrl-C stops)\n");
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
@@ -2621,6 +2624,7 @@ static const shell_cmd_t commands[] = {
     {"more", NULL, view_command, NULL, SHELL_PATH},
     {"man", man_command, NULL, SHELL_VALUES_OF(man_topics), 0},
     {"http", http_command, NULL, http_words, 0},
+    {"fetch", NULL, fetch_command, NULL, SHELL_PATH},
     {"passwd", run_passwd, NULL, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, NULL, SHELL_ADMIN},
     {"logout", run_logout, NULL, NULL, 0},
@@ -2636,8 +2640,8 @@ static const shell_cmd_t commands[] = {
 #undef W
 #undef END
 
-static const shell_cmd_t *const command_tables[] = {commands, files_commands, gzip_commands,
-                                                      NULL};
+static const shell_cmd_t *const command_tables[] = {commands, files_commands, sums_commands,
+                                                      gzip_commands, NULL};
 
 // Debug builds, once at startup: every command has one handler, and those that take paths take
 // words (shell.h). The host tests check files_commands; this checks commands[] too.

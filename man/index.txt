@@ -6,8 +6,8 @@ Messages: who wall chat
 Configuration: config glitch bootkey rootsecret passwd setup hostname key
 Wi-Fi: wifi ping
 Time and TLS: time nts tls
-HTTPS: http
-Files and SD card: ls cd pwd cat cp mv rm mkdir echo gunzip zcat sd
+HTTPS: http fetch
+Files and SD card: ls cd pwd cat cp mv rm mkdir echo sha256sum sha1sum sha512sum gunzip zcat sd
 Editor: edit
 Pager and pipes: more grep head tail tee wc
 Manual pages: man

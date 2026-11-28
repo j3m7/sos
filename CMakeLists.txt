@@ -241,6 +241,7 @@ set(SOS_SOURCES
     src/net/wifi.c
     src/net/wifi_pick.c
     src/net/wifi_names.c
+    src/net/fetch.c
     src/net/http.c
     src/net/http_msg.c
     src/net/ping.c
@@ -260,6 +261,8 @@ set(SOS_SOURCES
     src/files/gz.c
     src/files/gzip.c
     src/files/path.c
+    src/files/sums.c
+    src/files/sums_parse.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c

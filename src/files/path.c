@@ -3,6 +3,7 @@
 
 #include "files/path.h"
 
+#include <stdint.h>
 #include <string.h>
 
 bool path_resolve(const char *cwd, const char *path, char *out, size_t n) {
@@ -109,4 +110,45 @@ bool path_join(const char *dir, const char *name, char *out, size_t n) {
     out[dlen] = '/';
     memcpy(out + dlen + 1, name, nlen + 1);
     return true;
+}
+
+const char *path_name_check(const char *name) {
+    size_t len = strlen(name);
+    if (len == 0)
+        return "empty name";
+    if (!strcmp(name, ".") || !strcmp(name, ".."))
+        return "not a file name";
+    if (name[len - 1] == ' ' || name[len - 1] == '.')
+        return "ends in a space or a dot";
+    size_t units = 0;                           // UTF-16 code units, as FatFs counts
+    for (size_t i = 0; i < len;) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x20 || c == 0x7f)
+            return "has control characters";
+        if (c == '/' || c == '\\')
+            return "has a / or \\";
+        if (strchr("\"*:<>?|", c))
+            return "has a character FAT doesn't allow (\"*:<>?|)";
+        size_t n = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3
+                 : (c & 0xf8) == 0xf0 ? 4 : 0;
+        if (n == 0 || i + n > len)
+            return "not valid UTF-8";
+        uint32_t cp = n == 1 ? c : n == 2 ? c & 0x1fu : n == 3 ? c & 0x0fu : c & 0x07u;
+        for (size_t k = 1; k < n; k++) {
+            unsigned char cc = (unsigned char)name[i + k];
+            if ((cc & 0xc0) != 0x80)
+                return "not valid UTF-8";
+            cp = (cp << 6) | (cc & 0x3fu);
+        }
+        static const uint32_t min[5] = {0, 0, 0x80, 0x800, 0x10000};
+        if (cp < min[n] || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
+            return "not valid UTF-8";           // overlong, out of range, or a surrogate
+        if (cp >= 0x80 && cp < 0xa0)
+            return "has control characters";    // C1, UTF-8-encoded
+        units += cp >= 0x10000 ? 2 : 1;
+        i += n;
+    }
+    if (units > 255)
+        return "too long";
+    return NULL;
 }

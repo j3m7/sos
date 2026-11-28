@@ -21,6 +21,9 @@ struct http_req {
     http_state_t state;
     char method[16];
     http_url_t url;
+    char url_text[HTTP_URL_MAX + 1];    // url as text (http_url())
+    uint8_t max_redirects, redirects;
+    bool allow_downgrade;
     uint32_t timeout_ms;
     tls_conn_t *tls;
 
@@ -61,6 +64,45 @@ static void refresh_deadline(http_req_t *r) {
     r->deadline_us = time_us_64() + (uint64_t)r->timeout_ms * 1000;
 }
 
+// Build the request for r->url and open its connection: at the start, and for each redirect.
+// Returns NULL, or what's wrong (then nothing is left allocated in r).
+static const char *begin(http_req_t *r, const char *content_type, const char *const *headers,
+                         const void *body, size_t body_len) {
+    const char *err;
+    http_request_t req = {r->method, &r->url, content_type, headers, body_len};
+    // Built straight into the heap buffer, not on the caller's stack, then trimmed to size.
+    r->out = heap_alloc(HEAP_HTTP, HTTP_HEAD_MAX + body_len);
+    if (!r->out)
+        return "out of memory";
+    size_t head_len = http_request_build(&req, r->out, HTTP_HEAD_MAX, &err);
+    if (!head_len) {
+        heap_release(HEAP_HTTP, r->out);
+        r->out = NULL;
+        return err;
+    }
+    if (body_len)
+        memcpy(r->out + head_len, body, body_len);
+    r->out_len = head_len + body_len;
+    r->out_sent = 0;
+    char *trimmed = heap_realloc(HEAP_HTTP, r->out, r->out_len);
+    if (trimmed)
+        r->out = trimmed;
+
+    http_resp_init(&r->resp, !strcmp(r->method, "HEAD"));
+    r->rx_pos = r->rx_len = 0;
+    refresh_deadline(r);
+    r->state = HTTP_CONNECTING;
+    // No ALPN: HTTP/1.1 is the default without it, and tls/ would refuse a server that
+    // doesn't do ALPN at all.
+    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
+    if (!r->tls) {
+        heap_release(HEAP_HTTP, r->out);
+        r->out = NULL;
+        return "out of memory";
+    }
+    return NULL;
+}
+
 http_req_t *http_start(const http_opts_t *o, const char **err) {
     *err = NULL;
     if (o->body_len > HTTP_BODY_MAX) {
@@ -82,39 +124,23 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
         return NULL;
     }
     snprintf(r->method, sizeof(r->method), "%s", o->method ? o->method : "");
-    http_request_t req = {o->method, &r->url, o->content_type, o->headers, o->body_len};
-    // Built straight into the heap buffer, not on the caller's stack, then trimmed to size.
-    r->out = heap_alloc(HEAP_HTTP, HTTP_HEAD_MAX + o->body_len);
-    if (!r->out) {
-        heap_release(HEAP_HTTP, r);
-        *err = "out of memory";
-        return NULL;
+    if (o->max_redirects) {
+        if ((strcmp(r->method, "GET") && strcmp(r->method, "HEAD")) || o->body_len ||
+            o->content_type || (o->headers && *o->headers)) {
+            heap_release(HEAP_HTTP, r);
+            *err = "redirects are followed only for GET and HEAD without extra headers";
+            return NULL;
+        }
+        r->max_redirects = o->max_redirects < HTTP_REDIRECTS_MAX ? o->max_redirects
+                                                                 : HTTP_REDIRECTS_MAX;
+        r->allow_downgrade = o->allow_downgrade;
     }
-    size_t head_len = http_request_build(&req, r->out, HTTP_HEAD_MAX, err);
-    if (!head_len) {
-        heap_release(HEAP_HTTP, r->out);
-        heap_release(HEAP_HTTP, r);
-        return NULL;
-    }
-    if (o->body_len)
-        memcpy(r->out + head_len, o->body, o->body_len);
-    r->out_len = head_len + o->body_len;
-    char *trimmed = heap_realloc(HEAP_HTTP, r->out, r->out_len);
-    if (trimmed)
-        r->out = trimmed;
-
-    http_resp_init(&r->resp, !strcmp(r->method, "HEAD"));
+    http_url_format(&r->url, r->url_text, sizeof(r->url_text));
     r->timeout_ms = o->timeout_ms ? o->timeout_ms : HTTP_DEFAULT_TIMEOUT;
     r->start_us = time_us_64();
-    refresh_deadline(r);
-    r->state = HTTP_CONNECTING;
-    // No ALPN: HTTP/1.1 is the default without it, and tls/ would refuse a server that
-    // doesn't do ALPN at all.
-    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
-    if (!r->tls) {
-        heap_release(HEAP_HTTP, r->out);
+    *err = begin(r, o->content_type, o->headers, o->body, o->body_len);
+    if (*err) {
         heap_release(HEAP_HTTP, r);
-        *err = "out of memory";
         return NULL;
     }
     return r;
@@ -166,6 +192,34 @@ static void send_request(http_req_t *r) {
     }
 }
 
+// The headers of a redirect are in: follow it (a new request on a new connection) or fail.
+// The body of the 3xx isn't read.
+static void follow_redirect(http_req_t *r) {
+    if (r->redirects >= r->max_redirects) {
+        fail(r, "too many redirects (more than %u)", (unsigned)r->max_redirects);
+        return;
+    }
+    // The Location is read into rx, whose bytes (the 3xx's body) are dropped anyway.
+    const char *loc = http_resp_header(&r->resp, "location", (char *)r->rx, sizeof(r->rx));
+    if (!loc) {
+        fail(r, "redirect refused: Location too long");
+        return;
+    }
+    const char *why = http_redirect_target(&r->url, loc, r->allow_downgrade, r->url_text,
+                                           sizeof(r->url_text));
+    if (why) {
+        fail(r, "redirect refused: %s", why);
+        return;
+    }
+    log_msg(SOS_LOG_DAEMON | SOS_LOG_INFO, "http: %d redirect to %s", r->resp.status, r->url.host);
+    tls_close(r->tls);
+    r->tls = NULL;
+    r->redirects++;
+    why = begin(r, NULL, NULL, NULL, 0);
+    if (why)
+        fail(r, "%s", why);
+}
+
 static void read_headers(http_req_t *r) {
     for (int i = 0; i < 8 && r->state == HTTP_WAITING; i++) {
         if (fill(r) <= 0)
@@ -177,6 +231,11 @@ static void read_headers(http_req_t *r) {
         if (r->resp.state == HTTP_P_ERROR) {
             fail(r, "bad response: %s", r->resp.error);
         } else if (http_resp_headers_done(&r->resp)) {
+            if (r->max_redirects && http_status_redirects(r->resp.status) &&
+                http_resp_has_header(&r->resp, "location")) {
+                follow_redirect(r);
+                return;
+            }
             r->headers_us = time_us_64();
             refresh_deadline(r);
             if (r->resp.state == HTTP_P_DONE)
@@ -283,6 +342,14 @@ uint32_t http_headers_ms(const http_req_t *r) {
 uint32_t http_elapsed_ms(const http_req_t *r) {
     uint64_t end = r->end_us ? r->end_us : time_us_64();
     return (uint32_t)((end - r->start_us) / 1000);
+}
+
+unsigned http_redirects(const http_req_t *r) {
+    return r->redirects;
+}
+
+const char *http_url(const http_req_t *r) {
+    return r->url_text;
 }
 
 void http_close(http_req_t *r) {

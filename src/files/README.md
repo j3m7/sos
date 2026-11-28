@@ -127,6 +127,28 @@ its own working directory (`shell_t.cwd`).
   (`sh->io->admin`). SFTP and Lua pass no shell (`NULL`), so they're refused there. The log
   writer itself writes through FatFs directly.
 
+## `sums.c`: `sha1sum`, `sha256sum`, `sha512sum`
+
+[Design](../../docs/design/archives.md) §4. Its own command table (`sums_commands`, after
+`files_commands` in `shell.c`); one `runv` handler for the three, picking the algorithm by
+`argv[0]`. A shell job like `cat`: 4 KB read and hashed (wolfCrypt's `wc_Hash*`, on core 0) per
+read, for `STEP_US` per pass, one file at a time, holding files (`files_hold()`). The job (two
+`FIL`s, the 4 KB read buffer, the list's line buffer, the hash state: about 10 KB) comes from
+`HEAP_FILES`. Each output line waits for `shell_write_space()` (up to 1 KB). `-c` reads the list
+a block at a time into `sums_parse.c`'s line splitter (not `f_gets()`, whose UTF-8 build fills
+fewer bytes than asked), resolves each name against the list's directory, and counts each
+result. `tests/test_sums.c` runs it from typed lines over a card in memory, with the host's
+wolfCrypt.
+
+## `sums_parse.c`: checksum lists (pure C, host tested and fuzzed)
+
+How a name is shown (GNU's `\` escape for `\n` and `\\`; other control characters as `?`), a
+list split into lines of up to 4 KB (`line <n>: too long` beyond), each line parsed (GNU text and
+binary, the escape form, BSD with the command's own tag, hex of either case and the right
+length), and `sums_name_safe()`: no absolute name, no `..` component (split at `/` and `\` as
+FatFs splits, and dots-and-spaces components FatFs may read as `..`), no `:` or control
+character. `tests/test_sums_parse.c`; fuzz target `sums`.
+
 ## `gzip.c`, `gz.c`, `bigjob.c`: gunzip and zcat
 
 [Design](../../docs/design/archives.md) §5. zlib is the submodule `lib/zlib`, built from the list
@@ -160,6 +182,18 @@ includes, no SOS warnings).
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
+- **`path_name_check()`** checks one name that came from outside (the name a download's URL
+  suggests; later the names in an archive) before anything is created under it: not empty,
+  `.` or `..`, no `/`, `\`, control characters (C1 too) or `"*:<>?|`, not ending in a space
+  or a dot (FatFs would drop them), valid UTF-8, at most 255 UTF-16 units.
+
+## `bigjob.c`: one archive job at a time (pure C, host tested)
+
+`fetch`, and later `gunzip`, `zcat`, `gzip` and `tar` ([archives.md](../../docs/design/archives.md)
+§5.2), each hold tens of KB of heap while they run, so they take turns across all shells:
+`bigjob_try_begin(name)` admits one (NULL) or names the one running, which the command reports
+with `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`); `bigjob_end()` when
+the job ends, however it ends.
 
 ## `fsck.c`: checking the card (pure C, host tested)
 

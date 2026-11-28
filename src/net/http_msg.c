@@ -43,6 +43,27 @@ static bool is_tchar(char c) {
            (c && strchr("!#$%&'*+-.^_`|~", c));
 }
 
+// Bounded output into a buffer, always NUL-terminated; overflow is sticky.
+typedef struct {
+    char *buf;
+    size_t size, len;
+    bool overflow;
+} out_t;
+
+static void put(out_t *o, const char *s, size_t n) {
+    if (o->overflow || o->len + n >= o->size) {
+        o->overflow = true;
+        return;
+    }
+    memcpy(o->buf + o->len, s, n);
+    o->len += n;
+    o->buf[o->len] = '\0';
+}
+
+static void puts_(out_t *o, const char *s) {
+    put(o, s, strlen(s));
+}
+
 // --- URLs ----------------------------------------------------------------------------------------
 
 const char *http_url_parse(const char *url, http_url_t *out) {
@@ -110,27 +131,179 @@ const char *http_url_parse(const char *url, http_url_t *out) {
     return NULL;
 }
 
-// --- requests ------------------------------------------------------------------------------------
-
-typedef struct {
-    char *buf;
-    size_t size, len;
-    bool overflow;
-} out_t;
-
-static void put(out_t *o, const char *s, size_t n) {
-    if (o->overflow || o->len + n >= o->size) {
-        o->overflow = true;
-        return;
+size_t http_url_format(const http_url_t *u, char *out, size_t size) {
+    int n = u->port == 443 ? snprintf(out, size, "https://%s%s", u->host, u->path)
+                           : snprintf(out, size, "https://%s:%u%s", u->host, (unsigned)u->port,
+                                      u->path);
+    if (n < 0 || (size_t)n >= size) {
+        if (size)
+            out[0] = '\0';
+        return 0;
     }
-    memcpy(o->buf + o->len, s, n);
-    o->len += n;
-    o->buf[o->len] = '\0';
+    return (size_t)n;
 }
 
-static void puts_(out_t *o, const char *s) {
-    put(o, s, strlen(s));
+// --- redirects -----------------------------------------------------------------------------------
+
+bool http_status_redirects(int status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
+
+static bool is_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// Length of a URI scheme at the start of s, followed by ':' ("https:" gives 5), or 0 if s
+// doesn't start with one (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":").
+static size_t scheme_len(const char *s, size_t n) {
+    if (n == 0 || !is_alpha(s[0]))
+        return 0;
+    for (size_t i = 1; i < n; i++) {
+        char c = s[i];
+        if (c == ':')
+            return i;
+        if (!is_alpha(c) && !is_digit(c) && c != '+' && c != '-' && c != '.')
+            return 0;
+    }
+    return 0;
+}
+
+// Remove "." and ".." segments (RFC 3986 §5.2.4) from the path s[0..n), which starts with '/',
+// in place. Returns the new length (at least 1: "/"). The output never runs ahead of the input,
+// so one buffer does.
+static size_t remove_dots(char *s, size_t n) {
+    size_t r = 0, w = 0;
+    while (r < n) {                             // s[r] == '/'
+        size_t start = r + 1, end = start;
+        while (end < n && s[end] != '/')
+            end++;
+        size_t len = end - start;
+        bool last = end >= n;
+        if (len == 1 && s[start] == '.') {
+            if (last)
+                s[w++] = '/';
+        } else if (len == 2 && s[start] == '.' && s[start + 1] == '.') {
+            while (w > 0 && s[w - 1] != '/')
+                w--;
+            if (w > 0)
+                w--;                            // the '/' before the dropped segment
+            if (last)
+                s[w++] = '/';
+        } else {
+            s[w++] = '/';
+            memmove(s + w, s + start, len);
+            w += len;
+        }
+        r = end;
+    }
+    if (w == 0)
+        s[w++] = '/';
+    return w;
+}
+
+const char *http_url_resolve(const http_url_t *base, const char *location, char *out,
+                             size_t size) {
+    if (size)
+        out[0] = '\0';
+    size_t n = strcspn(location, "#");          // a fragment isn't sent
+    if (n == 0 && location[0] != '#')
+        return "empty Location";
+    if (n == 0) {                               // a fragment alone: the same resource
+        if (size > HTTP_URL_MAX + 1)
+            size = HTTP_URL_MAX + 1;
+        return http_url_format(base, out, size) ? NULL : "Location too long";
+    }
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)location[i];
+        if (c <= ' ' || c >= 0x7f)
+            return "Location has spaces or other characters that must be percent-encoded";
+    }
+    size_t limit = size < HTTP_URL_MAX + 1 ? size : HTTP_URL_MAX + 1;
+    out_t o = {out, limit, 0, limit == 0};
+
+    if (scheme_len(location, n)) {
+        put(&o, location, n);                   // absolute: as given
+    } else if (n >= 2 && location[0] == '/' && location[1] == '/') {
+        puts_(&o, "https:");                    // same scheme, another host
+        put(&o, location, n);
+    } else {
+        // Same origin. The path and the query are joined in out, then the dots removed.
+        char port[8] = "";
+        if (base->port != 443)
+            snprintf(port, sizeof(port), ":%u", (unsigned)base->port);
+        puts_(&o, "https://");
+        puts_(&o, base->host);
+        puts_(&o, port);
+        size_t path_at = o.len;
+        size_t bpath = strcspn(base->path, "?");
+        if (location[0] == '/') {
+            put(&o, location, n);
+        } else if (location[0] == '?') {
+            put(&o, base->path, bpath);
+            put(&o, location, n);
+        } else {
+            // A relative path: the base's directory (up to its last '/'), then the Location.
+            size_t dir = bpath;
+            while (dir > 0 && base->path[dir - 1] != '/')
+                dir--;
+            put(&o, base->path, dir);
+            put(&o, location, n);
+        }
+        if (!o.overflow && location[0] != '?') {
+            size_t plen = strcspn(out + path_at, "?");     // the path, without the query
+            size_t new_len = remove_dots(out + path_at, plen);
+            memmove(out + path_at + new_len, out + path_at + plen, o.len - path_at - plen + 1);
+            o.len -= plen - new_len;
+        }
+    }
+    if (o.overflow)
+        return "Location too long";
+    return NULL;
+}
+
+const char *http_redirect_target(http_url_t *url, const char *location, bool allow_downgrade,
+                                 char *text, size_t size) {
+    const char *err = http_url_resolve(url, location, text, size);
+    if (err)
+        return err;
+    size_t len = strlen(text);
+    if (len >= 7 && ieq(text, 7, "http://"))
+        return allow_downgrade ? "plain http isn't supported yet"
+                               : "from https to plain http (refused without -k)";
+    if (len < 8 || !ieq(text, 8, "https://"))
+        return "not an https:// URL";
+    return http_url_parse(text, url);
+}
+
+const char *http_url_name(const char *path, char *out, size_t size) {
+    size_t end = strcspn(path, "?");
+    size_t start = end;
+    while (start > 0 && path[start - 1] != '/')
+        start--;
+    if (start == end)
+        return "the URL names no file";
+    size_t w = 0;
+    for (size_t i = start; i < end; i++) {
+        char c = path[i];
+        if (c == '%') {
+            int hi = i + 2 < end ? hex_value(path[i + 1]) : -1;
+            int lo = hi >= 0 ? hex_value(path[i + 2]) : -1;
+            if (lo < 0)
+                return "bad percent-encoding in the URL";
+            c = (char)(hi * 16 + lo);
+            if (c == '\0')
+                return "the URL's name holds a NUL";
+            i += 2;
+        }
+        if (w + 1 >= size)
+            return "the URL's name is too long";
+        out[w++] = c;
+    }
+    out[w] = '\0';
+    return NULL;
+}
+
+// --- requests ------------------------------------------------------------------------------------
 
 // Header names the client sets itself, or that would change how the message is framed.
 static bool reserved_header(const char *name, size_t n) {
@@ -551,21 +724,33 @@ bool http_resp_eof(http_resp_t *p) {
     return false;
 }
 
-const char *http_resp_header(const http_resp_t *p, const char *name, char *buf, size_t size) {
+// The value of header name in the store, or NULL.
+static const char *find_header(const http_resp_t *p, const char *name, size_t *v_len) {
     size_t name_len = strlen(name);
     const char *s = p->hdr, *end = p->hdr + p->hdr_len;
     while (s < end) {
         const char *nl = memchr(s, '\n', (size_t)(end - s));
         const char *colon = memchr(s, ':', (size_t)(nl - s));
         if (colon && ieq(s, (size_t)(colon - s), name) && (size_t)(colon - s) == name_len) {
-            size_t v_len = (size_t)(nl - colon - 1);
-            if (v_len + 1 > size)
-                return NULL;
-            memcpy(buf, colon + 1, v_len);
-            buf[v_len] = '\0';
-            return buf;
+            *v_len = (size_t)(nl - colon - 1);
+            return colon + 1;
         }
         s = nl + 1;
     }
     return NULL;
+}
+
+const char *http_resp_header(const http_resp_t *p, const char *name, char *buf, size_t size) {
+    size_t v_len;
+    const char *v = find_header(p, name, &v_len);
+    if (!v || v_len + 1 > size)
+        return NULL;
+    memcpy(buf, v, v_len);
+    buf[v_len] = '\0';
+    return buf;
+}
+
+bool http_resp_has_header(const http_resp_t *p, const char *name) {
+    size_t v_len;
+    return find_header(p, name, &v_len) != NULL;
 }

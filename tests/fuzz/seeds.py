@@ -39,6 +39,10 @@ def http():
         flags = 1 if name == "head" else 2
         write("http", name, bytes([flags, 64, 7]) + r)
     write("http", "url", b"https://user@example.org:8443/a/b?c=d#e")
+    # Redirect targets (fetch): relative with dots, scheme-relative, and a download's name.
+    write("http", "location", b"../x/./pkg%201.2.tar.gz?q=/a/../b#frag")
+    write("http", "location-host", b"//cdn.example.org:444/d/SHA256SUMS")
+    write("http", "name", b"https://example.org/dl/caf%C3%A9%2Etar.gz?raw=1")
 
 
 # --- nts_ke: the server's records --------------------------------------------------------------
@@ -573,6 +577,24 @@ def gz():
     write("gz", "bomb", bytes([255, 255]) + gz_member(bytes(200000), 9))
 
 
+# --- sums: [block size / 37, 0 for one buffer] then a checksum list --------------------------
+
+def sums():
+    h256 = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    h1 = b"da39a3ee5e6b4b0d3255bfef95601890afd80709"
+    h512 = (b"cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+            b"47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")
+    write("sums", "gnu", bytes([1]) + b"# SHA256SUMS\n" + h256 + b"  pkg-1.2.tar.gz\n" + h256
+          + b" *bin/tool\n\n" + h256.upper() + b"  dos\r\n")
+    write("sums", "bsd", bytes([0]) + b"SHA256 (pkg.tar.gz) = " + h256 + b"\nSHA1 (x) = " + h1
+          + b"\nSHA512 (odd) = name) = " + h512 + b"\n")
+    write("sums", "escaped", bytes([2]) + b"\\" + h256 + b"  a\\nb\\\\c\n\\SHA256 (n\\n) = "
+          + h256 + b"\n\\" + h256 + b"  bad\\t\n")
+    write("sums", "unsafe", bytes([3]) + h256 + b"  ../up\n" + h256 + b"  /abs\n" + h256
+          + b"  a\\..\\b\n" + h256 + b"  0:/x\n" + h256 + b"  .. /y")
+    write("sums", "long", bytes([255]) + b"x" * 4097 + b"\n" + h1 + b"  ok\n" + b"y" * 5000)
+
+
 for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat,
-          tzrule, gz):
+          tzrule, sums, gz):
     f()

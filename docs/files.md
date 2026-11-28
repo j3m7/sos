@@ -11,7 +11,9 @@ working directory:
 | `cat <file>` | print a file |
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
+| `fetch [-f] <url> [<file>]` | download a file over HTTPS, with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
 | `echo <text>` | print the text; `> file` / `>> file` after any command (the shell's redirect) writes / appends its output to a file |
+| `sha256sum <file>...`, `sha256sum -c <list>` | print files' SHA-256, or check files against a checksum list (also `sha1sum`, `sha512sum`; [below](#checksums)) |
 | `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
@@ -37,6 +39,28 @@ working directory:
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
+
+## Checksums
+
+`sha1sum`, `sha256sum` and `sha512sum` print a file's hash in GNU's format (`<hex>  <name>`),
+and with `-c` check the files a published list names (full rules in `man sha256sum`; design:
+[docs/design/archives.md](design/archives.md) §4):
+
+```
+sha256sum pkg-1.2.tar.gz
+sha256sum -c /apps/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+- `-c` reads GNU lines (`<hex>  <name>`, `<hex> *<name>`, the `\` escape) and BSD lines
+  (`SHA256 (<name>) = <hex>`, for the command's own algorithm). It prints `<name>: OK`, `FAILED`,
+  `missing` or the error per file, then the counts (`2 OK, 1 FAILED`). The shell has no exit
+  status, so that last line is the result.
+- Names in a list are relative to the **list's** directory. Absolute names and names with `..`
+  are refused (`unsafe path`): a list from a server can't make the board read outside its
+  directory.
+- A job like `cat`: one file at a time, 4 KB per step, Ctrl-C stops it. Hashing is wolfCrypt's,
+  in software on core 0.
 
 ## gzip files
 

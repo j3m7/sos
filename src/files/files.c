@@ -563,4 +563,6 @@ void files_help(shell_t *sh) {
     shell_printf(sh, "rm <path>         delete a file or an empty directory\n");
     shell_printf(sh, "mkdir <dir>       create a directory\n");
     shell_printf(sh, "echo <text>       print the text (> file, >> file: into a file)\n");
+    shell_printf(sh, "sha256sum <file>  print a file's SHA-256 (also sha1sum, sha512sum)\n");
+    shell_printf(sh, "sha256sum -c <list> check files against a list of checksums\n");
 }

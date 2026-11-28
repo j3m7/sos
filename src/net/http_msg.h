@@ -20,6 +20,10 @@
 #define HTTP_PATH_MAX     511       // path and query
 #define HTTP_HEADERS_MAX  4096      // response status line and headers, together
 #define HTTP_REASON_MAX   63
+// The longest URL http_url_parse() can take apart, fragment aside: "https://", the host, a
+// port, the path and query. A redirect's target longer than this is refused.
+#define HTTP_URL_MAX      (8 + HTTP_HOST_MAX + 6 + HTTP_PATH_MAX)
+#define HTTP_REDIRECTS_MAX 5        // hops a client follows at most (http_opts_t)
 
 // --- URLs ----------------------------------------------------------------------------------------
 
@@ -33,6 +37,37 @@ typedef struct {
 // literals. The path must already be percent-encoded: printable ASCII without spaces.
 // Returns NULL, or what's wrong.
 const char *http_url_parse(const char *url, http_url_t *out);
+
+// Write a parsed URL back as text: "https://host[:port]/path?query" (the port only when it isn't
+// 443). size HTTP_URL_MAX + 1 always holds it. Returns the length, or 0 if it didn't fit.
+size_t http_url_format(const http_url_t *u, char *out, size_t size);
+
+// --- redirects -----------------------------------------------------------------------------------
+
+// The statuses a client follows: 301, 302, 303, 307, 308 (with a Location header).
+bool http_status_redirects(int status);
+
+// Resolve a Location header's value against the URL of the request that got it (RFC 3986 §5.2):
+// absolute ("https://h/p"), without the scheme ("//h/p"), an absolute path ("/p"), a query ("?q")
+// or a relative path ("../p", "p"), with "." and ".." segments removed. A fragment is dropped.
+// The result goes to out as text. Returns NULL, or what's wrong: an empty Location, characters
+// that must be percent-encoded (spaces, controls, non-ASCII), or a result over HTTP_URL_MAX or
+// not fitting in out. The scheme isn't checked here: see http_redirect_target().
+const char *http_url_resolve(const http_url_t *base, const char *location, char *out, size_t size);
+
+// The next hop of a redirect: `url` holds the request's URL and gets the target's. Resolves
+// `location` (http_url_resolve(), text in `text`), refuses a target that isn't https (from
+// https to http only with allow_downgrade, and plain http isn't supported yet, so that is
+// refused too, with its own message), then parses it (http_url_parse(): no user:password@, no
+// IPv6, the limits). Returns NULL, or what's wrong; on failure *url is unspecified.
+const char *http_redirect_target(http_url_t *url, const char *location, bool allow_downgrade,
+                                 char *text, size_t size);
+
+// The file name a URL's path suggests: its last segment (before any query), percent-decoded,
+// into out. Returns NULL, or what's wrong: no segment ("https://h/" or ".../dir/"), bad
+// percent-encoding, an encoded NUL, or a name that doesn't fit. The name isn't checked as a
+// file name here (files/path.h: path_name_check()).
+const char *http_url_name(const char *path, char *out, size_t size);
 
 // --- requests ------------------------------------------------------------------------------------
 
@@ -110,5 +145,8 @@ bool http_resp_headers_done(const http_resp_t *p);
 // The value of header name (case-insensitive), or NULL. With repeated headers, the first.
 // Writes into buf, which must hold the value.
 const char *http_resp_header(const http_resp_t *p, const char *name, char *buf, size_t size);
+
+// True if the response has header name (case-insensitive), however long its value.
+bool http_resp_has_header(const http_resp_t *p, const char *name);
 
 #endif
