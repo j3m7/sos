@@ -201,7 +201,7 @@ static void ram_second(ram_state_t *st) {
             (unsigned long)st->first.read, memtest_element_name(st->first.element),
             (unsigned long)st->first.background, dma,
             // Kept short: the whole line must fit LOG_LINE_MAX (found cut on dev-1).
-            repeated ? "again in a second test: keys, seals off until reset; power-cycle"
+            repeated ? "repeats: keys, seals off until reset; power-cycle"
                      : "not in a second test");
     ram_last.seen = true;
     ram_last.addr = st->first_addr;
@@ -544,10 +544,13 @@ void fullcheck_board_dump(health_print_fn print, void *arg) {
         dump(print, arg, "ram: no mismatch since boot; SCRATCH_Y %s",
              scratch_in_use() ? scratch_in_use() : "free");
     static const char *const kinds[] = {"ok", "no hash", "not understood", "no blocks"};
-    dump(print, arg, "image at boot: %s, block at 0x%08lx, %s, hash %u words %08lx%08lx..., "
+    char head[17];                      // byte order, as `picotool info` and the PASS text
+    for (unsigned i = 0; i < 8; i++)
+        snprintf(head + 2 * i, 3, "%02x",
+                 (unsigned)((boot_hash.value[i / 4] >> (8 * (i % 4))) & 0xffu));
+    dump(print, arg, "image at boot: %s, block at 0x%08lx, %s, hash %u words %s..., "
          "%u block words hashed", kinds[boot_kind], (unsigned long)(XIP_BASE + boot_hash.block),
-         boot_hash.signed_image ? "signed" : "unsigned", boot_hash.value_words,
-         (unsigned long)boot_hash.value[0], (unsigned long)boot_hash.value[1],
+         boot_hash.signed_image ? "signed" : "unsigned", boot_hash.value_words, head,
          (unsigned)boot_hash.block_words);
     for (unsigned i = 0; i < boot_hash.loads; i++) {
         const bootkey_load_t *l = &boot_hash.load[i];
