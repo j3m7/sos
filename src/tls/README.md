@@ -98,3 +98,9 @@ Each connection's context loads two sets of roots:
   certificates, into DER for wolfSSL. Comment text between PEM blocks is allowed. Any other
   PEM block (a private key, say), a malformed block, or more than 32 certificates makes the
   file invalid.
+
+## Commands
+
+`tls_cmd.c` holds the `tls` command (`tls_command()`, and its Tab words), which hands
+`tls roots` to `certstore_command()`. `shell/shell.c` lists it in its command table
+(docs/design/build-features.md §4.1).

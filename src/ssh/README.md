@@ -113,3 +113,9 @@ can't overwrite a file, and reports failed removes and renames as successes.
   `/certs`.
 - **Open files:** files a transfer has open count as in use (`files_hold()`/`files_release()`),
   like a running `cp`. A client that disconnects mid-transfer releases them.
+
+## Commands
+
+`ssh_cmd.c` holds the `key` and `ssh` commands (`key_command()`, `ssh_command()`, and their Tab
+words). `setup` adds a key with `key_add_line()`. `shell/shell.c` lists them in its command table
+(docs/design/build-features.md §4.1).

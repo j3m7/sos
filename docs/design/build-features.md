@@ -132,7 +132,7 @@ without the network stack, the SSH server and the TLS client cannot be reached o
    `#if SOS_HAVE_...` around the optional steps, not a module registry that hides the order.
 8. **Commands belong to their features; their order belongs to the shell.** Each feature
    holds its commands' code and word lists. The main command table stays one ordered list,
-   in `shell/commands.c`, with each feature's entries fenced by `#if`, because Tab offers
+   `commands[]` in `shell/shell.c`, with each feature's entries fenced by `#if`, because Tab offers
    commands in table order and that order is chosen, not accidental (§4.1). The tables that
    already exist (`files_commands[]`, `sums_commands[]`, `gzip_commands[]`) stay as they are.
 9. **The plain Pico 2 is a target** (decided by the user, 2026-11-27), alongside the Pico 2 W.
@@ -198,9 +198,12 @@ change:
   (`net/wifi_cmd.c`, `time/time_cmd.c`, `tls/tls_cmd.c`, `ssh/ssh_cmd.c`...), exported through
   the subsystem's header (`cmd_wifi()`, `wifi_words[]`). Worth doing even without features: it
   shrinks `shell.c` and puts a command next to the code it drives.
-- The `commands[]` table moves, unchanged, to `shell/commands.c`: same entries, same order.
-  Tab completion (`complete.c`) offers commands in table order, so splitting it into one table
-  per feature would reorder what Tab lists. Later phases fence entries in place:
+- The `commands[]` table stays where it is, at the end of `shell/shell.c`: same entries, same
+  order, now naming the subsystems' handlers. Tab completion (`complete.c`) offers commands in
+  table order, so splitting it into one table per feature would reorder what Tab lists.
+  Its home is `shell.c` for now. Moving it to a file of its own, `shell/commands.c`, was the
+  first plan; it would have meant exporting about forty of the core's own handlers for nothing,
+  so it moves only if a later phase has a reason to. Later phases fence entries in place:
 
   ```c
   static const shell_cmd_t commands[] = {
@@ -233,8 +236,40 @@ change:
 - **Phase 1 is a pure move** (§10): no behaviour change, the table's order the same, `help`'s
   text identical byte for byte, `docs/commands.md` regenerated identical, every command still
   dispatching, and Tab's candidates for an empty line (console and SSH, which differ by
-  `SHELL_ADMIN`) identical before and after, checked by a host test. That makes its review a
-  mechanical check.
+  `SHELL_ADMIN`) identical before and after. That makes its review a mechanical check. (`shell.c`
+  can't be built for the host, so Tab is compared on the board, §4.1.1.)
+
+#### 4.1.1 Phase 1 as built
+
+Moved, as exact line ranges of `shell.c` (a script cut them; nothing retyped):
+
+| New home | What | Exported |
+|---|---|---|
+| `net/wifi_cmd.c` | `wifi` (with `wifi stats`, the SSID question and its Tab, `on_off` words), `net` | `wifi_command()`, `net_command()`, `wifi_words[]`, `wifi_show()` (for `config`), `wifi_ask_ssid()` (for `setup`) |
+| `net/ping.c` | Tab's hosts for `ping` | `ping_hosts` |
+| `time/time_cmd.c` | `time` (`auto`, `cal`, `server`, and `zone`'s values), `nts` | `time_command()`, `nts_command()`, `time_words[]`, `nts_words[]`, `time_nts_servers()` (for `ping`'s Tab) |
+| `tls/tls_cmd.c` | `tls` | `tls_command()`, `tls_words[]` |
+| `ssh/ssh_cmd.c` | `key`, `ssh` | `key_command()`, `ssh_command()`, `key_words[]`, `key_add_line()` (for `setup`) |
+
+The only edits to moved lines: `require_admin(sh)` and `save(sh)` became `shell_require_admin()`
+and `shell_save_settings()` (shell.h already exported them for this), `static` came off what is
+exported, and exported functions got their subsystem's prefix. The two lines of comment that
+introduced `nts` sat above `cmd_tls()`; they moved with `nts`. Still in `shell.c`, for phase 2:
+`setup`'s Wi-Fi and key steps (they call `wifi_ask_ssid()` and `key_add_line()`), `config reset`'s
+owner-gone calls, and `mem`'s lwIP lines.
+
+Checks, before (main 0f2f664) and after:
+
+- The images are the same size: text 1,338,504 bytes, bss 116,768, in both.
+- Their `.rodata` strings are the same apart from the commit hash.
+- Every line removed from `shell.c` is added in a new file, after undoing the edits above; the
+  only other added lines are file headers, includes and the word-list macros.
+- `cmd_help()` is byte for byte the same; the table's entries are in the same order, with the
+  moved handlers' new names.
+- Host tests 95/95, no warnings (firmware or tests), `just tidy` and `just lint` clean.
+- On dev-1: the full image boots, and every command's Tab candidates for an empty line and for
+  each command's words are the same as main's, on the console and over SSH (the PR shows the
+  capture).
 - `setup` asks its Wi-Fi and SSH questions only when those features exist; the steps move to
   their subsystems as functions `setup` calls.
 - `mem` stays in the core but leaves out the lines of features that are off (lwIP's pools,

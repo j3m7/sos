@@ -81,3 +81,10 @@ All times are UTC. Times before the firmware's configure time (`SOS_BUILD_EPOCH`
 The first key exchange can't check certificate dates. `tls/` then loads roots and accepts
 chains whatever their dates (signatures and the host name are still checked), and logs
 `certificate dates not checked (clock not set)`.
+
+## Commands
+
+`time_cmd.c` holds the `time` and `nts` commands (`time_command()`, `nts_command()`, and their
+Tab words, including the NTS servers Tab offers, which `ping` uses too). `time zone` is
+`tzzone_command()`. `shell/shell.c` lists them in its command table (docs/design/build-features.md
+§4.1).

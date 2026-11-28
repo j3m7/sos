@@ -174,21 +174,33 @@ where 0x9B is CSI on 8-bit terminals, and U+0080–U+009F in UTF-8) and invalid 
 
 ## `shell.c`: the commands
 
-`shell_execute()` looks the command up in two tables (`shell_cmd_t`, shell.h): `commands[]`
-here and `files_commands[]` (`files/`), and runs it with its arguments: its words (`runv`) or
-their join (`run`). Each entry also lists
-the words Tab offers after the name. System commands are implemented here: `help`, `config`,
-`wifi`, `net`, `key`, `hostname`, `setup`, `time`, `log`, `dmesg`, `mem`, `uptime`, `reboot`,
-`ssh`, `nts`, `tls`, `logout`/`exit`. Others belong to a subsystem: `sdcard_command()` (`sd`),
-`certstore_command()` (`tls roots`), `lua_command()`, `edit_command()`, `view_command()`
-(`more`), `http_command()`.
+`shell_execute()` looks the command up in the tables `command_tables[]` lists (`shell_cmd_t`,
+shell.h): `commands[]` here, then `files_commands[]`, `sums_commands[]`, `gzip_commands[]` and
+`tar_commands[]` (`files/`), and runs it with its arguments: its words (`runv`) or their join
+(`run`). Each entry also lists the words Tab offers after the name. Tab offers commands in
+table order, so `commands[]` is one list in a chosen order, even for commands whose code is
+elsewhere (docs/design/build-features.md §4.1).
+
+The core's commands are implemented here: `help`, `config`, `hostname`, `setup`, `passwd`,
+`log`, `dmesg`, `logger`, `mem`, `uptime`, `temp`, `power`, `version`, `glitch`, `health`,
+`bootkey`, `rootsecret`, `reboot`, `logout`/`exit`. Others belong to a subsystem, which exports
+the handler and its Tab words: `wifi_command()` and `net_command()` (`net/wifi_cmd.c`),
+`ping_command()`, `time_command()` and `nts_command()` (`time/time_cmd.c`), `tls_command()`
+(`tls/tls_cmd.c`), `key_command()` and `ssh_command()` (`ssh/ssh_cmd.c`), `sdcard_command()`
+(`sd`), `lua_command()`, `edit_command()`, `view_command()` (`more`), `man_command()`,
+`http_command()`, `fetch_command()`, and the chat commands. `config` shows the Wi-Fi settings
+with `wifi_show()`, and `setup` asks for the network with `wifi_ask_ssid()` and adds a key with
+`key_add_line()`.
 
 Commands that change the configuration first call `require_admin()`, which refuses on any
 channel but the console.
 
 ## Adding a command
 
-Add it to `commands[]` and to `help` in `shell.c`, and to `docs/commands.md`. Give it the
+Put its code in the subsystem it drives, exported through that subsystem's header, and add it
+to `commands[]` and to `help` in `shell.c`, and a man page (`docs/commands.md` is generated from
+them). Commands that change the configuration call `shell_require_admin()` and
+`shell_save_settings()`. Give it the
 subcommand words its parser takes, so Tab offers them (`SHELL_ADMIN` on those only the console
 may run), `SHELL_PATH` where it takes paths on the SD card (`SHELL_DIR`: directories; such a
 command takes its words, `runv`, so that a quoted path reaches it whole), and a

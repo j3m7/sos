@@ -12,6 +12,7 @@
 #include "shell/shell.h"
 
 void ping_command(shell_t *sh, char *args);
+extern const shell_values_t ping_hosts;   // what Tab offers after `ping`: NTS servers, the gateway
 
 // A ping without a shell (Lua's sos.ping): the same requests, one a second, nothing printed.
 typedef struct ping_run ping_run_t;
