@@ -16,7 +16,9 @@ last ones change or erase things and are marked.
 
 ## Before you start
 
-- [ ] Ask the Reviewer session for a dev-1 slot, and check nothing else is using the board.
+- [ ] Ask the Reviewer session for a dev-1 slot of about three hours, so it can fit the queue
+  (other PRs' board runs, the #275 drift reading) around it, and check nothing else is using
+  the board.
 - [ ] The board runs current main: `version` on its console names a commit at or after
   `11112a8`. If not, flash main in your slot first.
 - [ ] You know the console password, and your SSH key is one the board trusts.
@@ -80,10 +82,10 @@ All in **[console]**; each also works over SSH.
 
 | # | Type | You should see |
 |---|---|---|
-| 1 | `version` | commit, board serial `F94525FD61D9A1CC`, chip revision A2, how it is secured (secure boot on, dev key) |
+| 1 | `version` | commit, board serial `F94525FD61D9A1CC`, chip revision A2, and how it is secured: secure boot, debug port, root secret, console-only setup (the key hash is `bootkey`'s, section 19) |
 | 2 | `uptime` | time since boot and the last reset's cause |
 | 3 | `uptime history` | the recent resets, each with its cause and how long the board had been up |
-| 4 | `temp` | chip temperature, lowest and highest since boot, and the calibration if one is set |
+| 4 | `temp` | chip temperature, lowest and highest since boot, then either `Calibrated ...` or `Uncalibrated:` |
 | 5 | `power` | supply voltage, and USB power present |
 | 6 | `mem` | heap and stack use, by feature; core 0 stack high-water mark |
 | 7 | `net` | Wi-Fi link state, address, ARP counters |
@@ -100,7 +102,8 @@ Write down any WARN or FAIL with its reason.
 2. `dmesg -f auth`
    You should see: only logins and configuration changes.
 3. `logger review step 4.3`, then `dmesg -f user`
-   You should see: your line, at `notice`, tagged with the console.
+   You should see: `logger (console): review step 4.3` (no level shown: dmesg tags only
+   warnings and errors). Its level, `notice`, is in `/var/log/user.log` (next steps).
 4. `log`
    You should see: the console, history and file levels, the log files on the card and the
    rotation schedule (every 7 days at 00:00 UTC unless changed).
@@ -110,7 +113,8 @@ Write down any WARN or FAIL with its reason.
 6. `tail` works only after a pipe, so: `cat /var/log/user.log | tail 3`
    You should see: your `logger` line among the last three, with a UTC timestamp.
 7. **[ssh]** `rm /var/log/user.log`
-   You should see: a refusal: `/var/log` is changed only on the console.
+   You should see: `rm: /var/log/user.log: not allowed to change this path` (only the console
+   changes `/var/log`).
 
 ## 5. SSH
 
@@ -122,15 +126,15 @@ Write down any WARN or FAIL with its reason.
 3. **[host]** `ssh $B`
    You should see: the greeting and a prompt, without a password.
 4. **[ssh]** `ssh`, then `who`
-   You should see: your session marked `*`, named after your key's comment; `who` lists it and
-   `console`.
+   You should see: `ssh` lists your session as `<login>@<ip>:<port>`, marked `*`; `who` lists
+   it, named after your key's comment, and `console`.
 5. **[ssh]** `help`
    You should see: fewer commands than on the console (the console-only ones are missing).
 6. **[ssh]** `passwd`, then `hostname newname`
    You should see: both refused as console only. `hostname` alone shows the name.
-7. **[host]** Open three more sessions in other terminals (`ssh $B` each).
-   You should see: the third one logs in; the fourth gets "Too many connections: all 3 SSH
-   sessions are in use, try again later". Close the extra ones.
+7. **[host]** With this session open, open three more in other terminals (`ssh $B` each).
+   You should see: the first two log in (3 sessions in all); the third gets "Too many
+   connections: all 3 SSH sessions are in use, try again later". Close the extra ones.
 8. **[ssh]** Ctrl-D.
    You should see: the session ends.
 
@@ -152,8 +156,8 @@ Keep one SSH session open beside the console.
 ## 7. Wi-Fi
 
 1. **[console]** `wifi`
-   You should see: the saved networks (passwords not shown), the connected one, signal,
-   country, power saving.
+   You should see: the saved networks (passwords not shown), the link state, power saving and
+   country. (Signal is in `wifi stats` and `net`.)
 2. `wifi stats`
    You should see: signal, noise and packet counters. `wifi stats chip` adds the raw counters.
 3. `ping 1.1.1.1`
@@ -192,7 +196,8 @@ Keep one SSH session open beside the console.
    `tools/man-install.sh $B` from **[host]**).
 2. `man intro`
    You should see: the page in the pager. Space and b page, j and k scroll, g and G go to the
-   ends, `/quoting` finds QUOTING, q quits.
+   ends, `/QUOTING` finds the QUOTING section (search on main is case-sensitive; smart case is
+   #278), q quits.
 3. `dmesg | grep wifi`
    You should see: only lines holding `wifi`. Try `-i`, `-v`, `-n` too.
 4. `help | wc`
@@ -265,7 +270,8 @@ Keep one SSH session open beside the console.
    You should see: the UTC time and where it came from (RTC, NTS or SNTP), the RTC reading and
    battery state, the calibration, the drift line, the last sync, the server and periodic
    settings, and a local time line if a zone is set.
-2. `time sync`
+2. `time sync`: **skip on dev-1 until #275's drift reading is done (ask the Reviewer).** A
+   manual sync restarts the RTC drift measurement and loses the hours measured so far.
    You should see: a sync over NTS within a few seconds; `time` then shows its correction and
    round trip.
 3. `nts`
@@ -289,7 +295,7 @@ Keep one SSH session open beside the console.
 ## 14. TLS and HTTPS
 
 1. **[console]** `tls roots`
-   You should see: the two built-in roots (SSL.com ECC, ISRG Root X1) and the state of
+   You should see: the two built-in roots (`SSL.com Root Certification Authority ECC`, `ISRG Root X1`) and the state of
    `/certs/roots.pem`.
 2. `http head https://letsencrypt.org/`
    You should see: a 200 status and the headers.
@@ -350,10 +356,10 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
 
 ## 16. SD card
 
-1. **[console]** `sd`
+1. **[console]** `sd` (`sd info` is the same)
    You should see: card size, file system, encrypted or not, SPI clock.
-2. `sd info`
-   You should see: more detail, including error counters since the card started.
+2. `sd speed`
+   You should see: the SPI clock the card runs at. Don't change it.
 3. `sd test 1024`
    You should see: write and read rates (about 1 MB/s on an encrypted card); everything else
    waits meanwhile. The test file is removed.
@@ -367,8 +373,9 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
 ## 17. Setup on a configured board
 
 `setup` is how a new board gets its console password, Wi-Fi network and SSH key. On a board
-that already has them it asks only for the network and a key, and Enter keeps what's saved, so
-this walk changes nothing. The full first-time setup, from an empty configuration, is in
+that already has them it asks only for the network and a key, and Enter keeps what's saved.
+Finishing it still writes a new configuration record, even when nothing changed, so on dev-1
+(whose configuration sectors the slot rules keep untouched) stop at step 5. The full first-time setup, from an empty configuration, is in
 [section 20](#20-disruptive-steps-optional).
 
 1. **[ssh]** `setup`
@@ -385,11 +392,11 @@ this walk changes nothing. The full first-time setup, from an empty configuratio
    and a `Public key: ` question.
 5. Press Ctrl-C.
    You should see: `setup cancelled; nothing changed`.
-6. `setup` again, Enter at the network, Enter at the key.
+6. **Spare board only, not dev-1** (it writes the configuration sectors): `setup` again,
+   Enter at the network, Enter at the key.
    You should see: `saved:` and the configuration, as `config` shows it. Wi-Fi doesn't
-   reconnect (the network didn't change) and your SSH session stays up.
-7. `dmesg -f auth | tail 3`
-   You should see: `config: setup completed`.
+   reconnect (the network didn't change) and your SSH session stays up. Then
+   `dmesg -f auth | tail 3` shows `config: setup completed`.
 
 ## 18. Provisioning from a file (build only)
 
@@ -411,7 +418,7 @@ Each command here only reads.
 
 | # | Type | You should see |
 |---|---|---|
-| 1 | `config` | the saved configuration: hostname, networks (no passwords), keys, time and log settings, glitch setting |
+| 1 | `config` | the saved configuration: hostname, networks (no passwords), the number of trusted keys, time and log settings (the glitch setting is `glitch`'s, row 5) |
 | 2 | `key list` | the trusted SSH keys, numbered, with their comments |
 | 3 | `rootsecret` | `in OTP`, with whether its page is locked for this boot |
 | 4 | `bootkey` | the firmware's key hash, the boot key slots, secure boot on, and `MATCH` |
@@ -431,7 +438,7 @@ at a time, and tell the Reviewer before you start this section.
      `uptime` show `hard fault on core 0 at 0x...` with the addresses, and `health` shows the
      `resets` check as WARN.
   3. `crash hang`. You should see: nothing for about 8 s, then a watchdog reset; `uptime`
-     shows `(last reset: watchdog)`.
+     shows `(last reset: watchdog timeout)`.
   4. Don't run three crashes in a row within three minutes of each other: that counts as a
      boot loop (and `/autorun.lua` is skipped after each).
 - **Glitch detector:** `glitch trig` resets the board through the detector (it is armed).
@@ -481,7 +488,8 @@ Review these once they merge; their PRs describe what to try:
 
 - `tar tf` / `tar xf`: list and extract archives (#274).
 - `tar cf` / `tar czf`: create archives (#277).
-- Pager search: matches highlighted, `n` past the last match, smart case (#278).
+- Pager search: matches highlighted, `n` past the last match, smart case (#278). Then redo
+  section 9 step 2 with `/quoting`.
 - Build feature options: leave features out of an image at build time (#250, design #279).
 
 ## When you finish
