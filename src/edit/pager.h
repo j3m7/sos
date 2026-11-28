@@ -21,6 +21,12 @@
 // reads with a '?' at each line's end. Lines don't wrap: the view scrolls sideways (Left/Right).
 // Line numbers are counted from the start as the view moves, and the total is counted (one pass
 // over the text) the first time it is needed: the end key, or a search that wraps around.
+//
+// Search (/ or Ctrl-F, then n for the next): a new search starts at the top line shown, n just
+// past the match before it while that is still on screen (else at the top line), and both wrap
+// around to the start. The line holding the match goes to the top (or the last screenful is
+// shown), every match on screen is shown in reverse video, and the status row says the match's
+// line number. A search with no capital letter ignores ASCII case, as less -i does.
 
 #define PAGER_WINDOW   (16 * 1024)      // of the text in RAM at a time
 #define PAGER_FIND_MAX 64
@@ -65,6 +71,9 @@ typedef struct {
     char find[PAGER_FIND_MAX + 1];
     size_t find_len;
     char last_find[PAGER_FIND_MAX + 1];
+    bool fold;                  // last_find has no capital letter: ASCII case is ignored
+    size_t hit;                 // where the last match starts (SIZE_MAX: none), and its line
+    long hit_line;
 
     char name[64];              // shown in the status row
     char msg[128];              // shown instead of the status until the next key

@@ -21,10 +21,10 @@ The keys and details are in the manual page [man/edit.txt](../man/edit.txt) and
 ## Pager
 
 `more <file>` reads a file of any size a screen at a time (a 16 KB window of it is in memory),
-with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches, q
-quits. It draws text the way the editor does, so a file can't send the terminal a sequence, and
-it is the viewer for any command with more text to show than a screen, the manual pages first
-of all. The keys are in [man/more.txt](../man/more.txt).
+with less-like keys: Space and b page, j and k scroll, g and G go to the ends, `/` searches
+(matches in reverse video; text with no capital letter ignores case), q quits. It draws text the
+way the editor does, so a file can't send the terminal a sequence, and it is the viewer for any
+command with more text to show than a screen, the manual pages first of all. The keys are in [man/more.txt](../man/more.txt).
 Any command's output can be read the same way: end the line with `| more` (`dmesg | more`,
 `wifi stats chip | more`). The output is kept instead of printed, up to 32 KB, and paged as
 soon as the command has printed something: a command that runs for a while (`cat big.log |

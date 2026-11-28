@@ -1170,6 +1170,11 @@ DESCRIPTION
     with the total once it is known: after G, or once the end has been on
     screen) and how far in you are, or END.
 
+    A search brings the line with the match to the top (near the end, the
+    last screen is shown instead), shows every match on screen in reverse
+    video, and says on the bottom row which line the match is on ('found on
+    line 42'), so a match on a page that fits the screen is shown too.
+
 KEYS
     Space, f, PgDn / b, PgUp    a screen forward / back
     d / u                       half a screen forward / back
@@ -1178,11 +1183,15 @@ KEYS
                                 on a large file counts its lines, about a
                                 second per megabyte)
     Left / Right                half a screen sideways, for long lines
-    / (Ctrl-F)                  find: type the text, Enter finds the next
-                                match from the line after the top one (empty:
-                                the last search again), wrapping around to
-                                the start; Ctrl-C cancels
-    n                           the next match
+    / (Ctrl-F)                  find: type the text, Enter finds the first
+                                match from the top line on (empty: the last
+                                search again), wrapping around to the start;
+                                Ctrl-C cancels. Text with no capital letter
+                                ignores case ('/error' finds Error and
+                                ERROR); with one it must match exactly.
+                                Only ASCII letters: '/é' doesn't find É
+    n                           the next match: after the one before while
+                                that is on screen, else from the top line
     F                           follow: stay on the end as output arrives
                                 ('<command> | more' while the command runs;
                                 any movement key leaves it)

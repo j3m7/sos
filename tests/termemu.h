@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Julio Martinez
 //
 // A tiny terminal for the full-screen programs' tests (the editor, the pager): cursor movement,
-// erase, and printable bytes (UTF-8 as one cell), so a test checks what a terminal would show.
+// erase, reverse video and printable bytes (UTF-8 as one cell), so a test checks what a terminal
+// would show.
 // Included by one test file at a time (everything here is static).
 
 #ifndef SOS_TERMEMU_H
@@ -30,6 +31,8 @@ static size_t t_held;                       // bytes of a cut sequence waiting f
 #define CELL 17
 #define WIDE_RIGHT "\x01"
 static char screen[T_ROWS][T_COLS][CELL];
+static bool t_rev_on;                       // ESC [ 7 m: what's written now is in reverse video
+static bool t_rev[T_ROWS][T_COLS];          // cells written in reverse video
 
 // The test terminal's own idea of width, independent of charwidth.c: a few well-known ranges.
 static int t_width(uint32_t cp) {
@@ -64,6 +67,8 @@ static void t_reset(int rows, int cols) {
     t_rows = rows;
     t_cols = cols;
     t_cursor_on = true;
+    t_rev_on = false;
+    memset(t_rev, 0, sizeof(t_rev));
     t_bytes = 0;
     t_held = 0;
 }
@@ -100,13 +105,19 @@ static size_t t_parse(const char *s, size_t n) {
                 t_col = (p[1] ? p[1] : 1) - 1;
                 CHECK(t_row < t_rows && t_col < t_cols);
             } else if (f == 'K') {
+                CHECK(!t_rev_on);           // a real terminal would erase in reverse video
                 t_clear_partner(t_row, t_col);
-                for (int k = t_col; k < t_cols; k++)
+                for (int k = t_col; k < t_cols; k++) {
                     screen[t_row][k][0] = '\0';
+                    t_rev[t_row][k] = false;
+                }
             } else if (f == 'J') {
+                CHECK(!t_rev_on);
                 memset(screen, 0, sizeof(screen));
+                memset(t_rev, 0, sizeof(t_rev));
             } else if (f == 'm') {
-                // attributes: ignored
+                CHECK(p[0] == 0 || p[0] == 7);      // off, or reverse video: all that's sent
+                t_rev_on = p[0] == 7;
             } else {
                 CHECK(0 && "unexpected escape sequence");
             }
@@ -137,9 +148,11 @@ static size_t t_parse(const char *s, size_t n) {
         t_clear_partner(t_row, t_col);
         memcpy(screen[t_row][t_col], s + i, l);
         screen[t_row][t_col][l] = '\0';
+        t_rev[t_row][t_col] = t_rev_on;
         if (w == 2 && t_col + 1 < t_cols) {
             t_clear_partner(t_row, t_col + 1);
             strcpy(screen[t_row][t_col + 1], WIDE_RIGHT);
+            t_rev[t_row][t_col + 1] = t_rev_on;
         }
         last_col_full = t_col + w >= t_cols;
         t_col += w;
@@ -176,6 +189,18 @@ static const char *t_line(int r) {
         memcpy(buf + n, cell, l);
         n += l;
     }
+    while (n && buf[n - 1] == ' ')
+        n--;
+    buf[n] = '\0';
+    return buf;
+}
+
+// Row r's reverse-video cells: '^' under each one, ' ' elsewhere, trailing blanks dropped.
+static inline const char *t_rev_line(int r) {
+    static char buf[T_COLS + 1];
+    int n = 0;
+    for (int k = 0; k < t_cols; k++)
+        buf[n++] = t_rev[r][k] ? '^' : ' ';
     while (n && buf[n - 1] == ' ')
         n--;
     buf[n] = '\0';
