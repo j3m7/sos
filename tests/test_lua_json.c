@@ -137,6 +137,17 @@ static void encode_tables(void) {
     CHECK(holds("return json.encode({a = {b = {1, {c = true}}}}) == '{\"a\":{\"b\":[1,{\"c\":true}]}}'"));
     CHECK(holds("local t = {} for i = 1, 3000 do t[i] = i end local s = json.encode(t) "
                 "return #s > 10000 and s:sub(1, 7) == '[1,2,3,' and s:sub(-6) == ',3000]'"));
+    // Integer keys are looked up again from their text: the extremes and negatives too.
+    CHECK(holds("return json.encode({[math.mininteger] = 'lo', [math.maxinteger] = 'hi', [-1] = 'm'}) "
+                "== '{\"-1\":\"m\",\"-9223372036854775808\":\"lo\",\"9223372036854775807\":\"hi\"}'"));
+    CHECK(holds("return json.encode({[-5] = {[7] = 'x'}, y = {[0] = false}}) "
+                "== '{\"-5\":{\"7\":\"x\"},\"y\":{\"0\":false}}'"));
+    // Keys that only the table keeps alive, with the collector running at every step of the
+    // encode: each value must still come out under its own key.
+    CHECK(holds("collectgarbage('incremental', 0, 100) local t = {} "
+                "for i = 1, 1000 do t['key' .. i .. string.rep('x', i % 50)] = i; t[-i] = -i end "
+                "local d = json.decode(json.encode(t)) collectgarbage('incremental', 200, 100) "
+                "for k, v in pairs(t) do if d[tostring(k)] ~= v then return false end end return true"));
 }
 
 static void encode_refusals(void) {

@@ -362,11 +362,14 @@ static void put_string(enc_t *e, const char *s, size_t n) {
     put(e, "\"", 1);
 }
 
+// An object's key, for sorting. A string key points at the key in the table being encoded,
+// which keeps it alive: encoding runs no Lua code, so the table can't change meanwhile. An integer
+// key points at its decimal text, kept alive by object()'s anchor table, and is looked up again
+// by reading that text back. 12 bytes on the board.
 typedef struct {
-    const char *s;                              // the key as text (kept alive by the keys table)
+    const char *s;
     size_t n;
-    bool is_int;                                // an integer key, looked up as one
-    lua_Integer i;
+    bool is_int;
 } json_key_t;
 
 static int key_cmp(const void *a, const void *b) {
@@ -410,33 +413,39 @@ static bool try_array(enc_t *e, int idx, int depth) {
 
 static void object(enc_t *e, int idx, int depth) {
     lua_State *L = e->L;
-    size_t count = 0;
+    size_t count = 0, ints = 0;
     lua_pushnil(L);
     while (lua_next(L, idx)) {
         lua_pop(L, 1);
         count++;
+        if (lua_isinteger(L, -1))
+            ints++;
     }
-    // The keys as text, in a table that keeps them alive, and their order in a userdata.
-    lua_createtable(L, (int)(count < 1000000 ? count : 0), 0);
-    int keys = lua_gettop(L);
+    // The keys' order in a userdata, and the integer keys' text in a table that keeps it alive
+    // (only when there are integer keys).
     json_key_t *k = lua_newuserdatauv(L, (count ? count : 1) * sizeof(json_key_t), 0);
-    size_t n = 0;
+    int helpers = 1, anchors = 0;
+    if (ints) {
+        lua_createtable(L, (int)(ints < 1000000 ? ints : 0), 0);
+        anchors = lua_gettop(L);
+        helpers = 2;
+    }
+    size_t n = 0, a = 0;
     lua_pushnil(L);
     while (lua_next(L, idx)) {                  // the same `count` keys as above
         lua_pop(L, 1);
-        json_key_t *kk = &k[n];
+        json_key_t *kk = &k[n++];
         kk->is_int = false;
         if (lua_type(L, -1) == LUA_TSTRING) {
-            lua_pushvalue(L, -1);
+            kk->s = lua_tolstring(L, -1, &kk->n);   // a string already: not converted in place
         } else if (lua_isinteger(L, -1)) {
             kk->is_int = true;
-            kk->i = lua_tointeger(L, -1);
-            lua_pushfstring(L, "%I", (LUAI_UACINT)kk->i);
+            lua_pushfstring(L, "%I", (LUAI_UACINT)lua_tointeger(L, -1));
+            kk->s = lua_tolstring(L, -1, &kk->n);
+            lua_rawseti(L, anchors, (lua_Integer)++a);
         } else {
             luaL_error(L, "can't encode a %s key in JSON", luaL_typename(L, -1));
         }
-        kk->s = lua_tolstring(L, -1, &kk->n);
-        lua_rawseti(L, keys, (lua_Integer)++n);
     }
     qsort(k, n, sizeof(json_key_t), key_cmp);
     for (size_t i = 1; i < n; i++)              // the string "1" and the integer 1, say
@@ -449,16 +458,15 @@ static void object(enc_t *e, int idx, int depth) {
         put_string(e, k[i].s, k[i].n);
         put(e, ":", 1);
         if (k[i].is_int)
-            lua_rawgeti(L, idx, k[i].i);
-        else {
+            lua_stringtonumber(L, k[i].s);      // the integer again, from the text it gave
+        else
             lua_pushlstring(L, k[i].s, k[i].n);
-            lua_rawget(L, idx);
-        }
+        lua_rawget(L, idx);
         encode(e, lua_gettop(L), depth + 1);
         lua_pop(L, 1);
     }
     put(e, "}", 1);
-    lua_pop(L, 2);                              // the keys and their order
+    lua_pop(L, helpers);                        // the order, and the anchors if any
 }
 
 static void encode(enc_t *e, int idx, int depth) {
