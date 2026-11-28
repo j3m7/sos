@@ -51,6 +51,10 @@
 #include "files/tar_parse.h"
 #include "time/timeconv.h"
 
+// f_utime() and FILINFO's layout depend on FF_USE_CHMOD: a target built without config/fatfs ahead
+// of the SD library's include directory would see 0 here and a different FILINFO than ff.c.
+_Static_assert(FF_USE_CHMOD == 1, "FatFs must be built with config/fatfs/ffconf.h (FF_USE_CHMOD 1)");
+
 #define PATH_LEN    256             // FatFs long names are up to 255 characters
 #define STEP_US     20000           // work per job step before letting the main loop run
 #define BUF         4096            // the read buffer, and gzip's output buffer
@@ -120,6 +124,9 @@ static void skip(shell_t *sh, tarjob_t *j, const char *name, const char *why) {
 }
 
 // --- paths created in this run ---------------------------------------------------------------
+// 64-bit FNV-1a hashes. Two different paths with the same hash would make an existing file look
+// like one this run created, so it would be replaced without -f; with at most 8192 paths the
+// chance is about 2^-38 (1e-12), accepted.
 
 static uint64_t path_hash(const char *s) {
     uint64_t h = 0xcbf29ce484222325ull;
