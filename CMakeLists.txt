@@ -290,6 +290,7 @@ set(SOS_SOURCES
     src/net/wifistat.c
     src/net/wifi_pick.c
     src/net/wifi_names.c
+    src/net/fetch.c
     src/net/http.c
     src/net/http_msg.c
     src/net/ping.c
@@ -304,6 +305,7 @@ set(SOS_SOURCES
     src/files/fsck_exfat.c
     src/files/fsck_plan.c
     src/files/fsck_repair.c
+    src/files/bigjob.c
     src/files/files.c
     src/files/path.c
     src/files/sums.c

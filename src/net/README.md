@@ -186,11 +186,34 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
   the TCP connection.
 - **Timeout:** `timeout_ms` (default 30 s) runs until the headers arrive, then between pieces
   of the body.
-- **Not done yet:** redirects (the caller sees the `3xx` and `Location`), keep-alive,
-  compression, proxies.
+- **Redirects, opt-in:** with `max_redirects` set (at most 5), a `301`, `302`, `303`, `307` or
+  `308` with a `Location` is followed inside `http.c`: the 3xx's body is dropped, the
+  connection closed, and the same request (GET or HEAD only) made to the new URL on a new
+  connection, with its own certificate check and timeout. `http_msg.c` resolves the `Location`
+  against the request's URL (RFC 3986, dots removed) and refuses a target that isn't https (from
+  https to http only with `allow_downgrade`, and not until plain http exists), one with
+  `user:password@`, or one longer than the URL parser takes (`HTTP_URL_MAX`). Requests with
+  extra headers or a body can't opt in, so a header such as `Authorization` never goes to a
+  host a server names. `http_redirects()` and `http_url()` tell the caller each hop. Without
+  the option (`http get`, `sos.http`) the caller sees the `3xx` and `Location`, as before.
+- **Untrusted roots:** when the handshake fails because no trusted root signs the chain,
+  `tls/` notes the issuer it couldn't verify (`tls_stats_t.untrusted_issuer`), for messages
+  that say which root to add.
+- **Not done yet:** keep-alive, compression, proxies, plain http (docs/design/archives.md
+  §3.3).
 
 `http get|head|post` (any shell, `docs/commands.md`) runs a request as a shell job, for
 testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), from any shell.
+
+`fetch.c` runs `fetch [-f] [-k] <url> [<file>]` (docs/design/archives.md §3), a shell job like
+`cp`: it follows redirects (printing `-> <url>` per hop), writes a `2xx` body through a 4 KB
+buffer to `<file>.part`, hashing it with wolfCrypt's SHA-256 as it writes, and renames the
+`.part` only when `http.c` says the response is complete (`HTTP_DONE`: the `Content-Length`
+reached, the last chunk, or `close_notify`). Any failure or Ctrl-C deletes the `.part`. Writes
+pass `files_write_allowed()`, the job holds the card (`files_hold()`) and syncs once a second
+(`files_sync_if_due()`). The progress line is drawn only on the console (`io->admin`) and not
+into a pipe. One archive job runs at a time (`files/bigjob.h`). The pure parts (Location,
+the name a URL suggests, `path_name_check()`) are host tested and fuzzed (`fuzz_http`).
 
 ## Ping
 

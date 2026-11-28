@@ -72,6 +72,231 @@ TEST(url_refused) {
     CHECK_EQ(strlen(u.path), HTTP_PATH_MAX);
 }
 
+TEST(url_format) {
+    http_url_t u;
+    char out[HTTP_URL_MAX + 1];
+    CHECK(http_url_parse("HTTPS://Example.COM/a?b=1#frag", &u) == NULL);
+    CHECK(http_url_format(&u, out, sizeof(out)) == strlen("https://example.com/a?b=1"));
+    CHECK(!strcmp(out, "https://example.com/a?b=1"));
+    CHECK(http_url_parse("https://h:8443", &u) == NULL);
+    http_url_format(&u, out, sizeof(out));
+    CHECK(!strcmp(out, "https://h:8443/"));
+    CHECK_EQ(http_url_format(&u, out, 5), 0);       // doesn't fit
+    CHECK(!strcmp(out, ""));
+
+    // The longest URL the parser takes fits HTTP_URL_MAX, and parses back the same.
+    static char longest[HTTP_URL_MAX + 16];
+    char *p = longest + sprintf(longest, "https://");
+    memset(p, 'h', HTTP_HOST_MAX);
+    p += HTTP_HOST_MAX;
+    p += sprintf(p, ":65535/");
+    memset(p, 'p', HTTP_PATH_MAX - 1);
+    p[HTTP_PATH_MAX - 1] = '\0';
+    CHECK(http_url_parse(longest, &u) == NULL);
+    CHECK_EQ(http_url_format(&u, out, sizeof(out)), HTTP_URL_MAX);
+    CHECK(!strcmp(out, longest));
+}
+
+// --- redirects -----------------------------------------------------------------------------------
+
+static char resolved[HTTP_URL_MAX + 1];
+
+// Resolve loc against base; NULL if refused, else the result.
+static const char *resolve(const char *base, const char *loc) {
+    http_url_t u;
+    if (http_url_parse(base, &u))
+        return "(bad base)";
+    return http_url_resolve(&u, loc, resolved, sizeof(resolved)) ? NULL : resolved;
+}
+
+#define CHECK_RESOLVE(base, loc, want) do {                                                 \
+        const char *got_ = resolve((base), (loc));                                          \
+        test_checks++;                                                                      \
+        if (!got_ || strcmp(got_, (want))) {                                                \
+            test_failures++;                                                                \
+            fprintf(stderr, "%s:%d: resolve(%s, %s) = %s, expected %s\n", __FILE__, __LINE__, \
+                    (base), (loc), got_ ? got_ : "(refused)", (want));                      \
+        }                                                                                   \
+    } while (0)
+
+TEST(redirect_statuses) {
+    static const int yes[] = {301, 302, 303, 307, 308};
+    for (size_t i = 0; i < sizeof(yes) / sizeof(yes[0]); i++)
+        CHECK(http_status_redirects(yes[i]));
+    static const int no[] = {200, 204, 300, 304, 305, 306, 309, 400, 404, 500};
+    for (size_t i = 0; i < sizeof(no) / sizeof(no[0]); i++)
+        CHECK(!http_status_redirects(no[i]));
+}
+
+TEST(resolve_rfc3986) {
+    // RFC 3986 §5.4.1's normal examples, with its base on https.
+    const char *b = "https://a/b/c/d;p?q";
+    CHECK_RESOLVE(b, "g", "https://a/b/c/g");
+    CHECK_RESOLVE(b, "./g", "https://a/b/c/g");
+    CHECK_RESOLVE(b, "g/", "https://a/b/c/g/");
+    CHECK_RESOLVE(b, "/g", "https://a/g");
+    CHECK_RESOLVE(b, "//g", "https://g");
+    CHECK_RESOLVE(b, "?y", "https://a/b/c/d;p?y");
+    CHECK_RESOLVE(b, "g?y", "https://a/b/c/g?y");
+    CHECK_RESOLVE(b, "#s", "https://a/b/c/d;p?q");      // a fragment alone: the same resource
+    CHECK_RESOLVE(b, "g#s", "https://a/b/c/g");
+    CHECK_RESOLVE(b, "g?y#s", "https://a/b/c/g?y");
+    CHECK_RESOLVE(b, ";x", "https://a/b/c/;x");
+    CHECK_RESOLVE(b, "g;x", "https://a/b/c/g;x");
+    CHECK_RESOLVE(b, ".", "https://a/b/c/");
+    CHECK_RESOLVE(b, "./", "https://a/b/c/");
+    CHECK_RESOLVE(b, "..", "https://a/b/");
+    CHECK_RESOLVE(b, "../", "https://a/b/");
+    CHECK_RESOLVE(b, "../g", "https://a/b/g");
+    CHECK_RESOLVE(b, "../..", "https://a/");
+    CHECK_RESOLVE(b, "../../", "https://a/");
+    CHECK_RESOLVE(b, "../../g", "https://a/g");
+    // ... and abnormal ones (§5.4.2).
+    CHECK_RESOLVE(b, "../../../g", "https://a/g");
+    CHECK_RESOLVE(b, "../../../../g", "https://a/g");
+    CHECK_RESOLVE(b, "/./g", "https://a/g");
+    CHECK_RESOLVE(b, "/../g", "https://a/g");
+    CHECK_RESOLVE(b, "g.", "https://a/b/c/g.");
+    CHECK_RESOLVE(b, ".g", "https://a/b/c/.g");
+    CHECK_RESOLVE(b, "g..", "https://a/b/c/g..");
+    CHECK_RESOLVE(b, "..g", "https://a/b/c/..g");
+    CHECK_RESOLVE(b, "./../g", "https://a/b/g");
+    CHECK_RESOLVE(b, "./g/.", "https://a/b/c/g/");
+    CHECK_RESOLVE(b, "g/./h", "https://a/b/c/g/h");
+    CHECK_RESOLVE(b, "g/../h", "https://a/b/c/h");
+    CHECK_RESOLVE(b, "g;x=1/./y", "https://a/b/c/g;x=1/y");
+    CHECK_RESOLVE(b, "g;x=1/../y", "https://a/b/c/y");
+    CHECK_RESOLVE(b, "g?y/./x", "https://a/b/c/g?y/./x");   // dots in a query stay
+    CHECK_RESOLVE(b, "g?y/../x", "https://a/b/c/g?y/../x");
+}
+
+TEST(resolve_absolute_and_ports) {
+    CHECK_RESOLVE("https://a/x", "https://b.example/f.tgz", "https://b.example/f.tgz");
+    CHECK_RESOLVE("https://a/x", "HTTPS://B/f", "HTTPS://B/f");     // as given; parsed later
+    CHECK_RESOLVE("https://a/x", "http://b/f", "http://b/f");
+    CHECK_RESOLVE("https://a:8443/x/y", "z", "https://a:8443/x/z");
+    CHECK_RESOLVE("https://a:8443/x/y", "/z?q=1", "https://a:8443/z?q=1");
+    CHECK_RESOLVE("https://a:8443/x/y", "//b/z", "https://b/z");
+    CHECK_RESOLVE("https://a/", "f", "https://a/f");
+    CHECK_RESOLVE("https://a", "../../f", "https://a/f");
+    CHECK_RESOLVE("https://a/d/?q=1", "f", "https://a/d/f");
+    CHECK_RESOLVE("https://a/d/f?q=/x/y", "g", "https://a/d/g");     // '/' in the base's query
+}
+
+TEST(resolve_refused) {
+    http_url_t u;
+    CHECK(http_url_parse("https://a/b", &u) == NULL);
+    char out[HTTP_URL_MAX + 1];
+    CHECK(http_url_resolve(&u, "", out, sizeof(out)) != NULL);
+    CHECK(http_url_resolve(&u, "a b", out, sizeof(out)) != NULL);
+    CHECK(http_url_resolve(&u, "/a\r\nX: y", out, sizeof(out)) != NULL);
+    CHECK(http_url_resolve(&u, "/caf\xc3\xa9", out, sizeof(out)) != NULL);
+    CHECK(http_url_resolve(&u, "/\x7f", out, sizeof(out)) != NULL);
+    CHECK(http_url_resolve(&u, "/x", out, 8) != NULL);      // doesn't fit out
+
+    // Longer than HTTP_URL_MAX: refused, whatever out holds. Exactly the limit: taken.
+    static char loc[HTTP_URL_MAX + 64], big[HTTP_URL_MAX + 64];
+    strcpy(loc, "https://h/");
+    memset(loc + 10, 'p', HTTP_URL_MAX - 10);
+    loc[HTTP_URL_MAX] = '\0';
+    CHECK(http_url_resolve(&u, loc, big, sizeof(big)) == NULL);
+    CHECK_EQ(strlen(big), HTTP_URL_MAX);
+    loc[HTTP_URL_MAX] = 'p';
+    loc[HTTP_URL_MAX + 1] = '\0';
+    CHECK(http_url_resolve(&u, loc, big, sizeof(big)) != NULL);
+    // A long fragment doesn't count: it isn't kept.
+    strcpy(loc, "/f#");
+    memset(loc + 3, 'x', HTTP_URL_MAX);
+    loc[HTTP_URL_MAX + 3] = '\0';
+    CHECK(http_url_resolve(&u, loc, big, sizeof(big)) == NULL);
+    CHECK(!strcmp(big, "https://a/f"));
+}
+
+TEST(redirect_target) {
+    http_url_t u;
+    char text[HTTP_URL_MAX + 1];
+
+    CHECK(http_url_parse("https://a/dir/file", &u) == NULL);
+    CHECK(http_redirect_target(&u, "../other/f.tgz?x=1", false, text, sizeof(text)) == NULL);
+    CHECK(!strcmp(text, "https://a/other/f.tgz?x=1"));
+    CHECK(!strcmp(u.host, "a"));
+    CHECK(!strcmp(u.path, "/other/f.tgz?x=1"));
+
+    CHECK(http_redirect_target(&u, "https://cdn.example:444/x", false, text, sizeof(text)) ==
+          NULL);
+    CHECK(!strcmp(u.host, "cdn.example"));
+    CHECK_EQ(u.port, 444);
+
+    // Down to plain http: refused, with -k or without (plain http isn't there yet); the
+    // messages differ.
+    CHECK(http_url_parse("https://a/f", &u) == NULL);
+    const char *no_k = http_redirect_target(&u, "http://a/f", false, text, sizeof(text));
+    CHECK(http_url_parse("https://a/f", &u) == NULL);
+    const char *with_k = http_redirect_target(&u, "HTTP://a/f", true, text, sizeof(text));
+    CHECK(no_k && with_k && strcmp(no_k, with_k));
+    CHECK(strstr(no_k, "-k") != NULL);
+
+    static const char *const refused[] = {
+        "ftp://a/f", "mailto:x@y", "https://user:pw@a/f", "//user@a/f", "https://[::1]/f",
+        "https://a:0/f", "https://a_b/f", "javascript:alert(1)", "https:", "https://",
+    };
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        CHECK(http_url_parse("https://a/f", &u) == NULL);
+        CHECK(http_redirect_target(&u, refused[i], false, text, sizeof(text)) != NULL);
+    }
+    // A target whose path is over the parser's limit (the whole fits HTTP_URL_MAX).
+    static char loc[HTTP_URL_MAX + 1];
+    strcpy(loc, "/");
+    memset(loc + 1, 'p', HTTP_PATH_MAX);
+    loc[HTTP_PATH_MAX + 1] = '\0';
+    CHECK(http_url_parse("https://a/f", &u) == NULL);
+    CHECK(http_redirect_target(&u, loc, false, text, sizeof(text)) != NULL);
+}
+
+TEST(url_name) {
+    char name[64];
+    CHECK(http_url_name("/pkg/pkg-1.2.tar.gz", name, sizeof(name)) == NULL);
+    CHECK(!strcmp(name, "pkg-1.2.tar.gz"));
+    CHECK(http_url_name("/a/SHA256SUMS?raw=1&x=/y", name, sizeof(name)) == NULL);
+    CHECK(!strcmp(name, "SHA256SUMS"));
+    CHECK(http_url_name("/my%20file%2Etxt", name, sizeof(name)) == NULL);
+    CHECK(!strcmp(name, "my file.txt"));
+    CHECK(http_url_name("/caf%C3%a9", name, sizeof(name)) == NULL);
+    CHECK(!strcmp(name, "caf\xc3\xa9"));
+    CHECK(http_url_name("/a%2Fb", name, sizeof(name)) == NULL);   // decoded; path_name_check()
+    CHECK(!strcmp(name, "a/b"));                                    // refuses it
+
+    CHECK(http_url_name("/", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/dir/", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/?q=1", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/a%", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/a%4", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/a%4?", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/a%zz", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/a%00b", name, sizeof(name)) != NULL);
+    CHECK(http_url_name("/0123456789", name, 10) != NULL);         // doesn't fit
+    CHECK(http_url_name("/012345678", name, 10) == NULL);          // exactly
+}
+
+TEST(resp_has_header) {
+    http_resp_t p;
+    http_resp_init(&p, false);
+    static char resp[2048];
+    strcpy(resp, "HTTP/1.1 302 Found\r\nLocation: ");
+    size_t at = strlen(resp);
+    memset(resp + at, 'x', 1500);
+    strcpy(resp + at + 1500, "\r\nContent-Length: 0\r\n\r\n");
+    const uint8_t *body;
+    size_t body_len;
+    http_resp_feed(&p, (const uint8_t *)resp, strlen(resp), 0, &body, &body_len);
+    CHECK(http_resp_headers_done(&p));
+    char small[16];
+    CHECK(http_resp_header(&p, "location", small, sizeof(small)) == NULL);  // too long for it
+    CHECK(http_resp_has_header(&p, "LOCATION"));
+    CHECK(!http_resp_has_header(&p, "locatio"));
+    CHECK(!http_resp_has_header(&p, "x-none"));
+}
+
 // --- requests ------------------------------------------------------------------------------------
 
 static char req_buf[2048];
@@ -483,6 +708,14 @@ TEST(resp_fuzz) {
 TEST_MAIN(
     RUN(url_basic);
     RUN(url_refused);
+    RUN(url_format);
+    RUN(redirect_statuses);
+    RUN(resolve_rfc3986);
+    RUN(resolve_absolute_and_ports);
+    RUN(resolve_refused);
+    RUN(redirect_target);
+    RUN(url_name);
+    RUN(resp_has_header);
     RUN(request_get);
     RUN(request_post);
     RUN(request_refused);
