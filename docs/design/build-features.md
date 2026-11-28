@@ -511,6 +511,20 @@ libraries, and `--gc-sections` alone keeps whatever `config/user_settings.h` tur
 The `cmake/wolf*_pico.cmake` source lists drop the matching files. The savings here must be
 measured, not predicted: some curve code is shared with the core's boot key check.
 
+### 5.1 As built (phase 5): no `user_settings.h` change needed
+
+Measured on the phase 4 builds: `--gc-sections` already drops whatever nothing calls, so in an
+image without SSH and TLS the TLS layer, ASN.1, ECC, SP math and ML-KEM were gone before any
+setting changed. What stayed was Ed25519 and X25519 (64 KB), held by the crypto known answers
+in `core/selftest.c`, which ran in every build. Phase 5 fences them (§4.3): Ed25519's with SSH
+(`ed-public` in the boot set too: it exists for the host key), X25519's with SSH or TLS.
+
+What wolfSSL leaves in `minimal` after that, 41 KB, is the core's own: SHA-1 and SHA-2 (the
+checksums, the boot key, HMAC), SHA-3 (5.6 KB, linked through the generic hash call behind
+`sha*sum`), AES (card encryption and sealed records, with its Thumb-2 assembly), HMAC and the
+DRBG. Trimming `user_settings.h` per feature could save the 5.6 KB of SHA-3 at most; it is not
+worth changing crypto settings for, so §5's list stays a plan that isn't needed.
+
 ## 6. Presets
 
 As built in phase 3: `offline`, `pico2` and `minimal` (here without the phase 4 features, which
@@ -735,6 +749,16 @@ of full and offline build too. All twelve combinations: no warnings.
 | headless | 1,096 KB | 103 KB |
 | offline | 660 KB | 43 KB |
 | minimal, pico2-minimal | 379 KB | 29 KB |
+
+### 10.3 Phase 5 as built
+
+- `core/selftest.c`: the Ed25519 vectors, tests and table entries with SSH, X25519's with SSH
+  or TLS (§4.3, §5.1). The host test keeps the full table (every feature on).
+- `core/heaptag.c`: HEAP_NET is named `ssh/tls` with SSH or TLS, `crypto` without either, so an
+  offline image's `mem` doesn't name SSH for wolfCrypt's own allocations. The full image's
+  output doesn't change.
+- Sizes: full unchanged (1,341 KB); without SSH and TLS 71 KB less: offline 588 KB (was 660),
+  minimal 307 KB (was 379); no SSH 1,252 KB.
 
 ## 11. Decisions and open items
 

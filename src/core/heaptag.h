@@ -12,6 +12,7 @@
 // header; malloc's own bookkeeping per block isn't counted. Pure C, safe from both cores.
 typedef enum {
     HEAP_NET,       // SSH and TLS: all of wolfSSL/wolfSSH, session buffers, certificates, SFTP files.
+                    // Named "ssh/tls", or "crypto" in a build with neither (heaptag.c).
                     // wolfCrypt's hooks don't say who asks, so its other users count here too,
                     // network or not: card encryption, sealed records, passwords, the RNG
     HEAP_LUA,       // the script's state, its source and core 1's stack

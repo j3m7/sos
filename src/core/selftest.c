@@ -29,8 +29,12 @@
 
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
 #include <wolfssl/wolfcrypt/curve25519.h>
+#endif
+#if SOS_HAVE_SSH
 #include <wolfssl/wolfcrypt/ed25519.h>
+#endif
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/hmac.h>
 #include <wolfssl/wolfcrypt/random.h>
@@ -46,11 +50,15 @@ struct selftest {
         Aes gcm;
         XtsAes xts;
         Hmac hmac;
+#if SOS_HAVE_SSH
         ed25519_key ed;
+#endif
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
         struct {
             curve25519_key priv, peer;
             WC_RNG rng;
         } x;
+#endif
     } u;
 };
 
@@ -155,6 +163,7 @@ static const uint8_t xts_cipher[32] = {
     0xfb, 0x18, 0x6f, 0xff, 0x74, 0x80, 0xad, 0xc4, 0x28, 0x93, 0x82, 0xec, 0xd6, 0xd3, 0x94, 0xf0,
 };
 
+#if SOS_HAVE_SSH
 // RFC 8032 §7.1, TEST 2: a one-byte message, 0x72. Ed25519 signatures are deterministic, so the
 // signature is a known answer too.
 static const uint8_t ed_secret[ED25519_KEY_SIZE] = {
@@ -175,7 +184,9 @@ static const uint8_t ed_signature[ED25519_SIG_SIZE] = {
     0x08, 0x5a, 0xc1, 0xe4, 0x3e, 0x15, 0x99, 0x6e, 0x45, 0x8f, 0x36, 0x13, 0xd0, 0xf1, 0x1d, 0x8c,
     0x38, 0x7b, 0x2e, 0xae, 0xb4, 0x30, 0x2a, 0xee, 0xb0, 0x0d, 0x29, 0x16, 0x12, 0xbb, 0x0c, 0x00,
 };
+#endif
 
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
 // RFC 7748 §6.1: Alice's private key with Bob's public key gives the shared secret K. Byte order
 // as on the wire, which is how wolfSSH calls it (EC25519_LITTLE_ENDIAN).
 static const uint8_t x_alice_priv[CURVE25519_KEYSIZE] = {
@@ -192,6 +203,7 @@ static const uint8_t x_shared[CURVE25519_KEYSIZE] = {
     0x4a, 0x5d, 0x9d, 0x5b, 0xa4, 0xce, 0x2d, 0xe1, 0x72, 0x8e, 0x3b, 0xf4, 0x80, 0x35, 0x0f, 0x25,
     0xe0, 0x7e, 0x21, 0xc9, 0x47, 0xd1, 0x9e, 0x33, 0x76, 0xf0, 0x9b, 0x3c, 0x1e, 0x16, 0x17, 0x42,
 };
+#endif
 
 // --- SHA-2 and HMAC --------------------------------------------------------------------------
 
@@ -314,6 +326,7 @@ static const char *t_xts_decrypt(selftest_t *st) {
     return same(out, want, sizeof(out)) ? NULL : "aes-xts decrypt gave a wrong result";
 }
 
+#if SOS_HAVE_SSH
 // --- Ed25519 ---------------------------------------------------------------------------------
 
 // The public key from the secret (as the host key is made: a base point multiplication).
@@ -394,7 +407,9 @@ static const char *t_ed_refuse(selftest_t *st) {
         return error("ed25519 verify", ret);
     return valid ? "ed25519 verify accepted a changed message" : NULL;
 }
+#endif
 
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
 // --- X25519 ----------------------------------------------------------------------------------
 
 static const char *t_x25519(selftest_t *st) {
@@ -443,6 +458,7 @@ static const char *t_x25519(selftest_t *st) {
         return "x25519 gave a wrong shared secret";
     return NULL;
 }
+#endif
 
 // --- the table -------------------------------------------------------------------------------
 
@@ -458,11 +474,17 @@ static const struct {
     {{"gcm-refuse", SELFTEST_GCM, true}, t_gcm_refuse},
     {{"xts-encrypt", SELFTEST_XTS, true}, t_xts_encrypt},
     {{"xts-decrypt", SELFTEST_XTS, true}, t_xts_decrypt},
+#if SOS_HAVE_SSH
+    // Ed25519 is SSH's alone (the host key, logins): docs/design/build-features.md §4.3.
     {{"ed-public", SELFTEST_ED_PUB, true}, t_ed_public},
     {{"ed-sign", SELFTEST_ED_SIGN, false}, t_ed_sign},
     {{"ed-verify", SELFTEST_ED_VERIFY, false}, t_ed_verify},
     {{"ed-refuse", SELFTEST_ED_VERIFY, false}, t_ed_refuse},
+#endif
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
+    // X25519: SSH's key exchange and TLS's.
     {{"x25519", SELFTEST_X25519, false}, t_x25519},
+#endif
 };
 
 #define TEST_COUNT (sizeof(tests) / sizeof(tests[0]))
