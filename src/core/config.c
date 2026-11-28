@@ -30,7 +30,9 @@ _Static_assert(offsetof(sos_config_t, glitch_detector) == 1793, "it takes a form
 _Static_assert(offsetof(sos_config_t, temp_offset) == 1794, "it takes two former padding bytes");
 #define CONFIG_V8_LENGTH offsetof(sos_config_t, log_rotate_days)  // + wifi_extra
 _Static_assert(CONFIG_V8_LENGTH == 2184, "fields before log_rotate_days must not move");
-_Static_assert(sizeof(sos_config_t) == 2188, "the record's size is part of the format");
+#define CONFIG_V9_LENGTH offsetof(sos_config_t, tz_name)          // + log rotation settings
+_Static_assert(CONFIG_V9_LENGTH == 2188, "fields before tz_name must not move");
+_Static_assert(sizeof(sos_config_t) == 2292, "the record's size is part of the format");
 static const uint16_t record_lengths[] = {
     CONFIG_V1_LENGTH,
     CONFIG_V2_LENGTH,
@@ -40,7 +42,8 @@ static const uint16_t record_lengths[] = {
     CONFIG_V6_LENGTH,
     CONFIG_V7_LENGTH,
     CONFIG_V8_LENGTH,       // + wifi_extra
-    sizeof(sos_config_t),   // + log_rotate_days, log_rotate_minute
+    CONFIG_V9_LENGTH,       // + log_rotate_days, log_rotate_minute
+    sizeof(sos_config_t),   // + tz_name, tz_rule
 };
 
 static bool known_length(uint16_t length) {
@@ -122,6 +125,9 @@ static bool contents_valid(const sos_config_t *c, uint16_t length) {
         return false;
     if (HAS_FIELD(length, log_rotate_days) && (c->log_rotate_days > CONFIG_LOG_ROTATE_DAYS_MAX ||
                                                c->log_rotate_minute > CONFIG_LOG_ROTATE_MINUTE_MAX))
+        return false;
+    if (HAS_FIELD(length, tz_rule) && (!terminated(c->tz_name, sizeof(c->tz_name)) ||
+                                       !terminated(c->tz_rule, sizeof(c->tz_rule))))
         return false;
     if (HAS_FIELD(length, wifi_country) &&
         (!terminated(c->wifi_country, sizeof(c->wifi_country)) ||
