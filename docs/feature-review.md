@@ -402,8 +402,9 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
    You should see, tab-separated: `200`, the number of hops (1 or 2: that depends on how the
    site redirects that day, not on SOS) and `https://letsencrypt.org/docs/`, where they led.
 9. `lua -e 'print(sos.http.get("https://github.com/"))'`
-   You should see: `nil` and a long reason starting `no trusted root`, naming the issuer it
-   couldn't verify, printed whole, not cut short (#288).
+   You should see, tab-separated: `nil` and `TLS handshake: the server's certificate isn't
+   signed by a root this firmware trusts (-188)`, whole, not cut short (#288). (The issuer's
+   name is `fetch`'s addition, section 14, not `sos.http`'s.)
 10. `lua -e 'print(sos.hashfile("/review/r.bin"))'`
    You should see: the same SHA-256 as section 11 gave for `r.bin`, after a few seconds
    (`sos.hashfile` always hashes in software, about 20 s for 10 MB; the SHA-256 hardware isn't
