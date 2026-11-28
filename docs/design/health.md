@@ -16,7 +16,8 @@ the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254),
 waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
 changes, #255), built (§9.6), waiting for its board run. Phase 5, the full tier: designed in
 §9.7 (approved, #262, with the image hash source decided by the user), built (§9.8), waiting
-for its board run. Phase 6, the counters: designed in §9.9 (approved with changes, #268).
+for its board run. Phase 6, the counters: designed in §9.9 (approved with changes, #268),
+built (§9.10), waiting for its board run.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -2451,6 +2452,95 @@ Decided (Reviewer, on #268):
    only an error there WARNs.
 7. **The 30-minute text** says what to check: the network, and `wifi`.
 
+### 9.10 As built (phase 6)
+
+Built as §9.9 decides, with these details settled by the code. The judging and the classifiers
+are in `countcheck.c` (`tests/test_countcheck.c`, 21 tests: the windows, each rule at and around
+its figure, the classifiers), the counted function names in `countcheck_names.h`, the reads in
+`countcheck_board.c`; the Wi-Fi driver's hooks in `net/wifistat.c` (named by
+`config/cyw43_sos.h`), the drops, time down and `ver` line in `net/wifi.c` (`wifi_counts()`),
+the card's counters in `files/sdcard.c` (`sdcard_counters()`), the read fault in `sdfault.c`
+(`tests/test_sdfault.c`).
+
+**Texts.** As in §9.9, but where they differ or §9.9 gave none:
+
+| Check | §9.9 | As built |
+|---|---|---|
+| `wifi` | (connected, set up, no rule met) | while connecting, under 30 minutes: `no connection for 5 min; fw 7.95.49; no errors in 1 h` |
+| `wifi` | `7 driver errors in 1 h (5 timeouts, 2 bus); fw 7.95.49` | the same; the `; fw ...` tail is left out when the whole wouldn't fit (`29 driver errors in 1 h (11 timeouts, 12 I/O, 6 bus)`), and is `fw ?` when the version wasn't read |
+| `wifi` | PASS with `, driver 1.1.0` | the driver's version dropped if the line wouldn't fit |
+| `sd-bus` | (no figure for a small amount) | under 1 MB in KB, from 10 GB in GB: `25.0 MHz; 512 KB since the card's init, no errors` |
+| `net-pools` | `lwIP heap full 2x in 1 h: sends refused` | the same, and `segment pool full 4x in 1 h: sends refused`; the packet pool named first, then the segments, then the heap |
+
+**Also settled:**
+
+- **The SD library's error lines** are counted by function too: the table in
+  `countcheck_names.h` has a fourth column saying whether a function's error lines
+  (`EMSG_PRINTF`) or its debug lines count, so `send_block()`'s refused block counts once (its
+  error line) and its debug lines (`Card not ready yet`, after `sd_wait_ready`'s) count nothing.
+  `error_message_printf()` then formats and hands the line to `put_out_error_message()`, as the
+  library's weak version does, so the log reads as before.
+- **`sd_cmd`'s lines during an initialisation** count nothing: `init_layer()` sets a flag around
+  the driver's `init`. A real initialisation (the card not up before) zeroes the window first,
+  so its own errors are in the new window; `init_fails` and `last_init_failed` say how it ended.
+- **The clock** in the texts is the SPI block's (`spi_get_baudrate()`), read only once the
+  driver has set it up and the last initialisation worked; otherwise the one set by `sd speed`
+  (after `sd speed 50`, the block runs at 37.5 MHz, which the text names).
+- **An injected write** (`sd fault fail`) counts as a failed write, and an injected read
+  (`sd fault read`) as a failed read: what FatFs saw.
+- **`wifi fault drop`** calls `cyw43_wifi_leave()` (the disassociation the design names) while
+  `W_UP`, and changes nothing in `wifi.c`; `wifi_reconnect()` from `W_UP` resets the time down
+  without counting a drop. Shown as `wifi fault drop` in test builds (hidden from Tab's list).
+- **`health fault wifi timeout|bus <n>`** (n up to 1000) calls `wifistat_fail()` or
+  `wifistat_warn()` with the driver's function names; its lines are a rate-limit site of their
+  own, apart from the driver's.
+- **The rate limit** keeps 8 sites (function and line); a ninth replaces the one logged longest
+  ago. Lines held back are counted (`held_back`, in `health state-dump`) besides their kinds.
+- **lwIP's failure counters** are 16 bits (`STAT_COUNTER`): `net-pools` carries them into
+  32-bit totals at each run, so a window across a wrap counts right.
+- **`CYW43_PRINTF`** is left to the SDK: `F2 not ready` (counted by its error return) and the
+  initialisation's debug lines (debug builds) are still printed, as §9.9 says.
+- **Where the counts show:** `wifi stats` adds `driver: N timeouts, N bus, N io, N tx, N other
+  since boot; N link drops; firmware 7.95.49`; `sd` adds `errors: since init N failed, N
+  retried, N timeouts; since boot ...`; `sos.wifi.status()` adds `firmware`, `drops` and
+  `errors = {timeout, io, bus, tx, other}`; `sos.sd.info()` adds, once a card has started,
+  `errors = {failed_reads, failed_writes, crc, cmd, write, timeouts}` and `spi_khz`;
+  `sos.mem().lwip` adds `failures = {packets, segments, heap}`. `health state-dump` adds eight
+  lines: three for `wifi` (the counts since boot and the last error, the window, the drops and
+  the join's RSSI, the `ver` line), three for `sd-bus` (the initialisations and the clock, the
+  counts since the init and since boot) and two for `net-pools` (the failures since boot and in
+  the window; each pool's most and size, the connection pool's among them, and lwIP's receive
+  checksum errors).
+- **The guard** (`CMakeLists.txt`) checks each name in `countcheck_names.h` for a definition
+  in the library's source (the name, its parameters, then `{`), `sd_card_spi.c`'s 51
+  `DBG_PRINTF(` calls, and `#ifndef CYW43_FAIL_FAST_CHECK` and `#ifndef CYW43_WARN` in
+  `cyw43_config.h`; a renamed function, a changed count or a hook no longer left to the port
+  stops the configuration with the file and what to review. Each was tried by hand.
+- **The registry:** 26 checks, 28 with the test-only gate checks, of 32.
+
+**Step times** (estimates): each a copy of counters, under 50 us; `net-pools` takes lwIP's lock
+for the copy.
+
+**Cost** (`arm-none-eabi-size`, against main 76c8003): debug text +9.7 KB (1267024 to 1276752),
+bss +1.1 KB; release text +9.8 KB (1523176 to 1532992), bss +1.1 KB; the test build text
++12.5 KB with the dump and the fault commands. About 2.4 KB of it is the SD library's debug
+lines (§9.9); the rest the judging, the hooks at the driver's error sites, the rate limit, the
+new lines in `wifi stats`, `sd` and Lua. bss: the two windows, the rate limit's sites, the
+`ver` line, the counters and the gathered reads. No flash sector, nothing on the card.
+
+**Builds:** debug, the test build and release build with no warning in the files this phase
+touched; release keeps 8 warnings in `chat.c` (`-Wformat-truncation`), which it had before.
+
+**Expected on dev-1:**
+
+| Check | Text |
+|---|---|
+| `wifi` | `fw 7.95.49, driver 1.1.0; no errors in 1 h; no drops in 24 h` (`in 2 min` and the like until an hour up) |
+| `sd-bus` | `25.0 MHz; N MB since the card's init, no errors` |
+| `net-pools` | `no failures in 1 h; packets most N of 12` |
+
+**Board run:** as §9.9 lists (steps 1 to 7; the 24-hour baseline is the later follow-up).
+
 ## 10. Phases
 
 1. This note, then the framework and seed checks (§9). Host tests, then a dev-1 slot.
@@ -2474,7 +2564,8 @@ Decided (Reviewer, on #268):
    only on a card unmounted by hand); as built: §9.8.
 6. **Counters:** CYW43 firmware version and bus errors, SD SPI CRC errors and retries. Design:
    §9.9 (`wifi`, `sd-bus` and `net-pools`, judged as rates; the counters taken through the
-   libraries' own configuration hooks, with no patch to the Pico SDK or the SD library).
+   libraries' own configuration hooks, with no patch to the Pico SDK or the SD library); as
+   built: §9.10.
 
 ## 11. Left open for later phases
 
