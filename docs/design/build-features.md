@@ -201,9 +201,9 @@ change:
 - The `commands[]` table stays where it is, at the end of `shell/shell.c`: same entries, same
   order, now naming the subsystems' handlers. Tab completion (`complete.c`) offers commands in
   table order, so splitting it into one table per feature would reorder what Tab lists.
-  (Moving it to a file of its own, `shell/commands.c`, was the first plan; it would have meant
-  exporting about forty of the core's own handlers for nothing.) Later phases fence entries in
-  place:
+  Its home is `shell.c` for now. Moving it to a file of its own, `shell/commands.c`, was the
+  first plan; it would have meant exporting about forty of the core's own handlers for nothing,
+  so it moves only if a later phase has a reason to. Later phases fence entries in place:
 
   ```c
   static const shell_cmd_t commands[] = {
