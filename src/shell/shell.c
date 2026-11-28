@@ -57,13 +57,21 @@
 #include "core/stackmon.h"
 #include "core/version.h"
 #include "core/wdog.h"
+#if SOS_HAVE_PAGER || SOS_HAVE_EDITOR
 #include "edit/edit.h"
+#endif
+#if SOS_HAVE_MAN
 #include "man/man.h"
+#endif
 #include "files/files.h"
+#if SOS_HAVE_ARCHIVE
 #include "files/gzip.h"
+#endif
 #include "files/sdcard.h"
 #include "files/sums.h"
+#if SOS_HAVE_ARCHIVE
 #include "files/tar.h"
+#endif
 #if SOS_HAVE_LUA
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
@@ -330,9 +338,11 @@ static void cmd_help(shell_t *sh) {
 #if SOS_HAVE_SSH
     shell_printf(sh, "ssh               SSH server status\n");
 #endif
+#if SOS_HAVE_CHAT
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
     shell_printf(sh, "wall <message>    send a message to every other shell\n");
     shell_printf(sh, "chat              talk with the others in the chat room (Ctrl-D leaves)\n");
+#endif
     shell_printf(sh, "dmesg [-f <fac>]  system log, or one facility's (kern auth daemon user)\n");
     shell_printf(sh, "logger [-p <level>] <message>  add a line to the log\n");
     shell_printf(sh, "log               log levels\n");
@@ -350,16 +360,24 @@ static void cmd_help(shell_t *sh) {
 #endif
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
+#if SOS_HAVE_ARCHIVE
     gzip_help(sh);
     tar_help(sh);
+#endif
+#if SOS_HAVE_EDITOR
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
+#endif
+#if SOS_HAVE_PAGER
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
     shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
+#endif
     shell_printf(sh, "<command> | grep [-v] [-i] [-n] <text>  only the lines with the text\n");
     shell_printf(sh, "<command> | head|tail [<n>]  the first / last n lines (10); | wc counts\n");
     shell_printf(sh, "<command> | tee [-a] <file>  also write the output to a file (-a appends)\n");
     shell_printf(sh, "                  stages chain: dmesg | grep wifi | tail 5 | more\n");
+#if SOS_HAVE_MAN
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
+#endif
 #if SOS_HAVE_LUA
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
@@ -408,7 +426,9 @@ static void cmd_help(shell_t *sh) {
         shell_printf(sh, "                  erase and format the SD card: encrypted unless plain,\n");
         shell_printf(sh, "                  showing the card's key once, to store offline\n");
         shell_printf(sh, "sd unmount        unmount the card, to remove it\n");
+#if SOS_HAVE_FSCK
         shell_printf(sh, "sd check          check the unmounted card's file system (reads only)\n");
+#endif
         shell_printf(sh, "sd test [KB [keep]]  write/read benchmark (everything else waits)\n");
         shell_printf(sh, "health run [<name>]|full  run the self-checks now (full: the slow ones too)\n");
     }
@@ -1981,7 +2001,9 @@ static void cmd_health(shell_t *sh, char *args) {
 
 // --- values Tab asks for (shell.h: SHELL_VALUES_OF) ---
 
+#if SOS_HAVE_MAN
 static const shell_values_t man_topics = SHELL_VALUES_INIT(man_tab_topics);
+#endif
 
 // `health run <name>`: the checks' names, with their latest status.
 static void tab_health_names(shell_t *sh, shell_value_fn fn, void *arg) {
@@ -2027,7 +2049,9 @@ static const shell_word_t sd_words[] = {
     {"test", NULL, SHELL_ADMIN},
     {"format", (const shell_word_t[]){W("exfat"), W("fat32"), W("plain"), END}, SHELL_ADMIN},
     {"unmount", NULL, SHELL_ADMIN},
+#if SOS_HAVE_FSCK
     {"check", (const shell_word_t[]){W("fix"), END}, SHELL_ADMIN},
+#endif
 #ifdef SOS_TEST_COMMANDS
     {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("read"), W("off"), END},
      SHELL_ADMIN},
@@ -2091,9 +2115,11 @@ static const shell_cmd_t commands[] = {
 #if SOS_HAVE_SSH
     {"ssh", ssh_command, NULL, NULL, 0},
 #endif
+#if SOS_HAVE_CHAT
     {"who", chat_cmd_who, NULL, NULL, 0},
     {"wall", chat_cmd_wall, NULL, NULL, 0},
     {"chat", chat_cmd_chat, NULL, NULL, 0},
+#endif
     {"dmesg", cmd_dmesg, NULL, dmesg_words, 0},
     {"logger", cmd_logger, NULL, logger_words, 0},
     {"log", cmd_log, NULL, log_words, 0},
@@ -2113,9 +2139,15 @@ static const shell_cmd_t commands[] = {
 #if SOS_HAVE_LUA
     {"lua", NULL, lua_command, lua_words, SHELL_PATH},
 #endif
+#if SOS_HAVE_EDITOR
     {"edit", NULL, edit_command, NULL, SHELL_PATH},
+#endif
+#if SOS_HAVE_PAGER
     {"more", NULL, view_command, NULL, SHELL_PATH},
+#endif
+#if SOS_HAVE_MAN
     {"man", man_command, NULL, SHELL_VALUES_OF(man_topics), 0},
+#endif
 #if SOS_HAVE_HTTP
     {"http", http_command, NULL, http_words, 0},
     {"fetch", NULL, fetch_command, NULL, SHELL_PATH},
@@ -2136,7 +2168,10 @@ static const shell_cmd_t commands[] = {
 #undef END
 
 static const shell_cmd_t *const command_tables[] = {commands, files_commands, sums_commands,
-                                                      gzip_commands, tar_commands, NULL};
+#if SOS_HAVE_ARCHIVE
+                                                      gzip_commands, tar_commands,
+#endif
+                                                      NULL};
 
 // Debug builds, once at startup: every command has one handler, and those that take paths take
 // words (shell.h). The host tests check files_commands; this checks commands[] too.
@@ -2155,6 +2190,7 @@ const shell_cmd_t *const *shell_command_tables(const shell_t *sh) {
     return command_tables;
 }
 
+#if SOS_HAVE_PAGER
 void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
     edit_view_take(sh, name, text, len);
 }
@@ -2162,6 +2198,20 @@ void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
 bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
     return edit_view_growing(sh, name, text, len);
 }
+#else
+// No pager in this image (SOS_FEATURE_PAGER off): pipe.c refuses `| more`, so these aren't
+// reached; if they were, the text goes to the terminal as without `| more`.
+void shell_page(shell_t *sh, const char *name, char *text, size_t len) {
+    (void)name;
+    shell_write(sh, text, len);
+    heap_release(HEAP_EDIT, text);
+}
+
+bool shell_page_growing(shell_t *sh, const char *name, char *text, size_t len) {
+    (void)sh, (void)name, (void)text, (void)len;
+    return false;                       // the caller goes on without the pager
+}
+#endif
 
 bool shell_execute(shell_t *sh, int argc, char **argv) {
     // The console's lock was checked on the raw line (run_line(), login_gate()).

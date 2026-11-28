@@ -709,6 +709,33 @@ Sizes (debug, 2026-11-28; `just features`):
 offline is half the size before any `user_settings.h` trimming (§5). The test-commands builds
 of full and offline build too. All twelve combinations: no warnings.
 
+### 10.2 Phase 4 as built
+
+- Options `CHAT`, `PAGER`, `EDITOR` (needs PAGER), `MAN` (needs PAGER), `FSCK`, `ARCHIVE`, with
+  their source lists; zlib is linked only with ARCHIVE.
+- CHAT: `chat/chat.h` gives inline stand-ins when it's off (§4.4: `chat_init`, `chat_register`,
+  `chat_unregister`, `chat_deliver`, `chat_name`), so `main.c`, `sshd.c` and `shell.c`'s
+  `logger` and `reboot` keep no `#if`. `who`, `wall`, `chat`, `sos.who` and `sos.wall` aren't
+  built.
+- PAGER: `pipe.c` answers `more: not in this build (no pager)` to `<command> | more`, and Tab
+  stops offering it; `shell_page()` keeps a stand-in that prints the text, never reached.
+- FSCK: `files/sdcard.c`'s check section is fenced; `sd check` says it isn't in this build, and
+  `checking` stays false. The `sd-check` health check goes with it.
+- ARCHIVE: the `gzip` and `tar` command tables and their help.
+- The host tests define every `SOS_HAVE_<NAME>` as 1: they test the full build.
+- Presets: `minimal` now leaves out every optional feature; `headless` (no LUA, CHAT, EDITOR,
+  MAN, ARCHIVE) and `pico2-minimal` added. `just features`: 21 combinations and the cache check,
+  all clean.
+
+| Combination | Code | Static RAM |
+|---|---|---|
+| full | 1,341 KB | 117 KB |
+| no CHAT / PAGER (and EDITOR, MAN) / EDITOR / MAN | 1,335 / 1,321 / 1,334 / 1,337 KB | 109-117 KB |
+| no FSCK / ARCHIVE | 1,305 / 1,293 KB | 117 KB |
+| headless | 1,096 KB | 103 KB |
+| offline | 660 KB | 43 KB |
+| minimal, pico2-minimal | 379 KB | 29 KB |
+
 ## 11. Decisions and open items
 
 Decided by the user, 2026-11-27:

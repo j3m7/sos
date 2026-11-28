@@ -300,38 +300,16 @@ set(SOS_SOURCES
     src/shell/login.c
     src/shell/termtext.c
     src/shell/charwidth.c
-    src/edit/edit.c
-    src/edit/editor.c
-    src/edit/fsterm.c
-    src/edit/pager.c
-    src/edit/screen.c
-    src/edit/view.c
-    src/man/man.c
-    src/man/man_topic.c
-    src/chat/chat.c
     src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/sdstat.c
-    src/files/fsck.c
-    src/files/fsck_check.c
-    src/files/fsck_check_board.c
     src/files/card_check.c
-    src/files/fsck_exfat.c
-    src/files/fsck_plan.c
-    src/files/fsck_repair.c
     src/files/bigjob.c
     src/files/files.c
-    src/files/gz.c
-    src/files/gzip.c
-    src/files/gzw.c
     src/files/path.c
     src/files/sha256hw.c
     src/files/sums.c
     src/files/sums_parse.c
-    src/files/tar.c
-    src/files/tar_create.c
-    src/files/tar_parse.c
-    src/files/tar_write.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c
@@ -393,7 +371,41 @@ set(SOS_SOURCES_LUA
     src/lua/lua_info.c
     src/lua/lua_json.c
 )
-foreach(f NET TLS HTTP NTS SSH LUA)
+set(SOS_SOURCES_CHAT
+    src/chat/chat.c
+)
+set(SOS_SOURCES_PAGER
+    src/edit/fsterm.c
+    src/edit/pager.c
+    src/edit/screen.c
+    src/edit/view.c
+)
+set(SOS_SOURCES_EDITOR
+    src/edit/edit.c
+    src/edit/editor.c
+)
+set(SOS_SOURCES_MAN
+    src/man/man.c
+    src/man/man_topic.c
+)
+set(SOS_SOURCES_FSCK
+    src/files/fsck.c
+    src/files/fsck_check.c
+    src/files/fsck_check_board.c
+    src/files/fsck_exfat.c
+    src/files/fsck_plan.c
+    src/files/fsck_repair.c
+)
+set(SOS_SOURCES_ARCHIVE
+    src/files/gz.c
+    src/files/gzip.c
+    src/files/gzw.c
+    src/files/tar.c
+    src/files/tar_create.c
+    src/files/tar_parse.c
+    src/files/tar_write.c
+)
+foreach(f NET TLS HTTP NTS SSH LUA CHAT PAGER EDITOR MAN FSCK ARCHIVE)
     if (SOS_FEATURE_${f})
         list(APPEND SOS_SOURCES ${SOS_SOURCES_${f}})
     endif()
@@ -508,7 +520,6 @@ target_link_libraries(sos
     hardware_watchdog
     hardware_adc            # chip temperature and supply voltage (core/sensors.h)
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
-    zlib
     pico_sha256             # the SHA-256 block for sha256sum and fetch (files/sha256hw.h)
     wolfssl                 # wolfCrypt: sealing, hashes, card encryption (the core's)
 )
@@ -520,6 +531,9 @@ if (SOS_FEATURE_SSH)
 endif()
 if (SOS_FEATURE_TLS)
     target_link_libraries(sos sos-ringbuffer)  # tls/tls.c's TCP input
+endif()
+if (SOS_FEATURE_ARCHIVE)
+    target_link_libraries(sos zlib)            # gzip, gunzip, zcat, tar z
 endif()
 if (SOS_FEATURE_LUA)
     target_link_libraries(sos pico_multicore)  # Lua on core 1 (also makes malloc mutex-protected)

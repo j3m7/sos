@@ -66,7 +66,47 @@
         "SOS_FEATURE_HTTP": "OFF",
         "SOS_FEATURE_NTS": "OFF",
         "SOS_FEATURE_SSH": "OFF",
-        "SOS_FEATURE_LUA": "OFF"
+        "SOS_FEATURE_LUA": "OFF",
+        "SOS_FEATURE_CHAT": "OFF",
+        "SOS_FEATURE_PAGER": "OFF",
+        "SOS_FEATURE_EDITOR": "OFF",
+        "SOS_FEATURE_MAN": "OFF",
+        "SOS_FEATURE_FSCK": "OFF",
+        "SOS_FEATURE_ARCHIVE": "OFF"
+      }
+    },
+    {
+      "name": "headless",
+      "displayName": "Pico 2 W network appliance: SSH, SFTP, time, HTTPS; no Lua, editor, man, chat, archives",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-headless",
+      "cacheVariables": {
+        "SOS_FEATURE_LUA": "OFF",
+        "SOS_FEATURE_EDITOR": "OFF",
+        "SOS_FEATURE_MAN": "OFF",
+        "SOS_FEATURE_CHAT": "OFF",
+        "SOS_FEATURE_ARCHIVE": "OFF"
+      }
+    },
+    {
+      "name": "pico2-minimal",
+      "displayName": "Plain Pico 2, the security core, the shell and the card",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-pico2-minimal",
+      "cacheVariables": {
+        "SOS_FEATURE_NET": "OFF",
+        "SOS_FEATURE_TLS": "OFF",
+        "SOS_FEATURE_HTTP": "OFF",
+        "SOS_FEATURE_NTS": "OFF",
+        "SOS_FEATURE_SSH": "OFF",
+        "PICO_BOARD": "pico2",
+        "SOS_FEATURE_LUA": "OFF",
+        "SOS_FEATURE_CHAT": "OFF",
+        "SOS_FEATURE_PAGER": "OFF",
+        "SOS_FEATURE_EDITOR": "OFF",
+        "SOS_FEATURE_MAN": "OFF",
+        "SOS_FEATURE_FSCK": "OFF",
+        "SOS_FEATURE_ARCHIVE": "OFF"
       }
     }
   ],
@@ -94,6 +134,14 @@
     {
       "name": "minimal",
       "configurePreset": "minimal"
+    },
+    {
+      "name": "headless",
+      "configurePreset": "headless"
+    },
+    {
+      "name": "pico2-minimal",
+      "configurePreset": "pico2-minimal"
     }
   ]
 }

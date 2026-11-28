@@ -34,6 +34,7 @@ typedef struct {
     void (*stamp)(char *buf, size_t len);       // the time to show on a message
 } chat_hooks_t;
 
+#if SOS_HAVE_CHAT
 void chat_init(const chat_hooks_t *hooks);
 
 // A shell has started (after shell_init): `slot` is shown by `who` (0 = console, SSH sessions
@@ -70,5 +71,17 @@ typedef struct {
     bool in_chat;
 } chat_peer_t;
 unsigned chat_peers(chat_peer_t *out, unsigned max);
+#else
+// No chat in this image (SOS_FEATURE_CHAT off): what the shells and SSH sessions call does
+// nothing (docs/design/build-features.md §4.4). The commands and sos.who/sos.wall aren't built.
+static inline void chat_init(const chat_hooks_t *hooks) { (void)hooks; }
+static inline bool chat_register(shell_t *sh, unsigned slot, const char *name, const char *from) {
+    (void)sh, (void)slot, (void)name, (void)from;
+    return true;
+}
+static inline void chat_unregister(shell_t *sh) { (void)sh; }
+static inline void chat_deliver(shell_t *sh) { (void)sh; }
+static inline const char *chat_name(const shell_t *sh) { (void)sh; return NULL; }
+#endif
 
 #endif

@@ -528,6 +528,12 @@ static bool check_stages(shell_t *sh, const words_t *w, int i) {
                 return false;
             }
             bool more = !strcmp(name, sink_more);
+#if !SOS_HAVE_PAGER
+            if (more) {
+                shell_printf(sh, "more: not in this build (no pager)\n");
+                return false;
+            }
+#endif
             if (!more && !find_filter(name)) {
                 shell_printf(sh, "%s: not a filter (grep, head, tail, wc, tee, more)\n", name);
                 return false;
@@ -623,7 +629,9 @@ static const shell_word_t tee_options[2] = {{"-a", NULL, SHELL_PATH}, {0}};
 const shell_cmd_t pipe_stage_table[] = {
     {"grep", NULL, NULL, grep_options, 0},
     {"head", NULL, NULL, NULL, 0},
+#if SOS_HAVE_PAGER
     {"more", NULL, NULL, NULL, 0},
+#endif
     {"tail", NULL, NULL, NULL, 0},
     {"tee", NULL, NULL, tee_options, SHELL_PATH},
     {"wc", NULL, NULL, NULL, 0},
