@@ -47,10 +47,18 @@
 #include "core/statecheck.h"
 #include "files/card_check.h"
 #include "files/fsck_check.h"
+#if SOS_HAVE_LUA
 #include "lua/lua_check.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/net_check.h"
+#endif
+#if SOS_HAVE_SSH
 #include "ssh/hostkey_check.h"
+#endif
+#if SOS_HAVE_LUA
 #include "lua/lua_core1.h"
+#endif
 
 #define SEED_PERIOD_S 60                // the background seed checks: once a minute
 
@@ -66,8 +74,12 @@ static health_step_t check_glitch(void **state, bool cancel, health_result_t *ou
 static health_step_t check_stack(void **state, bool cancel, health_result_t *out) {
     (void)state;
     if (!cancel)
+#if SOS_HAVE_LUA
         health_judge_stack(stackmon_peak(), stackmon_size(), lua_core1_stack_peak(),
                            LUA_CORE1_STACK, out);
+#else
+        health_judge_stack(stackmon_peak(), stackmon_size(), 0, 0, out);   // core 0 alone
+#endif
     return HEALTH_DONE;
 }
 
@@ -342,9 +354,11 @@ static health_step_t check_crypto(void **state, bool cancel, health_result_t *ou
     return kat_step("crypto", true, state, cancel, out);
 }
 
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
 static health_step_t check_crypto_ssh(void **state, bool cancel, health_result_t *out) {
     return kat_step("crypto-ssh", false, state, cancel, out);
 }
+#endif
 
 #define CRYPTO_SSH_FIRST_S  30          // after boot: Wi-Fi is coming up, nobody logged in yet
 #define CRYPTO_SSH_PERIOD_S 86400       // then daily
@@ -366,8 +380,11 @@ static const health_check_t checks[] = {
     {"flash", HEALTH_BOOT, 0, 0, 0, check_flash},
     {"trng", HEALTH_BOOT, 0, 0, HEALTH_GATE_KEYS, check_trng},
     {"crypto", HEALTH_BOOT, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, check_crypto},
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
+    // Ed25519 is SSH's, X25519 SSH's and TLS's (docs/design/build-features.md §4.3).
     {"crypto-ssh", HEALTH_BACKGROUND, CRYPTO_SSH_PERIOD_S, CRYPTO_SSH_FIRST_S,
      HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, check_crypto_ssh},
+#endif
     {"glitch", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_glitch},
     {"stack", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_stack},
     {"heap", HEALTH_BACKGROUND, SEED_PERIOD_S, 0, 0, check_heap},
@@ -377,14 +394,22 @@ static const health_check_t checks[] = {
     {"rootsecret", HEALTH_BACKGROUND, STATE_PERIOD_S, 45, 0, statecheck_root_step},
     {"otp", HEALTH_BACKGROUND, STATE_PERIOD_S, 50, 0, statecheck_otp_step},
     {"failcount", HEALTH_BACKGROUND, STATE_PERIOD_S, 55, 0, statecheck_failcount_step},
+#if SOS_HAVE_SSH
     {"hostkey", HEALTH_BACKGROUND, STATE_PERIOD_S, 60, 0, hostkey_check_step},
+#endif
     {"card", HEALTH_BACKGROUND, CARD_PERIOD_S, 90, 0, card_check_step},
+#if SOS_HAVE_LUA
     {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, lua_check_core1_step},
+#endif
     {"heap-sum", HEALTH_BACKGROUND, HEAPSUM_PERIOD_S, 70, 0, bgcheck_heap_step},
     {"rtc-drift", HEALTH_BACKGROUND, DRIFT_PERIOD_S, 100, 0, bgcheck_drift_step},
+#if SOS_HAVE_NET
     {"wifi", HEALTH_BACKGROUND, COUNT_PERIOD_S, 110, 0, wifi_check_step},
+#endif
     {"sd-bus", HEALTH_BACKGROUND, COUNT_PERIOD_S, 115, 0, sdbus_check_step},
+#if SOS_HAVE_NET
     {"net-pools", HEALTH_BACKGROUND, COUNT_PERIOD_S, 120, 0, pools_check_step},
+#endif
     // Phase 5 (§9.7): only on `health full` or `health run <name>`, last, in this order.
     {"ram", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_ram_step},
     {"image", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_image_step},

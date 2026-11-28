@@ -8,14 +8,20 @@
 
 #include "hardware/sync.h"
 #include "pico/aon_timer.h"
+#if SOS_HAVE_NET
 #include "pico/cyw43_arch.h"
+#endif
 #include "pico/time.h"
+#if SOS_HAVE_NET
 #include "lwip/apps/sntp.h"
+#endif
 
 #include "core/history.h"
 #include "core/log.h"
 #include "core/settings.h"
+#if SOS_HAVE_NTS
 #include "time/nts.h"
+#endif
 #include "time/rtc.h"
 #include "time/timeconv.h"
 #include "time/tzzone.h"
@@ -46,7 +52,9 @@ static bool nts_cancelled;              // periodic sync turned off while runnin
 static uint64_t nts_started_us;
 static char nts_server_used[CONFIG_NTP_SERVER_MAX + 1];
 static uint64_t retry_at_us;            // boot timer; 0 = no retry delay pending
-static uint32_t retry_delay_ms;
+#if SOS_HAVE_NTS
+static uint32_t retry_delay_ms;         // nts_done()'s
+#endif
 static uint64_t failed_us;              // boot timer, last failed sync (0 = none since success)
 static char failed_why[128];
 
@@ -64,7 +72,9 @@ static int64_t synced_delay_us;         // round trip of the NTS sample used
 #define SNTP_DELAY_MS 50                // SNTP gives no round trip: take a typical one
 static timeconv_drift_t drift;
 static bool drift_measured;             // a sync since boot filled `drift`
+#if SOS_HAVE_NTS || SOS_HAVE_NET
 static uint32_t last_delay_ms;          // the round trip of the sync before
+#endif
 
 // SNTP, only on `time sync sntp`.
 static bool sntp_running;
@@ -108,7 +118,7 @@ static uint64_t periodic_interval_us(void) {
 }
 
 static const char *configured_server(void) {
-    return settings()->ntp_server[0] ? settings()->ntp_server : NTS_DEFAULT_SERVER;
+    return settings()->ntp_server[0] ? settings()->ntp_server : SOS_NTS_SERVER;   // NTS_DEFAULT_SERVER
 }
 
 // "clock set" or "clock stepped +23 ms", for the last accepted sync.
@@ -125,6 +135,8 @@ static bool rtc_baseline(history_rec_t *rec) {
     return history_list(history_sector(), HISTORY_KIND_RTC, rec, 1) == 1 && rec->confirmed;
 }
 
+#if SOS_HAVE_NTS || SOS_HAVE_NET
+// A sync to apply: NTS, or SNTP on request (none in an image without either).
 // The RTC's drift since its baseline, read at the second `next` (Unix s) that the RTC is about to
 // be set to; the XOSC's since the sync before, if that was in this uptime.
 static void measure(int64_t next, int64_t step, uint64_t prev_sync_us, bool prev_set,
@@ -194,10 +206,17 @@ static void apply_time(int64_t t_us, time_source_t src) {
     log_msg(SOS_LOG_DAEMON | (rtc_ok ? SOS_LOG_NOTICE : SOS_LOG_WARNING), "%s: %s UTC, %s, rtc %s",
             src == SRC_NTS ? "nts" : "sntp", buf, step, rtc_ok ? "updated" : "not updated");
 }
+#endif
 
 // --- NTS -----------------------------------------------------------------------------------------
 
+// Without NTS (SOS_FEATURE_NTS off) nothing can sync the clock but SNTP on request: the RTC
+// keeps the time (docs/design/build-features.md §3).
 static bool start_nts(sync_reason_t reason) {
+#if !SOS_HAVE_NTS
+    (void)reason;
+    return false;
+#else
     snprintf(nts_server_used, sizeof(nts_server_used), "%s", configured_server());
     if (!nts_sync_start(nts_server_used))
         return false;                           // busy (e.g. an `nts ke` in progress)
@@ -209,9 +228,11 @@ static bool start_nts(sync_reason_t reason) {
             "nts: getting the time from %s%s",
             nts_server_used, reason == WHY_PERIODIC ? " (periodic sync)" : "");
     return true;
+#endif
 }
 
 static void nts_done(void) {
+#if SOS_HAVE_NTS
     int64_t offset_us = 0, delay_us = 0;
     const char *err = NULL;
     nts_sync_state_t st = nts_sync_result(&offset_us, &delay_us, &err);
@@ -254,9 +275,12 @@ static void nts_done(void) {
         log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING,
                 "nts: sync with %s failed: %s", nts_server_used, failed_why);
     }
+#endif
 }
 
 // --- SNTP (only on request) ----------------------------------------------------------------------
+
+#if SOS_HAVE_NET
 
 // lwIP SNTP hooks (lwipopts.h); lwIP context.
 void sos_sntp_set_time(unsigned int sec, unsigned int us) {
@@ -325,6 +349,7 @@ static void sntp_done(void) {
     sntp_end();
     apply_time(t_us, SRC_SNTP);
 }
+#endif
 
 // --- public --------------------------------------------------------------------------------------
 
@@ -448,10 +473,14 @@ bool timesync_request_nts(void) {
 }
 
 bool timesync_request_sntp(void) {
+#if SOS_HAVE_NET
     if (nts_running || sntp_running)
         return false;
     sntp_begin();
     return true;
+#else
+    return false;                               // no network to ask
+#endif
 }
 
 void timesync_poll(void) {
@@ -461,8 +490,10 @@ void timesync_poll(void) {
             nts_cancelled = true;
         nts_done();
     }
+#if SOS_HAVE_NET
     if (sntp_running)
         sntp_done();
+#endif
 }
 
 static void print_duration(shell_t *sh, uint64_t us) {
@@ -595,6 +626,7 @@ void timesync_status(shell_t *sh) {
         }
         shell_printf(sh, "\n");
     }
+#if SOS_HAVE_NTS
     shell_printf(sh, "server: %s (NTS)%s\n", configured_server(),
                  settings()->ntp_server[0] ? "" : ", build default");
 
@@ -610,4 +642,5 @@ void timesync_status(shell_t *sh) {
         }
         shell_printf(sh, "\n");
     }
+#endif
 }

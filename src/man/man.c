@@ -37,7 +37,9 @@
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "man/man_topic.h"
+#if SOS_HAVE_HTTP
 #include "net/http.h"
+#endif
 #include "shell/complete.h"
 #include "shell/termtext.h"
 
@@ -54,9 +56,15 @@
 #define MAN_URL_FMT     "https://raw.githubusercontent.com/" MAN_REPO "/%s/man/pages.bundle"
 #define MAN_STEP_US     20000           // most of a main-loop pass the install job takes
 
+#if SOS_HAVE_HTTP
 #define MAN_HOW_TO_INSTALL                                                                     \
     "no manual pages on the card: 'man install' downloads them from GitHub (the board needs\n" \
     "the network), or copy them over SFTP from the repository: tools/man-install.sh <host>\n"
+#else
+#define MAN_HOW_TO_INSTALL                                                                     \
+    "no manual pages on the card: copy them from the repository's man/ directory (this\n"     \
+    "image has no HTTP client for 'man install')\n"
+#endif
 
 
 static void page_path(char *out, size_t cap, const char *topic, const char *ext) {
@@ -78,6 +86,7 @@ static bool have_pages(void) {
     return found;
 }
 
+#if SOS_HAVE_HTTP
 // --- installing ----------------------------------------------------------------------------------
 
 typedef struct {
@@ -371,6 +380,16 @@ static void offer_install(shell_t *sh) {
     shell_printf(sh, "No manual pages on the card. Download them from GitHub?\n  %s\n", url);
     shell_ask(sh, "Download now? [y/N] ", false, on_install_answer, NULL);
 }
+#else
+// No HTTP client in this image (SOS_FEATURE_HTTP off): the pages come over SFTP or by hand.
+static void install(shell_t *sh) {
+    shell_printf(sh, "man install: not in this build (no HTTP client); " MAN_HOW_TO_INSTALL);
+}
+
+static void offer_install(shell_t *sh) {
+    shell_printf(sh, MAN_HOW_TO_INSTALL);
+}
+#endif
 
 // --- the listing ---------------------------------------------------------------------------------
 
@@ -557,7 +576,9 @@ static void man_tab_entry(const char *name, bool is_dir, void *arg) {
 }
 
 void man_tab_topics(shell_t *sh, shell_value_fn fn, void *arg) {
+#if SOS_HAVE_HTTP
     fn("install", NULL, arg);
+#endif
     man_tab_t t = {fn, arg};
     shell_list_dir(sh, MAN_DIR, man_tab_entry, &t);
 }

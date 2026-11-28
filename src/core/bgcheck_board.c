@@ -21,7 +21,9 @@
 #include "core/history.h"
 #include "core/log.h"
 #include "core/resetwhy.h"
+#if SOS_HAVE_LUA
 #include "lua/lua_check.h"
+#endif
 #include "time/timesync.h"
 
 // --- resets ------------------------------------------------------------------------------------------
@@ -282,6 +284,8 @@ void bgcheck_board_dump(health_print_fn print, void *arg) {
          (unsigned)h.a.arena, (unsigned)h.a.tags, (unsigned long)h.start, (unsigned long)h.end,
          (unsigned long)h.limit, (unsigned long)h.msplim);
 
+#if SOS_HAVE_LUA
     lua_check_dump(print, arg);
+#endif
 }
 #endif

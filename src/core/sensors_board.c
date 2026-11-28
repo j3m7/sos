@@ -14,11 +14,18 @@
 // input off); the driver gives it back to PIO, with its pull-down, at the start of every
 // transfer (cyw43_bus_pio_spi.c, start_spi_comms). Tried on dev-1 at 45 readings a second
 // under heavy ping traffic: no more packets lost than without the readings.
+//
+// A Pico 2 W built without the Wi-Fi chip (SOS_FEATURE_NET off) reads neither: VSYS reaches the
+// pin only while the chip is deselected, and USB power is the chip's pin. The plain Pico 2 has
+// both on its own pins (PICO_VBUS_PIN, PICO_VSYS_PIN), read without a lock
+// (docs/design/build-features.md §4.8).
 
 #include "core/sensors.h"
 
 #include "hardware/adc.h"
+#if SOS_HAVE_NET
 #include "pico/cyw43_arch.h"
+#endif
 #include "pico/stdlib.h"
 
 #include "core/log.h"
@@ -73,7 +80,7 @@ int sensors_read_temp(void) {
 }
 
 int sensors_read_vsys(void) {
-#if defined(PICO_VSYS_PIN) && defined(CYW43_WL_GPIO_VBUS_PIN)
+#if SOS_HAVE_NET && defined(PICO_VSYS_PIN) && defined(CYW43_WL_GPIO_VBUS_PIN)
     cyw43_thread_enter();
     // USB power, from the Wi-Fi chip's VBUS sense pin. Asking also wakes the Wi-Fi chip, which
     // Raspberry Pi's read_vsys example does before reading VSYS.
@@ -88,6 +95,18 @@ int sensors_read_vsys(void) {
     sensors_stats_add(&vsys_stats, mv, uptime_s());
     sensors_window_add(&vsys_window, mv);
     return mv;
+#elif defined(PICO_VSYS_PIN) && defined(PICO_VBUS_PIN) && !defined(CYW43_WL_GPIO_VBUS_PIN)
+    // The plain Pico 2: USB power and VSYS on the RP2350's own pins, nothing shared.
+    usb = gpio_get(PICO_VBUS_PIN) ? 1 : 0;
+    adc_gpio_init(PICO_VSYS_PIN);
+    adc_select_input(PICO_VSYS_PIN - ADC_BASE_PIN);
+    for (unsigned i = 0; i < SENSORS_VSYS_DISCARD; i++)
+        (void)adc_read();
+    uint32_t sum = sum_conversions();
+    int mv = sensors_vsys_mv(sum, SENSORS_SAMPLES, SENSORS_VREF_UV, SENSORS_VSYS_DIVIDER);
+    sensors_stats_add(&vsys_stats, mv, uptime_s());
+    sensors_window_add(&vsys_window, mv);
+    return mv;
 #else
     return SENSORS_NONE;
 #endif
@@ -95,6 +114,9 @@ int sensors_read_vsys(void) {
 
 void sensors_init(void) {
     adc_init();
+#if defined(PICO_VBUS_PIN) && !defined(CYW43_WL_GPIO_VBUS_PIN)
+    gpio_init(PICO_VBUS_PIN);           // the plain Pico 2's USB power sense: an input
+#endif
     adc_set_temp_sensor_enabled(true);
     // The sensor's bias takes a moment to settle: read at once, it says the chip is a few
     // degrees warmer than it is.

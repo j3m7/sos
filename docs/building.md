@@ -77,6 +77,46 @@ SFTP hardware tests pass with it. One 2 MB SFTP download took longer (10.8 s aga
 single reading over Wi-Fi each). Its main-loop stack peak was a little higher (3,720 against
 about 3,550 of 8,192 bytes). `debug` remains the default.
 
+### Build features
+
+Parts of SOS can be left out of the image at compile time
+([design note](design/build-features.md)). Each is a CMake option, on by default:
+
+| Option | What it is | Needs |
+|---|---|---|
+| `SOS_FEATURE_NET` | Wi-Fi, lwIP, `net`, `wifi`, `ping`, SNTP | the Wi-Fi chip (Pico 2 W) |
+| `SOS_FEATURE_TLS` | TLS 1.3 client, `tls` | NET |
+| `SOS_FEATURE_HTTP` | `http`, `fetch`, `man install`, `time zone install` | TLS |
+| `SOS_FEATURE_NTS` | authenticated time: `nts`, `time sync`, `time server` | TLS |
+| `SOS_FEATURE_SSH` | the SSH server and SFTP, `ssh`, `key` | NET |
+| `SOS_FEATURE_LUA` | Lua scripts on core 1, `lua` | |
+
+The security core (root secret, sealed configuration, console password, health checks,
+watchdog) is always built. Turning on a feature whose dependency is off stops the configure
+with a message saying what to turn off too; a feature left unset follows its dependencies, so
+`-DSOS_FEATURE_NET=OFF` also leaves out TLS, HTTP, NTS and SSH. Each option is `AUTO` (the
+default), `ON` or `OFF`, and a build directory remembers only what it was given, so turning NET
+back on there brings the others back. A build directory configured before the options became
+`AUTO`/`ON`/`OFF` has them stored as plain `ON`/`OFF`, which now count as asked for: configure a
+fresh directory, or clear them once with `cmake -B build -U 'SOS_FEATURE_*'`.
+
+Presets for the usual combinations, each in its own build directory:
+
+```sh
+cmake --preset offline && cmake --build --preset offline   # nothing over the air
+cmake --preset pico2 && cmake --build --preset pico2       # the plain Pico 2 (no Wi-Fi chip)
+cmake --preset minimal && cmake --build --preset minimal   # the security core, shell and card
+```
+
+On the board, `version` and `health` show the features line (`features: LUA (off: NET TLS HTTP
+NTS SSH)`), and Lua scripts read it with `sos.features()`. `help` and Tab list only what the
+image has. A Pico 2 W built without NET doesn't drive the Wi-Fi chip at all: its LED stays off,
+and `power` can't read VSYS or USB power (they go through the chip).
+
+`just features` builds every combination worth checking into `build-features/<name>` and prints
+the sizes; any warning fails it. Run it before review on a change that adds an
+`#if SOS_HAVE_<NAME>`.
+
 The [`justfile`](../justfile) has shortcuts for these and the other everyday commands (tests,
 flashing, provisioning, hardware tests, cleaning), if [just](https://github.com/casey/just) 1.30 or newer
 is installed: `just` lists them. It is optional: each recipe runs the commands documented here.

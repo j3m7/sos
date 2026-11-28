@@ -27,6 +27,11 @@ build-in dir *cmake_args:
     cmake --preset debug -B {{ quote(dir) }} {{ cmake_args }}
     cmake --build {{ quote(dir) }}
 
+# Docs: docs/design/build-features.md §8; `just features offline pico2` builds only those two.
+# Build every feature combination (build-features/<name>) and show sizes; a warning fails
+features *names:
+    tools/features.sh {{ names }}
+
 # Host unit tests; extra arguments go to ctest, e.g. `just test -R config`
 test *ctest_args:
     cmake -S tests -B build-tests

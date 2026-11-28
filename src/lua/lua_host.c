@@ -35,8 +35,12 @@
 #include "lua/lua_core1.h"
 #include "lua/lua_hash.h"
 #include "lua/lua_health.h"
+#if SOS_HAVE_NET
 #include "lua/lua_net.h"
+#endif
+#if SOS_HAVE_HTTP
 #include "net/http.h"
+#endif
 #include "shell/words.h"
 #include "time/timeconv.h"
 #include "time/timesync.h"
@@ -89,7 +93,9 @@ static bool script_alive(void) {
 
 // Core 0's messages reach the script whole (#220). The longest are http_error()'s, bounded by
 // HTTP_ERROR_MAX; the rest (FatFs, paths, "interrupted") are shorter.
+#if SOS_HAVE_HTTP
 _Static_assert(sizeof(lua_req.error) >= HTTP_ERROR_MAX, "lua_req.error must hold any HTTP error");
+#endif
 
 static bool req_error(const char *msg) {
     snprintf(lua_req.error, sizeof(lua_req.error), "%s", msg);
@@ -400,6 +406,7 @@ static void serve_info(void) {
 // inside a shell job: the TLS handshake needs stack, and an SSH session's job runs deep inside
 // sshd_poll().
 
+#if SOS_HAVE_HTTP
 static http_req_t *http;                // the script's request, if any
 static bool http_started;               // the pending LR_HTTP_REQUEST has been started
 
@@ -513,7 +520,14 @@ static bool serve_http(void) {
 static bool is_http(lua_req_type_t t) {
     return t == LR_HTTP_REQUEST || t == LR_HTTP_READ || t == LR_HTTP_CLOSE;
 }
+#else
+// No HTTP in this image (SOS_FEATURE_HTTP off): sos.http isn't there, so no request comes.
+static bool http_started;
+static void http_drop(void) {}
+static bool is_http(lua_req_type_t t) { (void)t; return false; }
+#endif
 
+#if SOS_HAVE_NET
 static bool is_net(lua_req_type_t t) {
     return t == LR_SCAN || t == LR_RESOLVE || t == LR_PING;
 }
@@ -536,10 +550,19 @@ static bool serve_net(void) {
         lua_req.len = (uint32_t)len;
     return true;
 }
+#else
+// No network in this image (SOS_FEATURE_NET off): sos.wifi, sos.net and sos.ping aren't there.
+static bool is_net(lua_req_type_t t) { (void)t; return false; }
+static void lua_net_drop(void) {}
+#endif
 
 // Answer the pending request, if it can be answered here and now.
 static void serve(bool main_loop) {
+#if !SOS_HAVE_HTTP && !SOS_HAVE_NET
+    (void)main_loop;                    // only the network's requests wait for the main loop
+#endif
     if (is_http(lua_req.type)) {
+#if SOS_HAVE_HTTP
         if (!main_loop)
             return;
         lua_req.result = 0;
@@ -547,13 +570,16 @@ static void serve(bool main_loop) {
         if (!serve_http())
             return;                             // not yet: again next pass
         http_started = false;
+#endif
     } else if (is_net(lua_req.type)) {
+#if SOS_HAVE_NET
         if (!main_loop)
             return;
         lua_req.result = 0;
         lua_req.error[0] = '\0';
         if (!serve_net())
             return;
+#endif
     } else {
         lua_req.result = 0;
         lua_req.error[0] = '\0';

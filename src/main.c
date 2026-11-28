@@ -5,15 +5,20 @@
 #include <time.h>
 
 #include "hardware/sync.h"
+#if SOS_HAVE_NET
 #include "pico/cyw43_arch.h"
+#endif
 #include "pico/stdio/driver.h"
 #include "pico/stdlib.h"
 
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/wc_port.h>
+#if SOS_HAVE_SSH
 #include <wolfssh/ssh.h>
+#endif
 
 #include "chat/chat.h"
+#include "core/board.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
 #include "core/history.h"
@@ -34,15 +39,25 @@
 #include "core/memhold.h"
 #endif
 #include "files/cardkey.h"
+#if SOS_HAVE_LUA
 #include "lua/lua_host.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/wifi.h"
+#endif
 #include "shell/login.h"
 #include "shell/shell.h"
+#if SOS_HAVE_SSH
 #include "ssh/hostkey.h"
 #include "ssh/sshd.h"
+#endif
+#if SOS_HAVE_NTS
 #include "time/nts.h"
+#endif
 #include "time/timesync.h"
+#if SOS_HAVE_TLS
 #include "tls/tls.h"
+#endif
 
 // Minutes without a key typed after which an open console locks itself. 0: never. A CMake
 // setting (-DSOS_CONSOLE_IDLE_LOCK_MIN=..., or local.cmake).
@@ -191,11 +206,19 @@ int main(void) {
     history_boot();                     // this boot's record, with the time if the RTC had it
 
     cryptoheap_init();                  // wolfSSL heap accounting, before any allocation
+#if SOS_HAVE_TLS
     tls_init();                         // and TLS connections' peaks from it
-    if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
+#endif
+    if (wolfCrypt_Init() != 0) {
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "crypto init failed");
         return 1;
     }
+#if SOS_HAVE_SSH
+    if (wolfSSH_Init() != WS_SUCCESS) {
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "crypto init failed");
+        return 1;
+    }
+#endif
     // Self-checks (core/health.h), before anything below can make a key: a failed check closes
     // the gates that the root secret, the owner secret and the host key ask first.
     health_boot();
@@ -209,17 +232,22 @@ int main(void) {
     sensors_init();                     // a temperature, kept from before the detector is armed
     glitchdet_start(config_glitch_mode(settings()->glitch_detector));   // armed unless set otherwise
     timesync_apply_cal();               // the RTC's calibration is a setting
+#if SOS_HAVE_SSH
     const uint8_t *hostkey;
     uint32_t hostkey_len;
     hostkey_init();
     hostkey_get(&hostkey, &hostkey_len);    // now, before Wi-Fi; none yet on a board not set up
+#endif
     cardkey_init();                     // the base of the key for encrypted SD cards
 
+#if SOS_HAVE_NET
     if (cyw43_arch_init_with_country(wifi_country_code())) {
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "cyw43 init failed");
         return 1;
     }
     wifi_start();                       // connects in the background; the console works meanwhile
+#endif
+    board_led_init();
 
     // Every key has been derived by now: no more until reset (core/keyprov.h).
     keyprov_lock();
@@ -233,13 +261,18 @@ int main(void) {
     log_set_deferred(true);
     logfile_start();                    // and written to /var/log on the SD card, when there's one
 
+#if SOS_HAVE_SSH
     bool sshd_failed = false;
+#endif
     bool usb_was = stdio_usb_connected();
     absolute_time_t next_blink = get_absolute_time();
     bool led = false;
     for (;;) {
         wdog_feed();
+#if SOS_HAVE_NET
         wifi_poll();
+#endif
+#if SOS_HAVE_SSH
         // Serve SSH once there's a network and someone to let in (keys may be added later).
         if (!sshd_running() && !sshd_failed && wifi_up() && settings()->key_count) {
             // A board set up since boot gets its host key now: it is tied to the owner, who
@@ -249,13 +282,18 @@ int main(void) {
             if (hostkey_get(&hostkey, &hostkey_len))
                 sshd_failed = !sshd_start(hostkey, hostkey_len);
         }
+#endif
+#if SOS_HAVE_NET
         if (wifi_up())
             timesync_network_up();      // starts SNTP only if the RTC had no valid time
+#endif
         sensors_poll();                 // before glitchdet_poll, which keeps the latest readings
         health_poll();                  // one step of a background check, when one is due
         glitchdet_poll();
         timesync_poll();
+#if SOS_HAVE_NTS
         nts_poll();
+#endif
         shell_poll(&console_shell);
         // The console locks itself when the USB terminal goes away (for a second: shorter drops
         // happen around a port being reopened, #153), and when nothing was typed for
@@ -272,8 +310,12 @@ int main(void) {
         console_gate_set(login_locked());   // follows a login, a logout or a lock in this pass
         if (!login_locked())            // a locked console shows nothing
             chat_deliver(&console_shell);   // wall and chat messages from SSH sessions
+#if SOS_HAVE_SSH
         sshd_poll();
+#endif
+#if SOS_HAVE_LUA
         lua_host_poll(true);            // requests from a Lua script on core 1
+#endif
         log_flush();                    // messages logged in interrupt context
         logfile_poll();                 // new messages to the log files
 #ifdef SOS_TEST_COMMANDS
@@ -281,7 +323,7 @@ int main(void) {
 #endif
         if (time_reached(next_blink)) {
             led = !led;
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led);
+            board_led_set(led);
             next_blink = make_timeout_time_ms(led ? 50 : 1950);   // brief blink every 2 s
         }
         sleep_ms(5);
