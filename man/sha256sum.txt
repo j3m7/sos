@@ -48,7 +48,8 @@ LIST FORMAT
     The hex may be upper or lower case and must be the algorithm's length
     (64 digits for SHA-256). A BSD line must name this command's algorithm:
     a 'SHA1 (...)' line counts as improperly formatted for sha256sum.
-    Blank lines and lines starting with '#' are skipped. A line may be up
+    Blank lines and lines starting with '#' are skipped ('#' after spaces
+    counts as improperly formatted, as in GNU). A line may be up
     to 4 KB long ('line <n>: too long' otherwise); lists written on Windows
     (CR LF) work.
 

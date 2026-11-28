@@ -203,6 +203,8 @@ static bool print_step(shell_t *sh, sums_job_t *j) {
             return true;                // for what the next name may say
         if (!j->open && !print_next(sh, j))
             return false;
+        if (!room_for(sh, OUT_ROOM))
+            return true;                // a read error closes the file and says a line at once
         const char *why = NULL;
         hash_step_t r = hash_some(j, t0, &why);
         if (r == HASH_MORE)
@@ -334,6 +336,8 @@ static bool check_step(shell_t *sh, sums_job_t *j) {
             if (n == NEXT_SAID)
                 continue;
         }
+        if (!room_for(sh, OUT_ROOM))
+            return true;                // a read error closes the file and says a line at once
         const char *why = NULL;
         hash_step_t r = hash_some(j, t0, &why);
         if (r == HASH_MORE)
