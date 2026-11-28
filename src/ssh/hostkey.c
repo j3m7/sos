@@ -23,6 +23,7 @@
 #include "core/consoleonly.h"
 #include "core/settings.h"
 #include "ssh/hostkey_record.h"
+#include "ssh/sshd.h"
 
 // The host key is the first page of the key sector (core/keysector.h), which survives
 // reflashing. It's stored sealed (ssh/hostkey_record.h) under a key made from two things: a
@@ -63,7 +64,16 @@ static void wipe(void *p, size_t len) {
         *v++ = 0;
 }
 
+// `config reset` (core/settings.h): the host key was the old owner's. SSH stops now (it would
+// otherwise go on answering with the old key until a reboot) and starts again, with a new host
+// key, once the board is set up.
+static void owner_gone(void) {
+    sshd_stop();
+    hostkey_owner_gone();
+}
+
 void hostkey_init(void) {
+    settings_on_owner_gone(owner_gone);
     have_base = keyprov_derive(KEYPROV_HOSTKEY_SEAL, base);
 }
 

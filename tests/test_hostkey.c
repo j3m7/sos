@@ -16,9 +16,11 @@
 #include "core/log.h"
 #include "core/random.h"
 #include "core/seal.h"
+#include "core/settings.h"
 #include "core/consoleonly.h"
 #include "core/settings.h"
 #include "ssh/hostkey.h"
+#include "ssh/sshd.h"
 #include "ssh/hostkey_record.h"
 #include "test.h"
 
@@ -65,6 +67,10 @@ bool settings_has_owner_secret(void) {
 
 static bool is_console_only;
 bool consoleonly(void) { return is_console_only; }
+// hostkey_init() adds its `config reset` hook (core/settings.h), which stops the SSH server: the
+// tests call hostkey_owner_gone() themselves.
+void settings_on_owner_gone(settings_owner_gone_fn fn) { (void)fn; }
+void sshd_stop(void) {}
 
 static unsigned rng;
 bool random_bytes(void *ctx, uint8_t *out, size_t len) {

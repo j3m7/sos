@@ -25,6 +25,7 @@
 #include "core/failflash.h"
 #include "core/rootsource.h"
 #include "core/consoleonly.h"
+#include "core/cryptoheap.h"
 #include "core/sensors.h"
 #include "core/settings.h"
 #include "core/stackmon.h"
@@ -189,7 +190,8 @@ int main(void) {
     timesync_boot();
     history_boot();                     // this boot's record, with the time if the RTC had it
 
-    tls_init();                         // wolfSSL heap accounting, before any allocation
+    cryptoheap_init();                  // wolfSSL heap accounting, before any allocation
+    tls_init();                         // and TLS connections' peaks from it
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "crypto init failed");
         return 1;

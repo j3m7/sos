@@ -144,7 +144,8 @@ add_test(NAME sensors COMMAND test_sensors)
 
 # src/core/health.c: the health check framework (registry, results, scheduling, gates, text, the
 # Lua record) and the seed checks' judging, with the log, the clock and the Lua writer stood in for.
-add_executable(test_health test_health.c ${SOS_ROOT}/src/core/health.c)
+add_executable(test_health test_health.c ${SOS_ROOT}/src/core/health.c
+    ${SOS_ROOT}/src/lua/lua_health_table.c)
 target_include_directories(test_health PRIVATE ${SOS_ROOT}/src)
 add_test(NAME health COMMAND test_health)
 

@@ -44,6 +44,10 @@ static uint32_t now_s(void) {
     return (uint32_t)(now_us() / 1000000u);
 }
 
+uint32_t health_now_s(void) {
+    return now_s();
+}
+
 // --- names and text --------------------------------------------------------------------------
 
 const char *health_status_name(health_status_t s) {
@@ -419,31 +423,6 @@ void health_format_row(char *out, size_t cap, unsigned index) {
     }
     snprintf(out, cap, "%-11s %-7s %-10s %s", e->check->name, status_upper(e->result.status),
              when, text);
-}
-
-// --- Lua -------------------------------------------------------------------------------------
-
-void health_lua_table(lua_info_t *w) {
-    health_status_t worst = health_worst();
-    lua_info_str(w, "worst", health_status_name(worst));
-    lua_info_int(w, "boot_ms", boot_ms);
-    lua_info_open(w, "checks");
-    uint32_t now = now_s();
-    for (unsigned i = 0; i < count; i++) {
-        const health_entry_t *e = &entries[i];
-        lua_info_open(w, "");
-        lua_info_str(w, "name", e->check->name);
-        lua_info_str(w, "status", health_status_name(e->result.status));
-        lua_info_str(w, "tier", health_tier_name(e->check->tier));
-        if (e->result.status != HEALTH_NONE) {
-            lua_info_str(w, "text", e->result.text);
-            lua_info_int(w, "ago_s", now - e->at_s);
-        }
-        lua_info_int(w, "runs", e->runs);
-        lua_info_int(w, "fails", e->fails);
-        lua_info_close(w);
-    }
-    lua_info_close(w);
 }
 
 // --- judging the seed checks -----------------------------------------------------------------

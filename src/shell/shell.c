@@ -813,12 +813,9 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
     int old_temp_offset = settings()->temp_offset;
     bool erased = settings_reset();
     // The live configuration is gone either way, the owner secret with it: an encrypted card
-    // doesn't stay open under it, and the SSH host key was that owner's. SSH stops now (it
-    // would otherwise go on answering with the old key until a reboot) and starts again, with
-    // a new host key, once the board is set up.
-    sdcard_owner_gone();
-    sshd_stop();
-    hostkey_owner_gone();
+    // doesn't stay open under it, and the SSH host key was that owner's (the hooks the files and
+    // SSH subsystems added, core/settings.h).
+    settings_owner_gone();
     if (erased)
         shell_printf(sh, "configuration erased: no Wi-Fi network and no trusted keys; run "
                          "'setup'\n");

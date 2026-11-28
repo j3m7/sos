@@ -348,6 +348,20 @@ bool settings_reset(void) {
     return ok;
 }
 
+static settings_owner_gone_fn owner_hooks[SETTINGS_OWNER_HOOKS];
+static unsigned owner_hook_count;
+
+void settings_on_owner_gone(settings_owner_gone_fn fn) {
+    if (owner_hook_count == SETTINGS_OWNER_HOOKS)
+        panic("settings: no room for another owner-gone hook (SETTINGS_OWNER_HOOKS)");
+    owner_hooks[owner_hook_count++] = fn;
+}
+
+void settings_owner_gone(void) {
+    for (unsigned i = 0; i < owner_hook_count; i++)
+        owner_hooks[i]();
+}
+
 bool settings_persistent(void) {
     return persistent;
 }

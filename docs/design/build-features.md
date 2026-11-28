@@ -617,9 +617,18 @@ other ranges; leave those out too.
 1. **Commands move to their subsystems** (§4.1), no options yet. A pure move: same table
    order, same `help` text, same `docs/commands.md`; `shell.c` shrinks by roughly half. The riskiest phase for conflicts with other work, so it goes
    first, while shell work is quiet.
-2. **Seams** (§4.3, §4.4): the health checks' read steps moved to their features, the
-   stand-in headers, the owner-gone hooks, the Lua health table moved, `tls_init()` moved to
-   the core, `fullcheck.h` freed of `fsck.h`. Still no options.
+2. **Seams**, still no options, in two PRs so each review stays small:
+   - **2a** (§4.2, §4.4): `tls_init()`'s counting allocators moved to `core/cryptoheap.c`
+     (`cryptoheap_init()` in every build; `tls_init()` only watches it for its connections'
+     peaks); the `sos.health()` record moved to `lua/lua_health_table.c` (pure, still tested by
+     `test_health`), so `core/health.h` no longer includes a Lua header; `config reset`'s
+     owner-gone calls replaced by hooks that `files/cardkey.c` and `ssh/hostkey.c` add at boot
+     (`settings_on_owner_gone()`). The hooks now run in the order added (SSH, then the card);
+     the two don't depend on each other, and SSH still stops before its host key is forgotten.
+     Cost: 128 bytes of code, 24 of static RAM.
+   - **2b** (§4.3): the health checks' read steps moved to their features, with the `sd-check`
+     judging and `fullcheck.h`'s use of `fsck.h`.
+   The stand-in headers (§4.4) move to phase 3: they need `SOS_HAVE_<X>`, which phase 3 adds.
 3. **`cmake/features.cmake` with NET, SSH, LUA** and the presets that use them, plus
    `just features`. The first options are the ones that pay most. Includes the board split
    (§4.8) and the `pico2` presets, since NET off is what a Pico 2 needs.
