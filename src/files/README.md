@@ -179,7 +179,7 @@ includes, no SOS warnings).
   `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
   caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).
 
-## `tar.c`, `tar_parse.c`: tar tf and tar xf
+## `tar.c`, `tar_parse.c`, `tar_create.c`, `tar_write.c`: tar tf, xf, cf and czf
 
 [Design](../../docs/design/archives.md) §6.
 
@@ -204,6 +204,25 @@ includes, no SOS warnings).
   when a path exists, the name FatFs has stored for it (a stat per component) is looked up
   there. Dates via `f_utime()` (FatFs built with `FF_USE_CHMOD 1`: `config/fatfs/ffconf.h`).
   `tests/test_tar.c` runs it over a card in memory whose names compare ignoring case.
+- **`tar_write.c` (pure C, host tested):** the other way: the header blocks for a file or a
+  directory (ustar, 0644/0755, uid/gid 0, no user names; the name split into ustar's prefix
+  where it can be, a pax `x` record with `path` where it can't; sizes from 8 GB in base-256)
+  and the end (two zero blocks, padded to GNU's 10240-byte record). `tests/test_tar_write.c`
+  reads its headers back with `tar_parse.c` in any split and has GNU tar and bsdtar list and
+  extract them (`tests/tar_tools.h`; skipped when the host lacks them); the tar fuzz target
+  round-trips its input as a name.
+- **`tar_create.c`:** `tar cf`/`czf` as a shell job (`tar.c` reads the words): each step
+  reads a directory entry and writes its header, or reads 4 KB of a file and writes it (through
+  `gzw.c` for `cz`), until `STEP_US`. The walk's stack is in the job: per level a `DIR`, the
+  entries read from it and its path's length, at most 16 levels; at most 4 directories are
+  open at a time, because FatFs counts open subdirectories in its 16-entry lock table (SFTP
+  alone may hold 8): a level closed to make room is opened again on the way back and read
+  past what it gave. Skips the archive and its `.part`, files being written
+  (`files_being_written()`, the test `ls` uses, or `FR_LOCKED` at the open), unreadable files.
+  Output to `<archive>.part`, put in place by `files_install_part()`. FAT dates are UTC on the
+  card (the library's `get_fattime()` calls `localtime_r()` with no zone set), so they go into
+  the headers unconverted. `tests/test_tar.c` makes archives on the card in memory, has GNU tar
+  and bsdtar list and extract them, and extracts them again with `tar xf`.
 
 ## `path.c`: paths (pure C, host tested)
 

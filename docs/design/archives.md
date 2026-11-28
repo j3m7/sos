@@ -404,17 +404,41 @@ continues.
 ### 6.7 Creating (`c`)
 
 - `<path>...` relative to `-C <dir>` (default the working directory), stored as given, without
-  a leading `/`. Directories are walked recursively, in directory order.
+  a leading `/` (said once, as for `x`). Directories are walked recursively, in directory order.
+  (Phase 7: a path is cleaned with `tar_name_clean()`, so `.` and empty components are dropped
+  and a path with `..` is refused, `<path>: unsafe path`, since `x` would refuse to extract it;
+  `.` alone is `-C`'s directory, whose contents go in with no entry of its own. `-C` and `-f`
+  may come anywhere after the archive.)
 - The walk keeps its stack on the heap (one `DIR` and the path, per level; at most 16 levels,
   deeper: refused for that directory), not the C stack (`-Wstack-usage=1536`).
+  (Phase 7: the path per level is the length of its prefix in the current path. FatFs counts
+  each open subdirectory in its lock table, `FF_FS_LOCK` 16 shared by everyone, SFTP alone up
+  to 8, so 16 open `DIR`s would starve the log writer and SFTP: at most 4 levels are open at a
+  time. Going deeper closes the outermost open level; coming back to it opens it again and
+  reads past the entries it already gave, one per piece of work. A directory changed meanwhile
+  may then lose or repeat an entry, a race GNU tar has too.)
 - Headers: ustar; a name over 100 bytes that `prefix` can't hold gets a pax `x` record (`path`).
-  Size, mtime from the FAT date (local time converted to UTC with the configured zone), mode
-  `0644` files and `0755` directories, uid/gid 0, no user names.
+  Size, mtime from the FAT date, mode `0644` files and `0755` directories, uid/gid 0, no user
+  names. (Phase 7: `tar_write.c`, pure C. The FAT date is UTC already: the SD library's
+  `get_fattime()` calls `localtime_r()`, and SOS sets no zone (zones are display-only, #240), so
+  no conversion. Sizes from 8 GB in GNU base-256, which GNU tar, bsdtar and `tar_parse.c` read.
+  Names longer than `TAR_NAME_MAX` - 2 bytes, what `x` reads back, are skipped with a note.
+  The pax header itself is named `PaxHeaders/<last component>`.)
+- The end: two zero blocks, then zeros up to GNU tar's 10240-byte record, so a plain archive is
+  a whole number of records as GNU writes them (at most 10 KB more; gzip shrinks it to a few
+  bytes).
 - Skipped with a note: the archive itself (and its `.part`), files being written by someone else
-  (open for writing: what `ls` shows as `being written`), anything not readable.
-- Output to `<archive>.part`, renamed at the end. Not replaced without `-f`.
+  (open for writing: what `ls` shows as `being written`, `files_being_written()`, or `FR_LOCKED`
+  from FatFs at the open, which a synced file still open for writing gives), anything not
+  readable. A file that ends early while read is padded with zeros to its header's size, as GNU
+  does, and said. Paths that don't exist: said and skipped. Nothing added: `nothing to archive`,
+  nothing installed.
+- Output to `<archive>.part`, renamed at the end (`files_install_part()`). Not replaced without
+  `-f`. Ctrl-C or an error deletes the `.part`. Summary: `<archive>: <n> files, <n>
+  directories, <size> bytes (<n> skipped)`, the size the archive's on the card.
+- `cz`: through `gzw.c` (§5.4 settings); heap: the job (~14 KB) + `GZW_HEAP` + 64 KB free.
 - Host tests: archives made here are listed and extracted by GNU tar and bsdtar, and theirs by
-  ours (§7).
+  ours (§7); ours extract ours with the same contents and dates.
 
 ## 7. Tests
 
