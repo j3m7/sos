@@ -17,11 +17,15 @@
 #include <string.h>
 #include <sys/time.h>
 
+#if SOS_HAVE_NET
 #include "pico/cyw43_arch.h"
+#endif
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
+#if SOS_HAVE_NET
 #include "lwip/netif.h"
 #include "lwip/stats.h"
+#endif
 
 #include "core/chipinfo.h"
 #include "core/config.h"
@@ -43,12 +47,18 @@
 #include "core/wdog.h"
 #include "chat/chat.h"
 #include "files/sdcard.h"
+#if SOS_HAVE_SSH
 #include "ssh/sshd.h"
+#endif
+#if SOS_HAVE_TLS
 #include "tls/certstore.h"
 #include "tls/tls_roots.h"
+#endif
 #include "lua/lua_core1.h"
+#if SOS_HAVE_NET
 #include "net/wifi.h"
 #include "net/wifistat.h"
+#endif
 #include "time/rtc.h"
 #include "time/timesync.h"
 
@@ -102,6 +112,7 @@ static void mem_table(lua_info_t *w) {
         lua_info_close(w);
     }
     lua_info_close(w);
+#if SOS_HAVE_NET
     cyw43_arch_lwip_begin();
     struct stats_mem net = lwip_stats.mem;
     unsigned pool_err = lwip_stats.memp[MEMP_PBUF_POOL]->err;
@@ -118,6 +129,7 @@ static void mem_table(lua_info_t *w) {
     lua_info_int(w, "heap", net.err);
     lua_info_close(w);
     lua_info_close(w);
+#endif
     lua_info_open(w, "stack");
     lua_info_int(w, "peak", (int64_t)stackmon_peak());
     lua_info_int(w, "size", (int64_t)stackmon_size());
@@ -183,6 +195,7 @@ static void glitch_table(lua_info_t *w) {
     }
 }
 
+#if SOS_HAVE_NET
 static void wifi_table(lua_info_t *w) {
     lua_info_str(w, "state", wifi_state());
     lua_info_bool(w, "up", wifi_up());
@@ -233,6 +246,7 @@ static void wifi_table(lua_info_t *w) {
     lua_info_int(w, "other", ws.other);
     lua_info_close(w);
 }
+#endif
 
 // What `time` shows. The RTC is read (an I2C transfer of a few bytes).
 static void clock_table(lua_info_t *w) {
@@ -298,6 +312,7 @@ static void who_table(lua_info_t *w) {
     }
 }
 
+#if SOS_HAVE_SSH
 // What `ssh` shows. The sessions are a list: login, address, state, sftp, seconds.
 static void ssh_table(lua_info_t *w) {
     sshd_info_t s;
@@ -327,7 +342,9 @@ static void ssh_table(lua_info_t *w) {
     }
     lua_info_close(w);
 }
+#endif
 
+#if SOS_HAVE_TLS
 // What `tls roots` shows: the built-in roots by name, and the card's file. Reading and checking
 // the file takes what `tls roots` takes (up to CERTSTORE_FILE_MAX from the card, hashed).
 static void tls_table(lua_info_t *w) {
@@ -346,6 +363,7 @@ static void tls_table(lua_info_t *w) {
     lua_info_str(w, "why", c.why);
     lua_info_close(w);
 }
+#endif
 
 // What `sd info` shows. Counting free space can take a moment on a FAT32 card (exFAT keeps a
 // bitmap); `sd info` does the same from any shell.
@@ -430,11 +448,17 @@ size_t lua_health_fill(lua_health_table_t which, uint32_t arg, uint8_t *buf, siz
     case LH_VERSION: version_table(&w); break;
     case LH_RESET:   reset_table(&w); break;
     case LH_GLITCH:  glitch_table(&w); break;
+#if SOS_HAVE_NET
     case LH_WIFI:    wifi_table(&w); break;
+#endif
     case LH_CLOCK:   clock_table(&w); break;
     case LH_WHO:     who_table(&w); break;
+#if SOS_HAVE_SSH
     case LH_SSH:     ssh_table(&w); break;
+#endif
+#if SOS_HAVE_TLS
     case LH_TLS:     tls_table(&w); break;
+#endif
     case LH_SD:      sd_table(&w); break;
     case LH_DMESG:   dmesg_table(&w, arg); break;
     case LH_HEALTH:  lua_health_table(&w); break;     // results only: no check is run

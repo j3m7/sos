@@ -12,10 +12,14 @@
 
 #include "hardware/regs/powman.h"
 #include "hardware/structs/powman.h"
+#if SOS_HAVE_NET
 #include "pico/cyw43_arch.h"
+#endif
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
+#if SOS_HAVE_NET
 #include "lwip/stats.h"
+#endif
 
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/hash.h>
@@ -60,24 +64,50 @@
 #include "files/sdcard.h"
 #include "files/sums.h"
 #include "files/tar.h"
+#if SOS_HAVE_LUA
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
+#endif
+#if SOS_HAVE_HTTP
 #include "net/fetch.h"
+#endif
+#if SOS_HAVE_HTTP
 #include "net/http.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/ping.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/wifi.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/wifi_cmd.h"
+#endif
+#if SOS_HAVE_NET
 #include "net/wifistat.h"
+#endif
+#if SOS_HAVE_SSH
 #include "ssh/hostkey.h"
+#endif
+#if SOS_HAVE_SSH
 #include "ssh/ssh_cmd.h"
+#endif
+#if SOS_HAVE_SSH
 #include "ssh/sshd.h"
+#endif
+#if SOS_HAVE_NTS
 #include "time/nts.h"
+#endif
 #include "time/time_cmd.h"
 #include "time/timeconv.h"
 #include "time/timesync.h"
 #include "time/tzzone.h"
+#if SOS_HAVE_TLS
 #include "tls/certstore.h"
+#endif
+#if SOS_HAVE_TLS
 #include "tls/tls_cmd.h"
+#endif
 
 // --- helpers -------------------------------------------------------------------------------------
 
@@ -117,6 +147,16 @@ static void cmd_version(shell_t *sh) {
     pico_get_unique_board_id_string(serial, sizeof(serial));
     chipinfo_format(chip, sizeof(chip), rp2350_chip_version(), rp2350_rom_version());
     shell_printf(sh, "SOS %s\n", sos_version);
+    // What this image was built with (docs/design/build-features.md §7): a stripped image never
+    // looks like a full one with commands missing.
+    shell_printf(sh, "features: %s\n", SOS_FEATURE_LIST);
+#if defined(SOS_TEST_COMMANDS) && defined(SOS_FORCE_CONSOLE_ONLY)
+    shell_printf(sh, "build: test commands, console-only forced\n");
+#elif defined(SOS_TEST_COMMANDS)
+    shell_printf(sh, "build: test commands\n");
+#elif defined(SOS_FORCE_CONSOLE_ONLY)
+    shell_printf(sh, "build: console-only forced\n");
+#endif
 #ifdef SOS_BURN_IMAGE
     shell_printf(sh, "THIS IS THE BURN IMAGE: it can write OTP (`rootsecret burn`). Not for "
                      "everyday use.\n");
@@ -268,16 +308,28 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "temp cal          chip temperature calibration\n");
     shell_printf(sh, "power             supply voltage (VSYS) and USB power\n");
     shell_printf(sh, "version           firmware commit, board serial, chip revision, secure boot\n");
+#if SOS_HAVE_NTS
     shell_printf(sh, "time [sync]       date and time (UTC) / set clock and RTC from NTS\n");
     shell_printf(sh, "time auto|server  periodic sync / NTS server settings\n");
+#else
+    shell_printf(sh, "time              date and time (UTC)\n");
+#endif
     shell_printf(sh, "time cal [ppm]    RTC calibration: how fast the RTC runs\n");
+#if SOS_HAVE_NTS
     shell_printf(sh, "nts [ke]          NTS status / key exchange (development)\n");
     shell_printf(sh, "nts query         authenticated NTS time query; reports the offset\n");
+#endif
+#if SOS_HAVE_TLS
     shell_printf(sh, "tls roots         trusted root certificates (built-in and SD card)\n");
+#endif
     shell_printf(sh, "mem               heap (by feature) and stack usage\n");
+#if SOS_HAVE_NET
     shell_printf(sh, "net               Wi-Fi and IP status\n");
     shell_printf(sh, "ping <host> [n]   is the host reachable? n echo requests, default 4 (Ctrl-C stops)\n");
+#endif
+#if SOS_HAVE_SSH
     shell_printf(sh, "ssh               SSH server status\n");
+#endif
     shell_printf(sh, "who               who is logged in, and who is in the chat\n");
     shell_printf(sh, "wall <message>    send a message to every other shell\n");
     shell_printf(sh, "chat              talk with the others in the chat room (Ctrl-D leaves)\n");
@@ -289,9 +341,13 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "health            self-checks: the latest result of each\n");
     shell_printf(sh, "rootsecret        the root secret that stored keys are derived from\n");
     shell_printf(sh, "bootkey           would this firmware start with secure boot on? (its key vs OTP)\n");
+#if SOS_HAVE_SSH
     shell_printf(sh, "key [list]        trusted SSH public keys\n");
+#endif
+#if SOS_HAVE_NET
     shell_printf(sh, "wifi              Wi-Fi networks and state\n");
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
+#endif
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
     gzip_help(sh);
@@ -304,32 +360,48 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "<command> | tee [-a] <file>  also write the output to a file (-a appends)\n");
     shell_printf(sh, "                  stages chain: dmesg | grep wifi | tail 5 | more\n");
     shell_printf(sh, "man [<topic>]     the manual: list pages or read one (man install fetches them)\n");
+#if SOS_HAVE_LUA
     shell_printf(sh, "lua <file> | lua -e <code>  run a Lua script (on core 1; Ctrl-C stops)\n");
     shell_printf(sh, "lua               interactive Lua prompt (Ctrl-D or exit leaves)\n");
     shell_printf(sh, "lua -b <file>     run a script in the background (output to the log)\n");
     shell_printf(sh, "lua ps | lua stop the running script / stop it\n");
+#endif
+#if SOS_HAVE_HTTP
     shell_printf(sh, "http get|head <url>, http post <url> <text>  HTTPS request (testing)\n");
     shell_printf(sh, "fetch [-f] <url> [<file>]  download to a file (Ctrl-C stops)\n");
+#endif
     if (sh->io->admin) {
         shell_printf(sh, "setup             guided configuration\n");
         shell_printf(sh, "passwd            set or change the console password\n");
         shell_printf(sh, "glitch watch|on <0-3>, glitch off|default  glitch detector: log triggers / reset on them (default: on 3)\n");
         shell_printf(sh, "log console|history|file <level>  set log levels (until reboot)\n");
         shell_printf(sh, "log rotate [every <N>d|at <HH:MM>]  rotate the log files now / when\n");
+#if SOS_HAVE_NET
         shell_printf(sh, "time sync sntp    one unauthenticated SNTP sync (" SOS_NTP_SERVER ")\n");
+#endif
+#if SOS_HAVE_NTS
         shell_printf(sh, "nts ke <host>     key exchange with another server (development)\n");
+#endif
+#if SOS_HAVE_NET
         shell_printf(sh, "wifi set|connect  change the first network / reconnect\n");
         shell_printf(sh, "wifi add|remove <n>|prefer <n>  more networks: the first in reach is used\n");
         shell_printf(sh, "wifi power on|off Wi-Fi power saving (default off)\n");
         shell_printf(sh, "wifi country <XX>|worldwide  radio rules to follow, e.g. US (after reboot)\n");
         shell_printf(sh, "wifi keepalive on|off  testing: stop announcing the address (until reboot)\n");
         shell_printf(sh, "wifi iovar <name> [<value>]  debugging: read or set a Wi-Fi chip variable\n");
+#endif
+#if SOS_HAVE_SSH
         shell_printf(sh, "key add [line]    trust a public key (paste an authorized_keys line)\n");
         shell_printf(sh, "key del <n>       stop trusting key n\n");
+#endif
         shell_printf(sh, "hostname <name>   set the hostname\n");
+#if SOS_HAVE_NTS
         shell_printf(sh, "time auto <h>|off sync the clock from NTS every h hours (default off)\n");
         shell_printf(sh, "time server <name>|default  set the NTS server\n");
+#endif
+#if SOS_HAVE_TLS
         shell_printf(sh, "tls roots approve|forget  trust /certs/roots.pem for TLS / stop\n");
+#endif
         shell_printf(sh, "config reset      erase the configuration\n");
         shell_printf(sh, "crash fault|stack|panic|hang  testing: stop the firmware that way\n");
         shell_printf(sh, "sd format [exfat|fat32] [plain]\n");
@@ -493,6 +565,7 @@ static void cmd_mem(shell_t *sh) {
                      (unsigned)heap_tag_peak((heap_tag_t)t));
     }
     shell_printf(sh, "  %-8s %7u\n", "other", (unsigned)(h.used > tagged ? h.used - tagged : 0));
+#if SOS_HAVE_NET
     cyw43_arch_lwip_begin();
     struct stats_mem net = lwip_stats.mem;
     cyw43_arch_lwip_end();
@@ -500,11 +573,14 @@ static void cmd_mem(shell_t *sh) {
     shell_printf(sh, "lwip:  %u in use, %u peak, %u total (lwIP's own heap, not part of the above; "
                      "its pools: wifi stats)\n",
                  (unsigned)net.used, (unsigned)net.max, (unsigned)net.avail);
+#endif
     shell_printf(sh, "stack: %u peak of %u bytes\n",
                  (unsigned)stackmon_peak(), (unsigned)stackmon_size());
+#if SOS_HAVE_LUA
     if (lua_core1_stack_peak())
         shell_printf(sh, "lua:   %u peak of %u bytes of core 1 stack (last script)\n",
                      (unsigned)lua_core1_stack_peak(), (unsigned)LUA_CORE1_STACK);
+#endif
 #ifdef SOS_TEST_COMMANDS
     if (memhold_count())
         shell_printf(sh, "held:  %u in %d blocks by 'mem hold' (counted in other above)\n",
@@ -800,8 +876,10 @@ static void set_field(shell_t *sh, const char *what, char *value, char *field, s
     snprintf(field, size, "%s", value);
     save(sh);
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: %s set to '%s'", what, field);
+#if SOS_HAVE_NET
     if (field == settings()->hostname)
         shell_printf(sh, "takes effect on the next Wi-Fi connect ('wifi connect')\n");
+#endif
 }
 
 static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
@@ -823,10 +901,14 @@ static void on_reset_confirm(shell_t *sh, char *answer, void *arg) {
         shell_printf(sh, "error: erasing the saved configuration failed (see dmesg). It's "
                          "cleared in memory, but\nthe saved one is still in flash and comes "
                          "back at the next boot.\n");
+#if SOS_HAVE_NET
     wifi_apply_power();
+#endif
     timesync_apply_cal();               // the RTC goes back to uncalibrated now, not at the next boot
     sensors_temp_offset_changed(old_temp_offset);   // and the chip temperature
+#if SOS_HAVE_NET
     wifi_reconnect();
+#endif
 }
 
 // --- glitch detector -----------------------------------------------------------------------------
@@ -1218,14 +1300,20 @@ static void cmd_config(shell_t *sh, char *args) {
     shell_printf(sh, "hostname:      %s\n", c->hostname);
     shell_printf(sh, "console:       %s\n", settings_console_has_password()
                                               ? "password set" : "no password (`passwd` sets one)");
+#if SOS_HAVE_NET
     wifi_show(sh);
+#endif
+#if SOS_HAVE_SSH
     shell_printf(sh, "keys:          %u trusted ('key list')\n", c->key_count);
+#endif
+#if SOS_HAVE_NTS
     shell_printf(sh, "nts:           %s%s, ", c->ntp_server[0] ? c->ntp_server : SOS_NTS_SERVER,
                  c->ntp_server[0] ? "" : " (build default)");
     if (c->ntp_sync_hours)
         shell_printf(sh, "sync every %u h\n", (unsigned)c->ntp_sync_hours);
     else
         shell_printf(sh, "periodic sync off\n");
+#endif
     char cal[40];
     timesync_cal_str(cal, sizeof(cal));
     shell_printf(sh, "rtc cal:       %s\n", cal);
@@ -1355,12 +1443,17 @@ static void setup_finish(shell_t *sh) {
     log_msg(SOS_LOG_AUTH | SOS_LOG_NOTICE, "config: setup completed");
     shell_printf(sh, "\nsaved:\n");
     cmd_config(sh, NULL);
+#if SOS_HAVE_SSH
     if (!c->key_count)
         shell_printf(sh, "\nno trusted keys yet: add one with 'key add' to allow SSH logins\n");
+#endif
+#if SOS_HAVE_NET
     if (wifi_changed)
         wifi_reconnect();           // a new network: don't drop a working link otherwise
+#endif
 }
 
+#if SOS_HAVE_SSH
 static void on_setup_key(shell_t *sh, char *answer, void *arg) {
     (void)arg;
     if (!answer) {
@@ -1374,13 +1467,21 @@ static void on_setup_key(shell_t *sh, char *answer, void *arg) {
     setup_finish(sh);
 }
 
+#endif
+
+// Without the SSH server there are no keys to ask for: setup ends here.
 static void ask_setup_key(shell_t *sh) {
+#if SOS_HAVE_SSH
     shell_printf(sh, "\nTrusted keys: %u. Paste a public key to trust (one line from\n"
                      "~/.ssh/id_ed25519.pub on your computer), or press Enter to skip.\n",
                  settings()->key_count);
     shell_ask(sh, "Public key: ", false, on_setup_key, NULL);
+#else
+    setup_finish(sh);
+#endif
 }
 
+#if SOS_HAVE_NET
 static void on_setup_password(shell_t *sh, char *answer, void *arg) {
     (void)arg;
     if (!answer) {
@@ -1419,6 +1520,7 @@ static void on_setup_ssid(shell_t *sh, char *answer, void *arg) {
     strcpy(setup_state.ssid, answer);
     shell_ask(sh, "Wi-Fi password (empty for an open network): ", true, on_setup_password, NULL);
 }
+#endif
 
 // --- the console password ------------------------------------------------------------------------
 
@@ -1538,14 +1640,19 @@ static void cmd_setup(shell_t *sh) {
     setup_network(sh);
 }
 
+// Without Wi-Fi there is no network to ask for: on to the keys.
 static void setup_network(shell_t *sh) {
-    static char prompt[CONFIG_SSID_MAX + 40];
     memset(&setup_state, 0, sizeof(setup_state));
+#if SOS_HAVE_NET
+    static char prompt[CONFIG_SSID_MAX + 40];
     if (settings()->wifi_ssid[0])
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID) [%s]: ", settings()->wifi_ssid);
     else
         snprintf(prompt, sizeof(prompt), "Wi-Fi network (SSID): ");
     wifi_ask_ssid(sh, prompt, on_setup_ssid, NULL);
+#else
+    ask_setup_key(sh);
+#endif
 }
 
 // --- dispatch ------------------------------------------------------------------------------------
@@ -1657,7 +1764,9 @@ static void crash_brownout(shell_t *sh) {
     sdcard_health_state(&sd);
     const char *busy = files_busy() ? "files are open (SFTP, cp, tee or a > redirection)"
                      : sd.busy ? sd.busy
+#if SOS_HAVE_LUA
                      : lua_host_running() ? "a Lua script is running"
+#endif
                      : NULL;
     if (busy) {
         shell_printf(sh, "crash brownout: refused: %s\n", busy);
@@ -1771,6 +1880,8 @@ static void health_print_wrapped(void *arg, const char *line) {
 static void cmd_health(shell_t *sh, char *args) {
     char row[HEALTH_ROW_MAX];
     if (!args) {
+        // The features first: a check that isn't there is a feature this image lacks (decision 10).
+        shell_printf(sh, "features: %s\n", SOS_FEATURE_LIST);
         health_format_header(row, sizeof(row));
         shell_printf(sh, "%s\n", row);
         for (unsigned i = 0; i < health_count(); i++)
@@ -1922,11 +2033,15 @@ static const shell_word_t sd_words[] = {
      SHELL_ADMIN},
 #endif
     END};
+#if SOS_HAVE_LUA
 static const shell_word_t lua_words[] = {
     W("-e"), {"-b", NULL, SHELL_PATH}, W("ps"), W("stop"), END};
+#endif
+#if SOS_HAVE_HTTP
 static const shell_word_t url_start[] = {{"https://", NULL, SHELL_NOSPACE}, END};
 static const shell_word_t http_words[] = {
     {"get", url_start, 0}, {"head", url_start, 0}, {"post", url_start, 0}, END};
+#endif
 #ifdef SOS_TEST_COMMANDS
 static const shell_word_t mem_hold_words[] = {W("leave"), W("holes"), END};
 static const shell_word_t mem_release_words[] = {W("first"), END};
@@ -1958,16 +2073,24 @@ static const shell_cmd_t commands[] = {
     {"power", run_power, NULL, NULL, 0},
     {"version", run_version, NULL, NULL, 0},
     {"time", time_command, NULL, time_words, 0},
+#if SOS_HAVE_TLS
     {"tls", tls_command, NULL, tls_words, 0},
+#endif
+#if SOS_HAVE_NTS
     {"nts", nts_command, NULL, nts_words, 0},
+#endif
 #ifdef SOS_TEST_COMMANDS
     {"mem", run_mem, NULL, mem_words, 0},
 #else
     {"mem", run_mem, NULL, NULL, 0},
 #endif
+#if SOS_HAVE_NET
     {"net", net_command, NULL, NULL, 0},
     {"ping", ping_command, NULL, SHELL_VALUES_OF(ping_hosts), 0},
+#endif
+#if SOS_HAVE_SSH
     {"ssh", ssh_command, NULL, NULL, 0},
+#endif
     {"who", chat_cmd_who, NULL, NULL, 0},
     {"wall", chat_cmd_wall, NULL, NULL, 0},
     {"chat", chat_cmd_chat, NULL, NULL, 0},
@@ -1979,16 +2102,24 @@ static const shell_cmd_t commands[] = {
     {"health", cmd_health, NULL, health_words, 0},
     {"bootkey", run_bootkey, NULL, NULL, 0},
     {"rootsecret", run_rootsecret, NULL, rootsecret_words, 0},
+#if SOS_HAVE_SSH
     {"key", key_command, NULL, key_words, 0},
+#endif
+#if SOS_HAVE_NET
     {"wifi", wifi_command, NULL, wifi_words, 0},
+#endif
     {"hostname", run_hostname, NULL, NULL, 0},
     {"sd", sdcard_command, NULL, sd_words, 0},
+#if SOS_HAVE_LUA
     {"lua", NULL, lua_command, lua_words, SHELL_PATH},
+#endif
     {"edit", NULL, edit_command, NULL, SHELL_PATH},
     {"more", NULL, view_command, NULL, SHELL_PATH},
     {"man", man_command, NULL, SHELL_VALUES_OF(man_topics), 0},
+#if SOS_HAVE_HTTP
     {"http", http_command, NULL, http_words, 0},
     {"fetch", NULL, fetch_command, NULL, SHELL_PATH},
+#endif
     {"passwd", run_passwd, NULL, NULL, SHELL_ADMIN},
     {"setup", run_setup, NULL, NULL, SHELL_ADMIN},
     {"logout", run_logout, NULL, NULL, 0},

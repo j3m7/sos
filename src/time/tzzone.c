@@ -17,7 +17,9 @@
 #include "core/settings.h"
 #include "files/files.h"
 #include "files/sdcard.h"
+#if SOS_HAVE_HTTP
 #include "net/http.h"
+#endif
 #include "time/timeconv.h"
 #include "time/timesync.h"
 #include "time/tzbundle.h"
@@ -239,6 +241,7 @@ static void list(shell_t *sh, const char *prefix) {
     heap_release(HEAP_FILES, j);
 }
 
+#if SOS_HAVE_HTTP
 // --- installing ---------------------------------------------------------------------------------
 
 typedef struct {
@@ -394,6 +397,13 @@ static void install(shell_t *sh) {
     files_hold();
     shell_run_job(sh, install_step, j);
 }
+#else
+// No HTTP client in this image (SOS_FEATURE_HTTP off): the bundle comes over SFTP or by hand.
+static void install(shell_t *sh) {
+    shell_printf(sh, "time zone install: not in this build (no HTTP client); copy "
+                     TZZONE_BUNDLE " to the card instead\n");
+}
+#endif
 
 // --- Tab ----------------------------------------------------------------------------------------
 
@@ -409,7 +419,9 @@ static void tab_name(const char *name, void *arg) {
 
 void tzzone_tab(shell_t *sh, shell_value_fn fn, void *arg) {
     fn("list", NULL, arg);
+#if SOS_HAVE_HTTP
     fn("install", NULL, arg);
+#endif
     if (!sh->io->admin)                     // setting a zone is console only
         return;
     fn("utc", NULL, arg);

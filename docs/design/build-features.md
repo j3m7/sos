@@ -105,10 +105,14 @@ without the network stack, the SSH server and the TLS client cannot be reached o
 
 1. **One CMake option per feature, `SOS_FEATURE_<NAME>`, all ON by default.** The default
    build stays exactly today's image; nobody's build changes until they turn something off.
-2. **A feature whose dependency is off is a configure error, not a silent drop.**
-   `-DSOS_FEATURE_NET=OFF` with SSH still on stops with "SOS_FEATURE_SSH needs SOS_FEATURE_NET;
-   turn it off too". An image never loses something its builder didn't ask to lose. Presets
-   (§6) make the common combinations one word.
+2. **Asking for a feature whose dependency is off is a configure error, not a silent drop.**
+   `-DSOS_FEATURE_SSH=ON` with NET off stops with "SOS_FEATURE_SSH needs SOS_FEATURE_NET: turn
+   it off too". An image never loses something its builder asked for. A feature nobody set
+   follows its dependencies: its default is OFF while one of them is off (as built in phase 3:
+   a plain Pico 2, which has no Wi-Fi chip, would otherwise stop at configure for TLS, HTTP,
+   NTS and SSH). A build directory keeps what it was given (CMake's cache), so a feature turned
+   on there earlier and a dependency turned off later is the error case. Presets (§6) make the
+   common combinations one word.
 3. **Parts that only glue two features follow them automatically and have no option of their
    own.** Lua's `http` table exists when both LUA and HTTP do; SFTP when SSH and FILES do;
    `man install` when MAN and HTTP do.
@@ -353,6 +357,11 @@ static inline void chat_deliver(shell_t *sh) { (void)sh; }
 #endif
 ```
 
+As built in phase 3: no stand-in header was needed yet. Each crossing call turned out to sit
+in a file that has other `#if`s for the same feature (`main.c`, `shell.c`, `lua_host.c`), and
+the `#if` at the call reads better there than a function that silently does nothing. The table
+below stays the plan for phase 4's features, whose calls are more spread out (`chat_*`).
+
 The list should stay short; each stand-in has an obvious "nothing" answer:
 
 | Call | Callers outside the feature | Stand-in when off |
@@ -502,6 +511,10 @@ measured, not predicted: some curve code is shared with the core's boot key chec
 
 ## 6. Presets
 
+As built in phase 3: `offline`, `pico2` and `minimal` (here without the phase 4 features, which
+don't exist yet); `headless` and `pico2-minimal` come with phase 4. Each preset sets its
+features explicitly, so it means the same in a build directory configured before.
+
 `CMakePresets.json` gets one preset per useful image, inheriting from today's (`debug`,
 `release` and `minsize` stay as build types):
 
@@ -637,14 +650,61 @@ other ranges; leave those out too.
      still prints its lines in the same order, through the core files' dispatchers, which is
      where phase 3's `#if`s go. Without test commands the image is byte for byte 2a's size.
    The stand-in headers (§4.4) move to phase 3: they need `SOS_HAVE_<X>`, which phase 3 adds.
-3. **`cmake/features.cmake` with NET, SSH, LUA** and the presets that use them, plus
-   `just features`. The first options are the ones that pay most. Includes the board split
-   (§4.8) and the `pico2` presets, since NET off is what a Pico 2 needs.
-4. **The rest:** TLS, HTTP, NTS, CHAT, PAGER, EDITOR, MAN, FSCK, ARCHIVE.
+3. **`cmake/features.cmake` with NET, TLS, HTTP, NTS, SSH and LUA**, plus `just features`, the
+   board split (§4.8) and the features line (§7). TLS, HTTP and NTS came forward from phase 4:
+   NET off turns them off by decision 2, so their code had to be fenced with it. See §10.1.
+4. **The rest:** CHAT, PAGER, EDITOR, MAN, FSCK, ARCHIVE.
 5. **wolfSSL and wolfSSH trimming** (§5), with the known answers that follow the algorithms,
    measured per preset.
 6. **FILES** (§4.7), if still wanted.
 7. **The app hook** (§9).
+
+### 10.1 Phase 3 as built
+
+- `cmake/features.cmake`: `sos_feature()` declares an option with its `NEEDS` and default;
+  `sos_features_apply()` checks the needs, defines `SOS_HAVE_<NAME>` 0 or 1 and
+  `SOS_FEATURE_LIST` on the target, and prints `SOS features: ...` at configure. NET defaults to
+  `PICO_CYW43_SUPPORTED`; a feature defaults to off while a need is off (decision 2).
+- `CMakeLists.txt`: one source list per feature (`SOS_SOURCES_NET`, ...), glue (`lua_net.c`:
+  LUA and NET), and libraries per feature: the Wi-Fi driver and lwIP's SNTP with NET, wolfSSH
+  and the SSH server with SSH, `pico_multicore` with LUA. The SSH server's ring buffer is TLS's
+  too, so it became a library of its own (`sos-ringbuffer`). wolfCrypt is linked directly (the
+  core's), not through the SSH server as before. The Wi-Fi driver's configure-time checks run
+  only with NET.
+- Code fenced with `#if SOS_HAVE_<NAME>`: `main.c` (boot and loop steps), `shell.c` (`help`,
+  the table, `mem`, `config`, `setup`, `config reset`), `time/timesync.c` (NTS and SNTP; with
+  neither, the RTC keeps the time), `time/time_cmd.c`'s callers, `time/tzzone.c` and `man/man.c`
+  (`install` without HTTP says so and points at copying the files), the health table
+  (`crypto-ssh` with SSH or TLS, `hostkey`, `wifi`, `net-pools`, `core1`) and its dump
+  dispatchers, `lua/lua_core1.c` (`sos.http`, `sos.wifi`, `sos.net`, `sos.ping`, `sos.ssh`,
+  `sos.tls`), `lua/lua_host.c` (their serving on core 0), `lua/lua_health.c`.
+- Boards (§4.8): `core/board.c` (`board_led_set()`: the Wi-Fi chip's GPIO, `PICO_DEFAULT_LED_PIN`,
+  or nothing), and `core/sensors_board.c`'s plain Pico 2 branch (GPIO 24 for USB power, GPIO 29
+  for VSYS, no lock). A Pico 2 W without NET doesn't drive the Wi-Fi chip, so it has no LED and
+  no VSYS or USB power reading: VSYS reaches its pin only while the chip is deselected.
+- The features line (§7): `version` (with `build:` for the test switches), the plain `health`
+  listing, and `sos.features()` (`{NET=true, ..., line="..."}`, answered on core 1).
+- `tools/features.sh` (`just features`), presets `offline`, `pico2`, `minimal`, and
+  `docs/building.md` "Build features".
+
+Sizes (debug, 2026-11-28; `just features`):
+
+| Combination | Code | Static RAM | Features |
+|---|---|---|---|
+| full | 1,341 KB | 117 KB | NET TLS HTTP NTS SSH LUA |
+| no NTS | 1,325 KB | 113 KB | |
+| no HTTP | 1,317 KB | 117 KB | |
+| no SSH | 1,253 KB | 109 KB | |
+| no TLS (so no HTTP, NTS) | 1,208 KB | 112 KB | NET SSH LUA |
+| no Lua | 1,163 KB | 110 KB | |
+| NET only (no TLS, SSH) | 979 KB | 104 KB | NET LUA |
+| offline (no NET) | 659 KB | 43 KB | LUA |
+| plain Pico 2 | 660 KB | 43 KB | LUA |
+| minimal | 490 KB | 36 KB | none |
+
+`--gc-sections` already drops most of wolfSSL's TLS layer once nothing calls it, which is why
+offline is half the size before any `user_settings.h` trimming (§5). The test-commands builds
+of full and offline build too. All twelve combinations: no warnings.
 
 ## 11. Decisions and open items
 

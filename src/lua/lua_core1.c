@@ -34,7 +34,9 @@
 #include "lua/lua_json.h"
 #include "lua/lua_health.h"
 #include "lua/lua_info.h"
+#if SOS_HAVE_HTTP
 #include "net/http.h"
+#endif
 
 #define HOOK_EVERY 1000             // instructions between cancel checks
 
@@ -529,6 +531,13 @@ static int simple(lua_State *L, lua_req_type_t type) {
 static int l_remove(lua_State *L) { return simple(L, LR_REMOVE); }
 static int l_mkdir(lua_State *L) { return simple(L, LR_MKDIR); }
 
+// A request answered "interrupted" because the script is being stopped: stop now.
+static void check_cancel(lua_State *L) {
+    if (lua_job.cancel)
+        interrupt(L);
+}
+
+#if SOS_HAVE_HTTP
 // --- sos.http ----------------------------------------------------------------------------------
 //
 // sos.http.request(opts), sos.http.get(url [, opts]), sos.http.post(url, body [, opts]): one
@@ -542,12 +551,6 @@ static int l_mkdir(lua_State *L) { return simple(L, LR_MKDIR); }
 #define HTTP_CLOSER "sos.http.closer"       // registry: metatable of the to-be-closed guard
 
 static bool http_open;                      // core 0 holds a request whose body isn't all read
-
-// A request answered "interrupted" because the script is being stopped: stop now.
-static void check_cancel(lua_State *L) {
-    if (lua_job.cancel)
-        interrupt(L);
-}
 
 // __close of the guard that http_request() keeps in a to-be-closed slot: however the call ends
 // (an error, "not enough memory" while the body grows, Ctrl-C, max_body), a request left
@@ -898,6 +901,7 @@ static const luaL_Reg http_lib[] = {
     {"request", l_http_request}, {"get", l_http_get},   {"post", l_http_post},
     {"head", l_http_head},       {"download", l_http_download}, {NULL, NULL},
 };
+#endif
 
 // --- timers: sos.every, sos.after, sos.cancel ---------------------------------------------------
 //
@@ -1140,11 +1144,17 @@ static int l_sensors(lua_State *L) { return info(L, LH_SENSORS); }
 static int l_version(lua_State *L) { return info(L, LH_VERSION); }
 static int l_reset_reason(lua_State *L) { return info(L, LH_RESET); }
 static int l_glitch(lua_State *L) { return info(L, LH_GLITCH); }
+#if SOS_HAVE_NET
 static int l_wifi_status(lua_State *L) { return info(L, LH_WIFI); }
+#endif
 static int l_sd_info(lua_State *L) { return info(L, LH_SD); }
 static int l_who(lua_State *L) { return info(L, LH_WHO); }
+#if SOS_HAVE_SSH
 static int l_ssh_status(lua_State *L) { return info(L, LH_SSH); }
+#endif
+#if SOS_HAVE_TLS
 static int l_tls_roots(lua_State *L) { return info(L, LH_TLS); }
+#endif
 
 // sos.wall(msg): to every shell; returns how many (0: nobody is logged in), or nil and why.
 static int l_wall(lua_State *L) {
@@ -1254,14 +1264,19 @@ static const luaL_Reg sd_lib[] = {
     {"info", l_sd_info}, {NULL, NULL},
 };
 
+#if SOS_HAVE_SSH
 static const luaL_Reg ssh_lib[] = {
     {"status", l_ssh_status}, {NULL, NULL},
 };
+#endif
 
+#if SOS_HAVE_TLS
 static const luaL_Reg tls_lib[] = {
     {"roots", l_tls_roots}, {NULL, NULL},
 };
+#endif
 
+#if SOS_HAVE_NET
 // --- sos.wifi.scan, sos.net.resolve, sos.ping (on core 0: lua_net.c) -------------------------
 
 // One of the slow network requests; its answer (lua_info.h records) pushed as a table.
@@ -1312,6 +1327,27 @@ static const luaL_Reg net_lib[] = {
 static const luaL_Reg wifi_lib[] = {
     {"status", l_wifi_status}, {"scan", l_wifi_scan}, {NULL, NULL},
 };
+#endif
+
+// sos.features(): what this image was built with (docs/design/build-features.md §7), as
+// {NET=true, SSH=false, ...}, and its features line as `line`. No request: it's the build's.
+static int l_features(lua_State *L) {
+    static const struct {
+        const char *name;
+        bool on;
+    } f[] = {
+        {"NET", SOS_HAVE_NET}, {"TLS", SOS_HAVE_TLS}, {"HTTP", SOS_HAVE_HTTP},
+        {"NTS", SOS_HAVE_NTS}, {"SSH", SOS_HAVE_SSH}, {"LUA", SOS_HAVE_LUA},
+    };
+    lua_createtable(L, 0, (int)(sizeof(f) / sizeof(f[0])) + 1);
+    for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
+        lua_pushboolean(L, f[i].on);
+        lua_setfield(L, -2, f[i].name);
+    }
+    lua_pushstring(L, SOS_FEATURE_LIST);
+    lua_setfield(L, -2, "line");
+    return 1;
+}
 
 static const luaL_Reg sos_lib[] = {
     {"log", l_log},       {"time", l_time},     {"uptime", l_uptime}, {"sleep", l_sleep},
@@ -1323,7 +1359,10 @@ static const luaL_Reg sos_lib[] = {
     {"localdate", l_localdate},                 {"localtime", l_localtime}, {"zone", l_zone},
     {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
-    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},
+    {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"features", l_features},
+#if SOS_HAVE_NET
+    {"ping", l_ping},
+#endif
 #ifdef SOS_TEST_COMMANDS
     {"spin", l_spin},
 #endif
@@ -1478,28 +1517,40 @@ static void setup_package(lua_State *L) {
 
 static int open_sos(lua_State *L) {
     luaL_newlib(L, sos_lib);
+#if SOS_HAVE_HTTP
     luaL_newlib(L, http_lib);
     lua_setfield(L, -2, "http");
+#endif
+#if SOS_HAVE_NET
     luaL_newlib(L, wifi_lib);
     lua_setfield(L, -2, "wifi");
+#endif
     luaL_newlib(L, sd_lib);
     lua_setfield(L, -2, "sd");
+#if SOS_HAVE_SSH
     luaL_newlib(L, ssh_lib);
     lua_setfield(L, -2, "ssh");
+#endif
+#if SOS_HAVE_TLS
     luaL_newlib(L, tls_lib);
     lua_setfield(L, -2, "tls");
+#endif
+#if SOS_HAVE_NET
     luaL_newlib(L, net_lib);
     lua_setfield(L, -2, "net");
+#endif
     luaL_newlib(L, base64_lib);
     lua_setfield(L, -2, "base64");
     luaL_newlib(L, json_lib);
     lua_json_push_null(L);
     lua_setfield(L, -2, "null");
     lua_setfield(L, -2, "json");
+#if SOS_HAVE_HTTP
     luaL_newmetatable(L, HTTP_CLOSER);
     lua_pushcfunction(L, http_closer);
     lua_setfield(L, -2, "__close");
     lua_pop(L, 1);
+#endif
     return 1;
 }
 
@@ -1730,7 +1781,9 @@ static void run_job(void) {
         lua_newtable(L);
         lua_setfield(L, LUA_REGISTRYINDEX, TIMERS_KEY);
         next_timer_id = 0;
+#if SOS_HAVE_HTTP
         http_open = false;
+#endif
         lua_sethook(L, hook, LUA_MASKCOUNT, HOOK_EVERY);
         lua_pushcfunction(L, traceback);            // stack index 1: message handler
         if (lua_job.repl) {

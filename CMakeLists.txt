@@ -37,6 +37,11 @@ if (SOS_SIGN_KEY_ON_COMMAND_LINE)
     set(SOS_SIGN_KEY "${SOS_SIGN_KEY_FROM_COMMAND_LINE}")
 endif()
 
+# --- Build features (docs/design/build-features.md) -------------------------------------------
+# SOS_FEATURE_<NAME> options: cmake/features.cmake lists them and checks what each needs. The
+# presets in CMakePresets.json name the usual combinations; `just features` builds them all.
+include(cmake/features.cmake)
+
 # --- wolfSSL / wolfSSH ---------------------------------------------------------
 # Git submodules under lib/ by default. To use checkouts elsewhere, set WOLFSSL_ROOT and
 # WOLFSSH_ROOT in local.cmake (or with -D / CMakeUserPresets.json).
@@ -167,14 +172,15 @@ set_source_files_properties(${WOLFSSL_ROOT}/wolfcrypt/src/sha256.c
     PROPERTIES COMPILE_DEFINITIONS SOS_WOLFCRYPT_TABLES_IN_RAM)
 
 # --- SSH server (src/ssh/pico-sshd: copied from pico-sshd, see THIRD_PARTY.md) ---
-add_library(sos-ssh INTERFACE)
-target_include_directories(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/include
+# Its ring buffer is TLS's too (tls/tls.c), so it is a library of its own, which both link.
+add_library(sos-ringbuffer INTERFACE)
+target_include_directories(sos-ringbuffer INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src)       # core/heaptag.h
-target_sources(sos-ssh INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c
-)
-target_link_libraries(sos-ssh INTERFACE pico_rand pico_aon_timer wolfssl wolfssh)
+target_sources(sos-ringbuffer INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/ringbuffer.c)
+add_library(sos-ssh INTERFACE)
+target_sources(sos-ssh INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c)
+target_link_libraries(sos-ssh INTERFACE sos-ringbuffer pico_rand pico_aon_timer wolfssl wolfssh)
 # The server's log formats go to the log module's vsnprintf as they are (#105): have the
 # compiler check each LOG_MSG() against its arguments. (The copied code isn't built with -Wall.)
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/ssh/pico-sshd/server.c
@@ -190,9 +196,6 @@ if (NOT PICO_CYW43_DRIVER_PATH)
 endif()
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/core/countcheck_names.h sos_count_names)
 file(READ ${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c sos_sd_spi)
-file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c sos_cyw43_ll)
-file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_lwip.c sos_cyw43_lwip)
-file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_config.h sos_cyw43_config)
 function(sos_count_guard what names source where)
     string(REGEX MATCHALL "${what}\\(\"[a-z0-9_]+\"" found "${names}")
     if (NOT found)
@@ -210,8 +213,6 @@ function(sos_count_guard what names source where)
 endfunction()
 sos_count_guard(SD_FN "${sos_count_names}" "${sos_sd_spi}"
     "${SDCARD_ROOT}/src/sd_driver/SPI/sd_card_spi.c")
-sos_count_guard(WIFI_FN "${sos_count_names}" "${sos_cyw43_ll}${sos_cyw43_lwip}"
-    "${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c or cyw43_lwip.c")
 string(REGEX MATCHALL "DBG_PRINTF\\(" sos_dbg_calls "${sos_sd_spi}")
 list(LENGTH sos_dbg_calls sos_dbg_count)
 string(REGEX MATCH "COUNTCHECK_SD_DBG_PRINTF_CALLS ([0-9]+)" _ "${sos_count_names}")
@@ -220,12 +221,20 @@ if (NOT sos_dbg_count EQUAL CMAKE_MATCH_1)
         "${CMAKE_MATCH_1}: the SD card library changed; review src/core/countcheck_names.h "
         "(docs/design/health.md §9.9) and update COUNTCHECK_SD_DBG_PRINTF_CALLS")
 endif()
-foreach(hook CYW43_FAIL_FAST_CHECK CYW43_WARN)
-    if (NOT sos_cyw43_config MATCHES "#ifndef ${hook}\n")
-        message(FATAL_ERROR "the CYW43 driver no longer leaves ${hook} to its port "
-            "(cyw43_config.h): config/cyw43_sos.h's hook wouldn't be used")
-    endif()
-endforeach()
+# The Wi-Fi driver's, only when it is built (SOS_FEATURE_NET).
+if (SOS_FEATURE_NET)
+    file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c sos_cyw43_ll)
+    file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_lwip.c sos_cyw43_lwip)
+    file(READ ${PICO_CYW43_DRIVER_PATH}/src/cyw43_config.h sos_cyw43_config)
+    sos_count_guard(WIFI_FN "${sos_count_names}" "${sos_cyw43_ll}${sos_cyw43_lwip}"
+        "${PICO_CYW43_DRIVER_PATH}/src/cyw43_ll.c or cyw43_lwip.c")
+    foreach(hook CYW43_FAIL_FAST_CHECK CYW43_WARN)
+        if (NOT sos_cyw43_config MATCHES "#ifndef ${hook}\n")
+            message(FATAL_ERROR "the CYW43 driver no longer leaves ${hook} to its port "
+                "(cyw43_config.h): config/cyw43_sos.h's hook wouldn't be used")
+        endif()
+    endforeach()
+endif()
 
 # --- SOS firmware ------------------------------------------------------------
 # One directory per subsystem; see src/README.md.
@@ -257,6 +266,7 @@ set(SOS_SOURCES
     src/core/resetwhy_board.c
     src/core/history.c
     src/core/history_board.c
+    src/core/board.c
     src/core/chipinfo.c
     src/core/sensors.c
     src/core/sensors_board.c
@@ -299,23 +309,6 @@ set(SOS_SOURCES
     src/man/man.c
     src/man/man_topic.c
     src/chat/chat.c
-    src/net/wifi.c
-    src/net/wifi_cmd.c
-    src/net/wifistat.c
-    src/net/net_check.c
-    src/net/wifi_pick.c
-    src/net/wifi_names.c
-    src/net/fetch.c
-    src/net/http.c
-    src/net/http_msg.c
-    src/net/ping.c
-    src/net/ping_msg.c
-    src/ssh/sshd.c
-    src/ssh/ssh_cmd.c
-    src/ssh/hostkey.c
-    src/ssh/hostkey_check.c
-    src/ssh/hostkey_record.c
-    src/ssh/sftp_fs.c
     src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/sdstat.c
@@ -349,15 +342,45 @@ set(SOS_SOURCES
     src/time/tzrule.c
     src/time/tzbundle.c
     src/time/tzzone.c
-    src/time/nts.c
-    src/time/nts_ke.c
-    src/time/nts_ntp.c
+)
+# Each feature's own files (cmake/features.cmake), added when the feature is on.
+set(SOS_SOURCES_NET
+    src/net/wifi.c
+    src/net/wifi_cmd.c
+    src/net/wifistat.c
+    src/net/net_check.c
+    src/net/wifi_pick.c
+    src/net/wifi_names.c
+    src/net/ping.c
+    src/net/ping_msg.c
+)
+set(SOS_SOURCES_TLS
     src/tls/tls.c
     src/tls/tls_cmd.c
     src/tls/tls_admit.c
     src/tls/tls_roots.c
     src/tls/certstore.c
     src/tls/certbundle.c
+)
+set(SOS_SOURCES_HTTP
+    src/net/fetch.c
+    src/net/http.c
+    src/net/http_msg.c
+)
+set(SOS_SOURCES_NTS
+    src/time/nts.c
+    src/time/nts_ke.c
+    src/time/nts_ntp.c
+)
+set(SOS_SOURCES_SSH
+    src/ssh/sshd.c
+    src/ssh/ssh_cmd.c
+    src/ssh/hostkey.c
+    src/ssh/hostkey_check.c
+    src/ssh/hostkey_record.c
+    src/ssh/sftp_fs.c
+)
+set(SOS_SOURCES_LUA
     src/lua/lua_host.c
     src/lua/lua_core1.c
     src/lua/lua_codec.c
@@ -368,9 +391,17 @@ set(SOS_SOURCES
     src/lua/lua_check.c
     src/lua/lua_health_table.c
     src/lua/lua_info.c
-    src/lua/lua_net.c
     src/lua/lua_json.c
 )
+foreach(f NET TLS HTTP NTS SSH LUA)
+    if (SOS_FEATURE_${f})
+        list(APPEND SOS_SOURCES ${SOS_SOURCES_${f}})
+    endif()
+endforeach()
+# Glue between two features, built when both are (docs/design/build-features.md decision 3).
+if (SOS_FEATURE_LUA AND SOS_FEATURE_NET)
+    list(APPEND SOS_SOURCES src/lua/lua_net.c)    # sos.wifi.scan, sos.net.resolve, sos.ping
+endif()
 # The commit being built (src/core/version.h), shown in the shell greeting and by `version`.
 # Regenerated at every build rather than at configure time, so it follows checkouts and commits.
 set(SOS_VERSION_C ${CMAKE_CURRENT_BINARY_DIR}/generated/sos_version.c)
@@ -382,10 +413,16 @@ add_custom_target(sos_version
 )
 add_executable(sos ${SOS_SOURCES}
     ${SOS_VERSION_C}
-    src/ssh/sftp_wolf.c         # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
-    ${LUA_SOURCES}
 )
 add_dependencies(sos sos_version)
+sos_features_apply(sos)
+if (SOS_FEATURE_SSH)
+    # wolfSSH's wolfsftp.c with SOS file functions (third-party warnings)
+    target_sources(sos PRIVATE src/ssh/sftp_wolf.c)
+endif()
+if (SOS_FEATURE_LUA)
+    target_sources(sos PRIVATE ${LUA_SOURCES})
+endif()
 # wolfSSL's Thumb-2 AES (see above), linked last. Where its code lands in flash matters: listed
 # before the Lua sources, encrypted SD card reads ran 16% slower (841 vs 1000 KB/s), from code
 # competing for the same XIP cache lines. Re-measure with `sd test` after moving it.
@@ -446,10 +483,15 @@ target_compile_definitions(sos PRIVATE
     PICO_PANIC_FUNCTION=sos_panic   # src/core/fault.c: record why, reset at once
     PICO_MALLOC_PANIC=0             # a failed malloc returns NULL (the code handles it) instead of
                                     # the SDK default: panic, i.e. halt until the watchdog resets
-    # The CYW43 driver's port configuration: the SDK's, plus its error and warning hooks counted
-    # for the `wifi` health check and its warnings logged, never printed (config/cyw43_sos.h).
-    CYW43_CONFIG_FILE="cyw43_sos.h"
 )
+if (SOS_FEATURE_NET)
+    target_compile_definitions(sos PRIVATE
+        # The CYW43 driver's port configuration: the SDK's, plus its error and warning hooks
+        # counted for the `wifi` health check and its warnings logged, never printed
+        # (config/cyw43_sos.h).
+        CYW43_CONFIG_FILE="cyw43_sos.h"
+    )
+endif()
 pico_set_linker_script_var(sos SOS_CORE0_STACK_SIZE ${SOS_CORE0_STACK_SIZE})
 # The board keeps UTC: localtime_r() and mktime() go to src/time/utc_libc.c, so the C library's
 # time zone code and the scanf it parses TZ with stay out of the image (about 10 KB).
@@ -459,20 +501,29 @@ pico_add_linker_script_override_path(sos ${CMAKE_CURRENT_SOURCE_DIR}/config/ld
 
 target_link_libraries(sos
     pico_stdlib
-    pico_cyw43_arch_lwip_threadsafe_background
     pico_flash
     pico_unique_id          # board serial, shown by `version`
-    pico_lwip_sntp
     hardware_flash
     hardware_i2c
     hardware_watchdog
     hardware_adc            # chip temperature and supply voltage (core/sensors.h)
-    sos-ssh
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     zlib
-    pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)
     pico_sha256             # the SHA-256 block for sha256sum and fetch (files/sha256hw.h)
+    wolfssl                 # wolfCrypt: sealing, hashes, card encryption (the core's)
 )
+if (SOS_FEATURE_NET)
+    target_link_libraries(sos pico_cyw43_arch_lwip_threadsafe_background pico_lwip_sntp)
+endif()
+if (SOS_FEATURE_SSH)
+    target_link_libraries(sos sos-ssh)
+endif()
+if (SOS_FEATURE_TLS)
+    target_link_libraries(sos sos-ringbuffer)  # tls/tls.c's TCP input
+endif()
+if (SOS_FEATURE_LUA)
+    target_link_libraries(sos pico_multicore)  # Lua on core 1 (also makes malloc mutex-protected)
+endif()
 
 pico_set_program_name(sos "SOS")
 pico_set_program_description(sos "Small/Secure OS")

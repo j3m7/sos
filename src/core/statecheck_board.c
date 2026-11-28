@@ -40,7 +40,9 @@
 #include "core/rootsource.h"
 #include "core/settings.h"
 #include "files/card_check.h"
+#if SOS_HAVE_SSH
 #include "ssh/hostkey_check.h"
+#endif
 
 _Static_assert(STATECHECK_CRIT1_ROW == OTP_DATA_CRIT1_ROW &&
                STATECHECK_CRIT1_ROW + STATECHECK_CRIT1_COPIES - 1 == OTP_DATA_CRIT1_R7_ROW &&
@@ -292,7 +294,9 @@ void statecheck_board_dump(health_print_fn print, void *arg) {
     dump_root(print, arg);
     dump_otp(print, arg);
     dump_failcount(print, arg);
+#if SOS_HAVE_SSH
     hostkey_check_dump(print, arg);
+#endif
     card_check_dump(print, arg);
 }
 #endif

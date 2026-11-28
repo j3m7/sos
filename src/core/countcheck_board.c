@@ -9,16 +9,28 @@
 #include "core/countcheck_board.h"
 
 #include "files/card_check.h"
+#if SOS_HAVE_NET
 #include "net/net_check.h"
+#endif
 
 #ifdef SOS_TEST_COMMANDS
 bool countcheck_board_wifi_fault(const char *kind, const char *count) {
+#if SOS_HAVE_NET
     return wifi_check_fault(kind, count);
+#else
+    (void)kind;
+    (void)count;
+    return false;                       // no Wi-Fi in this image
+#endif
 }
 
 void countcheck_board_dump(health_print_fn print, void *arg) {
+#if SOS_HAVE_NET
     wifi_check_dump(print, arg);
+#endif
     sdbus_check_dump(print, arg);
+#if SOS_HAVE_NET
     pools_check_dump(print, arg);
+#endif
 }
 #endif

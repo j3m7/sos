@@ -27,11 +27,73 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "MinSizeRel"
       }
+    },
+    {
+      "name": "offline",
+      "displayName": "Pico 2 W, nothing over the air (no Wi-Fi, TLS, HTTP, NTS, SSH)",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-offline",
+      "cacheVariables": {
+        "SOS_FEATURE_NET": "OFF",
+        "SOS_FEATURE_TLS": "OFF",
+        "SOS_FEATURE_HTTP": "OFF",
+        "SOS_FEATURE_NTS": "OFF",
+        "SOS_FEATURE_SSH": "OFF"
+      }
+    },
+    {
+      "name": "pico2",
+      "displayName": "Plain Pico 2 (no Wi-Fi chip)",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-pico2",
+      "cacheVariables": {
+        "SOS_FEATURE_NET": "OFF",
+        "SOS_FEATURE_TLS": "OFF",
+        "SOS_FEATURE_HTTP": "OFF",
+        "SOS_FEATURE_NTS": "OFF",
+        "SOS_FEATURE_SSH": "OFF",
+        "PICO_BOARD": "pico2"
+      }
+    },
+    {
+      "name": "minimal",
+      "displayName": "Pico 2 W, the security core, the shell and the card",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-minimal",
+      "cacheVariables": {
+        "SOS_FEATURE_NET": "OFF",
+        "SOS_FEATURE_TLS": "OFF",
+        "SOS_FEATURE_HTTP": "OFF",
+        "SOS_FEATURE_NTS": "OFF",
+        "SOS_FEATURE_SSH": "OFF",
+        "SOS_FEATURE_LUA": "OFF"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "debug", "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" },
-    { "name": "minsize", "configurePreset": "minsize" }
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "minsize",
+      "configurePreset": "minsize"
+    },
+    {
+      "name": "offline",
+      "configurePreset": "offline"
+    },
+    {
+      "name": "pico2",
+      "configurePreset": "pico2"
+    },
+    {
+      "name": "minimal",
+      "configurePreset": "minimal"
+    }
   ]
 }
