@@ -45,6 +45,11 @@
 #include "core/sensors.h"
 #include "core/stackmon.h"
 #include "core/statecheck.h"
+#include "files/card_check.h"
+#include "files/fsck_check.h"
+#include "lua/lua_check.h"
+#include "net/net_check.h"
+#include "ssh/hostkey_check.h"
 #include "lua/lua_core1.h"
 
 #define SEED_PERIOD_S 60                // the background seed checks: once a minute
@@ -372,18 +377,18 @@ static const health_check_t checks[] = {
     {"rootsecret", HEALTH_BACKGROUND, STATE_PERIOD_S, 45, 0, statecheck_root_step},
     {"otp", HEALTH_BACKGROUND, STATE_PERIOD_S, 50, 0, statecheck_otp_step},
     {"failcount", HEALTH_BACKGROUND, STATE_PERIOD_S, 55, 0, statecheck_failcount_step},
-    {"hostkey", HEALTH_BACKGROUND, STATE_PERIOD_S, 60, 0, statecheck_hostkey_step},
-    {"card", HEALTH_BACKGROUND, CARD_PERIOD_S, 90, 0, statecheck_card_step},
-    {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, bgcheck_core1_step},
+    {"hostkey", HEALTH_BACKGROUND, STATE_PERIOD_S, 60, 0, hostkey_check_step},
+    {"card", HEALTH_BACKGROUND, CARD_PERIOD_S, 90, 0, card_check_step},
+    {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, lua_check_core1_step},
     {"heap-sum", HEALTH_BACKGROUND, HEAPSUM_PERIOD_S, 70, 0, bgcheck_heap_step},
     {"rtc-drift", HEALTH_BACKGROUND, DRIFT_PERIOD_S, 100, 0, bgcheck_drift_step},
-    {"wifi", HEALTH_BACKGROUND, COUNT_PERIOD_S, 110, 0, countcheck_wifi_step},
-    {"sd-bus", HEALTH_BACKGROUND, COUNT_PERIOD_S, 115, 0, countcheck_sd_step},
-    {"net-pools", HEALTH_BACKGROUND, COUNT_PERIOD_S, 120, 0, countcheck_pools_step},
+    {"wifi", HEALTH_BACKGROUND, COUNT_PERIOD_S, 110, 0, wifi_check_step},
+    {"sd-bus", HEALTH_BACKGROUND, COUNT_PERIOD_S, 115, 0, sdbus_check_step},
+    {"net-pools", HEALTH_BACKGROUND, COUNT_PERIOD_S, 120, 0, pools_check_step},
     // Phase 5 (§9.7): only on `health full` or `health run <name>`, last, in this order.
     {"ram", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_ram_step},
     {"image", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_image_step},
-    {"sd-check", HEALTH_FULL, 0, 0, 0, fullcheck_sd_step},
+    {"sd-check", HEALTH_FULL, 0, 0, 0, fsck_check_step},
 };
 
 void health_boot(void) {

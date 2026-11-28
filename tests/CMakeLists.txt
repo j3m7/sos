@@ -182,7 +182,8 @@ add_test(NAME memtest COMMAND test_memtest)
 
 # src/core/fullcheck.c: phase 5's checks, the pure half (docs/design/health.md §9.7): ram, image
 # and sd-check judged from made-up inputs, and the walk over what the image's hash covers.
-add_executable(test_fullcheck test_fullcheck.c ${SOS_ROOT}/src/core/fullcheck.c)
+add_executable(test_fullcheck test_fullcheck.c ${SOS_ROOT}/src/core/fullcheck.c
+    ${SOS_ROOT}/src/files/fsck_check.c)
 target_include_directories(test_fullcheck PRIVATE ${SOS_ROOT}/src)
 add_test(NAME fullcheck COMMAND test_fullcheck)
 

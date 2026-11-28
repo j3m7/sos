@@ -19,7 +19,6 @@
 
 #include "core/bootkey.h"
 #include "core/health.h"
-#include "files/fsck.h"
 
 // --- ram -----------------------------------------------------------------------------------------
 
@@ -85,29 +84,5 @@ size_t fullcheck_hash_bytes(const bootkey_hash_t *h);
 
 // Does the computed SHA-256 match the HASH_VALUE (its first value_words words, little-endian)?
 bool fullcheck_hash_matches(const bootkey_hash_t *h, const uint8_t computed[32]);
-
-// --- sd-check ------------------------------------------------------------------------------------
-
-typedef enum {
-    FULLCHECK_SD_DONE,                  // fsck finished: res
-    FULLCHECK_SD_FAILED,                // fsck stopped or couldn't start: res->why, res->passes
-    FULLCHECK_SD_MOUNTED,               // the card is mounted: not run
-    FULLCHECK_SD_NOT_BY_HAND,           // not mounted, but not unmounted by hand either
-    FULLCHECK_SD_BUSY,                  // `sd check` or a format owns the card: why
-    FULLCHECK_SD_NOT_OPENED,            // the card couldn't be opened or no memory: why
-} fullcheck_sd_state_t;
-
-typedef struct {
-    fullcheck_sd_state_t state;
-    const fsck_result_t *res;           // DONE, FAILED
-    bool encrypted;
-    const char *why;                    // BUSY, NOT_OPENED
-    uint32_t ms;
-} fullcheck_sd_t;
-
-// PASS no problems; FAIL cross-linked clusters or (exFAT) clusters reached but free in the bitmap,
-// since the next write can overwrite a file; WARN other problems, or a check that stopped or
-// found no volume; SKIP when it didn't run, saying how to run it.
-void fullcheck_judge_sd(const fullcheck_sd_t *in, health_result_t *out);
 
 #endif

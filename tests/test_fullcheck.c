@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "core/fullcheck.h"
+#include "files/fsck_check.h"
 #include "test.h"
 
 static health_result_t r;
@@ -206,15 +207,15 @@ static fsck_result_t exfat(void) {
 
 TEST(sd_pass) {
     fsck_result_t res = exfat();
-    fullcheck_sd_t in = {FULLCHECK_SD_DONE, &res, true, NULL, 512};
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_in_t in = {FSCK_CHECK_DONE, &res, true, NULL, 512};
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_PASS);
     CHECK(is("exFAT encrypted 7.5 GB: no problems, 2 passes in 0.5 s"));
     res.kind = FSCK_KIND_FAT32;
     res.passes = 1;
     res.notes = 3;                          // notes aren't problems
     in.encrypted = false;
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK(is("FAT32 7.5 GB: no problems, 1 pass in 0.5 s"));
 }
 
@@ -222,16 +223,16 @@ TEST(sd_warn) {
     fsck_result_t res = exfat();
     res.problems = 3;
     res.lost_clusters = 16;
-    fullcheck_sd_t in = {FULLCHECK_SD_DONE, &res, true, NULL, 512};
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_in_t in = {FSCK_CHECK_DONE, &res, true, NULL, 512};
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(is("3 problems, 512 KB lost: sd check fix repairs them"));
     res.lost_clusters = 4000000;
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK(strlen(r.text) < HEALTH_TEXT_MAX - 1);     // 125000 MB
     res.problems = 1;
     res.lost_clusters = 0;
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK(is("1 problem: sd check lists it, sd check fix repairs"));
 }
 
@@ -240,51 +241,51 @@ TEST(sd_fail) {
     res.problems = 2;
     res.cross_linked = 4;
     res.lost_clusters = 9;
-    fullcheck_sd_t in = {FULLCHECK_SD_DONE, &res, true, NULL, 512};
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_in_t in = {FSCK_CHECK_DONE, &res, true, NULL, 512};
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
     CHECK(is("4 cross-linked clusters: sd check fix before writing"));
     res.cross_linked = 0;
     res.reached_free = 5;
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
     CHECK(is("5 clusters used but free: sd check fix before writing"));
     res.problems = res.reached_free = 4000000000u;
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK(strlen(r.text) < HEALTH_TEXT_MAX - 1);
 }
 
 TEST(sd_stopped_and_skipped) {
     fsck_result_t res = exfat();
     res.why = "read error at sector 81920";
-    fullcheck_sd_t in = {FULLCHECK_SD_FAILED, &res, true, NULL, 0};
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_in_t in = {FSCK_CHECK_FAILED, &res, true, NULL, 0};
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(is("check stopped in pass 2: read error at sector 81920"));
     res.passes = 0;
     res.why = "no FAT32 or exFAT volume found";
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_WARN);
     CHECK(is("not checked: no FAT32 or exFAT volume found"));
     res.why = "a reason so long that it would never fit on the line the health table gives it";
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK(strlen(r.text) < HEALTH_TEXT_MAX - 1);
 
-    in = (fullcheck_sd_t){FULLCHECK_SD_MOUNTED, NULL, false, NULL, 0};
-    fullcheck_judge_sd(&in, &r);
+    in = (fsck_check_in_t){FSCK_CHECK_MOUNTED, NULL, false, NULL, 0};
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_SKIP);
     CHECK(is("card mounted: sd unmount, then health run sd-check"));
-    in.state = FULLCHECK_SD_NOT_BY_HAND;
-    fullcheck_judge_sd(&in, &r);
+    in.state = FSCK_CHECK_NOT_BY_HAND;
+    fsck_check_judge(&in, &r);
     CHECK(is("not unmounted by hand: sd unmount, then health run sd-check"));
-    in.state = FULLCHECK_SD_BUSY;
+    in.state = FSCK_CHECK_BUSY;
     in.why = "card being formatted";
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_SKIP);
     CHECK(is("card being formatted"));
-    in.state = FULLCHECK_SD_NOT_OPENED;
+    in.state = FSCK_CHECK_NOT_OPENED;
     in.why = "encrypted with another board's key";
-    fullcheck_judge_sd(&in, &r);
+    fsck_check_judge(&in, &r);
     CHECK_EQ(r.status, HEALTH_SKIP);
     CHECK(is("not checked: encrypted with another board's key"));
 }
