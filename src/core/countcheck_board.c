@@ -206,10 +206,19 @@ void countcheck_board_dump(health_print_fn print, void *arg) {
          (unsigned long)w.ws.tx, (unsigned long)w.ws.other, (unsigned long)w.ws.held_back,
          w.ws.last_res, w.ws.last_func ? w.ws.last_func : "-",
          (unsigned long)(w.ws.last_res ? now - w.ws.last_at_s : 0));
-    dump(print, arg, "wifi: window %lu s: timeout %lu, io %lu, bus %lu; state %d, down for %lu s; "
+    // The down time only means something while the link is down (found on dev-1: "down for
+    // 125 s" beside an up link read as a fault); the check judges it only then too.
+    static const char *const state_names[] = {"not set up", "stopped", "down", "up"};
+    char link[32];
+    if (w.in.state == COUNTCHECK_WIFI_DOWN)
+        snprintf(link, sizeof(link), "down for %lu s", (unsigned long)w.in.down_s);
+    else
+        snprintf(link, sizeof(link), "%s",
+                 (unsigned)w.in.state < 4 ? state_names[w.in.state] : "?");
+    dump(print, arg, "wifi: window %lu s: timeout %lu, io %lu, bus %lu; link %s; "
          "drops since boot %lu, in 24 h %u (last %lu s ago); join rssi %ld dBm",
          (unsigned long)w.in.span_s, (unsigned long)w.in.timeouts, (unsigned long)w.in.io,
-         (unsigned long)w.in.bus, (int)w.in.state, (unsigned long)w.in.down_s,
+         (unsigned long)w.in.bus, link,
          (unsigned long)w.wc.drops, w.in.drops, (unsigned long)w.in.last_drop_ago_s,
          (long)w.wc.join_rssi);
     dump(print, arg, "wifi: chip ver \"%s\"", w.wc.ver);
