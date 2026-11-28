@@ -334,9 +334,11 @@ Keep one SSH session open beside the console.
    ```
    or a measured rate (`rtc +103+-35 ppm in 8 h ...`) once two syncs have run.
 2. `health run rtc-drift`
-   You should see: the check's result. Right after a sync it is `SKIP  RTC set <n> min ago (no
-   cal, 12.5 pF): drift at the next sync`; with a measurement it reads like `WARN  RTC
-   +103+-35 ppm in 8 h, no cal: try time cal 103.1`. It only reads: it doesn't sync.
+   You should see: the check's result. Between syncs it is `SKIP  RTC set <n> min ago (or
+   <n> h ago) (no cal, 12.5 pF): drift at the next sync`, as on dev-1 until its measurement
+   ends; after a sync that measured it reads like `WARN  RTC +103+-35 ppm in 8 h, no cal: try
+   time cal 103.1`. It only reads (so do `health`, `time` and `uptime history`): safe during a
+   measurement.
 3. `time sync`: **on dev-1, ask the Reviewer first whether an RTC drift measurement is
    running (#275; one runs until about 06:30 UTC on 2026-11-29).** A manual sync starts the
    measurement over and loses the hours measured so far; skip this step while one runs.
