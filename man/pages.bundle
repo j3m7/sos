@@ -1472,7 +1472,9 @@ LIST FORMAT
     directory: 'sha256sum -c /apps/SHA256SUMS' checks the files in /apps
     from anywhere. A name that is absolute or holds '..' is refused
     ('<name>: unsafe path'), so a list from a server can't make the board
-    read outside the list's directory.
+    read outside the list's directory. So a list made with absolute names
+    ('sha256sum /apps/f > f.sha256') isn't checked: cd to the directory
+    first and give relative names ('sha256sum f > f.sha256').
 
 NAMES
     A name holding a newline or a backslash is printed the GNU way: the

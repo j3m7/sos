@@ -169,8 +169,18 @@ sha256sum -c <list>
 ### 4.3 Speed and the accelerator
 
 - Reads 4 KB per step, hashes it, yields after `STEP_US`. One file at a time.
-- The first checksum PR measures it against the card's read rate (`sd test`) on dev-1, for each
-  algorithm, and records the numbers here.
+- Measured on dev-1 (2026-11-28, #269, debug build, a 10 MB file on an XTS-AES encrypted exFAT
+  card at 25 MHz SPI, over SSH):
+
+  | Algorithm | Time | Rate | Hashing alone (rate minus the ~1.0 MB/s encrypted read) |
+  |---|---|---|---|
+  | SHA-1 | 18.2 s | 0.58 MB/s | ~1.4 MB/s |
+  | SHA-256 | 23.0 s | 0.46 MB/s | ~0.85 MB/s |
+  | SHA-512 | 28.4 s | 0.37 MB/s | ~0.6 MB/s |
+
+  `cp` of the same file ran at 285 KB/s. The read rate is the figure in docs/files.md (about
+  1.0 MB/s read on an encrypted card); `sd test` (console only) wasn't run. Hashing is more than
+  half the time for every algorithm, so the accelerator is worth doing.
 - **Follow-up (the user's call):** the RP2350's SHA-256 block through the SDK's `pico_sha256`,
   with a lock: `sha256sum` and `fetch` take the block when it's free and use wolfCrypt when it
   isn't (TLS and SSH keep wolfCrypt). wolfSSL's Thumb-2 SHA-256/512 assembly is the alternative
