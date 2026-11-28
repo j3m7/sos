@@ -186,6 +186,22 @@ sha256sum -c <list>
   with a lock: `sha256sum` and `fetch` take the block when it's free and use wolfCrypt when it
   isn't (TLS and SSH keep wolfCrypt). wolfSSL's Thumb-2 SHA-256/512 assembly is the alternative
   that also speeds up SHA-512; the measurement decides which, or neither.
+- **Done (phase 8):** `files/sha256hw.c` wraps `pico_sha256`. The lock is the SDK's: the
+  bootrom's SHA-256 boot lock, a hardware lock that both cores and the bootrom respect, tried
+  without waiting. `sha256sum` takes the block when it opens a file and releases it when the
+  file is closed (finished, read error, Ctrl-C, session end); `fetch` takes it when the body
+  starts and releases it in `finish()`, which every end goes through. A second shell meanwhile
+  hashes with wolfCrypt, with the same result. Fed by the CPU a word at a time, not DMA: each
+  4 KB chunk is waited for anyway, and DMA would claim a channel. The first use hashes two
+  FIPS 180-2 vectors on the block; a wrong answer is logged once and the block is never used
+  again. SHA-1, SHA-512, Lua's `sos.hash` (rarely large data, and a script could keep the block
+  taken), TLS and SSH stay on wolfCrypt.
+  Speed with the block, measured on dev-1 (2026-11-28, #281, same card and file): `sha256sum`
+  14.6 s (0.72 MB/s) against 23.0 s in wolfCrypt, 1.6 times as fast; what is left is mostly the
+  encrypted card's read. SHA-1 (17.5 s) and SHA-512 (25.5 s) are unchanged. Two shells hashing at
+  once: both correct, one on the block (22.8 s) and one on wolfCrypt (31 s), sharing the card.
+  After Ctrl-C, a dropped SSH session and a reboot, the next `sha256sum` was fast again (block
+  released); the self-check logged nothing.
 
 ## 5. gzip, gunzip, zcat
 

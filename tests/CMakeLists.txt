@@ -387,10 +387,26 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     # src/files/sums.c: sha1sum, sha256sum, sha512sum and -c, over a card in memory (tests/stubs).
     add_executable(test_sums test_sums.c ${SOS_ROOT}/src/files/sums.c
         ${SOS_ROOT}/src/files/sums_parse.c ${SOS_ROOT}/src/files/path.c
+        ${SOS_ROOT}/src/files/sha256hw.c fake_sha256.c
         ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
     target_include_directories(test_sums PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
     target_link_libraries(test_sums PRIVATE wolfcrypt_host)
     add_test(NAME sums COMMAND test_sums)
+
+    # src/files/sha256hw.c: the SHA-256 block's lock, self-check and release, over a fake
+    # pico_sha256 made with wolfCrypt (tests/fake_sha256.c).
+    add_executable(test_sha256hw test_sha256hw.c ${SOS_ROOT}/src/files/sha256hw.c fake_sha256.c)
+    target_include_directories(test_sha256hw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+        ${SOS_ROOT}/src)
+    target_link_libraries(test_sha256hw PRIVATE wolfcrypt_host)
+    add_test(NAME sha256hw COMMAND test_sha256hw)
+    add_executable(test_sha256hw_broken test_sha256hw.c ${SOS_ROOT}/src/files/sha256hw.c
+        fake_sha256.c)
+    target_compile_definitions(test_sha256hw_broken PRIVATE SHA256HW_BROKEN)
+    target_include_directories(test_sha256hw_broken PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+        ${SOS_ROOT}/src)
+    target_link_libraries(test_sha256hw_broken PRIVATE wolfcrypt_host)
+    add_test(NAME sha256hw_broken COMMAND test_sha256hw_broken)
 
     # src/core/selftest.c: the crypto known-answer tests of the `crypto` health check, run against
     # the host's wolfCrypt, with a fault made in each test in turn to see it caught.
