@@ -388,7 +388,10 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
 3. `sd test 1024`
    You should see: write and read rates (about 1 MB/s on an encrypted card); everything else
    waits meanwhile. The test file is removed.
-4. Clean up: `rm` each file in `/review`, then `rm /review`.
+4. Clean up: `rm` removes one file or empty directory at a time, so empty `/review/out` from
+   the inside out (`ls` each level; `pkg/docs/a.txt`, then `pkg/docs`, and so on), then `rm` each
+   file in `/review`, then `rm /review`. Or, quicker, from **[host]**: `sftp $B` and `rm`/`rmdir`
+   there.
 5. `sd unmount`, then `sd check`
    You should see: one line per pass, any problems or `note:` lines, then a summary
    (`no problems`, or the counts). It only reads.
