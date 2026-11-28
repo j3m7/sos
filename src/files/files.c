@@ -207,6 +207,10 @@ files_install_t files_install_part(shell_t *sh, const char *cmd, const char *wha
 
 // --- ls ----------------------------------------------------------------------------------------
 
+bool files_being_written(const FILINFO *fi) {
+    return !(fi->fattrib & AM_DIR) && !fi->fdate;  // month 0: not yet written out
+}
+
 typedef struct {
     DIR dir;
     unsigned files, dirs;
@@ -231,7 +235,7 @@ static bool ls_step(shell_t *sh, void *arg, bool cancel) {
         }
         char date[24];
         if (!fi.fdate)      // month 0: an entry not yet written out (files_sync_if_due())
-            snprintf(date, sizeof(date), "%-20s", fi.fattrib & AM_DIR ? "" : "being written");
+            snprintf(date, sizeof(date), "%-20s", files_being_written(&fi) ? "being written" : "");
         else
             snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u UTC", (fi.fdate >> 9) + 1980,
                      (fi.fdate >> 5) & 15, fi.fdate & 31, fi.ftime >> 11,

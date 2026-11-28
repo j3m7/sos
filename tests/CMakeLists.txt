@@ -586,9 +586,19 @@ target_include_directories(test_tar_parse PRIVATE ${SOS_ROOT}/src)
 target_compile_definitions(test_tar_parse PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
 add_test(NAME tar_parse COMMAND test_tar_parse)
 
-# src/files/tar.c: tar tf and tar xf as commands, over a card in memory (tests/stubs; names
-# compared ignoring case), with the real tar_parse.c, gz.c, files.c and bigjob.c.
-add_executable(test_tar test_tar.c ${SOS_ROOT}/src/files/tar.c ${SOS_ROOT}/src/files/tar_parse.c
+# src/files/tar_write.c: tar cf's headers, read back by tar_parse.c and by GNU tar and bsdtar
+# when the host has them (tests/tar_tools.h).
+add_executable(test_tar_write test_tar_write.c ${SOS_ROOT}/src/files/tar_write.c
+    ${SOS_ROOT}/src/files/tar_parse.c ${SOS_ROOT}/src/files/path.c)
+target_include_directories(test_tar_write PRIVATE ${SOS_ROOT}/src)
+add_test(NAME tar_write COMMAND test_tar_write)
+
+# src/files/tar.c: tar tf, xf, cf and czf as commands, over a card in memory (tests/stubs; names
+# compared ignoring case), with the real tar_parse.c, tar_write.c, gz.c, gzw.c, files.c and
+# bigjob.c; archives it makes are also listed and extracted by GNU tar and bsdtar.
+add_executable(test_tar test_tar.c ${SOS_ROOT}/src/files/tar.c ${SOS_ROOT}/src/files/tar_create.c
+    ${SOS_ROOT}/src/files/tar_parse.c
+    ${SOS_ROOT}/src/files/tar_write.c ${SOS_ROOT}/src/files/gzw.c
     ${SOS_ROOT}/src/files/gz.c ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c
     ${SOS_ROOT}/src/files/path.c ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/shell/cmdcheck.c
     ${SOS_ROOT}/src/core/heaptag.c)
@@ -657,4 +667,5 @@ target_link_libraries(replay_gz PRIVATE zlib_host)
 if (SOS_FUZZ)
     target_link_libraries(fuzz_gz PRIVATE zlib_host)
 endif()
-sos_fuzz(tar ${SOS_ROOT}/src/files/tar_parse.c ${SOS_ROOT}/src/files/path.c)   # tar's input
+sos_fuzz(tar ${SOS_ROOT}/src/files/tar_parse.c ${SOS_ROOT}/src/files/tar_write.c  # tar's input
+    ${SOS_ROOT}/src/files/path.c)

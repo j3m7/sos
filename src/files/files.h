@@ -44,6 +44,12 @@ bool files_write_allowed(const shell_t *sh, const char *path);
 // Returns f_sync()'s result, or FR_OK when no sync was due.
 FRESULT files_sync_if_due(FIL *f, uint64_t *synced_at);
 
+// Is the file `fi` describes (from f_stat() or f_readdir()) being written: made and not yet
+// synced, so that its directory entry has no date yet? `ls` shows it as "being written"; `tar c`
+// skips it. A file being written that has been synced has its date, but FatFs's lock refuses to
+// open it a second time (FR_LOCKED) for as long as it is open for writing.
+bool files_being_written(const FILINFO *fi);
+
 // A finished `<dest>.part` (closed) put in place of `dest`: fetch's download, gunzip's output.
 // Returns FILES_INSTALLED when `part` is `dest` now. On a failure *why says why (static text),
 // and the result says what became of `part`:
