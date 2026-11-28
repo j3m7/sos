@@ -196,21 +196,30 @@ Keep one SSH session open beside the console.
    `tools/man-install.sh $B` from **[host]**).
 2. `man intro`
    You should see: the page in the pager. Space and b page, j and k scroll, g and G go to the
-   ends, `/QUOTING` finds the QUOTING section (search on main is case-sensitive; smart case is
-   #278), q quits.
-3. `dmesg | grep wifi`
+   ends.
+3. Still in the pager: `/quoting`, Enter.
+   You should see: the line with the match brought to the top, every match on screen in
+   reverse video, and `found on line <n>` on the bottom row. Lower-case text ignores case, so
+   it finds QUOTING.
+4. Press `n` a few times.
+   You should see: each press goes on past the previous match, wrapping round to the start
+   after the last.
+5. `/Quoting`, Enter.
+   You should see: `not found` on the bottom row: with a capital letter the text must match
+   exactly, and the page has only QUOTING. q quits.
+6. `dmesg | grep wifi`
    You should see: only lines holding `wifi`. Try `-i`, `-v`, `-n` too.
-4. `help | wc`
+7. `help | wc`
    You should see: line, word and byte counts.
-5. `dmesg | head 3`, then `dmesg | tail 3`
+8. `dmesg | head 3`, then `dmesg | tail 3`
    You should see: the first three, then the last three lines.
-6. `dmesg | grep sd | tee /review/sd.txt | wc`, then `cat /review/sd.txt | wc`
+9. `dmesg | grep sd | tee /review/sd.txt | wc`, then `cat /review/sd.txt | wc`
    You should see: the same counts twice.
-7. `dmesg | more`
+10. `dmesg | more`
    You should see: the log in the pager, the first frame showing the key hint. q quits.
-8. `ping 1.1.1.1 20 | more`
+11. `ping 1.1.1.1 20 | more`
    You should see: lines added while you read; q stops the ping.
-9. `more /var/log/daemon.log`
+12. `more /var/log/daemon.log`
    You should see: the file a screen at a time, whatever its size.
 
 ## 10. Editor
@@ -534,8 +543,6 @@ at a time, and tell the Reviewer before you start this section.
 
 Review these once they merge; their PRs describe what to try:
 
-- Pager search: matches highlighted, `n` past the last match, smart case (#278). Then redo
-  section 9 step 2 with `/quoting`.
 - Build feature options: leave features out of an image at build time (#250, design #279).
 
 ## When you finish
