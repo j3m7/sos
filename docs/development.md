@@ -348,8 +348,10 @@ tokenizer: a typed line split into words, quotes removed in place), `fsck` (the 
 checker, on a sparse disk image: `tests/fuzz/fsck_image.h`; each input is checked with two
 window sizes, which must agree), `fsck_exfat` (a card's exFAT boot region, directory entries
 and up-case table, as the checker's exFAT parts read them), `sums` (a checksum list for
-`sha256sum -c`, split into lines and each line parsed) and `gz` (what `gunzip` and `zcat` read:
-each input is decoded in one piece and in pieces, which must agree).
+`sha256sum -c`, split into lines and each line parsed), `gz` (what `gunzip` and `zcat` read:
+each input is decoded in one piece and in pieces, which must agree) and `tar` (what `tar tf` and
+`tar xf` read, the same way; every name the extraction rules accept must stay under the target
+directory).
 
 ```sh
 just fuzz nts_ntp 300        # five minutes; needs clang

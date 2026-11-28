@@ -552,6 +552,14 @@ target_compile_definitions(test_gzip PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
 target_link_libraries(test_gzip PRIVATE zlib_host)
 add_test(NAME gzip COMMAND test_gzip)
 
+# src/files/tar_parse.c: tar's reader and name rules, over archives made by GNU tar, bsdtar and
+# python's tarfile (tests/data/archives/tar, tools/make-archive-fixtures.sh).
+add_executable(test_tar_parse test_tar_parse.c ${SOS_ROOT}/src/files/tar_parse.c
+    ${SOS_ROOT}/src/files/path.c)
+target_include_directories(test_tar_parse PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_tar_parse PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+add_test(NAME tar_parse COMMAND test_tar_parse)
+
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
 add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
 target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
@@ -611,3 +619,4 @@ target_link_libraries(replay_gz PRIVATE zlib_host)
 if (SOS_FUZZ)
     target_link_libraries(fuzz_gz PRIVATE zlib_host)
 endif()
+sos_fuzz(tar ${SOS_ROOT}/src/files/tar_parse.c ${SOS_ROOT}/src/files/path.c)   # tar's input
