@@ -375,10 +375,12 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_link_libraries(test_pwverify PRIVATE wolfcrypt_host)
     add_test(NAME pwverify COMMAND test_pwverify)
 
-    # src/lua/lua_hash.c: sos.hash and sos.hmac's core 0 side, against published test vectors.
+    # src/lua/lua_hash.c: sos.hash, sos.hmac and sos.hashfile's core 0 side, against published
+    # test vectors; sos.hashfile's file from a card in memory (tests/stubs).
     add_executable(test_lua_hash test_lua_hash.c ${SOS_ROOT}/src/lua/lua_hash.c
         ${SOS_ROOT}/src/core/heaptag.c)
-    target_include_directories(test_lua_hash PRIVATE ${SOS_ROOT}/src)
+    target_include_directories(test_lua_hash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+        ${SOS_ROOT}/src)
     target_link_libraries(test_lua_hash PRIVATE wolfcrypt_host)
     add_test(NAME lua_hash COMMAND test_lua_hash)
 

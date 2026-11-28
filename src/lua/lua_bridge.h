@@ -131,7 +131,7 @@ typedef struct {
     const void *opts;               // LR_HTTP_REQUEST: core 1's http_opts_t, and the strings it
                                     // points at, which core 0 reads while core 1 waits
     int64_t result;                 // < 0: failed (error has why); LUA_REQ_NOT_FOUND: no such file
-    char error[64];
+    char error[96];                 // room for http_start()'s redirect refusal (67)
     uint8_t *data;                  // LUA_REQ_DATA bytes; there only while a script runs
 } lua_req_t;
 
@@ -154,8 +154,11 @@ typedef struct {
 // LR_HTTP_REQUEST packs the headers into data as http_resp_t stores them: "name:value\n" each,
 // names in lower case.
 
-// The LR_HTTP_READ answer that ends the body (len 0) carries the request's timings in data.
+// The LR_HTTP_READ answer that ends the body (len 0) carries the request's timings in data, then
+// (at data + sizeof(lua_http_stats_t)) the last hop's URL, NUL-terminated (http_url(): the one
+// asked for, or where its redirects led).
 typedef struct {
+    uint32_t redirects;             // redirects followed
     uint32_t headers_ms;            // request started -> headers in
     uint32_t elapsed_ms;            // request started -> end of the body
     bool tls;                       // the rest is there (a TLS connection was made)
