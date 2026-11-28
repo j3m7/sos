@@ -395,18 +395,26 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
    You should see: JSON for that table (key order may differ).
 6. `lua -e 'local r = sos.http.get("https://letsencrypt.org/") print(r.status, #r.body)'`
    You should see: `200` and the body's size.
-7. `lua -e 'print(sos.date("%Y-%m-%d %H:%M:%S"), sos.localdate("%H:%M %Z"))'`
+7. `lua -e 'local r = sos.http.get("https://letsencrypt.org/docs") print(r.status, r.redirects)'`
+   You should see: `301` and `0`: without the `redirects` option a script gets the redirect
+   itself.
+8. `lua -e 'local r = sos.http.get("https://letsencrypt.org/docs", {redirects = 2}) print(r.status, r.redirects, r.url)'`
+   You should see: `200`, `1` and `https://letsencrypt.org/docs/` (where the redirect led).
+9. `lua -e 'print(sos.hashfile("/review/r.bin"))'`
+   You should see: the same SHA-256 as section 11 gave for `r.bin`.
+   `lua -e 'print(sos.hashfile("/review/r.bin", "sha512"))'` gives the file's SHA-512.
+10. `lua -e 'print(sos.date("%Y-%m-%d %H:%M:%S"), sos.localdate("%H:%M %Z"))'`
    You should see: UTC now, and local time in the board's zone.
-8. `echo 'sos.every(2, function() sos.log("tick") end)' > /review/tick.lua`, then
+11. `echo 'sos.every(2, function() sos.log("tick") end)' > /review/tick.lua`, then
    `lua -b /review/tick.lua`, then `lua ps`.
    You should see: the script listed as running in the background.
-9. Wait 5 s, then `dmesg -f user | tail 3`.
+12. Wait 5 s, then `dmesg -f user | tail 3`.
    You should see: `tick` lines tagged with the script's path.
-10. **[ssh]** `lua stop`; then **[console]** `lua ps`.
+13. **[ssh]** `lua stop`; then **[console]** `lua ps`.
    You should see: stopped from another shell; nothing running, and its end in the log.
-11. `lua -e 'while true do end'`, then Ctrl-C.
+14. `lua -e 'while true do end'`, then Ctrl-C.
    You should see: the script stops; the console stayed responsive meanwhile.
-12. `ls /autorun.lua`
+15. `ls /autorun.lua`
    You should see: whether dev-1 has an autorun script. Don't add one without telling the
    Reviewer: it runs at every boot.
 
