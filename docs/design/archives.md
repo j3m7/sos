@@ -266,9 +266,19 @@ gzip [-k] [-f] [-1..-9] <file>...
 - Output to `<name>.gz.part`, renamed at the end; the input deleted unless `-k`. The gzip header
   holds no name and date 0 (`gzip -n`), since FatFs dates are local and coarse.
 - Heap check as `gunzip`, with ~62 KB.
-- Speed: to be measured on the board (dev-1) per level when phase 6 is tested there; expected
-  well under 1 MB/s. Each step yields after `STEP_US`, so the shell stays responsive whatever
-  the speed.
+- Speed, measured on dev-1 (2026-11-28, #273, debug build, XTS-AES encrypted exFAT card, read
+  and write included; GNU gzip's sizes for the same 10 MB text file in brackets):
+
+  | Input | Level | Output | Time | Rate |
+  |---|---|---|---|---|
+  | 10 MB text (docs and C) | 1 | 3,818,889 (3,500,222) | 42.0 s | 244 KB/s |
+  | 10 MB text | 6 | 3,374,462 (2,882,389) | 45.4 s | 225 KB/s |
+  | 10 MB text | 9 | 3,365,406 (2,860,403) | 48.7 s | 210 KB/s |
+  | 1 MB random | 6 | 1,049,914 | 6.9 s | 148 KB/s |
+
+  zlib held 55,004 bytes of heap while it ran. The level barely changes the time: the encrypted
+  card's read and write take most of it. Each step yields after `STEP_US`, so the shell stays
+  responsive; another shell's `mem` and `gunzip` (busy) answered at once during a run.
 
 ## 6. tar
 

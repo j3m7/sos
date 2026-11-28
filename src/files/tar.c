@@ -119,7 +119,9 @@ static void say(shell_t *sh, tarjob_t *j, const char *name, const char *why) {
 }
 
 static void skip(shell_t *sh, tarjob_t *j, const char *name, const char *why) {
-    say(sh, j, name, why);
+    // A name the reader refused for its length (a pax path or GNU long name over TAR_NAME_MAX)
+    // never reaches us, so there is nothing to show.
+    say(sh, j, name[0] ? name : "(a name too long to show)", why);
     j->skipped++;
 }
 
