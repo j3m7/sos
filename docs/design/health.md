@@ -16,7 +16,7 @@ the second. Phase 3, checks of stored state: designed in §9.3 (approved, #254),
 waiting for its board run. Phase 4, the background tier: designed in §9.5 (approved with
 changes, #255), built (§9.6), waiting for its board run. Phase 5, the full tier: designed in
 §9.7 (approved, #262, with the image hash source decided by the user), built (§9.8), waiting
-for its board run. Phase 6, the counters: designed in §9.9, waiting for review.
+for its board run. Phase 6, the counters: designed in §9.9 (approved with changes, #268).
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.
@@ -2035,7 +2035,10 @@ faults). An unsigned image gains picotool's hashed block.
 
 ### 9.9 Phase 6 design: the counters
 
-Status: design, waiting for review. Phase 6 adds three background checks that judge counters:
+Status: approved by Reviewer (#268) with changes, which this section now reads as: the SD
+library's debug lines counted by function name, the driver's warnings logged one line per site
+per 10 s, the clock alone no WARN, the figures provisional; the decisions are listed at its end.
+Phase 6 adds three background checks that judge counters:
 `wifi` (the Wi-Fi chip's driver errors, link drops and firmware version), `sd-bus` (the SD
 card's SPI errors and clock) and `net-pools` (lwIP's pool and heap failures). Nothing in the Pico
 SDK or the SD card library is edited: the counters are taken through the hooks both libraries
@@ -2049,11 +2052,13 @@ the third, and what was considered and dropped, are argued below.
   month mustn't WARN for errors spread over it. The windows: the last hour for driver and pool
   errors, the last 24 hours for link drops, and since the card's last initialisation for the
   SD card. Totals since boot stay in `health state-dump` and Lua.
-- **Windows measured, not assumed.** A check keeps its last 8 samples (the uptime and the
-  totals at each run) and takes the window from the newest sample at least an hour old (before
-  an hour of uptime, from boot, and the text says `in 42 min`). So an extra `health run`
-  between two periodic runs changes nothing. A WARN clears by itself once the window holds no
-  more errors, and the change back is logged (§5).
+- **Windows measured, not assumed.** A check stores a sample (the uptime and the totals) at a
+  run at most every 10 minutes, keeps the last 8, and takes the window from the newest sample at
+  least an hour old. With 8 samples at least 10 minutes apart one always is, once the ring is
+  full; before that the window starts at boot (all counters are zero then), and the text says
+  `in 42 min` while it is shorter than an hour. So an extra `health run` between two periodic
+  runs changes nothing. A WARN clears by itself once the window holds no more errors, and the
+  change back is logged (§5).
 - **Read only, and cheap.** The steps read RAM, and `net-pools` copies a few lwIP counters under
   the stack's lock. No step sends an ioctl to the Wi-Fi chip or touches the card: the one ioctl
   (the firmware version) is sent once, by `wifi_start()` at boot. So each check is one step of
@@ -2110,28 +2115,33 @@ place of the SDK's `cyw43_configport.h` when it is defined. SOS defines it in `C
 as the SDK's libraries are interface libraries), and `config/cyw43_sos.h` includes the SDK's
 `cyw43_configport.h`, then defines:
 
-- `CYW43_FAIL_FAST_CHECK(res)` as `wifistat_fail((res), __LINE__)`, which returns `res`
+- `CYW43_FAIL_FAST_CHECK(res)` as `wifistat_fail((res), __func__)`, which returns `res`
   unchanged and counts it: `timeout` (`-CYW43_ETIMEDOUT`), `io` (`-CYW43_EIO`) or `other`. It
-  keeps the last error's code, line and time for `health state-dump`.
-- `CYW43_WARN(...)` as `wifistat_warn(...)`, which counts by the format's start (`bus` for the
-  bus error, the header mismatch and the bus that won't wake; `tx` for a frame not sent;
-  `other`), and logs the line at warning (facility daemon, `wifi: driver: ...`), at most one
-  line per kind a minute. Since the timeouts also warn, a timeout is counted once, by its error
-  return; its warning is only logged.
+  keeps the last error's code, function and time for `health state-dump`.
+- `CYW43_WARN(...)` as `wifistat_warn(__func__, __LINE__, ...)`, which counts by the
+  function the warning comes from, never by its wording (decided on review):
+  `cyw43_ll_sdpcm_poll_device` (the bus error and the header mismatch), `cyw43_kso_set` and
+  `cyw43_ll_bus_sleep_helper` (the bus that won't wake) are `bus`; `cyw43_netif_output` (a
+  frame not sent) is `tx`; `cyw43_do_ioctl` and `cyw43_sdpcm_send_common`, whose timeouts are
+  already counted by their error returns, count nothing more; any other function is `other`.
+  It logs the line at warning (facility daemon, `wifi: driver: ...`) through `log_msg()`, which
+  only stores a line logged from interrupt context and prints it from the main loop, at most
+  one line per site (function and line) every 10 s; the lines held back are counted all the
+  same, and the next line logged from that site says how many there were. Never `printf`.
 
 Both live in a new `src/net/wifistat.c`. They run where the driver runs, in the async context
 on core 0 or in a caller holding the driver's lock, so plain 32-bit counters suffice; the log
 already takes lines from interrupt context (`log_in_irq`). A build guard keeps the hooks honest:
 `wifistat.c` refuses to compile unless `cyw43_sos.h` was the configuration file, and
-`CMakeLists.txt` checks at configure time that the driver's source still has the warning texts
-the classifier matches (`file(STRINGS)`), so a driver update that rewords them fails the build
-instead of counting nothing.
+`CMakeLists.txt` checks at configure time that the driver's sources still define the functions
+the classifier names and still leave both macros to the port (`file(READ)`), so a driver update
+that renames them fails the build instead of counting them as `other`.
 
 **Link drops** are counted in `wifi.c`, where `W_UP` sees the link go (`wifi: link lost (status
 %d), reconnecting`). A disconnect that was asked for doesn't pass there: `wifi connect`, `wifi
 set` and `wifi remove` go through `wifi_reconnect()`, and the move to a stronger access point
 happens before `W_UP`. `wifi.c` keeps the uptimes of the last 8 drops, and since when the link
-has been down (from `wifi_start()`, or from the last drop).
+has been down (from `wifi_start()`, or from the last time it left `W_UP`).
 
 **The firmware version** is read once by `wifi_start()`: the `ver` iovar (one
 `CYW43_IOCTL_GET_VAR`, as `wifi stats chip` reads `counters`), kept as a string in `wifi.c`.
@@ -2154,7 +2164,7 @@ programming errors (an argument refused), so both are shown, not judged.
 | WARN | 3 or more judged errors in the hour | `7 driver errors in 1 h (5 timeouts, 2 bus); fw 7.95.49` |
 | FAIL | 30 or more judged errors in the hour | `41 driver errors in 1 h: the chip isn't answering` |
 | WARN | 4 or more link drops in 24 h | `4 link drops in 24 h, the last 2 h ago; fw 7.95.49` |
-| WARN | set up, not connected for 30 min or more | `not connected for 42 min (waiting to retry)` |
+| WARN | set up, not connected for 30 min or more | `no connection for 42 min: check the network and 'wifi'` |
 | WARN | the firmware version wasn't read at boot | `the chip didn't give its firmware version` |
 | SKIP | no network saved, or Wi-Fi stopped | `Wi-Fi not set up`, `Wi-Fi stopped` |
 
@@ -2162,7 +2172,8 @@ The figures, and why:
 
 - **3 errors an hour, WARN.** A sound board's bus should have none; a single timeout can follow
   a burst of traffic held up by the chip's flow control, or a scan, so one is not a finding.
-  Three in an hour is a pattern. Provisional until a 24-hour baseline on dev-1 (below).
+  Three in an hour is a pattern. Provisional, like every figure in this section: built as
+  given, and fixed later from a 24-hour baseline on dev-1 (a follow-up, below).
 - **30 an hour, FAIL.** A chip that stops answering times out at every frame it is given: the
   keepalive alone sends one a minute (`KEEPALIVE_MS`), and each send waits 1 s for credit, so a
   hung chip passes 60 an hour while holding the main loop a second each time. FAIL logs at err;
@@ -2172,15 +2183,15 @@ The figures, and why:
   maintenance. A drop can be the network's doing, not the board's, so it doesn't FAIL.
 - **30 minutes not connected, WARN.** A router restart takes one to three minutes, and the
   retry delay is 15 s (`RETRY_DELAY_MS`). Half an hour without a link is not a blip, and without
-  this rule a board stuck "connecting" for days would read PASS. The text gives `wifi_state()`.
+  this rule a board stuck "connecting" for days would read PASS. The text says where to look:
+  the network itself, and `wifi` for the saved networks and the state.
 
 **RSSI** isn't judged. Reading it is an ioctl (an answer within 1 s, or a timeout counted
 above), it depends on where the board stands, and nothing in the board fixes it; `wifi stats`
 and `net` show it live, and `connected()` already logs it at each join. The join's RSSI goes to
 `health state-dump`.
 
-**Expected on dev-1:** PASS `fw 7.95.49, driver 1.1.0; no errors in 1 h; no drops in 24 h`,
-unless the baseline shows otherwise.
+**Expected on dev-1:** PASS `fw 7.95.49, driver 1.1.0; no errors in 1 h; no drops in 24 h`.
 
 #### `sd-bus`: the card's SPI errors and clock
 
@@ -2203,31 +2214,45 @@ read or write.
 in SOS's own files (THIRD_PARTY.md), and the submodules are checked out unchanged. Both levels
 keep to that.
 
-- **Level A, no change below SOS** (proposed). SOS already wraps the driver's calls: reads in
+- **Level A, no change below SOS.** SOS already wraps the driver's calls: reads in
   `read_blocks_logged()`, writes in `write_blocks_fed()` and initialisations in `init_layer()`
   (`sdcard.c`). New counters there: sectors read and written; reads and writes that failed
   after the driver's retries, by error (`CRC`, `NO_RESPONSE`, `WRITE`, other); initialisations
   attempted and failed. Write rejections are counted where SOS already receives them: SOS
   defines the library's weak `error_message_printf()` (it gets the function's name), counts the
   ones from `send_block()`, and logs the line as `put_out_error_message()` does today.
-- **Level B, the retried errors, by a build flag** (proposed, for review). `CMakeLists.txt`
-  compiles one library source, `sd_driver/SPI/sd_card_spi.c`, with `USE_DBG_PRINTF=1` (a source
-  property, as `lua_json.c` gets its `snprintf`), and SOS defines the weak
-  `debug_message_printf(func, line, fmt, ...)`. It formats nothing and prints nothing: it
-  matches the function's name and the format's start and counts `chk_crc16` (a data CRC
-  mismatch), `sd_cmd` with `CRC error` (a command CRC error), `sd_cmd` with `No response`
-  (a command retried), `sd_wait_token` and `sd_wait_ready` (a timeout), and `sd_write_blocks`
-  with `Retrying`. The other 40-odd debug lines (card type, CSD and the like at
-  initialisation) are ignored. Measured on that file alone (debug build, `arm-none-eabi-size`):
-  text and rodata 4.9 KB without, 7.3 KB with the flag, so about 2.4 KB of format strings and
-  calls. As for the Wi-Fi texts, a configure-time check fails the build if the matched names
-  and texts are gone from the source. The classifier is pure (`sdstat_classify()`) and host
-  tested with the library's texts.
+- **Level B, the retried errors, by a build flag** (approved). `CMakeLists.txt` compiles one
+  library source, `sd_driver/SPI/sd_card_spi.c`, with `USE_DBG_PRINTF=1`, through
+  `set_source_files_properties()` on that file alone, so no other library file starts
+  printing; SOS defines the weak `debug_message_printf(func, line, fmt, ...)`. It formats
+  nothing and prints nothing: it counts by `func`, the name of the function the line comes
+  from, never by the line's text (decided on review):
+
+  | Function | Counted as | What its lines say |
+  |---|---|---|
+  | `chk_crc16` | `crc` | a data block's CRC16 doesn't match (a read, or a register read at initialisation) |
+  | `sd_wait_token` | `timeout` | no data token within `sd_command` (2 s) |
+  | `sd_wait_ready` | `timeout` | the card still busy after `sd_command` (2 s) |
+  | `in_sd_spi_sectors` | `cmd` | the card's CSD register unreadable |
+  | `sd_cmd`, outside an initialisation | `cmd` | a command unanswered (retried), refused for its CRC, or illegal |
+  | `send_block`, through `error_message_printf()` | `write` | a data block refused by the card's token (CRC or write error) |
+
+  `sd_cmd`'s lines during an initialisation are mostly the card's type (`V2-Version Card`,
+  `R3/R7`), so they count only outside one: `sdcard.c` knows, since `init_layer()` wraps the
+  driver's `init`. A failed initialisation is counted by level A. The callers' repeats of the
+  same event (`read_bytes()` and `in_sd_read_blocks()` after `chk_crc16`, `send_block()` and
+  `stop_wr_tran()` after `sd_wait_ready`, `sd_write_blocks()`'s retry lines after
+  `send_block`) count nothing, so each event counts once. Measured on that file alone (debug
+  build, `arm-none-eabi-size`): text and rodata 4.9 KB without, 7.3 KB with the flag, so about
+  2.4 KB of format strings and calls. A configure-time check fails the build if the counted
+  functions are gone from `sd_card_spi.c` or its count of `DBG_PRINTF(` calls changes (51 in
+  3.6.2), so an update of the library is looked at before it is counted. The classifier is pure
+  and host tested.
 - **Not proposed:** a copy of `sd_card_spi.c` in SOS's tree with counters added (1731 lines to
   keep in step by hand), or a patch to the submodule. Either is the user's decision.
 
-Without level B, the rate and timeout rules below go, and `sd-bus` judges failed reads and
-writes, the initialisation, and the clock.
+Without level B, the rate and timeout rules below would go, and `sd-bus` would judge failed
+reads and writes and the initialisation.
 
 **Where the counters live:** `sdcard.c`, beside `io_stats` (which a format resets, so it isn't
 reused), read with a new `sdcard_counters()` that copies them and reads the SPI clock
@@ -2243,13 +2268,14 @@ it. Totals since boot go to `health state-dump`.
 | Status | When | Text (dev-1 or example) |
 |---|---|---|
 | PASS | no failed read or write, rates under the line | `25.0 MHz; 37 MB since the card's init, no errors` |
+| PASS | the same above 25 MHz | `at 37.5 MHz; 3 MB since the card's init, no errors` |
 | PASS | retried errors under the line | `25.0 MHz; 2 retried in 412 MB (under 1 per 10 MB)` |
 | FAIL | 10 or more failed reads and writes since the init | `12 failed reads/writes since init: card or bus failing` |
 | WARN | a failed read or write since the init | `2 failed writes, 1 failed read since init: sd check` |
 | WARN | the last initialisation failed, after one had worked since boot | `card no longer initialises at 75.0 MHz (removed?)` |
 | WARN | a timeout since the init (level B) | `card timed out 2x since init (2 s each); 25.0 MHz` |
-| WARN | 3 or more retried errors, and 1 or more per 10 MB moved (level B) | `37.5 MHz; 14 retried in 31 MB: over 1 per 10 MB` |
-| WARN | the clock set above 25 MHz | `37.5 MHz, above the SD spec's 25 MHz; no errors` |
+| WARN | above 25 MHz, any retried error (level B) | `2 retried at 37.5 MHz, over SD's 25 MHz: sd speed 25` |
+| WARN | 3 or more retried errors, and 1 or more per 10 MB moved (level B) | `25.0 MHz; 14 retried in 31 MB: over 1 per 10 MB` |
 | SKIP | no initialisation has worked since boot | `no card initialised since boot` |
 
 The first matching row wins, in this order (FAIL, then the WARNs as listed). The figures:
@@ -2265,9 +2291,12 @@ The first matching row wins, in this order (FAIL, then the WARNs as listed). The
   first megabyte from reading as a rate.
 - **Any timeout.** Each one holds the main loop for up to 2 s (`sd_timeouts.sd_command`), and
   three in a row (one read's retries) come near the 8 s watchdog. Rare on a working card.
-- **Above 25 MHz.** `sdcard.c` notes 25 MHz as the SD spec's maximum in SPI mode; the SPI block
-  divides 150 MHz by even numbers, so `sd speed` can give 75, 37.5 or 25 MHz and less. 37.5 MHz
-  worked on one card. `sd speed` isn't saved, so this WARN ends with the reboot.
+- **Above 25 MHz, no rate.** `sdcard.c` notes 25 MHz as the SD spec's maximum in SPI mode; the
+  SPI block divides 150 MHz by even numbers, so `sd speed` can give 75, 37.5 or 25 MHz and less.
+  37.5 MHz worked on one card. Running there is the person's choice and not a finding by itself
+  (decided on review): the PASS text names the clock (`at 37.5 MHz`). But an error there is put
+  down to the clock at once, without waiting for a rate, and the text says how to go back.
+  `sd speed` isn't saved, so a reboot goes back to 25 MHz.
 - **No card is SKIP**, not a finding: there is no card-detect pin, so a missing card and a dead
   one look the same until one has worked. The WARN for a card that stopped initialising covers
   the second.
@@ -2352,8 +2381,11 @@ question; if they don't, only the packet pool is judged.
 **Test commands** (`SOS_TEST_COMMANDS`, console):
 
 - **`wifi fault drop`:** sends the chip `CYW43_IOCTL_SET_DISASSOC` directly, as
-  `cyw43_wifi_leave()` does, without telling `wifi.c`. The state machine sees the link go, logs
-  `link lost`, counts a drop and reconnects within seconds, as after a real drop.
+  `cyw43_wifi_leave()` does, without telling `wifi.c`, and only while connected. The chip
+  answers with its `DISASSOC` event, on which the driver (`cyw43_ctrl.c`) sets the link down and
+  clears its join state, so `cyw43_tcpip_link_status()` stops reading `CYW43_LINK_UP`.
+  `wifi_poll()` then takes its ordinary `W_UP` path: it logs `link lost`, counts a drop, and
+  starts a new attempt (`begin_attempt()`), as after a real drop. Nothing else is touched.
 - **`health fault wifi timeout|bus <n>`:** calls `wifistat_fail()` or `wifistat_warn()` n times,
   as the driver would, to take the rules through WARN and FAIL. It tests counting and judging on
   the board; the driver's own calls are checked at build time (the guard above) and by the
@@ -2379,45 +2411,45 @@ that only grow); the drop times over 24 h; the rule order for `sd-bus`; `sdstat_
    `wifi fault drop` four times, a minute apart: four reconnects; `health run wifi` WARN
    `4 link drops in 24 h`. (They age out after 24 h; the host tests cover that.)
 4. `health fault wifi timeout 3`, `health run wifi`: WARN; `health fault wifi bus 30`: FAIL,
-   logged at err; the warning lines appear in `dmesg`, at most one a minute per kind, and
-   nothing raw on the console. The reboot at the slot's end clears them.
+   logged at err; the warning lines appear in `dmesg`, at most one per site every 10 s with
+   the count of those held back, and nothing raw on the console. The reboot at the slot's end
+   clears them.
 5. `sd speed 75` (the card fails to initialise at 75 MHz, as `sdcard.c` notes, so nothing is
    mounted or written), `health run sd-bus`: WARN `card no longer initialises at 75.0 MHz`, and
    level B's counts in the dump; `sd speed 25`: mounted again; `health run sd-bus`: PASS, the
-   window started again. `sd speed 37.5`, `cat` a large file, `health run sd-bus`: WARN for the
-   clock, with any retried errors counted; `sd speed 25`.
+   window started again. `sd speed 37.5`, `cat` a large file, `health run sd-bus`: PASS
+   `at 37.5 MHz`, or WARN if a retried error came; `sd speed 25`.
 6. `sd fault read 1`, `cat` a file: the read error; `health run sd-bus`: WARN `1 failed read
    since init`; `sd unmount`, `sd mount`, `health run sd-bus`: PASS.
 7. `net-pools`: from the host, a flood ping (`ping -f -s 1400`) for 10 s may empty the packet
    pool (frames are dropped, nothing else); if it doesn't, the host tests cover the rule and the
    step shows the pool's `max`. `wifi stats` pools line before and after.
-8. **The baseline:** the board left up for 24 hours in its ordinary use (SSH, the log files, NTS
-   syncs), with `health state-dump` read at the start and the end, and once during an SFTP
-   upload: real driver errors, drops and pool failures per day. The provisional figures (3 and
-   30 errors an hour, 4 drops a day, the pools) are fixed from it, which may need a slot longer
-   than usual or the counts read in the next one.
+8. **The baseline, a later follow-up** (decided on review, not part of this phase's run): the
+   board left up for 24 hours in its ordinary use (SSH, the log files, NTS syncs), with
+   `health state-dump` read at the start and the end, and once during an SFTP upload: real
+   driver errors, drops and pool failures per day. The provisional figures (3 and 30 errors an
+   hour, 4 drops a day, the pools) are fixed from it.
 
 **Cost estimate:** text about +3 KB for the checks, the hooks and the classifiers, +2.4 KB for
 level B's debug lines; bss about 200 bytes (the counters, the drop times, the samples, the
 version string). No flash sector, nothing on the card.
 
-#### Questions for review
+#### Decisions on review
 
-1. **Level B** (the retried SD errors, by compiling the library's `sd_card_spi.c` with
-   `USE_DBG_PRINTF` and matching its debug lines by function name): worth 2.4 KB and the
-   dependence on the library's wording (guarded at configure time)? Without it, `sd-bus` judges
-   only what got past the retries.
-2. **`CYW43_WARN` to the log:** the driver's warnings stop going raw to the serial console
-   (where they print even while it's locked) and go to `dmesg`, rate-limited. Agreed? Its
-   `CYW43_PRINTF` lines (debug builds only, at initialisation) are left as they are.
-3. **The figures** are provisional until the baseline (step 8): accept them for the build, or
-   wait for the counts?
-4. **`net-pools`:** a third check, or fold it into `wifi`? It is kept apart because its finding
-   is SOS's sizing, not the radio, as `heap` and `heap-sum` are kept apart.
-5. **The test commands** `wifi fault drop`, `health fault wifi` and `sd fault read`.
+Decided (Reviewer, on #268):
 
-For the user: patching the SD library, or keeping a modified copy of `sd_card_spi.c`, is not
-proposed; it is the alternative if level B is refused and the retried errors are still wanted.
+1. **Level B** is built, counting by function name (`__func__`), not by the lines' text; the
+   configure-time guard checks the function names and the count of `DBG_PRINTF(` calls in
+   `sd_card_spi.c`; `USE_DBG_PRINTF=1` is set on that file alone.
+2. **`CYW43_WARN`** goes to the log at warning, one line per site every 10 s, the rest counted;
+   never `printf`; from interrupt context through `log_msg()`'s stored path.
+3. **The figures** are built as given, provisional; the 24-hour baseline is a later follow-up.
+4. **`net-pools`** stays a check of its own.
+5. **The test commands** `wifi fault drop`, `health fault wifi` and `sd fault read` are in test
+   builds; `wifi fault drop` goes through the ordinary `W_UP` link loss (above).
+6. **The clock alone is no WARN** (`sd-bus`): the PASS text names a clock above 25 MHz, and
+   only an error there WARNs.
+7. **The 30-minute text** says what to check: the network, and `wifi`.
 
 ## 10. Phases
 
