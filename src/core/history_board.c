@@ -98,12 +98,13 @@ void history_boot(void) {
         write_failed("the boot record");
 }
 
-int history_rtc_begin(uint32_t t, int cal_steps) {
+int history_rtc_begin(uint32_t t, int cal_steps, uint8_t load) {
     if (!history_sector())
         return -1;
     history_rec_t rec = {
         .kind = HISTORY_KIND_RTC,
         .cal_steps = (int8_t)cal_steps,
+        .rtc_load = load,
         .uptime_s = 0,
         .wall = t,
     };

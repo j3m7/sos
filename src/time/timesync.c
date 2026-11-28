@@ -131,6 +131,7 @@ static void measure(int64_t next, int64_t step, uint64_t prev_sync_us, bool prev
                     uint32_t delay_ms) {
     timeconv_drift_t d = {0};
     d.cal_steps = settings()->rtc_offset;
+    d.load = rtc_load();
     if (prev_sync_us && prev_set) {
         // The clock ran on the crystal since the last sync: the step is its error.
         d.xosc = true;
@@ -144,9 +145,8 @@ static void measure(int64_t next, int64_t step, uint64_t prev_sync_us, bool prev
     d.rtc = TIMECONV_DRIFT_NO_BASELINE;
     history_rec_t base;
     if (st == RTC_OK && rtc_baseline(&base) && base.wall != HISTORY_NONE && next > base.wall) {
-        if (base.cal_steps != d.cal_steps) {
-            d.rtc = TIMECONV_DRIFT_CAL_CHANGED;
-        } else {
+        d.rtc = timeconv_baseline(base.cal_steps, base.rtc_load, d.cal_steps, d.load);
+        if (d.rtc == TIMECONV_DRIFT_BASELINE) {
             d.rtc = TIMECONV_DRIFT_MEASURED;
             d.rtc_err_ms = (rtc_t - next) * 1000;
             d.rtc_unc_ms = timeconv_rtc_unc_ms(d.cal_steps, delay_ms);
@@ -181,11 +181,12 @@ static void apply_time(int64_t t_us, time_source_t src) {
     // A flash write: usually one page (about 1 ms), but once every 240 records the history sector
     // is full and this erases it first, up to about 400 ms with XIP stalled on both cores. So a
     // sync now and then pauses core 1 (a running Lua script) for that long; nothing is wrong.
-    int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset);
+    int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset, rtc_load());
     if (rtc_ok)
         history_rtc_done(slot);
-    // Nothing to measure against this time: this sync is the baseline the next one measures from.
-    if (drift.rtc == TIMECONV_DRIFT_NO_BASELINE && rtc_ok && slot >= 0)
+    // Nothing measured this time (no baseline, or one under another calibration or crystal
+    // load): this sync is the baseline the next one measures from, under the settings now.
+    if (drift.rtc != TIMECONV_DRIFT_MEASURED && rtc_ok && slot >= 0)
         drift.rtc = TIMECONV_DRIFT_BASELINE;
 
     char buf[24], step[40];
@@ -328,6 +329,20 @@ static void sntp_done(void) {
 
 // --- public --------------------------------------------------------------------------------------
 
+// What rtc_init() did to the crystal load: logged once, when it changed it (CAP_SEL is kept by
+// the coin cell, so the next boot finds it set), or when the chip didn't take it.
+static void log_load(void) {
+    char was[24], now[24], want[24];
+    timeconv_format_load(was, sizeof(was), rtc_load_found());
+    timeconv_format_load(now, sizeof(now), rtc_load());
+    timeconv_format_load(want, sizeof(want), rtc_load_board());
+    if (rtc_load() != rtc_load_board())
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: setting the crystal load to %s failed "
+                "(it is %s)", want, now);
+    else if (rtc_load_found() != rtc_load())
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: crystal load set to %s (was %s)", now, was);
+}
+
 void timesync_boot(void) {
     if (!rtc_init()) {
         rtc_boot_status = RTC_ABSENT;
@@ -344,6 +359,7 @@ void timesync_boot(void) {
     if (rtc_boot_status != RTC_OK) {
         log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: %s; the time will come from NTS",
                 rtc_status_str(rtc_boot_status));
+        log_load();
         return;
     }
     set_clock_us(t * 1000000);
@@ -351,6 +367,7 @@ void timesync_boot(void) {
     char buf[24];
     timeconv_format(t, buf, sizeof(buf));
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: %s UTC", buf);
+    log_load();
     if (rtc_battery_low())
         log_msg(SOS_LOG_DAEMON | SOS_LOG_WARNING, "rtc: backup battery low; replace the CR1220");
 }
@@ -389,6 +406,25 @@ bool timesync_apply_cal(void) {
     return true;
 }
 
+#ifdef SOS_TEST_COMMANDS
+bool timesync_set_load(uint8_t load) {
+    uint8_t was = rtc_load();
+    bool ok = rtc_set_load(load);
+    char from[24], to[24];
+    timeconv_format_load(from, sizeof(from), was);
+    timeconv_format_load(to, sizeof(to), rtc_load());
+    if (rtc_load() != was) {
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: crystal load set to %s (was %s), by test "
+                "command", to, from);
+        if (drift_measured) {               // the rate measured was under the old load
+            drift.rtc = TIMECONV_DRIFT_LOAD_CHANGED;
+            drift.load = rtc_load();
+        }
+    }
+    return ok;
+}
+#endif
+
 void timesync_drift(timeconv_drift_t *out) {
     if (drift_measured) {
         *out = drift;
@@ -399,12 +435,12 @@ void timesync_drift(timeconv_drift_t *out) {
     // No sync since boot: what the history sector says about the RTC's baseline.
     timeconv_drift_t d = {0};
     d.cal_steps = settings()->rtc_offset;
+    d.load = rtc_load();
     d.rtc_present = rtc_boot_status != RTC_ABSENT;
     d.rtc = TIMECONV_DRIFT_NO_BASELINE;
     history_rec_t base;
     if (rtc_boot_status == RTC_OK && rtc_baseline(&base)) {
-        d.rtc = base.cal_steps == d.cal_steps ? TIMECONV_DRIFT_BASELINE
-                                              : TIMECONV_DRIFT_CAL_CHANGED;
+        d.rtc = timeconv_baseline(base.cal_steps, base.rtc_load, d.cal_steps, d.load);
         int64_t now = now_us() / 1000000;
         if (source != SRC_NONE && base.wall != HISTORY_NONE && now > base.wall)
             d.rtc_interval_s = (uint32_t)(now - base.wall);
@@ -507,8 +543,8 @@ void timesync_info(timesync_info_t *info) {
 static void print_drift(shell_t *sh) {
     timeconv_drift_t d;
     timesync_drift(&d);
-    char cal[16], rate[24], span[12];
-    timeconv_format_cal(cal, sizeof(cal), d.cal_steps);
+    char cal[40], rate[24], span[12];
+    timeconv_format_setup(cal, sizeof(cal), d.cal_steps, d.load);
     shell_printf(sh, "drift:  ");
     if (!d.rtc_present) {
         shell_printf(sh, "no rtc");
@@ -521,6 +557,8 @@ static void print_drift(shell_t *sh) {
         shell_printf(sh, "rtc measured at the next sync (%s)", cal);
     } else if (d.rtc == TIMECONV_DRIFT_CAL_CHANGED) {
         shell_printf(sh, "rtc measured after the next sync (calibration changed)");
+    } else if (d.rtc == TIMECONV_DRIFT_LOAD_CHANGED) {
+        shell_printf(sh, "rtc measured after the next sync (crystal load changed)");
     } else {
         shell_printf(sh, "rtc measured after two syncs");
     }
@@ -549,10 +587,19 @@ void timesync_status(shell_t *sh) {
     rtc_status_t st = rtc_read(&t);
     if (st == RTC_OK) {
         timeconv_format(t, buf, sizeof(buf));
-        shell_printf(sh, "rtc:    %s UTC%s\n", buf, rtc_battery_low() ? ", backup battery low" : "");
+        shell_printf(sh, "rtc:    %s UTC%s", buf, rtc_battery_low() ? ", backup battery low" : "");
     } else {
-        shell_printf(sh, "rtc:    %s\n", rtc_status_str(st));
+        shell_printf(sh, "rtc:    %s", rtc_status_str(st));
     }
+    if (rtc_load()) {
+        char load[24], want[24];
+        timeconv_format_load(load, sizeof(load), rtc_load());
+        timeconv_format_load(want, sizeof(want), rtc_load_board());
+        shell_printf(sh, "; crystal load %s", load);
+        if (rtc_load() != rtc_load_board())
+            shell_printf(sh, " (the board's is %s)", want);
+    }
+    shell_printf(sh, "\n");
 
     // The saved calibration, and whether the RTC has it (it can't if the chip is absent).
     char cal[40];

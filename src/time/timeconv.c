@@ -213,6 +213,32 @@ void timeconv_format_cal(char *buf, unsigned len, int steps) {
     snprintf(buf, len, "cal %s", ppm);
 }
 
+void timeconv_format_load(char *buf, unsigned len, uint8_t load) {
+    if (!load)
+        snprintf(buf, len, "load not recorded");
+    else if (load % 10)
+        snprintf(buf, len, "%u.%u pF", (unsigned)(load / 10), (unsigned)(load % 10));
+    else
+        snprintf(buf, len, "%u pF", (unsigned)(load / 10));
+}
+
+void timeconv_format_setup(char *buf, unsigned len, int steps, uint8_t load) {
+    char cal[40], pf[24];
+    timeconv_format_cal(cal, sizeof(cal), steps);
+    if (!load) {
+        snprintf(buf, len, "%s", cal);
+        return;
+    }
+    timeconv_format_load(pf, sizeof(pf), load);
+    snprintf(buf, len, "%s, %s", cal, pf);
+}
+
+timeconv_drift_state_t timeconv_baseline(int base_cal, uint8_t base_load, int cal, uint8_t load) {
+    if (base_load != load)
+        return TIMECONV_DRIFT_LOAD_CHANGED;
+    return base_cal == cal ? TIMECONV_DRIFT_BASELINE : TIMECONV_DRIFT_CAL_CHANGED;
+}
+
 void timeconv_format_span(char *buf, unsigned len, uint32_t s) {
     if (s < 7200)
         snprintf(buf, len, "%lu min", (unsigned long)(s / 60));

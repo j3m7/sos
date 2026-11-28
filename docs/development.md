@@ -271,6 +271,15 @@ returns `SD_BLOCK_DEVICE_ERROR_CRC` to its caller without reaching the driver, l
 `sd: fault: reading N sectors at S failed on purpose`. A read changes nothing on the card, so
 there is nothing to repair afterwards; FatFs reports the error to the command that read.
 
+## Test commands: the RTC crystal's load
+
+`time load 7` and `time load 12.5` (console only) set the PCF8523's crystal load (CAP_SEL;
+see [RTC crystal load](time.md#rtc-crystal-load)) without a reflash, so a board run can show the
+bit and put it back. `time load` shows the load in force and the build's. The change is logged
+(`rtc: crystal load set to 7 pF (was 12.5 pF), by test command`) and makes the next sync a new
+drift baseline, as a boot that changes it does. It is not a setting: the configuration isn't
+touched, and the next boot sets the build's `SOS_RTC_LOAD_PF` again.
+
 ## Editor
 
 `.vscode/` configures VS Code to use [clangd](https://clangd.llvm.org/) (extension
