@@ -115,6 +115,11 @@ add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_path PRIVATE ${SOS_ROOT}/src)
 add_test(NAME path COMMAND test_path)
 
+# src/files/bigjob.c: one archive job (fetch, gunzip, tar...) at a time across all shells.
+add_executable(test_bigjob test_bigjob.c ${SOS_ROOT}/src/files/bigjob.c)
+target_include_directories(test_bigjob PRIVATE ${SOS_ROOT}/src)
+add_test(NAME bigjob COMMAND test_bigjob)
+
 # src/core/config.c: persistent configuration (A/B flash records, key parsing, validation).
 add_executable(test_config test_config.c ${SOS_ROOT}/src/core/config.c)
 target_include_directories(test_config PRIVATE ${SOS_ROOT}/src)

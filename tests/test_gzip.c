@@ -324,9 +324,7 @@ static void check_released(void) {
     CHECK_EQ(heap_tag_used(HEAP_FILES), 0);
     CHECK_EQ(heap_tag_used(HEAP_ZLIB), 0);
     CHECK(!files_busy());
-    const char *running = NULL;
-    CHECK(bigjob_begin("test", &running));
-    bigjob_end();
+    CHECK(bigjob_running() == NULL);
 }
 
 // --- tests --------------------------------------------------------------------------------------
@@ -473,8 +471,7 @@ TEST(memory_and_one_at_a_time) {
     CHECK_HAS("gunzip: not enough memory: needs ");
     CHECK(card_find("/a.gz") >= 0 && card_find("/a") < 0);
     heap_free_now = 300 * 1024;
-    const char *running;
-    CHECK(bigjob_begin("fetch", &running));
+    CHECK(bigjob_try_begin("fetch") == NULL);
     run("zcat a.gz");
     CHECK_HAS("busy: fetch is running in another shell\n");
     run("gunzip a.gz");

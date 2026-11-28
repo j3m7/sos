@@ -1,21 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// The big file jobs, one at a time across all shells (docs/design/archives.md §5.2): gunzip,
-// zcat, and later gzip, tar and fetch each need ~50 KB of heap or more for as long as they run,
-// so while one runs another is refused, as http.c refuses a third request. Pure C.
+// One archive job at a time, across all shells (docs/design/archives.md §5.2): fetch, and later
+// gunzip, zcat, gzip and tar, each need tens of KB of heap for as long as they run, so while one
+// runs the others are refused rather than two of them starving the heap together. Pure C (no
+// SDK), host tested; main loop only.
+//
+//     const char *other = bigjob_try_begin("fetch");
+//     if (other) {
+//         shell_printf(sh, BIGJOB_BUSY_FMT, other);
+//         return;
+//     }
+//     ...                                  // and bigjob_end() when the job ends, however it ends
 
 #ifndef SOS_BIGJOB_H
 #define SOS_BIGJOB_H
 
 #include <stdbool.h>
 
-// Take the slot for the command `name` (a string that lives as long as the job: its name).
-// False if another job holds it, with *running set to that job's name: the caller prints
-// "busy: <running> is running in another shell".
-bool bigjob_begin(const char *name, const char **running);
+// The message for a refused command, with the running one's name.
+#define BIGJOB_BUSY_FMT "busy: %s is running in another shell\n"
 
-// Give the slot back (the job that took it has ended, whatever the outcome).
+// Start the job `name` (a string that outlives the job: the command's name as a literal).
+// Returns NULL if it may run, or the name of the job already running.
+const char *bigjob_try_begin(const char *name);
+
+// The job that bigjob_try_begin() admitted has ended. Harmless when none runs.
 void bigjob_end(void);
+
+// The job running, or NULL.
+const char *bigjob_running(void);
 
 #endif

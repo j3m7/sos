@@ -312,9 +312,9 @@ static void start(shell_t *sh, const char *cmd, bool keep, bool force, int n, ch
                      cmd, (unsigned)(need / 1024), HEAP_KEEP / 1024, (unsigned)(free_now / 1024));
         return;
     }
-    const char *running;
-    if (!bigjob_begin(cmd, &running)) {
-        shell_printf(sh, "busy: %s is running in another shell\n", running);
+    const char *other = bigjob_try_begin(cmd);
+    if (other) {
+        shell_printf(sh, BIGJOB_BUSY_FMT, other);
         return;
     }
     gzjob_t *j = heap_zalloc(HEAP_FILES, sizeof(*j));

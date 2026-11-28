@@ -146,9 +146,9 @@ includes, no SOS warnings).
   allows), until `STEP_US`, at least one of them a step. The .part is renamed into place only
   after `gz_finish()`; an error, Ctrl-C or the session ending deletes it. Refused when the heap
   would keep less than 64 KB free. `tests/test_gzip.c` runs both over a card in memory.
-- **`bigjob.c`:** one big file job at a time across the shells (gunzip and zcat now; gzip, tar
-  and fetch later): `bigjob_begin()` refuses while another holds the slot, and the caller says
-  `busy: <command> is running in another shell`.
+- **`bigjob.c`** (shared with `fetch`): one archive job at a time across the shells.
+  `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
+  caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).
 
 ## `path.c`: paths (pure C, host tested)
 

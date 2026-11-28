@@ -255,10 +255,10 @@ set(SOS_SOURCES
     src/files/fsck_exfat.c
     src/files/fsck_plan.c
     src/files/fsck_repair.c
+    src/files/bigjob.c
     src/files/files.c
     src/files/gz.c
     src/files/gzip.c
-    src/files/bigjob.c
     src/files/path.c
     src/files/sdcrypt.c
     src/files/cardkey.c
