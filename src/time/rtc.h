@@ -20,9 +20,13 @@ typedef enum {
     RTC_INVALID,        // registers don't decode to a date in 2000-2099
 } rtc_status_t;
 
+// The crystal load capacitance (Control_1's CAP_SEL), in tenths of a pF.
+#define RTC_LOAD_7PF    70          // CAP_SEL = 0, the chip's reset default
+#define RTC_LOAD_12_5PF 125         // CAP_SEL = 1: the PiCowbell Adalogger's crystal
+
 // Set up I2C and the chip: battery switch-over on (the chip's power-on default is off, which
-// loses the time at every power cut), clock running, 24-hour mode. Returns false if the chip
-// doesn't answer.
+// loses the time at every power cut), clock running, 24-hour mode, the crystal load the build
+// names (SOS_RTC_LOAD_PF). Returns false if the chip doesn't answer.
 bool rtc_init(void);
 
 // Read the time (Unix seconds, UTC). *t is only written when the result is RTC_OK.
@@ -45,6 +49,18 @@ bool rtc_battery_low(void);
 // the other mode by something else; writing checks that the value reads back.
 bool rtc_read_offset(int *steps);
 bool rtc_write_offset(int steps);
+
+// The crystal load (RTC_LOAD_*) in force, as read back from the chip; the one rtc_init() found
+// before setting it; the one the build names. The first two are 0 if the chip is absent.
+uint8_t rtc_load(void);
+uint8_t rtc_load_found(void);
+uint8_t rtc_load_board(void);
+
+#ifdef SOS_TEST_COMMANDS
+// `time load`: set CAP_SEL to `load` (RTC_LOAD_*) until the next boot sets the build's again.
+// False if the chip is absent or the value doesn't read back.
+bool rtc_set_load(uint8_t load);
+#endif
 
 const char *rtc_status_str(rtc_status_t st);
 

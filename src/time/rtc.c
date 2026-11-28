@@ -23,6 +23,7 @@
 #define REG_SECONDS     0x03        // 03h..09h: time and date, read/written as one block
 #define REG_OFFSET      0x0e        // MODE (bit 7) and a 7-bit two's complement offset
 
+#define CTL1_CAP_SEL    0x80        // crystal load: 0 = 7 pF (the reset default), 1 = 12.5 pF
 #define CTL1_STOP       0x20        // time circuits frozen
 #define CTL1_12_24      0x08        // 12-hour mode
 #define CTL3_PM_MASK    0xe0        // PM[2:0]; 000 = switch-over (standard) + battery low detection
@@ -30,7 +31,19 @@
 #define SECONDS_OS      0x80        // oscillator stopped: clock integrity not guaranteed
 #define OFFSET_MODE     0x80        // 1 = a correction every minute; 0 = every two hours
 
+// The crystal's load capacitance, set by the build (SOS_RTC_LOAD_PF in CMakeLists.txt).
+#ifndef SOS_RTC_LOAD_DPF
+#define SOS_RTC_LOAD_DPF RTC_LOAD_12_5PF
+#endif
+_Static_assert(SOS_RTC_LOAD_DPF == RTC_LOAD_7PF || SOS_RTC_LOAD_DPF == RTC_LOAD_12_5PF,
+               "the PCF8523 has 7 pF and 12.5 pF");
+
 static bool present;
+static uint8_t load_found, load_now;    // RTC_LOAD_*: at boot, and in force (0: absent)
+
+static uint8_t load_of(uint8_t c1) {
+    return (c1 & CTL1_CAP_SEL) ? RTC_LOAD_12_5PF : RTC_LOAD_7PF;
+}
 
 static bool reg_read(uint8_t reg, uint8_t *buf, size_t len) {
     if (i2c_write_timeout_us(RTC_I2C, RTC_ADDR, &reg, 1, true, RTC_TIMEOUT_US) != 1)
@@ -88,12 +101,19 @@ bool rtc_init(void) {
     if (!present)
         return false;
 
-    // Control_1: make sure the clock runs and uses 24-hour mode. Leave CAP_SEL (crystal load)
-    // as it is. If the chip was in 12-hour mode, the stored hour means something else and
-    // rtc_read() will usually report it invalid; the next sync rewrites it.
-    uint8_t c1 = ctl[0] & (uint8_t)~(CTL1_STOP | CTL1_12_24);
+    // Control_1: make sure the clock runs and uses 24-hour mode, and set CAP_SEL to the board's
+    // crystal (a crystal loaded below its rated capacitance runs fast). If the chip was in 12-hour
+    // mode, the stored hour means something else and rtc_read() will usually report it invalid;
+    // the next sync rewrites it. CAP_SEL is kept while the coin cell lasts, so older firmware,
+    // which leaves it as found, keeps the load set here.
+    load_found = load_of(ctl[0]);
+    uint8_t c1 = ctl[0] & (uint8_t)~(CTL1_STOP | CTL1_12_24 | CTL1_CAP_SEL);
+    if (SOS_RTC_LOAD_DPF == RTC_LOAD_12_5PF)
+        c1 |= CTL1_CAP_SEL;
     if (c1 != ctl[0])
         reg_write(REG_CONTROL_1, &c1, 1);
+    // What the chip has now: the write is checked by reading it back.
+    load_now = reg_read(REG_CONTROL_1, &c1, 1) ? load_of(c1) : load_found;
 
     // Control_3: battery switch-over in standard mode with battery low detection (PM = 000).
     // Keep the interrupt enables; BSF is cleared by writing 0, BLF is read-only.
@@ -103,6 +123,34 @@ bool rtc_init(void) {
     }
     return true;
 }
+
+uint8_t rtc_load(void) {
+    return present ? load_now : 0;
+}
+
+uint8_t rtc_load_found(void) {
+    return present ? load_found : 0;
+}
+
+uint8_t rtc_load_board(void) {
+    return SOS_RTC_LOAD_DPF;
+}
+
+#ifdef SOS_TEST_COMMANDS
+bool rtc_set_load(uint8_t load) {
+    uint8_t c1;
+    if (!present || (load != RTC_LOAD_7PF && load != RTC_LOAD_12_5PF) ||
+        !reg_read(REG_CONTROL_1, &c1, 1))
+        return false;
+    uint8_t want = (uint8_t)((c1 & ~CTL1_CAP_SEL) | (load == RTC_LOAD_12_5PF ? CTL1_CAP_SEL : 0));
+    if (want != c1 && !reg_write(REG_CONTROL_1, &want, 1))
+        return false;
+    if (!reg_read(REG_CONTROL_1, &c1, 1))
+        return false;
+    load_now = load_of(c1);
+    return load_now == load;
+}
+#endif
 
 rtc_status_t rtc_read(int64_t *t) {
     if (!present)

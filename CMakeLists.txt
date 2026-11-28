@@ -415,6 +415,18 @@ set(SOS_CONSOLE_IDLE_LOCK_MIN 10 CACHE STRING
 set(SOS_NTS_SERVER "time.cloudflare.com" CACHE STRING "NTS-KE server host name")
 # Plain SNTP server, used only on `time sync sntp` (unauthenticated).
 set(SOS_NTP_SERVER "pool.ntp.org" CACHE STRING "SNTP server host name")
+# The RTC crystal's load capacitance, pF: 7 or 12.5, the two the PCF8523 can give it (CAP_SEL).
+# The PiCowbell Adalogger's 32.768 kHz crystal is a 12.5 pF part; loaded at 7 pF it runs fast.
+# Written into the RTC at boot when it differs.
+set(SOS_RTC_LOAD_PF "12.5" CACHE STRING "RTC crystal load capacitance in pF (7 or 12.5)")
+set_property(CACHE SOS_RTC_LOAD_PF PROPERTY STRINGS 7 12.5)
+if (SOS_RTC_LOAD_PF STREQUAL "12.5")
+    set(SOS_RTC_LOAD_DPF 125)
+elseif (SOS_RTC_LOAD_PF STREQUAL "7")
+    set(SOS_RTC_LOAD_DPF 70)
+else()
+    message(FATAL_ERROR "SOS_RTC_LOAD_PF must be 7 or 12.5, not '${SOS_RTC_LOAD_PF}'")
+endif()
 # Lower bound for any accepted time. Taken at configure time; SOURCE_DATE_EPOCH overrides it for
 # reproducible builds.
 string(TIMESTAMP SOS_BUILD_EPOCH "%s" UTC)
@@ -424,6 +436,7 @@ target_compile_definitions(sos PRIVATE
     SOS_CONSOLE_IDLE_LOCK_MIN=${SOS_CONSOLE_IDLE_LOCK_MIN}
     SOS_NTS_SERVER="${SOS_NTS_SERVER}"
     SOS_NTP_SERVER="${SOS_NTP_SERVER}"
+    SOS_RTC_LOAD_DPF=${SOS_RTC_LOAD_DPF}
     SOS_BUILD_EPOCH=${SOS_BUILD_EPOCH}LL
     PICO_STACK_SIZE=${SOS_CORE0_STACK_SIZE}
     PICO_CORE1_STACK_SIZE=0x1000    # all of SCRATCH_X; the SDK would otherwise reuse PICO_STACK_SIZE
