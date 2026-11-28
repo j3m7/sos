@@ -659,6 +659,7 @@ static void set_int(lua_State *L, const char *name, lua_Integer v) {
 
 // The timings from the answer that ended the body, as fields of the response table on top.
 static void push_stats(lua_State *L, const lua_http_stats_t *s) {
+    set_int(L, "redirects", s->redirects);
     set_int(L, "headers_ms", s->headers_ms);
     set_int(L, "elapsed_ms", s->elapsed_ms);
     if (!s->tls)
@@ -741,6 +742,8 @@ static int http_request(lua_State *L, int t, const char *file) {
     lua_Integer timeout = opt_integer(L, t, "timeout", 0, 1, 600000);
     // -1: not given. Then a body in memory stops at HTTP_LUA_BODY_MAX, and a file has no limit.
     lua_Integer max_body = opt_integer(L, t, "max_body", -1, 0, 0x7fffffff);
+    // Off unless asked: GET and HEAD only, without a body or headers (http_start() refuses).
+    lua_Integer redirects = opt_integer(L, t, "redirects", 0, 0, HTTP_REDIRECTS_MAX);
 
     http_opts_t o = {
         .method = method,
@@ -750,6 +753,7 @@ static int http_request(lua_State *L, int t, const char *file) {
         .body = body,
         .body_len = body_len,
         .timeout_ms = (uint32_t)timeout,
+        .max_redirects = (uint8_t)redirects,
     };
     lua_req.type = LR_HTTP_REQUEST;
     lua_req.opts = &o;
@@ -813,6 +817,8 @@ static int http_request(lua_State *L, int t, const char *file) {
         total += lua_req.len;
     }
     luaL_pushresult(&b);
+    lua_pushstring(L, (const char *)lua_req.data + sizeof(stats));     // the end's last URL
+    lua_setfield(L, -3, "url");
     if (to_file) {
         lua_pop(L, 1);
         lua_req.len = 0;
@@ -1021,6 +1027,23 @@ static bool hash_step(unsigned step, unsigned arg, const char *data, size_t len)
     return lua_req.result >= 0;
 }
 
+// The last step of a hash that went well so far (ok): push the digest, raw or in hex, or nil and
+// why.
+static int finish_hash(lua_State *L, bool ok, bool raw) {
+    check_cancel(L);
+    if (!ok || !hash_step(LUA_HASH_FINAL, 0, "", 0))
+        return fail(L);
+    size_t n = lua_req.len;
+    if (raw) {
+        lua_pushlstring(L, (const char *)lua_req.data, n);
+    } else {
+        char hex[2 * LUA_HASH_MAX];
+        lua_hex(lua_req.data, n, hex);
+        lua_pushlstring(L, hex, 2 * n);
+    }
+    return 1;
+}
+
 // Hash msg (with key, for an HMAC) on core 0, 4 KB per request; push the digest, raw or in hex.
 static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len, const char *msg,
                     size_t msg_len, bool raw) {
@@ -1032,18 +1055,7 @@ static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len,
         size_t n = msg_len - at < LUA_REQ_DATA ? msg_len - at : LUA_REQ_DATA;
         ok = hash_step(LUA_HASH_UPDATE, arg, msg + at, n);
     }
-    check_cancel(L);
-    if (!ok || !hash_step(LUA_HASH_FINAL, arg, "", 0))
-        return fail(L);
-    size_t n = lua_req.len;
-    if (raw) {
-        lua_pushlstring(L, (const char *)lua_req.data, n);
-    } else {
-        char hex[2 * LUA_HASH_MAX];
-        lua_hex(lua_req.data, n, hex);
-        lua_pushlstring(L, hex, 2 * n);
-    }
-    return 1;
+    return finish_hash(L, ok, raw);
 }
 
 // sos.hash(alg, data [, raw]): the digest of data in hex (raw bytes if raw is true).
@@ -1061,6 +1073,31 @@ static int l_hmac(lua_State *L) {
     const char *key = luaL_checklstring(L, 2, &key_len);
     const char *msg = luaL_checklstring(L, 3, &len);
     return run_hash(L, alg | LUA_HASH_HMAC, key, key_len, msg, len, lua_toboolean(L, 4));
+}
+
+// sos.hashfile(path [, alg [, raw]]): the digest of the file at path (alg default "sha256"), in
+// hex or raw. Core 0 reads and hashes it (LUA_HASH_FILE), for up to 20 ms per request
+// (lua_host.c), so the file's bytes never come to core 1 and a script's memory doesn't limit
+// its size.
+static int l_hashfile(lua_State *L) {
+    char path[LUA_PATH_MAX];
+    resolve_path(L, luaL_checkstring(L, 1), path);
+    unsigned alg = (unsigned)luaL_checkoption(L, 2, "sha256", hash_names);
+    bool raw = lua_toboolean(L, 3);
+    bool ok = hash_step(LUA_HASH_BEGIN, alg, "", 0);
+    memcpy(lua_req.path, path, strlen(path) + 1);   // LR_HASH answers leave it alone
+    while (ok) {
+        check_cancel(L);
+        lua_req.type = LR_HASH;
+        lua_req.offset = LUA_HASH_FILE;
+        lua_req.arg = alg;
+        lua_req.len = 0;
+        request();
+        ok = lua_req.result >= 0;
+        if (lua_req.result == 0)
+            break;                              // the end of the file
+    }
+    return finish_hash(L, ok, raw);
 }
 
 static bool url_variant(lua_State *L, int idx) {
@@ -1367,6 +1404,7 @@ static const luaL_Reg sos_lib[] = {
 #if SOS_HAVE_CHAT
     {"who", l_who},       {"wall", l_wall},
 #endif
+    {"hashfile", l_hashfile},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
     {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"features", l_features},
 #if SOS_HAVE_NET
