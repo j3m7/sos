@@ -395,6 +395,32 @@ static void install(shell_t *sh) {
     shell_run_job(sh, install_step, j);
 }
 
+// --- Tab ----------------------------------------------------------------------------------------
+
+typedef struct {
+    shell_value_fn fn;
+    void *arg;
+} tab_t;
+
+static void tab_name(const char *name, void *arg) {
+    tab_t *t = arg;
+    t->fn(name, NULL, t->arg);
+}
+
+void tzzone_tab(shell_t *sh, shell_value_fn fn, void *arg) {
+    fn("list", NULL, arg);
+    fn("install", NULL, arg);
+    if (!sh->io->admin)                     // setting a zone is console only
+        return;
+    fn("utc", NULL, arg);
+    FIL f;
+    if (!sdcard_mounted() || f_open(&f, TZZONE_BUNDLE, FA_READ) != FR_OK)
+        return;
+    tab_t t = {fn, arg};
+    tzbundle_names(read_fil, &f, tab_name, &t);
+    f_close(&f);
+}
+
 // --- the command --------------------------------------------------------------------------------
 
 // Is s the word w, alone or followed by a space?
