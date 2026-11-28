@@ -232,7 +232,9 @@ change:
   `gzip_help()` already live with their subsystems.)
 - **Phase 1 is a pure move** (§10): no behaviour change, the table's order the same, `help`'s
   text identical byte for byte, `docs/commands.md` regenerated identical, every command still
-  dispatching. That makes its review a mechanical check.
+  dispatching, and Tab's candidates for an empty line (console and SSH, which differ by
+  `SHELL_ADMIN`) identical before and after, checked by a host test. That makes its review a
+  mechanical check.
 - `setup` asks its Wi-Fi and SSH questions only when those features exist; the steps move to
   their subsystems as functions `setup` calls.
 - `mem` stays in the core but leaves out the lines of features that are off (lwIP's pools,
