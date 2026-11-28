@@ -131,7 +131,7 @@ typedef struct {
     const void *opts;               // LR_HTTP_REQUEST: core 1's http_opts_t, and the strings it
                                     // points at, which core 0 reads while core 1 waits
     int64_t result;                 // < 0: failed (error has why); LUA_REQ_NOT_FOUND: no such file
-    char error[96];                 // fits the longest message passed on (http_start's redirect refusal)
+    char error[96];                 // room for http_start()'s redirect refusal (67)
     uint8_t *data;                  // LUA_REQ_DATA bytes; there only while a script runs
 } lua_req_t;
 
