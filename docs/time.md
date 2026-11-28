@@ -110,6 +110,11 @@ local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
   about 0.8 s in all. Each pass over the bundle (the check here, or a `time zone` lookup) is
   about 100 ms, done in one go.
 - **`tools/tz-install.sh [user@]<host>`** copies the same file over SFTP.
+- **`tz = <name>`** in the provisioning file sets it when provisioning: `tools/provision.sh`
+  looks the name up in the repository's `tz/zones.bundle`, so a new board shows local time
+  before any card is in.
+- **Lua scripts** get UTC from `sos.date` and `sos.time`, and local time only by asking:
+  `sos.localdate`, `sos.localtime` and `sos.zone()` (see [Local time](lua.md#local-time)).
 
 The bundle holds each zone's current rule, not its history: local time is right from the
 release's date onwards, which is what a clock needs. It is built from IANA's signed tzdata

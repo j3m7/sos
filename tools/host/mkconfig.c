@@ -8,9 +8,52 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "core/sensors.h"
 #include "time/timeconv.h"
+#include "time/tzbundle.h"
+
+static const char *bundle_path;                 // mkconfig_set_bundle()
+
+void mkconfig_set_bundle(const char *path) {
+    bundle_path = path;
+}
+
+static bool read_file(void *ctx, char *buf, size_t cap) {
+    return fgets(buf, (int)cap, ctx) != NULL;
+}
+
+// tz = <name>: looked up in tz/zones.bundle, as `time zone <name>` does on the card; "utc": none.
+static const char *apply_zone(sos_config_t *cfg, const char *value, char *msg, size_t msglen) {
+    if (!strcasecmp(value, "utc")) {
+        cfg->tz_name[0] = cfg->tz_rule[0] = '\0';
+        return NULL;
+    }
+    if (strlen(value) > TZBUNDLE_NAME_MAX)
+        return "no zone has a name that long";
+    FILE *f = bundle_path ? fopen(bundle_path, "r") : NULL;
+    if (!f)
+        return "the zone bundle (tz/zones.bundle) can't be read";
+    tzbundle_find_t found;
+    tzbundle_result_t r = tzbundle_find(read_file, f, value, &found);
+    fclose(f);
+    if (r == TZBUNDLE_NOT_A_BUNDLE)
+        return "tz/zones.bundle isn't a zone bundle";
+    if (r == TZBUNDLE_NOT_FOUND) {
+        int n = snprintf(msg, msglen, "no zone %s in tz/zones.bundle (tzdata %s)", value,
+                         found.version);
+        for (unsigned i = 0; i < found.near_count && n > 0 && (size_t)n < msglen; i++)
+            n += snprintf(msg + n, msglen - (size_t)n, "%s %s", i ? "," : "; did you mean",
+                          found.near[i]);
+        if (found.near_count && n > 0 && (size_t)n < msglen)
+            snprintf(msg + n, msglen - (size_t)n, "?");
+        return msg;
+    }
+    snprintf(cfg->tz_name, sizeof(cfg->tz_name), "%s", found.name);
+    snprintf(cfg->tz_rule, sizeof(cfg->tz_rule), "%s", found.rule);
+    return NULL;
+}
 
 // --- parsing -------------------------------------------------------------------------------------
 
@@ -61,7 +104,10 @@ static const char *apply_wifi(wifi_list_t *w, const char *name, const char *valu
     return set_text(w->nets[i].password, sizeof(w->nets[0].password), value, config_check_password);
 }
 
-static const char *apply(sos_config_t *cfg, const char *name, const char *value) {
+static const char *apply(sos_config_t *cfg, const char *name, const char *value, char *msg,
+                         size_t msglen) {
+    if (!strcmp(name, "tz"))
+        return apply_zone(cfg, value, msg, msglen);
     if (!strcmp(name, "hostname"))
         return set_text(cfg->hostname, sizeof(cfg->hostname), value, config_check_hostname);
     if (!strcmp(name, "ssh_user"))
@@ -135,6 +181,7 @@ const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t e
     config_defaults(cfg);
     wifi_list_t wifi;
     memset(&wifi, 0, sizeof(wifi));
+    char msg[160];
     unsigned lineno = 0;
     for (char *line = text; line && *line;) {
         char *next = strchr(line, '\n');
@@ -154,7 +201,7 @@ const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t e
         const char *name = trim(s);
         const char *err = !strcmp(name, "wifi_ssid") || !strcmp(name, "wifi_password")
                               ? apply_wifi(&wifi, name, trim(eq + 1))
-                              : apply(cfg, name, trim(eq + 1));
+                              : apply(cfg, name, trim(eq + 1), msg, sizeof(msg));
         if (err) {
             memset(&wifi, 0, sizeof(wifi));
             snprintf(errbuf, errlen, "line %u: %s: %s", lineno, name, err);
@@ -200,10 +247,12 @@ bool mkconfig_image(const sos_config_t *cfg, uint8_t image[MKCONFIG_IMAGE_SIZE])
 
 #ifndef MKCONFIG_NO_MAIN
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <provision.conf> <out.bin>\n", argv[0]);
+    if (argc != 3 && argc != 4) {
+        fprintf(stderr, "usage: %s <provision.conf> <out.bin> [<tz/zones.bundle>]\n", argv[0]);
         return 2;
     }
+    if (argc == 4)
+        mkconfig_set_bundle(argv[3]);
     FILE *in = fopen(argv[1], "rb");
     if (!in) {
         perror(argv[1]);
@@ -242,7 +291,10 @@ int main(int argc, char **argv) {
     for (unsigned i = 1; i < config_wifi_count(&cfg); i++)
         printf(", then %s (%s)", cfg.wifi_extra[i - 1].ssid,
                cfg.wifi_extra[i - 1].password[0] ? "password set" : "open");
-    printf(", %u trusted key(s)\n", cfg.key_count);
+    printf(", %u trusted key(s)", cfg.key_count);
+    if (cfg.tz_name[0])
+        printf(", time zone %s", cfg.tz_name);
+    printf("\n");
     return 0;
 }
 #endif
