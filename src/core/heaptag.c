@@ -18,7 +18,13 @@ static struct {
 } tags[HEAP_TAGS];
 
 static const char *const names[HEAP_TAGS] = {
+    // wolfSSL's and wolfCrypt's allocations (core/cryptoheap.c) are SSH's and TLS's in a build
+    // with them; without both, only the core's own crypto is left (build-features.md §4.2).
+#if SOS_HAVE_SSH || SOS_HAVE_TLS
     [HEAP_NET] = "ssh/tls",
+#else
+    [HEAP_NET] = "crypto",
+#endif
     [HEAP_LUA] = "lua",
     [HEAP_EDIT] = "editor",
     [HEAP_FILES] = "files",
