@@ -238,15 +238,46 @@ gzip [-k] [-f] [-1..-9] <file>...
 - `<name>` gives `<name>.gz`. Refused: a name already ending in `.gz` or `.tgz`, a directory.
 - **Memory decides the settings.** zlib's deflate needs `(1 << (windowBits + 2)) +
   (1 << (memLevel + 9))` plus ~6 KB. The defaults (15, 8) need ~262 KB, most of the heap. SOS uses
-  `windowBits 12` (4 KB window) and `memLevel 6`: ~54 KB, plus 2 × 4 KB buffers. The output is
-  standard gzip any gunzip reads. Files come out a few percent larger than with the defaults;
-  phase 6 measures how much on logs and on a source tree, and records it here.
+  `windowBits 12` (4 KB window) and `memLevel 6`: ~54 KB (55 160 bytes measured under
+  `HEAP_ZLIB` on the host, 64-bit; `GZW_HEAP` is 56 KB), plus 2 × 4 KB buffers. The output is
+  standard gzip any gunzip reads. Files come out larger than with GNU gzip's defaults: a little
+  on a log of short varied lines, 15 to 20 % on prose and source, where repeats are often more
+  than 4 KB apart. Measured on the host with this zlib and these settings (`gzip -n -N` for GNU
+  gzip 1.15):
+
+  | Input | Size | Level | SOS | GNU gzip | Larger by |
+  |---|---:|---:|---:|---:|---:|
+  | log (generated: 60 000 lines of Wi-Fi, SSH, time, fetch messages) | 4 463 446 | 1 | 1 104 135 | 1 061 964 | 4.0 % |
+  | | | 6 | 911 365 | 873 913 | 4.3 % |
+  | | | 9 | 903 677 | 845 250 | 6.9 % |
+  | text (all `docs/**/*.md` concatenated) | 483 362 | 1 | 225 875 | 208 799 | 8.2 % |
+  | | | 6 | 207 094 | 177 651 | 16.6 % |
+  | | | 9 | 207 076 | 177 177 | 16.9 % |
+  | source tree (`git archive` of `src/` as .tar) | 2 385 920 | 1 | 846 710 | 758 771 | 11.6 % |
+  | | | 6 | 752 826 | 623 273 | 20.8 % |
+  | | | 9 | 750 326 | 617 915 | 21.4 % |
+
+  The window, not memLevel, is what costs: at level 6, memLevel 8 gains under 1 %, while each
+  doubling of the window gains ~5 % on text and source and costs its own heap (windowBits 13:
+  ~70 KB, text +10 %, source +12 %; 14: ~102 KB, +5 % and +6 %; 15 with memLevel 6: ~166 KB,
+  +0.4 % and +0.4 %). Level 9 buys almost nothing over 6 with a 4 KB window.
 - `-1` to `-9`: zlib's levels, default 6. The level changes speed, not memory.
 - Output to `<name>.gz.part`, renamed at the end; the input deleted unless `-k`. The gzip header
   holds no name and date 0 (`gzip -n`), since FatFs dates are local and coarse.
 - Heap check as `gunzip`, with ~62 KB.
-- Speed: measured in phase 6 per level. Expected well under 1 MB/s; each step yields after
-  `STEP_US`, so the shell stays responsive whatever the speed.
+- Speed, measured on dev-1 (2026-11-28, #273, debug build, XTS-AES encrypted exFAT card, read
+  and write included; GNU gzip's sizes for the same 10 MB text file in brackets):
+
+  | Input | Level | Output | Time | Rate |
+  |---|---|---|---|---|
+  | 10 MB text (docs and C) | 1 | 3,818,889 (3,500,222) | 42.0 s | 244 KB/s |
+  | 10 MB text | 6 | 3,374,462 (2,882,389) | 45.4 s | 225 KB/s |
+  | 10 MB text | 9 | 3,365,406 (2,860,403) | 48.7 s | 210 KB/s |
+  | 1 MB random | 6 | 1,049,914 | 6.9 s | 148 KB/s |
+
+  zlib held 55,004 bytes of heap while it ran. The level barely changes the time: the encrypted
+  card's read and write take most of it. Each step yields after `STEP_US`, so the shell stays
+  responsive; another shell's `mem` and `gunzip` (busy) answered at once during a run.
 
 ## 6. tar
 

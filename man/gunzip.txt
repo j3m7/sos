@@ -42,9 +42,9 @@ OPTIONS
 MEMORY
     About 50 KB of heap while it runs (zlib's 32 KB window and its state
     show as 'zlib' in 'mem'). It is refused when that would leave less than
-    64 KB free, so a TLS handshake still fits. One of gunzip and zcat runs
-    at a time across all shells; another is refused with 'busy: gunzip is
-    running in another shell'.
+    64 KB free, so a TLS handshake still fits. One of gunzip, zcat and gzip
+    runs at a time across all shells; another is refused with 'busy: gunzip
+    is running in another shell'.
 
 SEE ALSO
-    zcat, cp, ls, mem
+    zcat, gzip, cp, ls, mem

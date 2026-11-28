@@ -149,7 +149,7 @@ length), and `sums_name_safe()`: no absolute name, no `..` component (split at `
 FatFs splits, and dots-and-spaces components FatFs may read as `..`), no `:` or control
 character. `tests/test_sums_parse.c`; fuzz target `sums`.
 
-## `gzip.c`, `gz.c`, `bigjob.c`: gunzip and zcat
+## `gzip.c`, `gz.c`, `gzw.c`, `bigjob.c`: gunzip, zcat and gzip
 
 [Design](../../docs/design/archives.md) §5. zlib is the submodule `lib/zlib`, built from the list
 in `cmake/zlib.cmake` for both the firmware and the host tests (`Z_SOLO`, `ZLIB_CONST`, SYSTEM
@@ -163,11 +163,18 @@ includes, no SOS warnings).
   `tests/test_gz.c` decodes the files GNU gzip made in `tests/data/archives/`
   (`tools/make-archive-fixtures.sh`) in pieces of many sizes; `tests/fuzz/fuzz_gz.c` checks that
   any input decodes the same in one piece and in pieces.
-- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates into 4 KB, or writes
-  that out (gunzip: to `<name>.part`, synced once a second; zcat: as `shell_write_space()`
-  allows), until `STEP_US`, at least one of them a step. The .part is renamed into place only
-  after `gz_finish()`; an error, Ctrl-C or the session ending deletes it. Refused when the heap
-  would keep less than 64 KB free. `tests/test_gzip.c` runs both over a card in memory.
+- **`gzw.c` (pure C, host tested and fuzzed):** the other way, data in and one gzip member out,
+  on `deflate` with windowBits 12 + 16 and memLevel 6 (~54 KB, `GZW_HEAP`, under `HEAP_ZLIB`;
+  zlib's defaults would take ~262 KB). The header is `gzip -n`'s: no name, date 0. Never more
+  output per call than the caller's buffer. `tests/test_gzw.c` reads its output back with
+  `gz.c` and GNU gunzip (when the host has it) at every level; the gz fuzz target round-trips
+  its input through both.
+- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates or deflates into
+  4 KB, or writes that out (gunzip: to `<name>.part`, gzip: to `<name>.gz.part`, synced once a
+  second; zcat: as `shell_write_space()` allows), until `STEP_US`, at least one of them a step.
+  The .part is installed (`files_install_part()`) only after `gz_finish()` or `gzw_done()`; an
+  error, Ctrl-C or the session ending deletes it. Refused when the heap would keep less than
+  64 KB free. `tests/test_gzip.c` runs all three over a card in memory.
 - **`bigjob.c`** (shared with `fetch`): one archive job at a time across the shells.
   `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
   caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).

@@ -13,8 +13,8 @@ DESCRIPTION
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script
-    may take 128 KB, the editor takes the file plus 32 KB of room, and
-    gunzip or zcat about 50 KB.
+    may take 128 KB, the editor takes the file plus 32 KB of room, gunzip
+    or zcat about 50 KB, and gzip about 65 KB.
 
 SEE ALSO
     ssh, lua, edit
