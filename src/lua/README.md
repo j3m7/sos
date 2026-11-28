@@ -112,8 +112,10 @@ core 1: lua_core1.c                     core 0: lua_host.c (main loop)
   slot, so however the call ends with the body unread (an error, "not enough memory", Ctrl-C,
   `max_body`), it sends `LR_HTTP_CLOSE` and the TLS connection is freed while the script goes on.
   The `LR_HTTP_READ` answer that ends the body (`len` 0) carries the request's timings and TLS
-  figures (`lua_http_stats_t`), taken just before core 0 frees the request; the script adds
-  them to the response table.
+  figures (`lua_http_stats_t`), and after them the last hop's URL (`http_url()`), taken just
+  before core 0 frees the request; the script adds them to the response table (`url`,
+  `redirects`). The `redirects` option is `http_opts_t.max_redirects`; `http_start()` refuses it
+  for anything but a plain GET or HEAD, and `allow_plain` stays false, so every hop is https.
   The exception is a coroutine that dies with an error, which isn't unwound until
   `coroutine.close()`: core 0 then drops the request when the next one starts, when a prompt line
   ends, or when the script ends. The whole body goes into one Lua string, limited by `max_body` (default 32 KB),
@@ -162,13 +164,22 @@ health table (`LH_CLOCK`) from `timesync_info()`.
 
 ## Hashes: `lua_hash.c`, `lua_codec.c`
 
-`sos.hash` and `sos.hmac` run on core 0 (`LR_HASH`), not core 1: wolfCrypt is built with
+`sos.hash`, `sos.hmac` and `sos.hashfile` run on core 0 (`LR_HASH`), not core 1: wolfCrypt is built with
 `WOLFSSL_SMALL_STACK`, so SHA's transform takes its buffer from `XMALLOC`, which goes to the TLS
 module's accounting hooks (`src/tls/tls.c`): plain counters, and a walk over core 0's open
 connections. Core 1 streams the key and message in 4 KB requests (begin, update..., final);
 core 0 keeps one context (from the heap, `lua` in `mem`), freed after the final step, by the next
-begin, or when the script ends. Hex and base64 (`lua_codec.c`) are pure C on core 1. Tested on the
-host: `tests/test_lua_hash.c` (FIPS 180, RFC 2202 and RFC 4231 vectors, with the host wolfCrypt)
+begin, or when the script ends.
+
+`sos.hashfile` is the same request with a step of its own (`LUA_HASH_FILE`, the path in
+`lua_req.path`): core 0 opens the file the first time (`files_hold()`, so the card isn't
+formatted or unmounted under it), then each request reads and hashes 4 KB pieces through
+`lua_req.data` for up to 20 ms (`HASH_FILE_STEP_US`, `sums.c`'s step) and answers the bytes hashed,
+0 at the end. The bytes never go to core 1. Core 1 checks for Ctrl-C between requests; a hash
+left unfinished keeps its file open until the next begin, the end of the prompt line, or the
+end of the script (`lua_hash_drop()`). Hex and base64 (`lua_codec.c`) are pure C on core 1. Tested on the
+host: `tests/test_lua_hash.c` (FIPS 180, RFC 2202 and RFC 4231 vectors, with the host wolfCrypt;
+the file step over a card in memory: pieces, the time budget, errors, the file released)
 and `tests/test_lua_codec.c`.
 
 ## JSON: `lua_json.c`
