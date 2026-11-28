@@ -94,7 +94,11 @@ Parts of SOS can be left out of the image at compile time
 The security core (root secret, sealed configuration, console password, health checks,
 watchdog) is always built. Turning on a feature whose dependency is off stops the configure
 with a message saying what to turn off too; a feature left unset follows its dependencies, so
-`-DSOS_FEATURE_NET=OFF` in a new build directory also leaves out TLS, HTTP, NTS and SSH.
+`-DSOS_FEATURE_NET=OFF` also leaves out TLS, HTTP, NTS and SSH. Each option is `AUTO` (the
+default), `ON` or `OFF`, and a build directory remembers only what it was given, so turning NET
+back on there brings the others back. A build directory configured before the options became
+`AUTO`/`ON`/`OFF` has them stored as plain `ON`/`OFF`, which now count as asked for: configure a
+fresh directory, or clear them once with `cmake -B build -U 'SOS_FEATURE_*'`.
 
 Presets for the usual combinations, each in its own build directory:
 
