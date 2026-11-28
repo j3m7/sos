@@ -433,16 +433,18 @@ static bool serve_http_request(void) {
     return true;
 }
 
-_Static_assert(sizeof(lua_http_stats_t) <= LUA_REQ_DATA, "the timings must fit in one answer");
+_Static_assert(sizeof(lua_http_stats_t) + HTTP_URL_MAX + 1 <= LUA_REQ_DATA,
+               "the timings and the URL must fit in one answer");
 
 static uint32_t clamp_u32(uint64_t v) {
     return v > UINT32_MAX ? UINT32_MAX : (uint32_t)v;
 }
 
-// The finished request's timings, into the answer that ends its body (the handshake is truncated
-// to whole milliseconds on core 1, as the `http` command prints it).
+// The finished request's timings and last URL, into the answer that ends its body (the handshake
+// is truncated to whole milliseconds on core 1, as the `http` command prints it).
 static void http_stats(void) {
     lua_http_stats_t s = {
+        .redirects = http_redirects(http),
         .headers_ms = http_headers_ms(http),
         .elapsed_ms = http_elapsed_ms(http),
     };
@@ -460,6 +462,7 @@ static void http_stats(void) {
         memcpy(s.cert_issuer, ts->cert_issuer, sizeof(s.cert_issuer));
     }
     memcpy(lua_req.data, &s, sizeof(s));
+    snprintf((char *)lua_req.data + sizeof(s), HTTP_URL_MAX + 1, "%s", http_url(http));
 }
 
 // Answer LR_HTTP_READ with as much of the body as there is now, up to a full answer.

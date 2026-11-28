@@ -154,8 +154,11 @@ typedef struct {
 // LR_HTTP_REQUEST packs the headers into data as http_resp_t stores them: "name:value\n" each,
 // names in lower case.
 
-// The LR_HTTP_READ answer that ends the body (len 0) carries the request's timings in data.
+// The LR_HTTP_READ answer that ends the body (len 0) carries the request's timings in data, then
+// (at data + sizeof(lua_http_stats_t)) the last hop's URL, NUL-terminated (http_url(): the one
+// asked for, or where its redirects led).
 typedef struct {
+    uint32_t redirects;             // redirects followed
     uint32_t headers_ms;            // request started -> headers in
     uint32_t elapsed_ms;            // request started -> end of the body
     bool tls;                       // the rest is there (a TLS connection was made)

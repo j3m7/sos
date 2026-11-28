@@ -656,6 +656,7 @@ static void set_int(lua_State *L, const char *name, lua_Integer v) {
 
 // The timings from the answer that ended the body, as fields of the response table on top.
 static void push_stats(lua_State *L, const lua_http_stats_t *s) {
+    set_int(L, "redirects", s->redirects);
     set_int(L, "headers_ms", s->headers_ms);
     set_int(L, "elapsed_ms", s->elapsed_ms);
     if (!s->tls)
@@ -738,6 +739,8 @@ static int http_request(lua_State *L, int t, const char *file) {
     lua_Integer timeout = opt_integer(L, t, "timeout", 0, 1, 600000);
     // -1: not given. Then a body in memory stops at HTTP_LUA_BODY_MAX, and a file has no limit.
     lua_Integer max_body = opt_integer(L, t, "max_body", -1, 0, 0x7fffffff);
+    // Off unless asked: GET and HEAD only, without a body or headers (http_start() refuses).
+    lua_Integer redirects = opt_integer(L, t, "redirects", 0, 0, HTTP_REDIRECTS_MAX);
 
     http_opts_t o = {
         .method = method,
@@ -747,6 +750,7 @@ static int http_request(lua_State *L, int t, const char *file) {
         .body = body,
         .body_len = body_len,
         .timeout_ms = (uint32_t)timeout,
+        .max_redirects = (uint8_t)redirects,
     };
     lua_req.type = LR_HTTP_REQUEST;
     lua_req.opts = &o;
@@ -810,6 +814,8 @@ static int http_request(lua_State *L, int t, const char *file) {
         total += lua_req.len;
     }
     luaL_pushresult(&b);
+    lua_pushstring(L, (const char *)lua_req.data + sizeof(stats));     // the end's last URL
+    lua_setfield(L, -3, "url");
     if (to_file) {
         lua_pop(L, 1);
         lua_req.len = 0;
