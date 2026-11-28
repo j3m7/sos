@@ -8,13 +8,17 @@ DESCRIPTION
     Downloads <url> and saves the body exactly as received. Without <file>,
     the name is the last part of the URL's path, percent-decoded ('%20' is a
     space); a URL that ends in '/' or whose name can't be a file name on the
-    card needs a <file>. A directory as <file> saves the URL's name inside it.
+    card needs a <file>. That includes a name FatFs would store differently,
+    such as one ending in a dot or a space: it is refused rather than
+    changed, and giving <file> is the way round it. A directory as <file>
+    saves the URL's name inside it.
 
     The body goes to <file>.part first and is renamed to <file> only once it
     is complete: the length the server announced arrived, or the last chunk,
     or the server ended TLS cleanly. A failure or Ctrl-C deletes the .part,
     so a cut download never looks finished. An existing <file> isn't replaced
-    without -f.
+    without -f; with -f it is moved aside to <file>.old until the download
+    has taken its name, so a failed rename loses neither.
 
     Only a 2xx status saves anything. Any other status prints the status line
     and the first 256 bytes of what came with it, filtered as 'http get'
