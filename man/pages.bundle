@@ -458,6 +458,24 @@ DESCRIPTION
                     TLS roots against /certs/roots.pem (see 'tls'): WARN if it
                     changed since approval. SKIP while anything else has the
                     card: unmounted by hand, sd check, a format, open files
+    The slow checks run only on 'health full' or 'health run <name>':
+        ram         a march test (March C-, six data patterns) over free heap,
+                    taken a 4 KB block at a time while about 96 KB stays
+                    free, and over the free 4 KB scratch bank, put back as it
+                    was. A wrong read is tested again: WARN if it doesn't come
+                    back, FAIL if the same address is wrong twice (power-cycle;
+                    keys and seals are refused until a reset). Each wrong read
+                    is logged with its address. Memory in use isn't tested
+        image       the firmware in flash hashed (SHA-256) and compared with
+                    the hash in the image, which the boot ROM checked at boot:
+                    FAIL if the flash or the hash changed since (reflash: the
+                    boot ROM won't start it again; keys and seals are refused
+                    until a reset)
+        sd-check    'sd check' on a card unmounted by hand ('sd unmount'): WARN
+                    on problems, FAIL on clusters two files share or that are
+                    used but marked free (the next write can overwrite a file;
+                    'sd check fix' first). SKIP on a mounted card. The card
+                    stays unmounted; any file command mounts it again
 
     A change of status is logged (facility kern): a FAIL at err, a WARN at
     warning, the way back to PASS at notice. A board that stays healthy logs
@@ -466,9 +484,10 @@ DESCRIPTION
     the SSH host key, an encrypted card, a console password's salt) or
     encrypting new data (saving the configuration). The refusal names the
     check, and the latest result counts: a check that passes again lifts it.
-    Reading what is already stored is never refused. Only trng, crypto and
-    crypto-ssh refuse anything: a FAIL of the others says what the board is
-    doing, and the feature's own command fixes it.
+    Reading what is already stored is never refused. Only trng, crypto,
+    crypto-ssh, ram and image refuse anything: a FAIL of the others says what
+    the board is doing, and the feature's own command fixes it. The slow
+    checks' results last until a reset, like their refusals.
 
     A fresh board whose root secret was refused this way keeps its console
     locked, saying which check failed; 'health' and 'reboot' work there.
@@ -478,9 +497,9 @@ DESCRIPTION
 CONSOLE ONLY
     'health run' runs the boot and background checks now, one after the
     other, and prints each result as it comes; 'health run <name>' runs one
-    check. 'health full' runs every check, including slow ones that run only
-    on request (none yet). Ctrl-C stops: the check being run keeps its earlier
-    result, those already done keep their new ones.
+    check. 'health full' runs every check, including the slow ones (ram,
+    image, sd-check: about a second). Ctrl-C stops: the check being run keeps
+    its earlier result, those already done keep their new ones.
 
 SEE ALSO
     uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
@@ -900,10 +919,10 @@ SYNOPSIS
 
 DESCRIPTION
     The heap: in use, peak and total, then what each feature holds and its
-    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, and 'other' for
-    the rest), lwIP's own pool, and core 0's peak stack use. After a Lua
-    script has run, also how deep the last script went into core 1's 32 KB
-    stack.
+    peak (ssh/tls, lua, editor, files, http, time, ping, wifi, health, and
+    'other' for the rest), lwIP's own pool, and core 0's peak stack use.
+    After a Lua script has run, also how deep the last script went into core
+    1's 32 KB stack.
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script

@@ -201,6 +201,9 @@ set(SOS_SOURCES
     src/core/statecheck_board.c
     src/core/bgcheck.c
     src/core/bgcheck_board.c
+    src/core/fullcheck.c
+    src/core/fullcheck_board.c
+    src/core/memtest.c
     src/core/heapwalk.c
     src/core/selftest.c
     src/core/logfile.c
@@ -387,6 +390,11 @@ pico_enable_stdio_uart(sos 1)
 # signed image like any other; a board with secure boot runs only images signed with the key
 # whose hash is in its OTP memory. Without SOS_SIGN_KEY the image is unsigned, as before.
 #
+# Every image is hashed, signed or not (pico_hash_binary below; docs/design/health.md §9.7):
+# picotool adds a HASH_VALUE to the image's block. The boot ROM checks it at every reset and
+# doesn't start an image whose flash no longer matches it, and the `image` health check compares
+# the running flash with it.
+#
 # The key is never in the repository.
 #
 # No OTP file is produced. The SDK would have picotool write sos.otp.json next to the image:
@@ -410,7 +418,6 @@ if (SOS_SIGN_KEY)
             "unsigned, or see docs/development.md for making a key.")
     endif()
     get_filename_component(SOS_SIGN_KEY "${SOS_SIGN_KEY}" ABSOLUTE)
-    pico_hash_binary(sos)
     pico_sign_binary(sos "${SOS_SIGN_KEY}")
     # pico_sign_binary() asks for the OTP file; an empty name makes the SDK leave it out.
     set_target_properties(sos PROPERTIES PICOTOOL_OTP_FILE "")
@@ -418,6 +425,7 @@ if (SOS_SIGN_KEY)
 else()
     message(STATUS "SOS: the image is not signed (SOS_SIGN_KEY is not set)")
 endif()
+pico_hash_binary(sos)
 
 # The burn image (docs/security/design.md, "Writing it"): the one build that can write a
 # board's root secret into OTP memory, with `rootsecret burn` on the console. It is flashed for that

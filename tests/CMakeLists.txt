@@ -161,6 +161,19 @@ add_executable(test_bgcheck test_bgcheck.c ${SOS_ROOT}/src/core/bgcheck.c
 target_include_directories(test_bgcheck PRIVATE ${SOS_ROOT}/src)
 add_test(NAME bgcheck COMMAND test_bgcheck)
 
+# src/core/memtest.c: the `ram` check's march test (docs/design/health.md §9.7), over a simulated
+# memory with one fault at a time (MEMTEST_HOOKS routes its reads and writes to the test).
+add_executable(test_memtest test_memtest.c ${SOS_ROOT}/src/core/memtest.c)
+target_include_directories(test_memtest PRIVATE ${SOS_ROOT}/src)
+target_compile_definitions(test_memtest PRIVATE MEMTEST_HOOKS)
+add_test(NAME memtest COMMAND test_memtest)
+
+# src/core/fullcheck.c: phase 5's checks, the pure half (docs/design/health.md §9.7): ram, image
+# and sd-check judged from made-up inputs, and the walk over what the image's hash covers.
+add_executable(test_fullcheck test_fullcheck.c ${SOS_ROOT}/src/core/fullcheck.c)
+target_include_directories(test_fullcheck PRIVATE ${SOS_ROOT}/src)
+add_test(NAME fullcheck COMMAND test_fullcheck)
+
 # src/core/heapwalk.c: `health heap-walk`'s walk of newlib's chunks and free lists, over arenas
 # built in a buffer in newlib's layout.
 add_executable(test_heapwalk test_heapwalk.c ${SOS_ROOT}/src/core/heapwalk.c)

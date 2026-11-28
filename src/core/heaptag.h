@@ -21,6 +21,7 @@ typedef enum {
     HEAP_TIME,      // NTS time sync
     HEAP_PING,      // ping runs
     HEAP_WIFI,      // network names a scan heard, while an SSID question wants them for Tab
+    HEAP_HEALTH,    // `health full`: the RAM test's blocks and the image hash's context
     HEAP_TAGS
 } heap_tag_t;
 

@@ -13,9 +13,9 @@
 // statecheck_board.c, judged in statecheck.c; none holds a gate. Phase 4's (§9.5: `resets` with
 // every reset reason and the reset history, `core1`, `heap-sum`, `rtc-drift`, and the brownout
 // detector's setting in `supply`) are read in bgcheck_board.c and judged in bgcheck.c; none holds
-// a gate either. There is no full-tier check yet:
-// `health full` runs the same checks as `health run`, plus the test-only gate checks of a test
-// build.
+// a gate either. Phase 5's full tier (§9.7: `ram`, `image`, `sd-check`) runs only on `health
+// full` or `health run <name>`; its steps are in fullcheck_board.c, judged in fullcheck.c. `ram`
+// and `image` hold KEYS and CRYPTO, closed by their FAILs only; `sd-check` holds none.
 
 #include "core/health.h"
 
@@ -32,6 +32,7 @@
 
 #include "core/bgcheck.h"
 #include "core/bgcheck_board.h"
+#include "core/fullcheck_board.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
@@ -371,9 +372,14 @@ static const health_check_t checks[] = {
     {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, bgcheck_core1_step},
     {"heap-sum", HEALTH_BACKGROUND, HEAPSUM_PERIOD_S, 70, 0, bgcheck_heap_step},
     {"rtc-drift", HEALTH_BACKGROUND, DRIFT_PERIOD_S, 100, 0, bgcheck_drift_step},
+    // Phase 5 (§9.7): only on `health full` or `health run <name>`, last, in this order.
+    {"ram", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_ram_step},
+    {"image", HEALTH_FULL, 0, 0, HEALTH_GATE_KEYS | HEALTH_GATE_CRYPTO, fullcheck_image_step},
+    {"sd-check", HEALTH_FULL, 0, 0, 0, fullcheck_sd_step},
 };
 
 void health_boot(void) {
+    fullcheck_boot();                   // the image's hash items as the boot ROM just verified them
     health_init(checks, sizeof(checks) / sizeof(checks[0]), time_us_64);
     booting = true;
     health_run_boot();

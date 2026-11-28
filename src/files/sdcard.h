@@ -7,8 +7,10 @@
 #define SOS_SDCARD_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include "files/fsck.h"
 #include "shell/shell.h"
 
 // `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check [fix]]`;
@@ -60,6 +62,24 @@ typedef struct {
     uint32_t generation;        // sdcard_generation()
 } sdcard_health_t;
 void sdcard_health_state(sdcard_health_t *out);
+
+// The `sd-check` health check (docs/design/health.md §9.7): `sd check`'s job without a shell, its
+// report lines counted but not printed, its steps aimed at 6 ms. It starts only on a card that
+// was unmounted by hand (`sd unmount`, or an earlier `sd check`) and never unmounts one; it ends
+// as `sd check` ends, the card left unmounted and its key forgotten, the summary logged.
+typedef enum {
+    SDCARD_CHECK_STARTED,
+    SDCARD_CHECK_MOUNTED,               // the card is mounted
+    SDCARD_CHECK_NOT_BY_HAND,           // not mounted, but not unmounted by hand either
+    SDCARD_CHECK_BUSY,                  // `sd check` or a format owns the card: why
+    SDCARD_CHECK_NOT_OPENED,            // no card, refused, no memory: why
+} sdcard_check_start_t;
+sdcard_check_start_t sdcard_check_health_begin(char *why, size_t why_len);
+
+// One step: FSCK_MORE, or FSCK_DONE / FSCK_FAILED with the checker's result copied to *res (and
+// whether the card is encrypted); SDCARD_CHECK_ENDED after a cancel (or with no check running).
+#define SDCARD_CHECK_ENDED (-1)
+int sdcard_check_health_step(bool cancel, fsck_result_t *res, bool *encrypted);
 
 // After the configuration was erased: an encrypted card is unmounted and its key forgotten (the
 // owner secret it was opened with no longer exists). A running `sd check` on it stops.

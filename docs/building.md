@@ -95,7 +95,9 @@ alone; a new board has neither a network nor a trusted key until it's set up
 
 The image can be signed as part of the build (`SOS_SIGN_KEY`; see
 [Signed builds](development.md#signed-builds)). A board without secure boot runs signed
-and unsigned images alike.
+and unsigned images alike. Every image is hashed, signed or not, and the boot ROM refuses to
+start one whose flash no longer matches its hash: reflash it (the board waits in the USB boot
+loader).
 
 Developing inside a VM? See [`docs/development.md`](development.md) for forwarding the
 Pico's USB connection so flashing works unattended.

@@ -179,6 +179,138 @@ TEST(votes) {
     CHECK_EQ(bootkey_vote(all, 3, 2), 0xffffff);
 }
 
+// --- the image's hash items ------------------------------------------------------------------
+
+typedef struct {
+    uint32_t stored, start, third;      // a load map entry's three words, as written
+} entry_t;
+
+// A block at `off` as picotool writes a hashed one: IMAGE_DEF, LOAD_MAP (n entries, relative
+// or absolute; none when n < 0), HASH_DEF counting `def_words` of the block (none when < 0),
+// optionally a signature, then HASH_VALUE of `value_words` words (none when 0), each word
+// 0x01010101 times its number. Returns the offset of the LOAD_MAP item.
+static size_t hblock(size_t off, int32_t link, const entry_t *e, int n, bool absolute,
+                     int def_words, bool sig, unsigned value_words) {
+    size_t pos = off, map = 0;
+    put32(pos, 0xffffded3u);
+    pos += 4;
+    put32(pos, 0x42u | 1u << 8 | 0x1021u << 16);
+    pos += 4;
+    if (n >= 0) {
+        map = pos;
+        put32(pos, 0x06u | (uint32_t)(1 + 3 * n) << 8 | (uint32_t)n << 24 | (absolute ? 1u << 31 : 0));
+        for (int i = 0; i < n; i++) {
+            put32(pos + 4 + 12 * (size_t)i, e[i].stored);
+            put32(pos + 8 + 12 * (size_t)i, e[i].start);
+            put32(pos + 12 + 12 * (size_t)i, e[i].third);
+        }
+        pos += 4 + 12 * (size_t)n;
+    }
+    if (def_words >= 0) {
+        put32(pos, 0x47u | 2u << 8 | 0x01u << 24);
+        put32(pos + 4, (uint32_t)def_words);
+        pos += 8;
+    }
+    if (sig) {
+        put32(pos, 0x09u | 0x21u << 8 | 0x01u << 24);
+        memset(img + pos + 4, 0x66, 128);
+        pos += 4 * 0x21;
+    }
+    if (value_words) {
+        put32(pos, 0x4bu | (1u + value_words) << 8);
+        for (unsigned i = 0; i < value_words; i++)
+            put32(pos + 4 + 4 * i, 0x01010101u * (i + 1));
+        pos += 4 + 4 * value_words;
+    }
+    size_t words = (pos - off - 4) / 4;
+    put32(pos, 0xffu | (uint32_t)words << 8);
+    put32(pos + 4, (uint32_t)link);
+    put32(pos + 8, 0xab123579u);
+    return map;
+}
+
+// As dev-1's image: a first block, and at the end the hashed one, whose relative load map
+// covers the code in place and the stored .data (copied to RAM).
+TEST(hash_items_relative) {
+    bootkey_hash_t h;
+    blank();
+    block(0x100, true, -1, 0x1000);
+    // Entry offsets count from the LOAD_MAP item, which is 8 bytes into the block at 0x1100.
+    entry_t e[2] = {
+        {(uint32_t)(0 - 0x1108), 0x10000000u, 0x1000},
+        {(uint32_t)(0x1000 - 0x1108), 0x20000140u, 0x100},
+    };
+    CHECK_EQ(hblock(0x1100, -0x1000, e, 2, false, 16, true, 8), 0x1108);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_OK);
+    CHECK_EQ(h.block, 0x1100);
+    CHECK_EQ(h.block_words, 16);
+    CHECK_EQ(h.loads, 2);
+    CHECK_EQ(h.load[0].storage, 0);
+    CHECK_EQ(h.load[0].size, 0x1000);
+    CHECK_EQ(h.load[1].storage, 0x1000);
+    CHECK_EQ(h.load[1].size, 0x100);
+    CHECK_EQ(h.value_words, 8);
+    CHECK_EQ(h.value[0], 0x01010101u);
+    CHECK_EQ(h.value[7], 0x08080808u);
+    CHECK(h.signed_image);
+}
+
+TEST(hash_items_absolute_and_zero_fill) {
+    bootkey_hash_t h;
+    blank();
+    entry_t e[2] = {
+        {0x10000000u, 0x10000000u, 0x10000800u},    // in place, end address
+        {0, 0x20001000u, 0x20001400u},              // zero fill
+    };
+    hblock(0x800, 0, e, 2, true, 6, false, 4);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_OK);
+    CHECK_EQ(h.load[0].storage, 0);
+    CHECK_EQ(h.load[0].size, 0x800);
+    CHECK_EQ(h.load[1].storage, BOOTKEY_ZERO_FILL);
+    CHECK_EQ(h.load[1].size, 0x400);
+    CHECK_EQ(h.value_words, 4);
+    CHECK(!h.signed_image);
+}
+
+TEST(hash_items_missing_or_not_understood) {
+    bootkey_hash_t h;
+    entry_t in[1] = {{0x10000000u, 0x10000000u, 0x10000800u}};
+    blank();
+    block(0x100, true, 0x44, 0);                    // signed, no hash value
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_NONE);
+    blank();
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_NO_BLOCKS);
+
+    blank();                                        // no HASH_DEF before the value
+    hblock(0x800, 0, in, 1, true, -1, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+    blank();                                        // no LOAD_MAP
+    hblock(0x800, 0, in, -1, true, 4, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+    blank();                                        // HASH_DEF counts past the block
+    hblock(0x800, 0, in, 1, true, 200, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+
+    entry_t out[1] = {{0x10001ff0u, 0x10001ff0u, 0x10003000u}};
+    blank();                                        // stored bytes past the buffer
+    hblock(0x800, 0, out, 1, true, 4, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+    entry_t odd[1] = {{0x10000002u, 0x10000000u, 0x10000800u}};
+    blank();                                        // not word aligned
+    hblock(0x800, 0, odd, 1, true, 4, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+    entry_t back[1] = {{0x10000000u, 0x10000800u, 0x10000000u}};
+    blank();                                        // an end before its start
+    hblock(0x800, 0, back, 1, true, 4, false, 8);
+    CHECK_EQ(bootkey_image_hash(img, sizeof(img), 0x10000000u, &h), BOOTKEY_HASH_UNKNOWN);
+
+    blank();                                        // the key is still found beside the hash
+    hblock(0x800, 0, in, 1, true, 4, true, 8);
+    const uint8_t *key;
+    CHECK_EQ(bootkey_image_pubkey(img, sizeof(img), &key), BOOTKEY_IMAGE_SIGNED);
+    CHECK(key[0] == 0x66);
+}
+
 TEST(slot_hash_byte_order) {
     uint16_t rows[BOOTKEY_SLOT_ROWS];
     uint8_t hash[BOOTKEY_HASH_LEN];
@@ -227,6 +359,9 @@ TEST(compare) {
 }
 
 TEST_MAIN(
+    RUN(hash_items_relative);
+    RUN(hash_items_absolute_and_zero_fill);
+    RUN(hash_items_missing_or_not_understood);
     RUN(unsigned_image);
     RUN(signed_image_second_block);
     RUN(signed_single_block);
