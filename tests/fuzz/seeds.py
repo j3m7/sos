@@ -595,7 +595,8 @@ def sums():
     write("sums", "long", bytes([255]) + b"x" * 4097 + b"\n" + h1 + b"  ok\n" + b"y" * 5000)
 
 
-# --- tar: [piece / 3] then an archive (tests/data/archives/tar, tools/make-archive-fixtures.sh) --
+# --- tar: [piece / 3] then an archive (tests/data/archives/tar, tools/make-archive-fixtures.sh),
+# or a name for tar_write.c ---------------------------------------------------------------------
 
 def tar():
     d = os.path.join(HERE, "..", "data", "archives", "tar")
@@ -610,6 +611,9 @@ def tar():
         while len(data) > 1024 and data[-1536:] == bytes(1536):
             data = data[:-512]
         write("tar", name.replace(".tar", ""), bytes([piece]) + data)
+    # Names for tar_write.c's round trip: split into ustar's prefix, and only a pax record holds.
+    write("tar", "name-prefix", bytes([0]) + b"p" * 150 + b"/" + b"q" * 90)
+    write("tar", "name-pax", bytes([0]) + "caf\u00e9/".encode() * 20 + "\u00e9".encode() * 60)
 
 
 for f in (http, nts_ke, nts_ntp, certbundle, config, ping, terminal, words, fsck, fsck_exfat,
