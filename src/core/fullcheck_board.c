@@ -200,8 +200,8 @@ static void ram_second(ram_state_t *st) {
             (unsigned long)st->first_addr, (unsigned long)st->first.wrote,
             (unsigned long)st->first.read, memtest_element_name(st->first.element),
             (unsigned long)st->first.background, dma,
-            repeated ? "again in a second test: keys and seals refused until reset; power-cycle, "
-                       "and if it fails again the board's RAM is faulty"
+            // Kept short: the whole line must fit LOG_LINE_MAX (found cut on dev-1).
+            repeated ? "again in a second test: keys, seals off until reset; power-cycle"
                      : "not in a second test");
     ram_last.seen = true;
     ram_last.addr = st->first_addr;
@@ -365,13 +365,19 @@ static void image_judge(image_state_t *st, const uint8_t *computed, health_resul
         .ms = (uint32_t)((time_us_64() - st->t0) / 1000),
     };
     fullcheck_judge_image(&in, out);
-    if (out->status == HEALTH_FAIL && computed)
+    if (out->status == HEALTH_FAIL && computed) {
+        // Both in byte order, as the PASS text and `picotool info` show a hash (found on dev-1:
+        // the booted hash printed as little-endian words looked unrelated to picotool's).
+        char booted[17];
+        for (unsigned i = 0; i < 8; i++)
+            snprintf(booted + 2 * i, 3, "%02x",
+                     (unsigned)((boot_hash.value[i / 4] >> (8 * (i % 4))) & 0xffu));
         log_msg(SOS_LOG_KERN | SOS_LOG_ERR,
-                "health: image: flash hashes to %02x%02x%02x%02x%02x%02x%02x%02x, booted as "
-                "%08lx%08lx (first words, little-endian); the boot ROM won't start this image "
-                "after a reset: reflash", computed[0], computed[1], computed[2], computed[3],
-                computed[4], computed[5], computed[6], computed[7],
-                (unsigned long)boot_hash.value[0], (unsigned long)boot_hash.value[1]);
+                "health: image: flash hashes to %02x%02x%02x%02x%02x%02x%02x%02x, booted as %s; "
+                "the boot ROM won't start this image after a reset: reflash", computed[0],
+                computed[1], computed[2], computed[3], computed[4], computed[5], computed[6],
+                computed[7], booted);
+    }
 }
 
 health_step_t fullcheck_image_step(void **state, bool cancel, health_result_t *out) {
