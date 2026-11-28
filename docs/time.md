@@ -46,8 +46,9 @@ from the build-time `SOS_NTP_SERVER` (`pool.ntp.org`); `time` then shows the tim
 unauthenticated.
 
 - `time` shows the date and time and where it came from (RTC, NTS, or SNTP), the RTC's reading
-  and backup-battery state, the RTC calibration, the last sync with its correction and round
-  trip, a failed attempt and when it's retried, and the server and periodic settings.
+  and backup-battery state, the RTC calibration, the drift the last sync measured (below), the
+  last sync with its correction and round trip, a failed attempt and when it's retried, and the
+  server and periodic settings.
 - `time auto`, `time server` and `time cal` (without a value) show those settings; `config`
   lists all three.
 - `nts` shows the NTS state (cookies, last key exchange and query). `nts ke [host]` and
@@ -60,22 +61,47 @@ The RTC's crystal isn't trimmed, and an uncalibrated one can be well off: the bo
 developed on ran 92 ppm fast, about 8 s a day. The PCF8523 can correct its own rate, and
 `time cal` (console only) sets that:
 
-1. **Measure.** Run `time sync`, leave the board for a day or more, restart it (so the clock
-   is taken from the RTC again), and run `time sync` once more. `time` then shows the step, for
-   example `clock stepped -5419 ms`. A negative step means the RTC ran fast. The RTC counts
-   whole seconds, so the step is only good to about a second: the longer the wait, the better.
-2. **Work out the rate:** ppm = milliseconds stepped ÷ seconds waited × 1000, positive if the
-   RTC ran fast. 5419 ms in 59,051 s is 92 ppm.
-3. **Set it:** `time cal 92`. The RTC is slowed by the nearest step it can do (4.34 ppm each,
+1. **Measure.** Run `time sync`, leave the board for a day or more (restarting it in between
+   is fine), and run `time sync` once more. `time`'s `drift:` line then shows the RTC's rate,
+   for example `rtc +92.0+-13 ppm in 22 h (no cal)`: positive means fast, and the figure after
+   `+-` is how far off the measurement may be. The RTC counts whole seconds, so each
+   measurement is good to about a second: the longer the wait, the better (about 15 hours
+   for 20 ppm).
+2. **Set it:** `time cal 92`. The RTC is slowed by the nearest step it can do (4.34 ppm each,
    here 91.1 ppm), and `time` shows `cal: slowed by 91.1 ppm`. A slow RTC takes a negative
-   value.
+   value. The `rtc-drift` health check's warning suggests the value.
 
 The value isn't added to the one before: after measuring again with a calibration set, give
 the rate `time` shows on its `cal:` line (91.1 here, not the 92 that was typed) plus the new
-error. `time cal off` removes it. The calibration is a saved
+drift. A change of calibration starts a new measurement at the next sync. `time cal off`
+removes it. The calibration is a saved
 setting (`rtc_cal_ppm` when provisioning), written into the RTC at boot if the chip doesn't
 already have it, so it survives a dead coin cell. The RTC applies it as a few short
 corrections every two hours.
+
+### How the drift is measured
+
+Every sync that sets the RTC reads it first, at the second boundary it is about to be set on,
+and compares the reading with the time it was set to at the sync before. That time, with the
+calibration then in force, is kept in the history sector of flash (`src/core/history.h`), so the
+measurement survives restarts and power cuts; a change of calibration, or an RTC that lost its
+time, starts again. The uncertainty is the RTC's whole second, plus 32 ms per calibration step
+(the PCF8523 applies the correction once every two hours, so in between it runs at its own rate),
+plus the sync's round trip.
+
+When the sync before was in the same uptime, the step that sync makes also measures the board's
+own 12 MHz crystal (`xosc`), which the clock runs on between syncs; that is the one measurement
+of the crystal against an outside reference (the `clocks` health check compares the clocks with
+each other, all made from the same crystal).
+
+The `rtc-drift` health check (`health`) judges both: WARN when the RTC is surely more than 20 ppm
+off (a 32.768 kHz crystal is typically good to 20 ppm), or the crystal more than 65 ppm (its
+tolerance, temperature and first year's aging); FAIL beyond 1000 ppm, the chip's clock margin. It
+never judges while the uncertainty straddles a line.
+
+After running older firmware: an older image's sync sets the RTC without recording it, so the
+first measurement back reads too small (nearer zero) once; that sync starts a new baseline. Sync
+twice after running older firmware before trusting the figure.
 
 ## Time zones
 

@@ -12,6 +12,7 @@
 #include "pico/time.h"
 #include "lwip/apps/sntp.h"
 
+#include "core/history.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "time/nts.h"
@@ -58,6 +59,12 @@ static uint64_t periodic_us;
 static int64_t step_ms;
 static bool step_was_unset;             // ...which set a clock that had no time
 static int64_t synced_delay_us;         // round trip of the NTS sample used
+
+// Drift (docs/design/health.md §9.5): what the last sync measured, for timesync_drift().
+#define SNTP_DELAY_MS 50                // SNTP gives no round trip: take a typical one
+static timeconv_drift_t drift;
+static bool drift_measured;             // a sync since boot filled `drift`
+static uint32_t last_delay_ms;          // the round trip of the sync before
 
 // SNTP, only on `time sync sntp`.
 static bool sntp_running;
@@ -112,8 +119,49 @@ static void format_step(char *buf, size_t len) {
         snprintf(buf, len, "clock stepped %+lld ms", (long long)step_ms);
 }
 
+// The newest record of the RTC being set (core/history.h), if it can be a baseline: confirmed
+// (the RTC took the time). False if there is none.
+static bool rtc_baseline(history_rec_t *rec) {
+    return history_list(history_sector(), HISTORY_KIND_RTC, rec, 1) == 1 && rec->confirmed;
+}
+
+// The RTC's drift since its baseline, read at the second `next` (Unix s) that the RTC is about to
+// be set to; the XOSC's since the sync before, if that was in this uptime.
+static void measure(int64_t next, int64_t step, uint64_t prev_sync_us, bool prev_set,
+                    uint32_t delay_ms) {
+    timeconv_drift_t d = {0};
+    d.cal_steps = settings()->rtc_offset;
+    if (prev_sync_us && prev_set) {
+        // The clock ran on the crystal since the last sync: the step is its error.
+        d.xosc = true;
+        d.xosc_err_ms = -step;
+        d.xosc_unc_ms = (last_delay_ms + delay_ms) / 2;
+        d.xosc_interval_s = (uint32_t)((time_us_64() - prev_sync_us) / 1000000);
+    }
+    int64_t rtc_t;
+    rtc_status_t st = rtc_read(&rtc_t);
+    d.rtc_present = st != RTC_ABSENT;
+    d.rtc = TIMECONV_DRIFT_NO_BASELINE;
+    history_rec_t base;
+    if (st == RTC_OK && rtc_baseline(&base) && base.wall != HISTORY_NONE && next > base.wall) {
+        if (base.cal_steps != d.cal_steps) {
+            d.rtc = TIMECONV_DRIFT_CAL_CHANGED;
+        } else {
+            d.rtc = TIMECONV_DRIFT_MEASURED;
+            d.rtc_err_ms = (rtc_t - next) * 1000;
+            d.rtc_unc_ms = timeconv_rtc_unc_ms(d.cal_steps, delay_ms);
+            d.rtc_interval_s = (uint32_t)(next - base.wall);
+        }
+    }
+    drift = d;
+    drift_measured = true;
+    last_delay_ms = delay_ms;
+}
+
 // Set the system clock and the RTC to t_us (microseconds since 1970).
 static void apply_time(int64_t t_us, time_source_t src) {
+    uint64_t prev_sync_us = synced_us;
+    bool prev_set = source != SRC_NONE;
     step_was_unset = source == SRC_NONE;        // a step from 1970 means nothing
     step_ms = step_was_unset ? 0 : (t_us - now_us()) / 1000;
     set_clock_us(t_us);
@@ -122,10 +170,23 @@ static void apply_time(int64_t t_us, time_source_t src) {
     failed_us = 0;
 
     // Write the RTC on a second boundary so it keeps the sub-second phase (the PCF8523 restarts
-    // its divider when the seconds register is written). Waiting is < 1 s.
+    // its divider when the seconds register is written). Waiting is < 1 s. Just before, read it
+    // for the drift measurement (one I2C read, about 1 ms); after, record the time it was set to,
+    // the next measurement's baseline, confirmed only if the RTC took it.
     int64_t next = (t_us / 1000000 + 1) * 1000000;
     busy_wait_us((uint64_t)(next - t_us));
+    uint32_t delay_ms = src == SRC_NTS ? (uint32_t)(synced_delay_us / 1000) : SNTP_DELAY_MS;
+    measure(next / 1000000, step_ms, prev_sync_us, prev_set, delay_ms);
     bool rtc_ok = rtc_write(next / 1000000);
+    // A flash write: usually one page (about 1 ms), but once every 240 records the history sector
+    // is full and this erases it first, up to about 400 ms with XIP stalled on both cores. So a
+    // sync now and then pauses core 1 (a running Lua script) for that long; nothing is wrong.
+    int slot = history_rtc_begin((uint32_t)(next / 1000000), settings()->rtc_offset);
+    if (rtc_ok)
+        history_rtc_done(slot);
+    // Nothing to measure against this time: this sync is the baseline the next one measures from.
+    if (drift.rtc == TIMECONV_DRIFT_NO_BASELINE && rtc_ok && slot >= 0)
+        drift.rtc = TIMECONV_DRIFT_BASELINE;
 
     char buf[24], step[40];
     timeconv_format(next / 1000000, buf, sizeof(buf));
@@ -321,7 +382,34 @@ bool timesync_apply_cal(void) {
         return false;
     }
     log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "rtc: calibration %s", cal);
+    if (drift_measured) {                   // the rate measured was under the old calibration
+        drift.rtc = TIMECONV_DRIFT_CAL_CHANGED;
+        drift.cal_steps = want;
+    }
     return true;
+}
+
+void timesync_drift(timeconv_drift_t *out) {
+    if (drift_measured) {
+        *out = drift;
+        if (drift.rtc == TIMECONV_DRIFT_BASELINE)       // set at the last sync: its age
+            out->rtc_interval_s = (uint32_t)((time_us_64() - synced_us) / 1000000);
+        return;
+    }
+    // No sync since boot: what the history sector says about the RTC's baseline.
+    timeconv_drift_t d = {0};
+    d.cal_steps = settings()->rtc_offset;
+    d.rtc_present = rtc_boot_status != RTC_ABSENT;
+    d.rtc = TIMECONV_DRIFT_NO_BASELINE;
+    history_rec_t base;
+    if (rtc_boot_status == RTC_OK && rtc_baseline(&base)) {
+        d.rtc = base.cal_steps == d.cal_steps ? TIMECONV_DRIFT_BASELINE
+                                              : TIMECONV_DRIFT_CAL_CHANGED;
+        int64_t now = now_us() / 1000000;
+        if (source != SRC_NONE && base.wall != HISTORY_NONE && now > base.wall)
+            d.rtc_interval_s = (uint32_t)(now - base.wall);
+    }
+    *out = d;
 }
 
 bool timesync_clock_set(void) {
@@ -414,6 +502,37 @@ void timesync_info(timesync_info_t *info) {
     };
 }
 
+// "drift:  rtc +92.0+-13 ppm in 22 h (no cal); xosc -1.8+-0.6 ppm in 24 h": the rates the last
+// sync measured (positive: running fast), or what is still needed for them.
+static void print_drift(shell_t *sh) {
+    timeconv_drift_t d;
+    timesync_drift(&d);
+    char cal[16], rate[24], span[12];
+    timeconv_format_cal(cal, sizeof(cal), d.cal_steps);
+    shell_printf(sh, "drift:  ");
+    if (!d.rtc_present) {
+        shell_printf(sh, "no rtc");
+    } else if (d.rtc == TIMECONV_DRIFT_MEASURED) {
+        timeconv_format_rate(rate, sizeof(rate), timeconv_rate_mppm(d.rtc_err_ms, d.rtc_interval_s),
+                             timeconv_rate_mppm(d.rtc_unc_ms, d.rtc_interval_s));
+        timeconv_format_span(span, sizeof(span), d.rtc_interval_s);
+        shell_printf(sh, "rtc %s in %s (%s)", rate, span, cal);
+    } else if (d.rtc == TIMECONV_DRIFT_BASELINE) {
+        shell_printf(sh, "rtc measured at the next sync (%s)", cal);
+    } else if (d.rtc == TIMECONV_DRIFT_CAL_CHANGED) {
+        shell_printf(sh, "rtc measured after the next sync (calibration changed)");
+    } else {
+        shell_printf(sh, "rtc measured after two syncs");
+    }
+    if (d.xosc) {
+        timeconv_format_rate(rate, sizeof(rate), timeconv_rate_mppm(d.xosc_err_ms, d.xosc_interval_s),
+                             timeconv_rate_mppm(d.xosc_unc_ms, d.xosc_interval_s));
+        timeconv_format_span(span, sizeof(span), d.xosc_interval_s);
+        shell_printf(sh, "; xosc %s in %s", rate, span);
+    }
+    shell_printf(sh, "\n");
+}
+
 void timesync_status(shell_t *sh) {
     char buf[24];
     static const char *const names[] = {"not set", "from rtc", "from nts, authenticated",
@@ -441,6 +560,8 @@ void timesync_status(shell_t *sh) {
     timesync_cal_str(cal, sizeof(cal));
     bool applied = rtc_read_offset(&steps) ? steps == want : want == 0;
     shell_printf(sh, "cal:    %s%s\n", cal, applied ? "" : " (not in the RTC)");
+
+    print_drift(sh);
 
     uint64_t now = time_us_64();
     shell_printf(sh, "sync:   ");

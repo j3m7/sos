@@ -10,7 +10,10 @@
 // `crypto-ssh` (background) for the known answers too slow for boot. Their judging is in
 // hwtest.c and the crypto vectors in selftest.c. Phase 3's checks of stored state (§9.3:
 // `config`, `rootsecret`, `otp`, `failcount`, `hostkey`, `card`) are background checks in
-// statecheck_board.c, judged in statecheck.c; none holds a gate. There is no full-tier check yet:
+// statecheck_board.c, judged in statecheck.c; none holds a gate. Phase 4's (§9.5: `resets` with
+// every reset reason and the reset history, `core1`, `heap-sum`, `rtc-drift`, and the brownout
+// detector's setting in `supply`) are read in bgcheck_board.c and judged in bgcheck.c; none holds
+// a gate either. There is no full-tier check yet:
 // `health full` runs the same checks as `health run`, plus the test-only gate checks of a test
 // build.
 
@@ -27,7 +30,8 @@
 #include "pico/flash.h"
 #include "pico/stdlib.h"
 
-#include "core/fault.h"
+#include "core/bgcheck.h"
+#include "core/bgcheck_board.h"
 #include "core/glitchdet.h"
 #include "core/heap.h"
 #include "core/heaptag.h"
@@ -37,17 +41,9 @@
 #include "core/sensors.h"
 #include "core/stackmon.h"
 #include "core/statecheck.h"
-#include "core/wdog.h"
 #include "lua/lua_core1.h"
 
 #define SEED_PERIOD_S 60                // the background seed checks: once a minute
-
-static health_step_t check_resets(void **state, bool cancel, health_result_t *out) {
-    (void)state;
-    if (!cancel)
-        health_judge_resets(fault_last(), glitchdet_caused_reset(), wdog_caused_reset(), out);
-    return HEALTH_DONE;
-}
 
 static health_step_t check_glitch(void **state, bool cancel, health_result_t *out) {
     (void)state;
@@ -94,6 +90,7 @@ static health_step_t check_supply(void **state, bool cancel, health_result_t *ou
     if (min == SENSORS_NONE)
         min = sensors_last_vsys();
     health_judge_supply(min, sensors_usb_power(), out);
+    bgcheck_judge_bod(bgcheck_bod_register(), out);     // phase 4: the brownout detector's setting
     return HEALTH_DONE;
 }
 
@@ -346,9 +343,14 @@ static health_step_t check_crypto_ssh(void **state, bool cancel, health_result_t
 // up, staggered so the first minute isn't one burst; then hourly, the card every 6 hours.
 #define STATE_PERIOD_S      3600
 #define CARD_PERIOD_S       (6 * 3600)
+// Phase 4 (§9.5): the heartbeat every 10 s (its WARN is three runs without a beat), the heap's
+// totals every 5 minutes, the drift record (it changes only at a sync) every 10 minutes.
+#define CORE1_PERIOD_S      10
+#define HEAPSUM_PERIOD_S    300
+#define DRIFT_PERIOD_S      600
 
 static const health_check_t checks[] = {
-    {"resets", HEALTH_BOOT, 0, 0, 0, check_resets},
+    {"resets", HEALTH_BOOT, 0, 0, 0, bgcheck_resets_step},
     {"clocks", HEALTH_BOOT, 0, 0, 0, check_clocks},
     {"flash", HEALTH_BOOT, 0, 0, 0, check_flash},
     {"trng", HEALTH_BOOT, 0, 0, HEALTH_GATE_KEYS, check_trng},
@@ -366,6 +368,9 @@ static const health_check_t checks[] = {
     {"failcount", HEALTH_BACKGROUND, STATE_PERIOD_S, 55, 0, statecheck_failcount_step},
     {"hostkey", HEALTH_BACKGROUND, STATE_PERIOD_S, 60, 0, statecheck_hostkey_step},
     {"card", HEALTH_BACKGROUND, CARD_PERIOD_S, 90, 0, statecheck_card_step},
+    {"core1", HEALTH_BACKGROUND, CORE1_PERIOD_S, CORE1_PERIOD_S, 0, bgcheck_core1_step},
+    {"heap-sum", HEALTH_BACKGROUND, HEAPSUM_PERIOD_S, 70, 0, bgcheck_heap_step},
+    {"rtc-drift", HEALTH_BACKGROUND, DRIFT_PERIOD_S, 100, 0, bgcheck_drift_step},
 };
 
 void health_boot(void) {

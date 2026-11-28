@@ -488,7 +488,7 @@ survive a watchdog reset; the SDK uses 4-7) and resets the chip at once with
   the address of the message, which the next boot prints if it is the same build.
 - `crash fault|stack|panic|hang` (console only) calls `fault_test()`.
 
-## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`)
+## Health checks (`health.c`, `health_board.c`, `hwtest.c`, `selftest.c`, `statecheck.c`, `bgcheck.c`)
 
 `health` (docs/design/health.md, #233): self-checks that report PASS, WARN or FAIL (or SKIP)
 with a one-line reason. `health.c` is pure C and host tested (`tests/test_health.c`): the
@@ -553,6 +553,28 @@ host's wolfCrypt by `tests/test_selftest.c`).
   stored page against the page now (the record is never opened), and on the card `/var/log`,
   `/certs` and `/certs/roots.pem` (2 KB per step, under `files_hold()`), yielding to `sd check`,
   a format, a card unmounted by hand and open files (`sdcard_health_state()`, `files_busy()`).
+- **The background tier** (phase 4, docs/design/health.md §9.5), judged in `bgcheck.c`
+  (`tests/test_bgcheck.c`) and read in `bgcheck_board.c`; none holds a gate:
+  - `resets` (boot) uses `resetwhy.c`'s one decoding of the last reset (fault record, watchdog
+    REASON, POWMAN CHIP_RESET: power-on, reboot, reset pin, brownout, watchdog timeout, fault,
+    glitch detector, debugger), which `main.c`'s boot line, `uptime`, the log files' marker and
+    `sos.health()` share; HAD_BOR beside HAD_POR is a power-on (a cold power-up trips the
+    detector). It also judges the reset history (`history.c`, below): WARN on three short runs
+    in a row (under 180 s, none a reboot asked for).
+  - `supply` WARNs if the brownout detector's register isn't its default (on, 0.946 V).
+  - `core1` (every 10 s): the heartbeat `lua_core1.c` keeps in `lua_beat` (the hook and the
+    wait loops count; requests, output and the prompt set `waiting`). WARN after 30 s without a
+    beat, FAIL 10 s after an ignored stop.
+  - `heap-sum` (every 5 min): `heap_snapshot()` (mallinfo and sbrk(0) under the heap's lock)
+    against the tags' sum, the arena and the stack guard (MSPLIM).
+  - `rtc-drift` (every 10 min): `timesync_drift()`, what the last sync measured
+    (`timeconv.c` has the arithmetic).
+- **The history sector** (`history.c`, pure, `tests/test_history.c`; `history_board.c`): the
+  sixth sector from the end (`flashlayout.h`), 240 records of 16 bytes after a header with a
+  format version: one per boot (`history_boot()` in `main()`, after `timesync_boot()`) and one
+  per sync that set the RTC (the drift baseline, confirmed once the RTC took the time). Full,
+  it is erased with the newest 16 boots and the newest confirmed RTC record copied back. A
+  newer format is never written. `uptime history` lists it.
 - **Test builds** (`-DSOS_TEST_COMMANDS=ON`): `health inject <name> fail|clear` sets a result by
   hand; `health inject gate keys|crypto` adds a test-only full-tier check holding that gate at
   FAIL, to see each refusal on the board (`health full` runs it, and it passes, which opens the
@@ -560,9 +582,15 @@ host's wolfCrypt by `tests/test_selftest.c`).
   test under 12 setups (sample period, autocorrelation test, corrector) to compare with the
   check's. `health state-dump` prints what the checks of stored state read (each config slot's
   kind and sequence number with its read time, the root secret's source, the OTP rows and slots,
-  the failcount tracks, the host key's state, the card's owners); it only reads and works in any
-  shell.
-- **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 24 at
+  the failcount tracks, the host key's state, the card's owners, and phase 4's: CHIP_RESET, the
+  BOD register, the history records, the drift record, the heap's totals, core 1's heartbeat),
+  wrapped at 79 columns (`statecheck_wrap()`); it only reads and works in any shell.
+  `health heap-walk` walks newlib's chunks and free lists (`heapwalk.c`, pure,
+  `tests/test_heapwalk.c`) under the allocator's lock, at most 8 ms, after a known answer;
+  `health history-fill` fills the history sector with test records; `crash brownout` makes a real
+  brownout reset (refused while files are open, the card is busy or a script runs); Lua gets
+  `sos.spin(ms)`, a C loop without Lua instructions.
+- **RAM:** about 100 bytes per registered check (the result and its text, scheduling); 32 at
   most.
 
 ## Stack monitor (`stackmon.c`)

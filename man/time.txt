@@ -23,9 +23,10 @@ DESCRIPTION
     an RTC time, the clock stays unset.
 
     'time' shows the date and time and where it came from (RTC, NTS or SNTP),
-    the RTC's reading and backup-battery state, the calibration, the last sync
-    with its correction and round trip, a failed attempt and when it is
-    retried, the server and the periodic setting.
+    the RTC's reading and backup-battery state, the calibration, the drift
+    the last sync measured, the last sync with its correction and round trip,
+    a failed attempt and when it is retried, the server and the periodic
+    setting.
 
     'time sync' syncs the clock and the RTC from NTS now. The board also syncs
     by itself when the RTC has no valid time (retrying with doubling delays),
@@ -38,16 +39,24 @@ DESCRIPTION
     'default' goes back to the build-time one (time.cloudflare.com). Its
     certificate must chain to a trusted root ('tls roots').
 
-    'time cal <ppm>' corrects the RTC's rate. To measure: 'time sync', leave
-    the board for a day or more, restart it and 'time sync' again; 'time'
-    shows the step, e.g. 'clock stepped -5419 ms' (negative: the RTC ran
-    fast). ppm = milliseconds stepped / seconds waited x 1000, positive if
-    fast: 5419 ms in 59051 s is 92 ppm, so 'time cal 92'. The RTC is slowed or
-    sped up by the nearest step of 4.34 ppm and 'time' shows the rate applied
-    ('cal: slowed by 91.1 ppm'). The value replaces the previous one: after
-    measuring again, give the rate shown plus the new error. 'time cal off'
-    removes it. Saved, and written into the RTC at boot if the chip doesn't
-    have it.
+    The 'drift:' line: every sync reads the RTC just before setting it, and
+    compares it with the time it was set to at the sync before (kept in flash
+    across restarts and power cuts). So after two syncs it shows the RTC's
+    rate, e.g. 'rtc +92.0+-13 ppm in 22 h (no cal)': positive means fast, and
+    the figure after +- is how far off the measurement may be (the RTC counts
+    whole seconds, so the longer between the syncs, the better: about 15
+    hours for 20 ppm). When the two syncs fell in one uptime it also shows the
+    board's own crystal ('xosc'). The 'rtc-drift' health check judges both.
+
+    'time cal <ppm>' corrects the RTC's rate: 'time sync', a day or more,
+    'time sync' again, then give the rate 'drift:' shows, e.g. 'time cal 92'
+    (the 'rtc-drift' check's warning suggests the value). The RTC is slowed
+    or sped up by the nearest step of 4.34 ppm and 'time' shows the rate
+    applied ('cal: slowed by 91.1 ppm'). The value replaces the previous one:
+    with a calibration set, give the rate shown on the 'cal:' line plus the
+    new drift. The next sync after a change starts a new measurement. 'time
+    cal off' removes it. Saved, and written into the RTC at boot if the chip
+    doesn't have it.
 
 TIME ZONES
     'time zone <name>' sets the zone 'time' shows local time in, by its IANA

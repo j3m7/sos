@@ -16,11 +16,9 @@
 #include "pico/stdlib.h"
 
 #include "core/config.h"
-#include "core/fault.h"
-#include "core/glitchdet.h"
+#include "core/resetwhy.h"
 #include "core/settings.h"
 #include "core/version.h"
-#include "core/wdog.h"
 #include "files/files.h"
 #include "files/sdcard.h"
 #include "time/timesync.h"
@@ -139,11 +137,7 @@ static bool save_rotated(int64_t unix_s, const char **why) {
 }
 
 static void boot_text(char *buf, size_t len) {
-    const char *why = fault_last() ? fault_last()
-                      : glitchdet_caused_reset() ? "glitch detector"
-                      : wdog_caused_reset() ? "watchdog"
-                      : "power-on or reboot";
-    snprintf(buf, len, "SOS %s, last reset: %s", sos_version, why);
+    snprintf(buf, len, "SOS %s, last reset: %s", sos_version, resetwhy_text());
 }
 
 static void retry_mount(void) { sdcard_mount_retry(); }

@@ -436,3 +436,37 @@ void statecheck_judge_card(const statecheck_card_t *c, health_result_t *out) {
         break;
     }
 }
+
+// --- health state-dump's lines ---------------------------------------------------------------------
+
+void statecheck_wrap(const char *line, unsigned cols, void (*emit)(void *arg, const char *piece),
+                     void *arg) {
+    char piece[256];
+    const unsigned indent = 2;
+    bool first = true;
+    if (cols <= indent + 8 || cols >= sizeof(piece))
+        cols = STATECHECK_WRAP_COLS;
+    while (*line || first) {
+        unsigned room = first ? cols : cols - indent;
+        size_t left = strlen(line);
+        size_t take = left;
+        if (left > room) {
+            // The last "; " or ", " that leaves its separator on this piece within room.
+            take = 0;
+            for (size_t i = room - 1; i > 0; i--) {
+                if ((line[i] == ';' || line[i] == ',') && line[i + 1] == ' ') {
+                    take = i + 1;
+                    break;
+                }
+            }
+            if (!take)
+                take = room;
+        }
+        snprintf(piece, sizeof(piece), "%s%.*s", first ? "" : "  ", (int)take, line);
+        emit(arg, piece);
+        line += take;
+        while (*line == ' ')
+            line++;
+        first = false;
+    }
+}

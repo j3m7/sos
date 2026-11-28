@@ -44,6 +44,7 @@
 #define LUA_MEM_LIMIT (128 * 1024)      // heap a script may use
 
 lua_job_t lua_job;
+lua_beat_t lua_beat;
 lua_req_t lua_req;
 lua_out_t lua_out;
 
@@ -324,7 +325,7 @@ static void serve_wall(void) {
     }
     int n = chat_wall_from(job_tag, (const char *)lua_req.data);
     if (n < 0)
-        req_error("other shells haven't read the last messages yet: try again shortly");
+        req_error("other shells haven't read the last messages yet: try again");
     else
         lua_req.result = n;
 }
@@ -995,6 +996,14 @@ static void autorun_check(void) {
 }
 
 // --- the lua command ---------------------------------------------------------------------------
+
+bool lua_host_running(void) {
+    return lua_job.state != LJ_IDLE;
+}
+
+uint32_t lua_host_job_seconds(void) {
+    return lua_job.state == LJ_IDLE ? 0 : (uint32_t)((time_us_64() - job_start_us) / 1000000);
+}
 
 static void lua_ps(shell_t *sh) {
     if (lua_job.state == LJ_IDLE) {

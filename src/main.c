@@ -16,6 +16,8 @@
 #include "chat/chat.h"
 #include "core/fault.h"
 #include "core/glitchdet.h"
+#include "core/history.h"
+#include "core/resetwhy.h"
 #include "core/health.h"
 #include "core/keyprov.h"
 #include "core/log.h"
@@ -141,6 +143,28 @@ static void chat_stamp(char *buf, size_t len) {
 
 static const chat_hooks_t chat_hooks = { chat_now, chat_stamp };
 
+// The reasons worth a line of their own (core/resetwhy.h): a power-on, a reboot or the reset pin
+// is ordinary, and the glitch detector's reset is reported by glitchdet_start() with what it kept.
+static void log_last_reset(void) {
+    switch (resetwhy()) {
+    case RESETWHY_FAULT:
+        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "last reset: %s", resetwhy_text());
+        break;
+    case RESETWHY_WATCHDOG:
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "last reset: watchdog timeout");
+        break;
+    case RESETWHY_BROWNOUT:
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "last reset: brownout (core supply under 0.95 V)");
+        break;
+    case RESETWHY_DEBUGGER:
+    case RESETWHY_UNKNOWN:
+        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "last reset: %s", resetwhy_text());
+        break;
+    default:
+        break;
+    }
+}
+
 // --- main ----------------------------------------------------------------------------------------
 
 int main(void) {
@@ -158,13 +182,12 @@ int main(void) {
     // Covers the rest of boot too: a hang there resets and retries instead of sitting dead.
     fault_boot();
     wdog_start();
-    if (fault_last())
-        log_msg(SOS_LOG_KERN | SOS_LOG_ERR, "last reset: %s", fault_last());
-    else if (wdog_caused_reset())
-        log_msg(SOS_LOG_KERN | SOS_LOG_WARNING, "last reset: watchdog timeout");
+    resetwhy_boot();                    // why the chip reset: after the fault record and the watchdog
+    log_last_reset();
 
     // System clock from the RTC, before anything that might want the time.
     timesync_boot();
+    history_boot();                     // this boot's record, with the time if the RTC had it
 
     tls_init();                         // wolfSSL heap accounting, before any allocation
     if (wolfCrypt_Init() != 0 || wolfSSH_Init() != WS_SUCCESS) {

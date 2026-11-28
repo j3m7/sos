@@ -9,11 +9,12 @@
 #include "pico/stdlib.h"
 
 #include "core/failcount.h"
+#include "core/flashlayout.h"
 #include "core/flashop.h"
 #include "core/log.h"
 
-// The fifth sector from the end: below the root secret's (core/rootflash.c).
-#define FAIL_OFFSET (PICO_FLASH_SIZE_BYTES - 5 * FLASH_SECTOR_SIZE)
+// The fifth sector from the end: below the root secret's (core/flashlayout.h).
+#define FAIL_OFFSET FLASHLAYOUT_FAIL_OFFSET
 
 _Static_assert(FAILCOUNT_SECTOR == FLASH_SECTOR_SIZE, "the store is one flash sector");
 _Static_assert(FAILCOUNT_PAGE == FLASH_PAGE_SIZE, "it is programmed a flash page at a time");

@@ -27,7 +27,7 @@
 
 #define HEALTH_TEXT_MAX  64             // a result's text, with its terminator
 #define HEALTH_NAME_MAX  12             // a check's name: [a-z0-9-]{1,12}
-#define HEALTH_MAX       24             // checks in the registry, test-only ones included
+#define HEALTH_MAX       32             // checks in the registry, test-only ones included
 
 typedef enum {
     HEALTH_NONE,    // not run yet
@@ -165,10 +165,6 @@ void health_format_row(char *out, size_t cap, unsigned index);
 void health_lua_table(lua_info_t *w);
 
 // --- judging the seed checks (pure; health_board.c reads the numbers) ----------------------------
-
-// resets: WARN if the last reset was a fault (with its record), the glitch detector or the
-// watchdog.
-void health_judge_resets(const char *fault, bool glitch, bool watchdog, health_result_t *out);
 
 // glitch: WARN if the loop guard stopped the detector being armed at this boot.
 void health_judge_glitch(bool guard_tripped, health_result_t *out);

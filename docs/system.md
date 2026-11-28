@@ -124,6 +124,13 @@ without `temp cal` still reads the configuration (and ignores it).
 | Flash, last 4 KB sector | keys: SSH host key (page 0); page 1 held the SD cards' device key of older firmware and is left as it is |
 | Flash, 2 sectors below it | configuration (A/B records) |
 | Flash, the sector below those | the board's root secret (open boards; nothing is stored under it yet), see [`src/core/README.md`](../src/core/README.md) |
+| Flash, the sector below that | wrong console passwords (`failflash.c`) |
+| Flash, the sector below that | reset history and the RTC drift baseline (`history_board.c`, `uptime history`) |
+
+The offsets are in `src/core/flashlayout.h`, which checks at build time that each store is
+below the one before it. Every store checks at boot that the image ends below its sector, and
+uses nothing if not. A new store goes below the lowest, so older firmware, which doesn't know
+it, never reads or writes it.
 
 The core 0 stack is moved out of SCRATCH_Y by the linker script overrides in `config/ld/`.
 Interrupt handlers, including lwIP/CYW43 network processing, share it. The `mem` shell command

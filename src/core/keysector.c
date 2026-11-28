@@ -8,10 +8,11 @@
 #include "hardware/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/flashlayout.h"
 #include "core/flashop.h"
 #include "core/log.h"
 
-#define KEYSECTOR_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+#define KEYSECTOR_OFFSET FLASHLAYOUT_KEYS_OFFSET     // the last sector (core/flashlayout.h)
 
 _Static_assert(KEYSECTOR_PAGES * FLASH_PAGE_SIZE <= FLASH_SECTOR_SIZE, "pages fit the sector");
 

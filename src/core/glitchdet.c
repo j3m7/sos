@@ -34,6 +34,7 @@
 
 static bool caused_reset, guard_tripped, stable_marked;
 static uint32_t triggers, last_uptime;
+static uint32_t prev_uptime = UINT32_MAX;   // the run before this one, any reset; MAX unknown
 static int last_temp = SENSORS_NONE;    // the readings before the detector reset
 static int last_vsys = SENSORS_NONE;
 static int armed = -1, watching = -1;
@@ -57,6 +58,10 @@ void glitchdet_boot(void) {
     triggers = glitch_detector_hw->trig_status & 0xf;
     glitch_detector_hw->trig_status = 0xf;      // write 1 to clear: don't carry them into this run
     uint32_t count = get16(REG_COUNT, MAGIC_COUNT), streak = get16(REG_STREAK, MAGIC_STREAK);
+    // Kept across every reset but a power-on, a brownout and the reset pin, which clear the
+    // POWMAN scratch registers (and with them the marker).
+    if ((REG_UPTIME & ~LOW24) == MAGIC_UPTIME)
+        prev_uptime = REG_UPTIME & LOW24;
     if (caused_reset) {
         if ((REG_UPTIME & ~LOW24) == MAGIC_UPTIME)
             last_uptime = REG_UPTIME & LOW24;
@@ -210,6 +215,7 @@ void glitchdet_poll(void) {
 bool glitchdet_caused_reset(void) { return caused_reset; }
 uint32_t glitchdet_last_triggers(void) { return triggers; }
 uint32_t glitchdet_last_uptime_s(void) { return last_uptime; }
+uint32_t glitchdet_prev_uptime_s(void) { return prev_uptime; }
 int glitchdet_last_temp(void) { return last_temp; }
 int glitchdet_last_vsys(void) { return last_vsys; }
 uint32_t glitchdet_resets(void) { return get16(REG_COUNT, MAGIC_COUNT); }

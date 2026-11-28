@@ -3,12 +3,19 @@ NAME
 
 SYNOPSIS
     crash fault | stack | panic | hang      (console only)
+    crash brownout                          (console only, test builds)
 
 DESCRIPTION
     Testing only. Stops the firmware with a hard fault (a bad memory access),
     a stack overflow, an SDK panic, or a hang that the watchdog ends after
     SOS_WATCHDOG_MS (default 8 s). The next boot's log and 'uptime' report
     what happened, with the addresses to look up in build/sos.dis.
+
+    'crash brownout', only in images built with SOS_TEST_COMMANDS, makes a real
+    brownout reset: it raises the brownout detector's threshold above the core
+    supply, and the reset puts it back. It clears what a power dip clears (the
+    glitch detector's counts, the uptime before the reset). Refused while
+    files are open, sd check or a format runs, or a Lua script runs.
 
 SEE ALSO
     uptime, dmesg

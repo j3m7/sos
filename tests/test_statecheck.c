@@ -634,6 +634,63 @@ TEST(card_skip) {
     CHECK(says("no card mounted"));
 }
 
+// --- health state-dump's wrapping ---------------------------------------------------------------
+
+static char wrapped[8][256];
+static unsigned pieces;
+
+static void collect(void *arg, const char *piece) {
+    (void)arg;
+    if (pieces < 8)
+        snprintf(wrapped[pieces], sizeof(wrapped[0]), "%s", piece);
+    pieces++;
+}
+
+TEST(wrap_lines) {
+    pieces = 0;
+    statecheck_wrap("short line", 79, collect, NULL);
+    CHECK_EQ(pieces, 1);
+    CHECK(!strcmp(wrapped[0], "short line"));
+
+    // The root secret's line on dev-1, which the 112-byte buffer used to cut.
+    const char *root = "rootsecret: source OTP; OTP: found, page 5, secret ok 1, list locked 1 "
+                       "(open page 0), soft lock 1; console-only 0";
+    pieces = 0;
+    statecheck_wrap(root, 79, collect, NULL);
+    CHECK_EQ(pieces, 2);
+    CHECK(!strcmp(wrapped[0], "rootsecret: source OTP; OTP: found, page 5, secret ok 1,"));
+    CHECK(!strcmp(wrapped[1], "  list locked 1 (open page 0), soft lock 1; console-only 0"));
+
+    // Every piece within the width, nothing lost: the pieces put back together are the line.
+    const char *fc = "failcount: usable 1, sector marker, attempts 3, cleared 3, stray 0, cleared "
+                     "over 0; count (RAM included) 0 of capacity 14336; and a little more, to "
+                     "need a third line here, with words";
+    pieces = 0;
+    statecheck_wrap(fc, 50, collect, NULL);
+    CHECK(pieces >= 4 && pieces <= 8);
+    char back[512] = "";
+    for (unsigned i = 0; i < pieces && i < 8; i++) {
+        CHECK(strlen(wrapped[i]) <= 50);
+        if (i)
+            CHECK(!strncmp(wrapped[i], "  ", 2));
+        strcat(back, i ? wrapped[i] + 2 : wrapped[i]);
+        if (i + 1 < pieces)
+            strcat(back, " ");
+    }
+    CHECK(!strcmp(back, fc));
+
+    // No separator to break at: cut at the width.
+    char longword[200];
+    memset(longword, 'x', sizeof(longword) - 1);
+    longword[sizeof(longword) - 1] = '\0';
+    pieces = 0;
+    statecheck_wrap(longword, 79, collect, NULL);
+    CHECK_EQ(pieces, 3);
+    CHECK_EQ(strlen(wrapped[0]), 79);
+    CHECK_EQ(strlen(wrapped[1]), 79);
+    CHECK_EQ(strlen(wrapped[2]), 2 + 199 - 79 - 77);
+}
+
 TEST_MAIN(
     RUN(config_pass_two_sealed);
     RUN(config_pass_other_empty);
@@ -679,4 +736,5 @@ TEST_MAIN(
     RUN(card_warn_dirs);
     RUN(card_warn_locked);
     RUN(card_skip);
+    RUN(wrap_lines);
 )

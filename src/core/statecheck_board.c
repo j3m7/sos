@@ -356,7 +356,7 @@ health_step_t statecheck_card_step(void **state, bool cancel, health_result_t *o
 // --- health state-dump -----------------------------------------------------------------------
 
 #ifdef SOS_TEST_COMMANDS
-#define DUMP_LINE 112
+#define DUMP_LINE 256               // the shell wraps it (statecheck_wrap())
 
 __attribute__((format(printf, 3, 4)))
 static void dump(health_print_fn print, void *arg, const char *fmt, ...) {

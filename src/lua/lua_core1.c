@@ -47,23 +47,29 @@ static uint32_t mem_used, mem_peak, mem_limit;
 static void request(void) {
     lua_req.done = false;
     __dmb();
+    lua_beat.waiting = LUA_WAIT_CORE0;
     lua_req.pending = true;
     __sev();
     while (!lua_req.done)
         __wfe();
     __dmb();
     lua_req.pending = false;
+    lua_beat.waiting = LUA_WAIT_NONE;
 }
 
 void sos_lua_write(const char *s, size_t len) {
     while (len) {
         uint32_t used = lua_out.head - lua_out.tail;
         if (used == LUA_OUT_SIZE) {             // full: core 0 drains (or discards) it
-            if (lua_job.cancel)
+            if (lua_job.cancel) {
+                lua_beat.waiting = LUA_WAIT_NONE;
                 return;
+            }
+            lua_beat.waiting = LUA_WAIT_OUTPUT;
             __wfe();
             continue;
         }
+        lua_beat.waiting = LUA_WAIT_NONE;
         size_t n = LUA_OUT_SIZE - used;
         if (n > len)
             n = len;
@@ -119,6 +125,7 @@ static int interrupt(lua_State *L) {
 
 static void hook(lua_State *L, lua_Debug *ar) {
     (void)ar;
+    lua_beat.beats++;                       // the `core1` health check's heartbeat
     if (lua_job.cancel)
         interrupt(L);
 }
@@ -284,10 +291,26 @@ static int l_sleep(lua_State *L) {
     while (!time_reached(until)) {
         if (lua_job.cancel)
             return interrupt(L);
+        lua_beat.beats++;
         sleep_ms(5);
     }
     return 0;
 }
+
+#ifdef SOS_TEST_COMMANDS
+// sos.spin(ms), test builds only: a C loop on core 1 that runs no Lua instruction, so neither the
+// hook (Ctrl-C, `lua stop`) nor the `core1` health check's heartbeat sees it until it returns. For
+// the board run of docs/design/health.md §9.5. At most two minutes.
+static int l_spin(lua_State *L) {
+    lua_Integer ms = luaL_checkinteger(L, 1);
+    if (ms < 0 || ms > 120000)
+        return luaL_error(L, "spin: 0 to 120000 ms");
+    uint64_t until = time_us_64() + (uint64_t)ms * 1000;
+    while (time_us_64() < until)
+        tight_loop_contents();
+    return 0;
+}
+#endif
 
 // Read the whole file at lua_req.path: pushes its contents and returns 0, or pushes nothing and
 // returns the failed request's result (< 0; lua_req.error says why).
@@ -955,6 +978,7 @@ static int run_timers(lua_State *L) {
             lua_Integer left = due - (lua_Integer)time_us_64();
             if (left <= 0)
                 break;
+            lua_beat.beats++;
             sleep_us(left < 5000 ? (uint64_t)left : 5000);
         }
         lua_rawgeti(L, -1, id);
@@ -1300,6 +1324,9 @@ static const luaL_Reg sos_lib[] = {
     {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
     {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},
+#ifdef SOS_TEST_COMMANDS
+    {"spin", l_spin},
+#endif
     {NULL, NULL},
 };
 
@@ -1650,9 +1677,11 @@ static int l_repl_complete(lua_State *L) {
 static void run_repl(lua_State *L) {
     lua_pushliteral(L, "");                         // 2: unfinished statement
     for (;;) {
+        lua_beat.waiting = LUA_WAIT_LINE;
         while (!lua_job.repl_cmd && !lua_job.repl_quit)
             __wfe();
         __dmb();
+        lua_beat.waiting = LUA_WAIT_NONE;
         if (lua_job.repl_quit)
             break;
         if (lua_job.repl_complete) {                // Tab: names, not a line (no code runs)
@@ -1744,6 +1773,7 @@ static void core1_main(void) {
         __dmb();
         lua_job.state = LJ_RUNNING;
         run_job();
+        lua_beat.waiting = LUA_WAIT_NONE;
         __dmb();
         lua_job.state = LJ_DONE;
         __sev();

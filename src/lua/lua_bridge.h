@@ -73,6 +73,19 @@ typedef struct {
 
 extern lua_job_t lua_job;
 
+// The heartbeat, for the `core1` health check (docs/design/health.md §9.5): core 1 adds one to
+// `beats` each time its instruction-count hook runs (every HOOK_EVERY Lua instructions, lua_core1.c, or
+// every instruction once a stop was asked) and in its own wait loops (sos.sleep, the timers),
+// and sets `waiting` while it waits for something else: core 0's answer to a request, room in
+// the output buffer, or the prompt's next line. A script inside one long C call does neither.
+enum { LUA_WAIT_NONE, LUA_WAIT_CORE0, LUA_WAIT_OUTPUT, LUA_WAIT_LINE };
+typedef struct {
+    volatile uint32_t beats;
+    volatile uint8_t waiting;
+} lua_beat_t;
+
+extern lua_beat_t lua_beat;
+
 // --- requests: core 1 asks, core 0 answers ----------------------------------------------------
 
 typedef enum {

@@ -9,6 +9,7 @@
 #include "hardware/flash.h"
 #include "pico/stdlib.h"
 
+#include "core/flashlayout.h"
 #include "core/flashop.h"
 #include "core/health.h"
 #include "core/keyprov.h"
@@ -18,8 +19,8 @@
 #include "core/seal.h"
 #include "core/consoleonly.h"
 
-// Slot A and B: the two sectors below the host key (the last sector, see hostkey.c).
-#define SLOT_OFFSET(slot) (PICO_FLASH_SIZE_BYTES - (3 - (slot)) * FLASH_SECTOR_SIZE)
+// Slot A and B: the two sectors below the host key (core/flashlayout.h).
+#define SLOT_OFFSET(slot) FLASHLAYOUT_CONFIG_OFFSET(slot)
 
 _Static_assert(CONFIG_SLOT_SIZE == FLASH_SECTOR_SIZE, "a config slot is one flash sector");
 

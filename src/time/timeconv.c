@@ -149,6 +149,79 @@ bool timeconv_cal_steps(int32_t mppm, int *steps) {
     return true;
 }
 
+uint32_t timeconv_rtc_unc_ms(int cal_steps, uint32_t delay_ms) {
+    uint32_t steps = (uint32_t)(cal_steps < 0 ? -cal_steps : cal_steps);
+    return TIMECONV_RTC_TICK_MS + steps * TIMECONV_CAL_SAWTOOTH_MS + delay_ms;
+}
+
+int64_t timeconv_rate_mppm(int64_t err_ms, uint32_t interval_s) {
+    return interval_s ? err_ms * 1000000 / (int64_t)interval_s : 0;
+}
+
+int timeconv_verdict(int64_t rate_mppm, int64_t unc_mppm, int64_t limit_mppm) {
+    int64_t mag = rate_mppm < 0 ? -rate_mppm : rate_mppm;
+    if (mag - unc_mppm > limit_mppm)
+        return 1;
+    if (mag + unc_mppm <= limit_mppm)
+        return -1;
+    return 0;
+}
+
+int32_t timeconv_cal_mppm(int steps) {
+    return (int32_t)steps * TIMECONV_CAL_STEP_MPPM;
+}
+
+// mppm with one decimal, rounded half away from zero: tenths of a ppm.
+static int64_t tenths(int64_t mppm) {
+    return (mppm >= 0 ? mppm + 50 : mppm - 50) / 100;
+}
+
+void timeconv_format_ppm(char *buf, unsigned len, int64_t mppm) {
+    int64_t t = tenths(mppm), a = t < 0 ? -t : t;
+    if (a % 10)
+        snprintf(buf, len, "%s%lld.%lld", t < 0 ? "-" : "", (long long)(a / 10),
+                 (long long)(a % 10));
+    else
+        snprintf(buf, len, "%s%lld", t < 0 ? "-" : "", (long long)(a / 10));
+}
+
+void timeconv_format_rate(char *buf, unsigned len, int64_t rate_mppm, int64_t unc_mppm) {
+    int64_t t = tenths(rate_mppm), a = t < 0 ? -t : t, u = tenths(unc_mppm);
+    char rate[24], unc[24];
+    if (a < 1000)
+        snprintf(rate, sizeof(rate), "%c%lld.%lld", t < 0 ? '-' : '+', (long long)(a / 10),
+                 (long long)(a % 10));
+    else
+        snprintf(rate, sizeof(rate), "%c%lld", t < 0 ? '-' : '+', (long long)((a + 5) / 10));
+    if (u < 100)
+        snprintf(unc, sizeof(unc), "%lld.%lld", (long long)(u / 10), (long long)(u % 10));
+    else
+        snprintf(unc, sizeof(unc), "%lld", (long long)((u + 5) / 10));
+    snprintf(buf, len, "%s+-%s ppm", rate, unc);
+}
+
+void timeconv_format_cal(char *buf, unsigned len, int steps) {
+    if (!steps) {
+        snprintf(buf, len, "no cal");
+        return;
+    }
+    char ppm[32];
+    int64_t m = timeconv_cal_mppm(steps);
+    int64_t t = tenths(m), a = t < 0 ? -t : t;
+    snprintf(ppm, sizeof(ppm), "%s%lld.%lld", t < 0 ? "-" : "", (long long)(a / 10),
+             (long long)(a % 10));
+    snprintf(buf, len, "cal %s", ppm);
+}
+
+void timeconv_format_span(char *buf, unsigned len, uint32_t s) {
+    if (s < 7200)
+        snprintf(buf, len, "%lu min", (unsigned long)(s / 60));
+    else if (s < 4 * 86400)
+        snprintf(buf, len, "%lu h", (unsigned long)(s / 3600));
+    else
+        snprintf(buf, len, "%lu d", (unsigned long)(s / 86400));
+}
+
 void timeconv_format(int64_t t, char *buf, unsigned buflen) {
     timeconv_cal_t cal;
     timeconv_to_cal(t, &cal);

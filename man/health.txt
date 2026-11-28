@@ -15,8 +15,11 @@ DESCRIPTION
     took.
 
     The boot checks run before anything can make a key (in at most 100 ms):
-        resets      WARN if the last reset was a fault, the watchdog or the
-                    glitch detector (the text says which; see 'uptime')
+        resets      WARN if the last reset was a fault, the watchdog, the
+                    glitch detector, a brownout or a debugger (the text says
+                    which; see 'uptime'), and on a boot loop: three resets in
+                    a row, none asked for, each after under 3 minutes up (from
+                    'uptime history')
         clocks      each running clock measured against its setting: WARN
                     beyond 1 %, FAIL beyond 5 %. They are measured against the
                     crystal, so this finds a PLL or divider set wrong, not a
@@ -47,7 +50,21 @@ DESCRIPTION
         chip-temp   every minute: WARN over 70 C, FAIL over 85 C (the die's
                     temperature, see 'temp')
         supply      every minute: the lowest VSYS since the last run; on USB
-                    power WARN under 4.3 V, and FAIL under 3.0 V (see 'power')
+                    power WARN under 4.3 V, and FAIL under 3.0 V (see 'power');
+                    WARN if the brownout detector isn't on at 0.946 V
+        core1       every 10 s while a Lua script runs: WARN when core 1 has
+                    run no Lua for 30 s and isn't waiting for anything (a long
+                    C call: Ctrl-C waits for it); FAIL when a stop was asked
+                    and nothing has moved for 10 s (no new script until the
+                    call returns, or a reboot)
+        heap-sum    every 5 minutes: the heap's totals agree (what the
+                    features hold is within what is in use; in use plus free
+                    is the arena); FAIL if the heap reaches the stack guard
+        rtc-drift   every 10 minutes: the drift the last sync measured (see
+                    'time'). WARN when the RTC is surely more than 20 ppm off
+                    (with the 'time cal' value to correct it), or the board's
+                    crystal more than 65 ppm; FAIL beyond 1000 ppm. SKIP until
+                    two syncs, and while the uncertainty is too large to say
     and these compare what is stored with what the board uses, hourly (the
     card every 6 hours), the first a minute or so after boot. They read
     only: none writes flash, OTP or the card, or repairs anything:
@@ -99,4 +116,4 @@ CONSOLE ONLY
 
 SEE ALSO
     uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
-    bootkey, tls
+    bootkey, tls, time

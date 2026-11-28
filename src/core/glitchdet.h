@@ -66,6 +66,11 @@ uint32_t glitchdet_last_uptime_s(void);
 int glitchdet_last_temp(void);
 int glitchdet_last_vsys(void);
 
+// How long the board had been up before the last reset, whatever the reset (seconds, to within
+// one: written about once a second); UINT32_MAX if unknown, after a power-on, a brownout or the
+// reset pin, which clear the POWMAN scratch registers. For the reset history (core/history.h).
+uint32_t glitchdet_prev_uptime_s(void);
+
 // Detector resets since power-on.
 uint32_t glitchdet_resets(void);
 

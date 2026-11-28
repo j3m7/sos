@@ -32,6 +32,7 @@
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "core/otpread.h"
+#include "core/resetwhy.h"
 #include "core/rootsource.h"
 #include "core/sensors.h"
 #include "core/settings.h"
@@ -137,6 +138,7 @@ static void reset_table(lua_info_t *w) {
     lua_info_str(w, "cause", fault ? "fault" : glitchdet_caused_reset() ? "glitch"
                  : wdog_caused_reset() ? "watchdog" : "other");
     lua_info_str(w, "detail", fault);
+    lua_info_str(w, "reason", resetwhy_name(resetwhy()));   // core/resetwhy.h: every reason
 }
 
 static void glitch_table(lua_info_t *w) {

@@ -142,12 +142,19 @@ NAME
 
 SYNOPSIS
     crash fault | stack | panic | hang      (console only)
+    crash brownout                          (console only, test builds)
 
 DESCRIPTION
     Testing only. Stops the firmware with a hard fault (a bad memory access),
     a stack overflow, an SDK panic, or a hang that the watchdog ends after
     SOS_WATCHDOG_MS (default 8 s). The next boot's log and 'uptime' report
     what happened, with the addresses to look up in build/sos.dis.
+
+    'crash brownout', only in images built with SOS_TEST_COMMANDS, makes a real
+    brownout reset: it raises the brownout detector's threshold above the core
+    supply, and the reset puts it back. It clears what a power dip clears (the
+    glitch detector's counts, the uptime before the reset). Refused while
+    files are open, sd check or a format runs, or a Lua script runs.
 
 SEE ALSO
     uptime, dmesg
@@ -376,8 +383,11 @@ DESCRIPTION
     took.
 
     The boot checks run before anything can make a key (in at most 100 ms):
-        resets      WARN if the last reset was a fault, the watchdog or the
-                    glitch detector (the text says which; see 'uptime')
+        resets      WARN if the last reset was a fault, the watchdog, the
+                    glitch detector, a brownout or a debugger (the text says
+                    which; see 'uptime'), and on a boot loop: three resets in
+                    a row, none asked for, each after under 3 minutes up (from
+                    'uptime history')
         clocks      each running clock measured against its setting: WARN
                     beyond 1 %, FAIL beyond 5 %. They are measured against the
                     crystal, so this finds a PLL or divider set wrong, not a
@@ -408,7 +418,21 @@ DESCRIPTION
         chip-temp   every minute: WARN over 70 C, FAIL over 85 C (the die's
                     temperature, see 'temp')
         supply      every minute: the lowest VSYS since the last run; on USB
-                    power WARN under 4.3 V, and FAIL under 3.0 V (see 'power')
+                    power WARN under 4.3 V, and FAIL under 3.0 V (see 'power');
+                    WARN if the brownout detector isn't on at 0.946 V
+        core1       every 10 s while a Lua script runs: WARN when core 1 has
+                    run no Lua for 30 s and isn't waiting for anything (a long
+                    C call: Ctrl-C waits for it); FAIL when a stop was asked
+                    and nothing has moved for 10 s (no new script until the
+                    call returns, or a reboot)
+        heap-sum    every 5 minutes: the heap's totals agree (what the
+                    features hold is within what is in use; in use plus free
+                    is the arena); FAIL if the heap reaches the stack guard
+        rtc-drift   every 10 minutes: the drift the last sync measured (see
+                    'time'). WARN when the RTC is surely more than 20 ppm off
+                    (with the 'time cal' value to correct it), or the board's
+                    crystal more than 65 ppm; FAIL beyond 1000 ppm. SKIP until
+                    two syncs, and while the uncertainty is too large to say
     and these compare what is stored with what the board uses, hourly (the
     card every 6 hours), the first a minute or so after boot. They read
     only: none writes flash, OTP or the card, or repairs anything:
@@ -460,7 +484,7 @@ CONSOLE ONLY
 
 SEE ALSO
     uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
-    bootkey, tls
+    bootkey, tls, time
 @@ help
 NAME
     help - list the commands this channel may use
@@ -1507,9 +1531,10 @@ DESCRIPTION
     an RTC time, the clock stays unset.
 
     'time' shows the date and time and where it came from (RTC, NTS or SNTP),
-    the RTC's reading and backup-battery state, the calibration, the last sync
-    with its correction and round trip, a failed attempt and when it is
-    retried, the server and the periodic setting.
+    the RTC's reading and backup-battery state, the calibration, the drift
+    the last sync measured, the last sync with its correction and round trip,
+    a failed attempt and when it is retried, the server and the periodic
+    setting.
 
     'time sync' syncs the clock and the RTC from NTS now. The board also syncs
     by itself when the RTC has no valid time (retrying with doubling delays),
@@ -1522,16 +1547,24 @@ DESCRIPTION
     'default' goes back to the build-time one (time.cloudflare.com). Its
     certificate must chain to a trusted root ('tls roots').
 
-    'time cal <ppm>' corrects the RTC's rate. To measure: 'time sync', leave
-    the board for a day or more, restart it and 'time sync' again; 'time'
-    shows the step, e.g. 'clock stepped -5419 ms' (negative: the RTC ran
-    fast). ppm = milliseconds stepped / seconds waited x 1000, positive if
-    fast: 5419 ms in 59051 s is 92 ppm, so 'time cal 92'. The RTC is slowed or
-    sped up by the nearest step of 4.34 ppm and 'time' shows the rate applied
-    ('cal: slowed by 91.1 ppm'). The value replaces the previous one: after
-    measuring again, give the rate shown plus the new error. 'time cal off'
-    removes it. Saved, and written into the RTC at boot if the chip doesn't
-    have it.
+    The 'drift:' line: every sync reads the RTC just before setting it, and
+    compares it with the time it was set to at the sync before (kept in flash
+    across restarts and power cuts). So after two syncs it shows the RTC's
+    rate, e.g. 'rtc +92.0+-13 ppm in 22 h (no cal)': positive means fast, and
+    the figure after +- is how far off the measurement may be (the RTC counts
+    whole seconds, so the longer between the syncs, the better: about 15
+    hours for 20 ppm). When the two syncs fell in one uptime it also shows the
+    board's own crystal ('xosc'). The 'rtc-drift' health check judges both.
+
+    'time cal <ppm>' corrects the RTC's rate: 'time sync', a day or more,
+    'time sync' again, then give the rate 'drift:' shows, e.g. 'time cal 92'
+    (the 'rtc-drift' check's warning suggests the value). The RTC is slowed
+    or sped up by the nearest step of 4.34 ppm and 'time' shows the rate
+    applied ('cal: slowed by 91.1 ppm'). The value replaces the previous one:
+    with a calibration set, give the rate shown on the 'cal:' line plus the
+    new drift. The next sync after a change starts a new measurement. 'time
+    cal off' removes it. Saved, and written into the RTC at boot if the chip
+    doesn't have it.
 
 TIME ZONES
     'time zone <name>' sets the zone 'time' shows local time in, by its IANA
@@ -1609,15 +1642,29 @@ NAME
 
 SYNOPSIS
     uptime
+    uptime history
 
 DESCRIPTION
-    The time since the board started. If the last reset was not a power-on or
-    a 'reboot', it says what it was:
+    The time since the board started, and why it last reset:
 
-        (last reset: watchdog)          the main loop stopped coming round
+        (last reset: power-on)          power applied
+        (last reset: reboot)            asked for: 'reboot', picotool, flashing
+        (last reset: reset pin)         the RUN pin
+        (last reset: brownout)          the core supply dipped under the
+                                        brownout detector's threshold
+        (last reset: watchdog timeout)  the main loop stopped coming round
         (last reset: glitch detector)   the detector reset the chip ('glitch')
+        (last reset: debugger)          a reset asked through SWD
         last reset: hard fault ...      a fault or panic, with the addresses
                                         to look up in build/sos.dis
+
+    'uptime history' lists the boots kept in flash, newest first: when (if
+    the clock was set), why, and how long the board had been up before it ('?'
+    after a power-on, a brownout or the reset pin, which leave nothing to read
+    it from), with the times a sync set the RTC between them. Up to 240
+    records; when full, the newest 16 boots are kept. The 'resets' health
+    check warns when three resets in a row, none asked for, each ended a run
+    of under 3 minutes.
 
     Once flash has been written since boot (a configuration save, a console
     login), a 'flash writes:' line says how many times, and how long the last
@@ -1625,7 +1672,7 @@ DESCRIPTION
     one.
 
 SEE ALSO
-    version, glitch, reboot, crash
+    version, glitch, reboot, crash, health
 @@ version
 NAME
     version - firmware commit, board serial, chip revision, how it is secured

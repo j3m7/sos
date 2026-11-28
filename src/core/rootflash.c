@@ -11,6 +11,7 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "core/flashlayout.h"
 #include "core/flashop.h"
 #include "core/health.h"
 #include "core/keyprov.h"
@@ -18,9 +19,9 @@
 #include "core/rootsecret.h"
 #include "core/rootsecret_priv.h"     // the one place that reads the secret out
 
-// The fourth sector from the end: below the two configuration slots (core/settings.c) and the
-// key sector (core/keysector.c).
-#define ROOT_OFFSET (PICO_FLASH_SIZE_BYTES - 4 * FLASH_SECTOR_SIZE)
+// The fourth sector from the end: below the two configuration slots and the key sector
+// (core/flashlayout.h).
+#define ROOT_OFFSET FLASHLAYOUT_ROOT_OFFSET
 
 _Static_assert(ROOTSECRET_PAGE == FLASH_PAGE_SIZE, "the record is one flash page");
 _Static_assert(ROOTSECRET_SECTOR == FLASH_SECTOR_SIZE, "the store is one flash sector");
