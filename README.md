@@ -75,7 +75,7 @@ flashing, provisioning and testing.
 | [Remote access](docs/remote-access.md) | the SSH server, messages and chat between sessions |
 | [Files (SD card)](docs/files.md) | file commands, encrypted cards, SFTP |
 | [Timekeeping](docs/time.md) | the RTC, authenticated network time (NTS), RTC calibration |
-| [TLS and HTTPS](docs/tls.md) | trusted root certificates, the HTTPS client |
+| [TLS and HTTPS](docs/tls.md) | trusted root certificates, the HTTPS client, downloading files (`fetch`) |
 | [Editor, pager and manual pages](docs/editor.md) | `edit`, `more` and `\| more`, `man` and installing the pages |
 | [Lua scripts](docs/lua.md) | running scripts, autorun, the `sos` library, modules, HTTPS from Lua |
 | [Logging, watchdog, temperature and memory](docs/system.md) | the system log and log files, the watchdog and crash reports, chip temperature calibration, memory layout |

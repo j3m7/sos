@@ -11,6 +11,7 @@ working directory:
 | `cat <file>` | print a file |
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
+| `fetch [-f] <url> [<file>]` | download a file over HTTPS, with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
 | `echo <text>` | print the text; `> file` / `>> file` after any command (the shell's redirect) writes / appends its output to a file |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |

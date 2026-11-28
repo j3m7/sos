@@ -137,6 +137,18 @@ its own working directory (`shell_t.cwd`).
   `/docs/../certs/x` are all protected.
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
+- **`path_name_check()`** checks one name that came from outside (the name a download's URL
+  suggests; later the names in an archive) before anything is created under it: not empty,
+  `.` or `..`, no `/`, `\`, control characters (C1 too) or `"*:<>?|`, not ending in a space
+  or a dot (FatFs would drop them), valid UTF-8, at most 255 UTF-16 units.
+
+## `bigjob.c`: one archive job at a time (pure C, host tested)
+
+`fetch`, and later `gunzip`, `zcat`, `gzip` and `tar` ([archives.md](../../docs/design/archives.md)
+§5.2), each hold tens of KB of heap while they run, so they take turns across all shells:
+`bigjob_try_begin(name)` admits one (NULL) or names the one running, which the command reports
+with `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`); `bigjob_end()` when
+the job ends, however it ends.
 
 ## `fsck.c`: checking the card (pure C, host tested)
 
