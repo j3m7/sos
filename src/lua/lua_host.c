@@ -293,8 +293,25 @@ static void serve_reboot(void) {
     wdog_reboot();
 }
 
-// sos.hash, sos.hmac: one step (lua_hash.c).
+// sos.hashfile: one request reads and hashes for at most this long (sums.c's STEP_US).
+#define HASH_FILE_STEP_US 20000
+
+// sos.hash, sos.hmac, sos.hashfile: one step (lua_hash.c).
 static void serve_hash(void) {
+    if (lua_req.offset == LUA_HASH_FILE) {      // result: the bytes hashed, 0 at the end
+        char path[LUA_PATH_MAX];
+        uint64_t got;
+        if (!req_path(path)) {
+            lua_hash_drop();
+            return;
+        }
+        const char *err = lua_hash_file(path, lua_req.data, LUA_REQ_DATA, HASH_FILE_STEP_US, &got);
+        if (err)
+            req_error(err);
+        else
+            lua_req.result = (int64_t)got;
+        return;
+    }
     if (lua_req.len > LUA_REQ_DATA) {
         req_error("too long");
         return;
@@ -865,6 +882,7 @@ static bool repl_step(shell_t *sh, void *arg, bool cancel) {
     if (lua_job.repl_cmd || lua_out.head != lua_out.tail)
         return true;
     http_drop();                                // one that an error in the line left open
+    lua_hash_drop();                            // and a hash (sos.hashfile's file) it left
     repl_more = lua_job.repl_incomplete;
     repl_ask(sh);
     return false;

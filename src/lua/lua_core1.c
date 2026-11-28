@@ -1017,6 +1017,23 @@ static bool hash_step(unsigned step, unsigned arg, const char *data, size_t len)
     return lua_req.result >= 0;
 }
 
+// The last step of a hash that went well so far (ok): push the digest, raw or in hex, or nil and
+// why.
+static int finish_hash(lua_State *L, bool ok, bool raw) {
+    check_cancel(L);
+    if (!ok || !hash_step(LUA_HASH_FINAL, 0, "", 0))
+        return fail(L);
+    size_t n = lua_req.len;
+    if (raw) {
+        lua_pushlstring(L, (const char *)lua_req.data, n);
+    } else {
+        char hex[2 * LUA_HASH_MAX];
+        lua_hex(lua_req.data, n, hex);
+        lua_pushlstring(L, hex, 2 * n);
+    }
+    return 1;
+}
+
 // Hash msg (with key, for an HMAC) on core 0, 4 KB per request; push the digest, raw or in hex.
 static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len, const char *msg,
                     size_t msg_len, bool raw) {
@@ -1028,18 +1045,7 @@ static int run_hash(lua_State *L, unsigned arg, const char *key, size_t key_len,
         size_t n = msg_len - at < LUA_REQ_DATA ? msg_len - at : LUA_REQ_DATA;
         ok = hash_step(LUA_HASH_UPDATE, arg, msg + at, n);
     }
-    check_cancel(L);
-    if (!ok || !hash_step(LUA_HASH_FINAL, arg, "", 0))
-        return fail(L);
-    size_t n = lua_req.len;
-    if (raw) {
-        lua_pushlstring(L, (const char *)lua_req.data, n);
-    } else {
-        char hex[2 * LUA_HASH_MAX];
-        lua_hex(lua_req.data, n, hex);
-        lua_pushlstring(L, hex, 2 * n);
-    }
-    return 1;
+    return finish_hash(L, ok, raw);
 }
 
 // sos.hash(alg, data [, raw]): the digest of data in hex (raw bytes if raw is true).
@@ -1057,6 +1063,31 @@ static int l_hmac(lua_State *L) {
     const char *key = luaL_checklstring(L, 2, &key_len);
     const char *msg = luaL_checklstring(L, 3, &len);
     return run_hash(L, alg | LUA_HASH_HMAC, key, key_len, msg, len, lua_toboolean(L, 4));
+}
+
+// sos.hashfile(path [, alg [, raw]]): the digest of the file at path (alg default "sha256"), in
+// hex or raw. Core 0 reads and hashes it (LUA_HASH_FILE), for up to 20 ms per request
+// (lua_host.c), so the file's bytes never come to core 1 and a script's memory doesn't limit
+// its size.
+static int l_hashfile(lua_State *L) {
+    char path[LUA_PATH_MAX];
+    resolve_path(L, luaL_checkstring(L, 1), path);
+    unsigned alg = (unsigned)luaL_checkoption(L, 2, "sha256", hash_names);
+    bool raw = lua_toboolean(L, 3);
+    bool ok = hash_step(LUA_HASH_BEGIN, alg, "", 0);
+    memcpy(lua_req.path, path, strlen(path) + 1);   // LR_HASH answers leave it alone
+    while (ok) {
+        check_cancel(L);
+        lua_req.type = LR_HASH;
+        lua_req.offset = LUA_HASH_FILE;
+        lua_req.arg = alg;
+        lua_req.len = 0;
+        request();
+        ok = lua_req.result >= 0;
+        if (lua_req.result == 0)
+            break;                              // the end of the file
+    }
+    return finish_hash(L, ok, raw);
 }
 
 static bool url_variant(lua_State *L, int idx) {
@@ -1322,6 +1353,7 @@ static const luaL_Reg sos_lib[] = {
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
     {"localdate", l_localdate},                 {"localtime", l_localtime}, {"zone", l_zone},
     {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
+    {"hashfile", l_hashfile},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
     {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},
 #ifdef SOS_TEST_COMMANDS
