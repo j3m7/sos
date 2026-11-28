@@ -3,7 +3,7 @@
 //
 // src/time/tzbundle.c: /tz/zones.bundle as it may be on the SD card, which anyone with SFTP
 // can write. The input is a name to look up, a NUL, then the bundle's bytes (NULs and all), read
-// as FatFs's f_gets() would. Any input is read to the end or to the match without going out of
+// as fgets() or FatFs's f_gets() would (the query's length picks how short the reads stop). Any input is read to the end or to the match without going out of
 // bounds; a match is the name asked for with a rule tzrule_parse() takes, and every name offered
 // instead is a string that fits the configuration.
 
@@ -19,6 +19,7 @@
 typedef struct {
     const uint8_t *p;
     size_t left;
+    size_t short_by;                    // the reader stops this many bytes short, as f_gets does
 } text_t;
 
 static bool read_text(void *ctx, char *buf, size_t cap) {
@@ -26,7 +27,7 @@ static bool read_text(void *ctx, char *buf, size_t cap) {
     if (!t->left)
         return false;
     size_t n = 0;
-    while (n + 1 < cap && n < t->left) {
+    while (n + 1 + t->short_by < cap && n < t->left) {
         n++;
         if (t->p[n - 1] == '\n')
             break;
@@ -50,7 +51,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     char query[TZBUNDLE_NAME_MAX + 1];
     memcpy(query, data, qlen);
     query[qlen] = '\0';
-    text_t t = {nul ? nul + 1 : data + size, nul ? size - qlen - 1 : 0};
+    text_t t = {nul ? nul + 1 : data + size, nul ? size - qlen - 1 : 0, qlen % 8 * 16};
     tzbundle_find_t f;
     tzbundle_result_t r = tzbundle_find(read_text, &t, query, &f);
     MUST(memchr(f.version, 0, sizeof(f.version)));

@@ -21,12 +21,30 @@
 #define TZBUNDLE_NAME_MAX    39     // as config's tz_name holds (tools/tz-bundle.sh checks)
 #define TZBUNDLE_RULE_MAX    63     // as config's tz_rule holds
 #define TZBUNDLE_VERSION_MAX 15
-#define TZBUNDLE_LINE_MAX    (TZBUNDLE_NAME_MAX + 1 + TZBUNDLE_RULE_MAX + 2)   // + newline
+#define TZBUNDLE_LINE_MAX    (TZBUNDLE_NAME_MAX + 1 + TZBUNDLE_RULE_MAX)   // a zone line's text
 #define TZBUNDLE_NEAR        3      // closest names offered for one that isn't found
+// The buffer lines are read into: room for the longest zone line and its newline, with some to
+// spare, because FatFs's f_gets() fills a few bytes less than it is given (4 less with the UTF-8
+// API this build has), and for the header.
+#define TZBUNDLE_READ_MAX    160
 
 // The next line into buf (cap bytes, NUL-terminated, the newline kept if it fits), as fgets()
-// and FatFs's f_gets() do; false at the end. A line longer than cap comes in pieces.
+// and FatFs's f_gets() do; false at the end. A line may come in several pieces, each shorter
+// than cap: only a newline, or the end of the file, ends one.
 typedef bool (*tzbundle_read_fn)(void *ctx, char *buf, size_t cap);
+
+// Whole lines from a reader, whatever pieces it gives them in.
+typedef struct {
+    tzbundle_read_fn read;
+    void *ctx;
+    char next[TZBUNDLE_READ_MAX];   // a piece read ahead, to tell the last line from a long one
+    bool have_next;
+} tzbundle_lines_t;
+
+// The next line into line, its newline dropped; false at the end. A line the reader doesn't
+// give in one piece (fgets: up to TZBUNDLE_READ_MAX - 1 bytes; f_gets on the board: 4 fewer) is
+// read to its end and dropped: true with *too_long set, and line holding only its start.
+bool tzbundle_next_line(tzbundle_lines_t *l, char line[TZBUNDLE_READ_MAX], bool *too_long);
 
 // The version a header line names ("# tzdata 2026f: ..." gives "2026f"); false if it isn't one.
 bool tzbundle_version(const char *line, char out[TZBUNDLE_VERSION_MAX + 1]);
