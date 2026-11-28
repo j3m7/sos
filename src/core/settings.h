@@ -70,10 +70,12 @@ bool settings_reset(void);
 // encrypted card is closed (files/), the SSH server stops and the host key is forgotten (ssh/).
 // Each subsystem adds its hook once at boot, so the core names none of them
 // (docs/design/build-features.md §4.4); settings_owner_gone() calls them in the order added.
-// False if there's no room (SETTINGS_OWNER_HOOKS).
+// A hook that found no room would leave an old owner's keys in place after a reset, so a full
+// table panics (the fault record says why) instead: at boot, where any build that adds one
+// too many finds out at once. Two are used today.
 #define SETTINGS_OWNER_HOOKS 4
 typedef void (*settings_owner_gone_fn)(void);
-bool settings_on_owner_gone(settings_owner_gone_fn fn);
+void settings_on_owner_gone(settings_owner_gone_fn fn);
 void settings_owner_gone(void);
 
 // False if flash can't be used (the firmware image overlaps the config slots).

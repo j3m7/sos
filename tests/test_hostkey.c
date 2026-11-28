@@ -69,7 +69,7 @@ static bool is_console_only;
 bool consoleonly(void) { return is_console_only; }
 // hostkey_init() adds its `config reset` hook (core/settings.h), which stops the SSH server: the
 // tests call hostkey_owner_gone() themselves.
-bool settings_on_owner_gone(settings_owner_gone_fn fn) { (void)fn; return true; }
+void settings_on_owner_gone(settings_owner_gone_fn fn) { (void)fn; }
 void sshd_stop(void) {}
 
 static unsigned rng;
