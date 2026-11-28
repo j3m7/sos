@@ -87,6 +87,10 @@ static bool script_alive(void) {
 
 // --- answering requests ----------------------------------------------------------------------
 
+// Core 0's messages reach the script whole (#220). The longest are http_error()'s, bounded by
+// HTTP_ERROR_MAX; the rest (FatFs, paths, "interrupted") are shorter.
+_Static_assert(sizeof(lua_req.error) >= HTTP_ERROR_MAX, "lua_req.error must hold any HTTP error");
+
 static bool req_error(const char *msg) {
     snprintf(lua_req.error, sizeof(lua_req.error), "%s", msg);
     lua_req.result = -1;

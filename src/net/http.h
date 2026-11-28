@@ -29,6 +29,7 @@
 #define HTTP_BODY_MAX        (16 * 1024)    // request body; it's copied
 #define HTTP_HEAD_MAX        1536           // request line and headers, together
 #define HTTP_DEFAULT_TIMEOUT 30000          // ms
+#define HTTP_ERROR_MAX       112            // http_error()'s text at most, with its NUL
 
 typedef enum {
     HTTP_CONNECTING,    // DNS, TCP, TLS handshake (https)
