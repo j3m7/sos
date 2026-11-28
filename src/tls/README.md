@@ -1,20 +1,22 @@
 # tls: TLS 1.3 client and trusted roots
 
 A small, non-blocking TLS client over lwIP's raw TCP API, built on wolfSSL. Its users are NTS
-key exchange (`time/nts.c`) and the HTTPS client (`net/http.c`). The wolfSSL build options are in
+key exchange (`time/nts.c`) and the HTTP client (`net/http.c`), which also opens plain TCP
+connections through it for plain http (`tls_open_plain()`, below). The wolfSSL build options are in
 `config/user_settings.h`.
 
 ## `tls_admit.c`: how many connections (pure C, host tested)
 
 Up to three connections can be open at once (`TLS_MAX_CONNS`). `tls_open()` says whose each one
-is: requests someone started (`http`, `sos.http`) are `TLS_USER` and may hold two of them
+is: requests someone started (`http`, `sos.http`, `fetch`) are `TLS_USER` and may hold two of them
 (`TLS_MAX_USER_CONNS`); the third is kept for the firmware's own (`TLS_SYSTEM`, NTS). So four
 shells running `http` at once can't make time sync fail. A connection also needs
 `TLS_HEAP_NEEDED` of free heap to start, about what one takes at the peak of its handshake (the
 11.7 KB receive buffer plus wolfSSL); with less, it's refused with "not enough free memory"
 rather than failing halfway, or making SSH sessions, Lua or the editor fail to allocate. A
 refused connection fails at once (`tls_poll()` returns `TLS_FAILED`, `tls_error()` says why); there
-is no queue, so the caller reports it and the person tries again.
+is no queue, so the caller reports it and the person tries again. Plain connections take the same
+slots; they need only `TLS_PLAIN_HEAP_NEEDED` (32 KB) and don't count as handshakes to come.
 
 ## `tls.c`: connections
 
@@ -27,7 +29,13 @@ TLS_RESOLVING (DNS) → TLS_CONNECTING (TCP) → TLS_HANDSHAKE → TLS_READY →
 ```
 
 The timeout covers DNS, connect and handshake together. When ready, `tls_read()` and
-`tls_write()` never block. `tls_error()` says why a connection failed, and `tls_stats()` gives
+`tls_write()` never block.
+
+`tls_open_plain(host, port, timeout_ms, use)` is the same connection without wolfSSL: it goes from
+`TLS_CONNECTING` straight to `TLS_READY`, and `tls_read()`/`tls_write()` move the TCP payload as
+it is, with the same ring buffer and window (`tcp_recved()` only as the caller reads). With the
+buffer empty, a FIN gives `TLS_CLOSED` and a reset or TCP error `TLS_FAILED`. It's here, not in a
+module of its own, so DNS, connect, timeouts, flow control and the connection slots are shared. `tls_error()` says why a connection failed, and `tls_stats()` gives
 timings and heap use.
 
 When wolfSSL reports an error, `tls_error()` gives SOS's own wording for the ones a person

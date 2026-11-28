@@ -66,16 +66,32 @@ static void puts_(out_t *o, const char *s) {
 
 // --- URLs ----------------------------------------------------------------------------------------
 
+// True if s starts with prefix, ignoring case.
+static bool istarts(const char *s, const char *prefix) {
+    size_t n = strlen(prefix);
+    return strlen(s) >= n && ieq(s, n, prefix);
+}
+
 const char *http_url_parse(const char *url, http_url_t *out) {
+    return http_url_parse_any(url, out, false);
+}
+
+const char *http_url_parse_any(const char *url, http_url_t *out, bool allow_plain) {
     memset(out, 0, sizeof(*out));
     if (!url || !*url)
         return "no URL";
-    if (!ieq(url, strlen(url) < 8 ? strlen(url) : 8, "https://")) {
-        if (strlen(url) >= 7 && ieq(url, 7, "http://"))
+    const char *p;
+    if (istarts(url, "https://")) {
+        p = url + 8;
+    } else if (istarts(url, "http://")) {
+        if (!allow_plain)
             return "plain http isn't supported: use https://";
-        return "the URL must start with https://";
+        out->plain = true;
+        p = url + 7;
+    } else {
+        return allow_plain ? "the URL must start with https:// or http://"
+                           : "the URL must start with https://";
     }
-    const char *p = url + 8;
     const char *end = p + strcspn(p, "/?#");        // end of host[:port]
 
     if (memchr(p, '@', (size_t)(end - p)))
@@ -97,7 +113,7 @@ const char *http_url_parse(const char *url, http_url_t *out) {
         out->host[i] = lower(c);
     }
 
-    out->port = 443;
+    out->port = out->plain ? 80 : 443;
     if (colon) {
         const char *d = colon + 1;
         size_t n = (size_t)(end - d);
@@ -131,10 +147,17 @@ const char *http_url_parse(const char *url, http_url_t *out) {
     return NULL;
 }
 
+// The scheme's default port.
+static uint16_t default_port(const http_url_t *u) {
+    return u->plain ? 80 : 443;
+}
+
 size_t http_url_format(const http_url_t *u, char *out, size_t size) {
-    int n = u->port == 443 ? snprintf(out, size, "https://%s%s", u->host, u->path)
-                           : snprintf(out, size, "https://%s:%u%s", u->host, (unsigned)u->port,
-                                      u->path);
+    const char *scheme = u->plain ? "http" : "https";
+    int n = u->port == default_port(u)
+                ? snprintf(out, size, "%s://%s%s", scheme, u->host, u->path)
+                : snprintf(out, size, "%s://%s:%u%s", scheme, u->host, (unsigned)u->port,
+                           u->path);
     if (n < 0 || (size_t)n >= size) {
         if (size)
             out[0] = '\0';
@@ -224,14 +247,14 @@ const char *http_url_resolve(const http_url_t *base, const char *location, char 
     if (scheme_len(location, n)) {
         put(&o, location, n);                   // absolute: as given
     } else if (n >= 2 && location[0] == '/' && location[1] == '/') {
-        puts_(&o, "https:");                    // same scheme, another host
+        puts_(&o, base->plain ? "http:" : "https:");     // same scheme, another host
         put(&o, location, n);
     } else {
         // Same origin. The path and the query are joined in out, then the dots removed.
         char port[8] = "";
-        if (base->port != 443)
+        if (base->port != default_port(base))
             snprintf(port, sizeof(port), ":%u", (unsigned)base->port);
-        puts_(&o, "https://");
+        puts_(&o, base->plain ? "http://" : "https://");
         puts_(&o, base->host);
         puts_(&o, port);
         size_t path_at = o.len;
@@ -261,18 +284,20 @@ const char *http_url_resolve(const http_url_t *base, const char *location, char 
     return NULL;
 }
 
-const char *http_redirect_target(http_url_t *url, const char *location, bool allow_downgrade,
-                                 char *text, size_t size) {
+const char *http_redirect_target(http_url_t *url, const char *location, bool allow_plain,
+                                 bool allow_downgrade, char *text, size_t size) {
     const char *err = http_url_resolve(url, location, text, size);
     if (err)
         return err;
-    size_t len = strlen(text);
-    if (len >= 7 && ieq(text, 7, "http://"))
-        return allow_downgrade ? "plain http isn't supported yet"
-                               : "from https to plain http (refused without -k)";
-    if (len < 8 || !ieq(text, 8, "https://"))
+    if (istarts(text, "http://")) {
+        if (!allow_plain)
+            return "to plain http (only https is supported here)";
+        if (!url->plain && !allow_downgrade)
+            return "from https to plain http (refused without -k)";
+    } else if (!istarts(text, "https://")) {
         return "not an https:// URL";
-    return http_url_parse(text, url);
+    }
+    return http_url_parse_any(text, url, allow_plain);
 }
 
 const char *http_url_name(const char *path, char *out, size_t size) {
@@ -380,7 +405,7 @@ size_t http_request_build(const http_request_t *req, char *buf, size_t size, con
     puts_(&o, req->url->path);
     puts_(&o, " HTTP/1.1\r\nHost: ");
     puts_(&o, req->url->host);
-    if (req->url->port != 443) {
+    if (req->url->port != default_port(req->url)) {
         snprintf(num, sizeof(num), ":%u", (unsigned)req->url->port);
         puts_(&o, num);
     }
@@ -715,13 +740,33 @@ size_t http_resp_feed(http_resp_t *p, const uint8_t *in, size_t len, size_t max_
 }
 
 bool http_resp_eof(http_resp_t *p) {
-    if (p->state == HTTP_P_BODY_TO_CLOSE)
+    if (p->state == HTTP_P_BODY_TO_CLOSE) {
         p->state = HTTP_P_DONE;
+        p->ended_by_close = true;
+    }
     if (p->state == HTTP_P_DONE)
         return true;
     if (p->state != HTTP_P_ERROR)
         set_error(p, "connection closed before the response ended");
     return false;
+}
+
+const char *http_resp_end(http_resp_t *p, bool plain, http_end_t how) {
+    if (p->state == HTTP_P_DONE)
+        return NULL;
+    if (p->state == HTTP_P_ERROR)
+        return p->error;
+    if (how == HTTP_END_CLOSE_NOTIFY || (how == HTTP_END_FIN && plain))
+        return http_resp_eof(p) ? NULL : p->error;
+    const char *why;
+    if (how == HTTP_END_RESET)
+        why = "connection reset before the response ended";
+    else if (p->state == HTTP_P_BODY_TO_CLOSE)
+        why = "connection closed without close_notify: the response may be incomplete";
+    else
+        why = "connection ended before the response did";
+    set_error(p, why);
+    return why;
 }
 
 // The value of header name in the store, or NULL.

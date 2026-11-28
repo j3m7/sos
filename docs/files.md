@@ -11,7 +11,7 @@ working directory:
 | `cat <file>` | print a file |
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
-| `fetch [-f] <url> [<file>]` | download a file over HTTPS, with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
+| `fetch [-f] [-k] <url> [<file>]` | download a file over HTTPS (or plain HTTP), with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
 | `echo <text>` | print the text; `> file` / `>> file` after any command (the shell's redirect) writes / appends its output to a file |
 | `sha256sum <file>...`, `sha256sum -c <list>` | print files' SHA-256, or check files against a checksum list (also `sha1sum`, `sha512sum`; [below](#checksums)) |
 | `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |

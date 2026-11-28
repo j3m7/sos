@@ -1210,8 +1210,12 @@ differ from the record's (`time cal` changed the rate in between).
   out of specification. Nothing is gated.
 - **Judged only when sure.** A part is WARN only when |rate| minus its uncertainty is over the
   threshold, PASS only when |rate| plus its uncertainty is within it, and otherwise "too short to
-  judge". With a 1 s reading, an uncalibrated RTC 92 ppm fast shows as WARN after about 4 hours
-  between syncs; a calibrated one passes after about a day (1.7 s over 20 ppm is 85 000 s).
+  judge". The RTC reads whole seconds, so what is measured is the error truncated to a second:
+  a WARN needs that whole-second count, less the uncertainty (about 1.05 s), to clear 20 ppm.
+  An uncalibrated RTC 92 ppm fast therefore shows as WARN after about 6 hours between syncs, one
+  70 ppm fast after about 8; a calibrated one passes after about a day (1.7 s over 20 ppm is
+  85 000 s). Measured on dev-1 (2026-11-28): after 4 h the true error of about 1.3 s read as
+  1 s, `RTC +69.1+-71 ppm in 4 h, no cal: too short to judge` (#275).
 
 | Status | When | Text (dev-1 or example) |
 |---|---|---|
@@ -1244,7 +1248,8 @@ check never WARNs or PASSes while that interval straddles a threshold. Uncalibra
 uncertainty is about 1.05 s (the whole second plus the round trips), so a sure PASS within 20 ppm
 needs at least 1.05 s / 20 ppm, about **14.6 hours** between the baseline and the measuring sync;
 calibrated at dev-1's 21 steps (about 1.7 s) about 24 hours. A shorter gap can still show a
-large error for sure (92 ppm surely over 20 after about 4 hours), but it can't show that the RTC
+large error for sure (92 ppm surely over 20 after about 6 hours, once the truncated reading
+reaches 2 s), but it can't show that the RTC
 is within 20 ppm: until then the result is SKIP `too short to judge`, with the figure. The XOSC's
 uncertainty is only the round trips (tens of ms), so an hour between two syncs in one uptime
 judges it.

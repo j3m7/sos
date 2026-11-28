@@ -23,10 +23,11 @@ DESCRIPTION
     controls, zero-width and other invisible characters; other UTF-8 text
     shows as itself.
 
-    Two HTTPS requests ('http' or a Lua script's sos.http, from any shells)
-    can run at once; a third is refused until one finishes, and one more TLS
-    connection is always kept free for time sync. A request is also refused
-    while the heap is too low for a TLS handshake (about 64 KB free).
+    Two requests ('http', 'fetch' over https or http, or a Lua script's
+    sos.http, from any shells) can run at once; a third is refused until one
+    finishes, and one more TLS connection is always kept free for time sync.
+    A request is also refused while the heap is too low for a TLS handshake
+    (about 64 KB free).
 
 SEE ALSO
     tls, lua, mem
