@@ -63,7 +63,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.rename(from, to [, replace])` | rename or move a file or directory. `to` mustn't exist, unless `replace` is true and it's a file, which is then replaced (there's a moment when only `from` exists). The same path, or one differing only in case, is refused |
 | `sos.copy(from, to)` | copy a file (4 KB per request each way); `to` is created or replaced; returns the size. Copying a file onto itself (however it's spelled) is refused. A failure after part of it was written removes the copy |
 | `sos.stat(path)`, `sos.exists(path)` | `{size=, dir=, time=}` (`time` in seconds since 1970, from the card's timestamp) or `nil` and `"no such file"`; `true` or `false` |
-| `sos.sd.info()` | what `sd info` shows: `{mounted=, card=, card_bytes=, encrypted=, fs=, total=, free=, cluster=}` (bytes; `mounted` false and nothing else without a card). On a FAT32 card the first call counts the free space, which can take seconds on a large card (later ones are quick; exFAT is always quick) |
+| `sos.sd.info()` | what `sd info` shows: `{mounted=, card=, card_bytes=, encrypted=, fs=, total=, free=, cluster=}` (bytes; `mounted` false and nothing else without a card). Once a card has started since boot, also `errors = {failed_reads=, failed_writes=, crc=, cmd=, write=, timeouts=}` since its last start (what the `sd-bus` health check judges) and `spi_khz`. On a FAT32 card the first call counts the free space, which can take seconds on a large card (later ones are quick; exFAT is always quick) |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
 | `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but in UTC (see [Dates and the clock](#dates-and-the-clock)) |
 | `sos.localdate([format [, t]])`, `sos.localtime(table)`, `sos.zone()` | the same in the board's time zone (`time zone`), and that zone's name and rule (the same section) |
@@ -291,6 +291,7 @@ field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
 | `heap.used`, `heap.peak`, `heap.total` | the heap, as the first line of `mem` |
 | `tags[name].used`, `tags[name].peak` | what each feature holds: `tags["ssh/tls"]`, `tags.lua`, `tags.http`, ... |
 | `lwip.used`, `lwip.peak`, `lwip.total` | lwIP's own heap |
+| `lwip.failures.packets`, `.segments`, `.heap` | lwIP's packet pool, segment pool and heap failing since boot, which the `net-pools` health check judges (lwIP's counters: they wrap at 65536) |
 | `stack.peak`, `stack.size` | core 0's stack |
 | `core1_stack.peak`, `core1_stack.size` | core 1's stack, which the running script uses |
 | `script.used`, `script.peak`, `script.limit` | what this script has allocated, out of its 128 KB |
@@ -337,6 +338,9 @@ field the board doesn't know (no reading yet, Wi-Fi not connected) is `nil`.
 | `channel`, `rate_mbps`, `txpower_dbm` | the channel, the current transmit rate and the power limit |
 | `ip`, `gateway` | the addresses (when connected) |
 | `arp_received`, `arp_sent` | ARP counters, as `net` shows them |
+| `firmware` | the Wi-Fi chip's firmware version (`"7.95.49"`), read at boot; `nil` if the chip didn't say |
+| `drops` | link drops nobody asked for, since boot (`wifi connect` and the like don't count) |
+| `errors` | the Wi-Fi driver's errors since boot, as `wifi stats` counts them: `{timeout=, io=, bus=, tx=, other=}` |
 
 **`sos.health()`**: the self-checks' latest results (`health`). A script reads them and can't
 run a check: running them is the console's (`health run`).

@@ -595,6 +595,25 @@ DESCRIPTION
                     (with the 'time cal' value to correct it), or the board's
                     crystal more than 65 ppm; FAIL beyond 1000 ppm. SKIP until
                     two syncs, and while the uncertainty is too large to say
+    and these count what the Wi-Fi driver, the card's bus and the network
+    stack report, every 10 minutes, judged as rates (errors in the last hour,
+    drops in a day, since the card's last start):
+        wifi        the Wi-Fi chip's firmware version, and the driver's errors
+                    (replies that never came, bus errors): WARN at 3 in an
+                    hour, FAIL at 30 (the chip isn't answering); WARN at 4 link
+                    drops in a day not asked for ('wifi connect' doesn't
+                    count), and after 30 minutes without a connection. SKIP
+                    while Wi-Fi isn't set up. 'wifi stats' gives the counts
+        sd-bus      the SD card's SPI bus since the card was last started:
+                    WARN on a read or write that failed after the driver's
+                    retries ('sd check' it), FAIL at 10; WARN when a start
+                    failed after one had worked, on a timeout, and on errors
+                    the driver retried: any above 25 MHz ('sd speed'), else
+                    3 or more and one per 10 MB. SKIP with no card. 'sd' gives
+                    the counts
+        net-pools   lwIP's packet pool, segment pool and heap: WARN on any
+                    failure in the last hour (frames dropped, sends refused:
+                    the load outgrew them)
     and these compare what is stored with what the board uses, hourly (the
     card every 6 hours), the first a minute or so after boot. They read
     only: none writes flash, OTP or the card, or repairs anything:
@@ -665,7 +684,7 @@ CONSOLE ONLY
 
 SEE ALSO
     uptime, glitch, mem, temp, power, dmesg, lua, config, rootsecret,
-    bootkey, tls, time
+    bootkey, tls, time, wifi, sd
 @@ help
 NAME
     help - list the commands this channel may use
@@ -1424,9 +1443,13 @@ SYNOPSIS
 
 DESCRIPTION
     'sd' (or 'sd info') shows the card and volume information, the SPI clock,
-    and whether the card is encrypted, with its card id. 'sd speed' shows the
-    SPI clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
-    reinitializes the card; not saved.
+    and whether the card is encrypted, with its card id, then the bus's errors
+    since the card was last started and since boot: reads and writes that
+    failed after the driver's retries, errors it retried, and timeouts (what
+    the sd-bus health check judges; see 'health'). 'sd speed' shows the SPI
+    clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
+    reinitializes the card; not saved. Above 25 MHz, the SD standard's limit,
+    any error the driver has to retry is a health warning.
 
     'sd unmount' unmounts the card before it is taken out; refused while a
     file is open. No card-detect switch is wired by default, so the board
@@ -2118,7 +2141,11 @@ DESCRIPTION
 
     'wifi stats' is for chasing packet loss: signal, noise floor, channel,
     access point and transmit rate; packets sent, received and dropped per
-    protocol since boot; TCP segments resent; and how full lwIP's pools got.
+    protocol since boot; TCP segments resent; how full lwIP's pools got; and
+    the Wi-Fi driver's errors since boot (timeouts, bus errors), the link
+    drops nobody asked for and the chip's firmware version, which the 'wifi'
+    health check judges (see 'health'). The driver's warnings go to the log
+    ('dmesg'), at most one line per kind every 10 s.
     'wifi stats chip' adds the Wi-Fi chip's own counters, raw (index: value);
     their layout isn't published, so compare two readings.
 
@@ -2129,7 +2156,7 @@ DESCRIPTION
     (see 'net').
 
 SEE ALSO
-    net, setup, hostname, config
+    net, setup, hostname, config, health
 @@ zcat
 NAME
     zcat - print a gzip file decompressed

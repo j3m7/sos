@@ -120,9 +120,12 @@ static bool f_save_rotated(int64_t s, const char **why) {
     return true;
 }
 
+static uint64_t mount_tried;            // when the last mount attempt by anyone ended
+static uint64_t f_last_mount(void) { return mount_tried; }
+
 static const logfile_hooks_t file_hooks = {
     f_now, f_wall, f_ready, f_generation, f_append, f_boot, f_retry, f_rotate_file,
-    f_load_rotated, f_save_rotated,
+    f_load_rotated, f_save_rotated, f_last_mount,
 };
 
 static void reset(void) {
@@ -138,6 +141,7 @@ static void reset(void) {
     card_rotated = 0;
     renames = 0;
     retries = 0;
+    mount_tried = 0;
     card_inserted = false;
     memset(files, 0, sizeof(files));
     log_init(&log_hooks);
@@ -517,6 +521,28 @@ TEST(no_card_retries_every_minute) {
     CHECK_EQ(retries, 2);
 }
 
+// A failed mount by someone else (`sd speed 75`: about 4 s on a card that won't initialise) must
+// not be followed by the quiet retry in the same main-loop pass: the two made 8 s, the watchdog's
+// limit, on dev-1. The retry waits LOGFILE_RETRY_MS after any mount attempt.
+TEST(no_retry_right_after_another_mount) {
+    reset();
+    now = 10 * LOGFILE_RETRY_MS * 1000ull;  // long after boot: a retry would be due
+    card = false;                           // the card just went (sd speed's failed mount)
+    mount_tried = now;                      // ...which has just ended
+    logfile_poll();
+    CHECK_EQ(retries, 0);
+    now += LOGFILE_RETRY_MS * 1000ull - 1;
+    logfile_poll();
+    CHECK_EQ(retries, 0);
+    now += 1;
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+    // Its own retries keep their minute too.
+    now += 1000000;
+    logfile_poll();
+    CHECK_EQ(retries, 1);
+}
+
 TEST(boot_marker_has_the_boot_time) {
     reset();
     now = 30000000;                     // written 30 s after boot
@@ -619,6 +645,7 @@ TEST_MAIN(
     RUN(rotation_time_in_the_future_is_reset);
     RUN(rotation_time_read_again_after_a_mount);
     RUN(no_card_retries_every_minute);
+    RUN(no_retry_right_after_another_mount);
     RUN(boot_marker_has_the_boot_time);
     RUN(markers_after_a_card_change);
     RUN(lowering_the_file_level_keeps_its_own_record);

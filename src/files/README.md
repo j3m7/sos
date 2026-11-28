@@ -294,13 +294,29 @@ the plan on one log line, `fsck_done_line()` what a repair wrote. They follow
 `fsck_plan_writes()`'s rules (frees and trims skipped when the tree wasn't all read, trims when
 anything is cross-linked). `tests/test_fsck_plan.c` checks the lines.
 
-## `sdfault.c`: injected write faults (test builds only, host tested)
+## `sdstat.c`: the bus's counters (pure, host tested)
 
-`sd fault fail <N>` and `sd fault reboot <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
+The `sd-bus` health check's counters (docs/design/health.md §9.9, §9.10): `sdcard.c` adds what
+passes its wrappers, and the driver's own report lines are counted here, by the function they
+come from: its debug lines (`debug_message_printf()`, with `USE_DBG_PRINTF` on `sd_card_spi.c`
+alone) and its error lines (`sdstat_error_line()`, from `sdcard.c`'s `error_message_printf()`).
+**What the driver calls from inside itself counts and returns**: no formatting, no log, no call
+into `sdcard.c`, FatFs or the log files, no waiting. The `sdstat-leaf` host test checks that
+`sdstat.c` references nothing but `countcheck_sd_kind()`.
+
+The log writer's quiet remount waits a minute after any mount attempt
+(`sdcard_last_mount_us()`), so a failed mount (about 4 s on a card that won't initialise) and
+the retry never fall in one main-loop pass: together they reached the 8 s watchdog on dev-1.
+
+## `sdfault.c`: injected write and read faults (test builds only, host tested)
+
+`sd fault fail <N>`, `sd fault reboot <N>` and `sd fault read <N>`, in images built with `-DSOS_TEST_COMMANDS=ON`
 only, for testing repair on a board ([design §10.4](../../docs/design/sd-check.md#104-fault-injection),
 usage in [development.md](../../docs/development.md#test-commands-sd-card-write-faults)).
 `sdfault.c` counts writes and decides. `write_blocks_fed()` in `sdcard.c`, through which every
 card write reaches the driver (FatFs's, the layer's chunks, the header writes), asks it once per
 write. It fails the write, or closes the driver's open multi-block write and resets the board
-(`fault_test_reset()` in `core/fault.c`, so the next boot says why). In other images, neither
-the hook nor the file is built. `tests/test_sdfault.c` covers the counting.
+(`fault_test_reset()` in `core/fault.c`, so the next boot says why). `read_blocks_logged()`
+asks it once per read too: `sd fault read <N>` fails read N with a CRC error without reading
+the card, for the `sd-bus` health check. In other images, neither the hook nor the file is
+built. `tests/test_sdfault.c` covers the counting.
