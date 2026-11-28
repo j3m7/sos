@@ -170,6 +170,39 @@ TEST(with_fgets_and_with_f_gets) {
     short_by = 0;
 }
 
+static void count_name(const char *name, void *arg) {
+    unsigned *n = arg;
+    if (!strcmp(name, "Europe/Madrid"))
+        n[1]++;
+    n[0]++;
+}
+
+// Tab's names: every zone line of the real bundle, nothing from one that isn't a bundle, and
+// neither a long line's pieces nor lines that aren't zones.
+TEST(names_for_tab) {
+    for (short_by = 0; short_by <= 4; short_by += 4) {
+        unsigned n[2] = {0, 0};
+        FILE *f = fopen(TZ_BUNDLE, "r");
+        CHECK(f != NULL);
+        if (!f)
+            return;
+        CHECK(tzbundle_names(read_file, f, count_name, n));
+        fclose(f);
+        CHECK_EQ(n[0], 598);
+        CHECK_EQ(n[1], 1);
+        text_t t = {"UTC UTC0\n"};
+        n[0] = 0;
+        CHECK(!tzbundle_names(read_text, &t, count_name, n));
+        CHECK_EQ(n[0], 0);
+        char text[512];
+        snprintf(text, sizeof(text), "# tzdata 2026f: x\n%0*d A/B UTC0\nnot a zone\nUTC UTC0", 200, 0);
+        t.p = text;
+        CHECK(tzbundle_names(read_text, &t, count_name, n));
+        CHECK_EQ(n[0], 1);
+    }
+    short_by = 0;
+}
+
 TEST(distance) {
     CHECK_EQ(tzbundle_distance("Europe/Madrid", "Europe/Madrid"), 0);
     CHECK_EQ(tzbundle_distance("madrid", "Europe/Madrid"), 0);
@@ -187,5 +220,6 @@ TEST_MAIN(
     RUN(version_from_header);
     RUN(split_lines);
     RUN(with_fgets_and_with_f_gets);
+    RUN(names_for_tab);
     RUN(distance);
 )
