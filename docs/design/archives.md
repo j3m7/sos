@@ -14,6 +14,8 @@ Further decisions (the user's, 2026-11-27):
 - The SHA-256 accelerator is a follow-up, not part of the first checksum PR (§4.3).
 
 This note sets the rules so that the phases (§9) can be built without deciding them again.
+Revised after Reviewer's review of #266: §3.1, §5.2, §6, §6.3, §6.5, §7, §10.
+
 Where this note and the code differ in detail, the code and its header comments will be the
 reference.
 
@@ -103,6 +105,7 @@ Followed in `http.c`, so `sos.http` can have them too (opt-in there, §8):
 - Each hop is a new connection with a fresh certificate check. Each hop's URL is printed
   (`-> <url>`), so where the file came from is on screen.
 - `fetch` sends only `GET`; `303` changes nothing for it.
+- A `Location` longer than the URL parser's limit, or holding `user:password@`, is refused.
 
 ### 3.2 TLS roots
 
@@ -194,9 +197,11 @@ gzip [-k] [-f] [-1..-9] <file>...
   suffix`) as GNU does.
 - `inflateInit2(windowBits 15 + 16)`: gzip only, the full 32 KB window (a file compressed with a
   smaller window is read the same way).
-- Concatenated members (`cat a.gz b.gz > c.gz`) are decompressed one after the other. Bytes after
-  the last member that aren't another member are an error (GNU warns and ignores zeros; we refuse
-  everything: fewer cases).
+- Concatenated members (`cat a.gz b.gz > c.gz`) are decompressed one after the other. Zero bytes
+  after the last member are ignored with one line, `ignoring trailing zeros`, as GNU does:
+  block-padded files (written through `dd` or tape-style tools) are real, and deleting the output
+  for padding would look like a broken download. Any other bytes after the last member that
+  aren't another member are an error.
 - Each member's CRC-32 and size (mod 2^32) are checked by zlib. A mismatch deletes the output.
 - Output to `<name>.part`, renamed when the input ended cleanly. An existing `<name>` is not
   replaced without `-f`. The input is deleted after success unless `-k` (Unix behaviour).
@@ -207,6 +212,9 @@ gzip [-k] [-f] [-1..-9] <file>...
   `.part`.
 - Heap: zlib's inflate state (~7 KB) + the 32 KB window + 2 × 4 KB buffers ≈ 47 KB. Refused when
   `heap_free()` minus that is below 64 KB, so time sync and an `http` request still fit.
+- **One at a time:** `gunzip`, `zcat`, `gzip`, `tar` and `fetch` count each other across all
+  shells. Two at once would need ~110 KB, so while one runs another is refused (`busy: <command>
+  is running in another shell`), as `http.c` refuses a third request.
 
 ### 5.3 zcat
 
@@ -239,7 +247,8 @@ tar czf <archive> [-C <dir>] <path>...
 
 - Options are one word as Unix tar writes them (`tf`, `xf`, `xzf`, `cf`, `czf`; also with a
   leading `-`, and `v` accepted). `-f` after the archive means overwrite (§6.4); on Unix it names
-  the archive, but here the archive is always the word after the mode, so there is no clash.
+  the archive, but here the archive is always the word after the mode, so there is no clash. The
+  man page says in one sentence that this `-f` differs from Unix tar's.
 - Reading recognises gzip by its magic bytes (`1f 8b`), so `xf` and `tf` take `.tar`, `.tar.gz`
   and `.tgz` alike, in one pass, with no temporary `.tar`. `z` is accepted and not needed.
 - `c` writes plain tar; `cz` writes gzip (§5.4 settings).
@@ -283,6 +292,9 @@ continues.
 
 - **Leading `/`** is removed, as GNU does, and said once (`removing leading /`). The name is then
   relative to the target directory (`-C`, or the working directory).
+- **`-C <dir>` must already exist**; it isn't created (`<dir>: no such directory`).
+- **Every name source follows these rules:** a pax `path` and a GNU `L` name are checked exactly
+  as a header name is. They are the longest names, and the likeliest place for a trick.
 - **`..` anywhere** in the name: refused (`<name>: unsafe path`). Also `.` components are
   dropped and empty components (`a//b`) joined.
 - **Never outside the target:** after joining, the path must stay under the target directory.
@@ -316,10 +328,13 @@ continues.
 ### 6.5 Dates and modes
 
 - `FF_USE_CHMOD` is 0, so there is no `f_utime()`: extracted files get the time of extraction.
-  The design wants archive dates; turning on `FF_USE_CHMOD` means overriding the submodule's
-  `ffconf.h` (it is there, not in SOS). Phase 5 checks how the build can set it, and does so if
-  it can without patching the submodule; else dates stay the extraction time and this note says
-  so.
+  The design wants archive dates. `ff.h` includes `"ffconf.h"` with quotes, and the library's
+  copy is in `src/include`, not beside `ff.c`, so the include order decides which one is found.
+  Phase 5 tries first: a SOS directory holding its own `ffconf.h` (a copy with `FF_USE_CHMOD 1`),
+  placed before `${SDCARD_ROOT}/src/include`, which overrides it without patching the submodule.
+  The check is that FatFs's own objects see the same header: one definition, or `FIL`'s layout
+  would differ between them and SOS. If that can't be made to hold, dates stay the extraction
+  time and this note says so.
 - Modes, owners and groups are ignored. The FAT read-only attribute isn't set from the mode.
 
 ### 6.6 Listing (`tf`)
@@ -359,8 +374,8 @@ continues.
 | board | per phase (§9): a real release tarball and its `SHA256SUMS` fetched, checked, extracted; Ctrl-C at each stage; full card; heap low |
 
 Fixtures are small archives committed under `tests/data/archives/`, made by a script
-(`tools/make-archive-fixtures.sh`) so they can be remade. Fuzz corpora are replayed in ctest
-like the others.
+(`tools/make-archive-fixtures.sh`, checked by shellcheck through `just lint` like the other
+scripts) so they can be remade. Fuzz corpora are replayed in ctest like the others.
 
 ## 8. Lua (later)
 
@@ -387,8 +402,13 @@ Reviewer and tested on dev-1 in its slot.
 Phases 1 and 2 give download and verify; 4 and 5 add unpacking. 1, 2 and 4 don't depend on each
 other.
 
-## 10. Open for review
+## 10. Settled in review
 
-- `tar xf` not overwriting by default (§6.4) differs from Unix tar.
-- `gunzip` refusing trailing zeros that GNU accepts with a warning (§5.2).
-- Plain http left out of `http get` and `sos.http` (§3.3).
+Reviewer's review of #266 (2026-11-27):
+- `tar xf` doesn't overwrite by default (§6.4), unlike Unix tar. Kept: with no exit status and
+  `.part`-then-rename everywhere, "never silently replace" is the rule `fetch`, `gunzip` and
+  `cp` follow too; `-f` gives Unix behaviour.
+- `gunzip` ignores trailing zeros with a note, as GNU does (§5.2), rather than refusing them.
+- Plain http only in `fetch` (§3.3): the hash is the check there and nowhere else.
+- Added: the `Location` limits (§3.1), the one-at-a-time rule (§5.2), `-C` must exist and pax
+  names follow the same rules (§6.3), how to try `FF_USE_CHMOD` (§6.5).
