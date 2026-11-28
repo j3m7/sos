@@ -341,7 +341,9 @@ static void put_s(enc_t *e, const char *s) {
 
 // The number at idx as Lua's tostring writes it (lobject.c's tostringbuff), into buf rather than
 // into a new Lua string: integers in LUA_INTEGER_FMT, floats in LUAI_NUMFFORMAT with ".0" added
-// when the text looks like an integer. Its length.
+// when the text looks like an integer. Its length. On the board this file is built with the C
+// library's snprintf, as the Lua sources are (CMakeLists.txt): the SDK's own prints doubles
+// differently, and the host tests can't see that.
 static size_t number_text(lua_State *L, int idx, char *buf) {
     int n;
     if (lua_isinteger(L, idx)) {
