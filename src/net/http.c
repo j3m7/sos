@@ -35,7 +35,7 @@ struct http_req {
     size_t rx_pos, rx_len;
 
     uint64_t start_us, deadline_us, headers_us, end_us;
-    char error[112];
+    char error[HTTP_ERROR_MAX];
 };
 
 static void fail(http_req_t *r, const char *fmt, ...) __attribute__((format(printf, 2, 3)));

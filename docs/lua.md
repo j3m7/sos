@@ -80,7 +80,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.wifi.scan()` | the Wi-Fi networks around, strongest first: `{ {ssid=, rssi=}, ... }` (a scan takes about half a second; the names a question's Tab offers come from the same scan) |
 | `sos.net.resolve(host)` | the host's IPv4 address as text (a DNS lookup, up to 20 s), or `nil` and why |
 | `sos.ping(host [, count])` | `count` echo requests (4 by default, at most 100), one a second, as `ping` sends them; then `{address=, sent=, received=, errors=, not_sent=, min_ms=, avg_ms=, max_ms=}` (the times only if something answered), or `nil` and why (Wi-Fi down, the lookup failed). The script waits meanwhile; Ctrl-C stops it |
-| `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
+| `sos.http.get(url [, opts])` | HTTPS GET: `{status=, reason=, headers=, body=, url=, redirects=, headers_ms=, elapsed_ms=, tls=}` (see [HTTPS](#https)) |
 | `sos.http.post(url, body [, opts])` | HTTPS POST of the string `body` |
 | `sos.http.head(url [, opts])` | HTTPS HEAD: the status and headers |
 | `sos.http.download(url, path [, opts])` | HTTPS GET into a file on the card (see [HTTPS](#https)) |
@@ -89,6 +89,7 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.reset_reason()`, `sos.glitch()`, `sos.wifi.status()`, `sos.health()` | the same |
 | `sos.reboot([why])` | restart the board, logging `why` and the script's name. Refused (`nil` and a message) until the board has been up 10 minutes: a normal restart runs `/autorun.lua` again, so a script that reboots at once would loop |
 | `sos.hash(alg, data [, raw])`, `sos.hmac(alg, key, data [, raw])` | SHA digests and HMACs, in hex (see [Hashes and base64](#hashes-and-base64)) |
+| `sos.hashfile(path [, alg [, raw]])` | the digest of a file on the card (`"sha256"` unless `alg` is given), read on core 0, so the file can be any size (the same section) |
 | `sos.base64.encode(s [, "url"])`, `sos.base64.decode(s [, "url"])` | base64, standard or URL-safe |
 | `sos.json.decode(s)`, `sos.json.encode(v)`, `sos.json.null` | JSON to Lua values and back (see [JSON](#json)) |
 | `sos.dmesg([cursor])` | the system log's entries, and a cursor to read only newer ones next time (see [The log](#the-log)) |
@@ -121,7 +122,8 @@ print(greet.hello("pico"))
 
 `sos.http` makes one request at a time with the HTTPS client (`src/net/README.md`),
 from scripts started on the console or over SSH. The server certificate is checked as for every
-TLS connection, and redirects aren't followed (the script sees the 3xx and `headers.location`).
+TLS connection. Redirects are followed only with the `redirects` option; without it the script
+sees the 3xx and `headers.location`.
 Any status is a response; `nil` and a message mean there was none (DNS, TLS, timeout, a bad
 option, a body over `max_body`). Options, all optional except `url` for `request`:
 
@@ -131,6 +133,7 @@ option, a body over `max_body`). Options, all optional except `url` for `request
 | `body`, `content_type` | request body (up to 16 KB) and its type (no `Content-Type` header if not given) |
 | `timeout` | milliseconds until the headers arrive, then between pieces of the body (default 30000) |
 | `max_body` | the most response body to accept, in bytes (default 32 KB; the script's 128 KB covers it) |
+| `redirects` | follow up to this many redirects (0 to 5; default 0, none): a 301, 302, 303, 307 or 308 with a `Location`, each hop a new connection with its own certificate check and `timeout`. Only for `GET` and `HEAD` without `body`, `content_type` or `headers` (a header such as `Authorization` mustn't go to whatever host a server names): otherwise the call returns `nil` and `redirects are followed only for GET and HEAD without extra headers`. Every hop stays https: a redirect to `http://` fails the request, as does one past the limit (`too many redirects (more than <n>)`). The response is the last hop's, and its `url` says where that was |
 
 `sos.http.download(url, path [, opts])` writes the body to the file at `path` (as `sos.write`
 does, so not in `/certs`), 4 KB at a time, so it can be far larger than a script's memory. Only a
@@ -158,7 +161,9 @@ The response also says how long the request took, for scripts that check a serve
 
 | Field | |
 |---|---|
-| `headers_ms` | from the start of the request (DNS, TCP and TLS included) until the status line and headers were in |
+| `url` | the URL of the response: the one asked for, or where its redirects led (as the client writes it: no default port) |
+| `redirects` | how many redirects were followed (0 without the `redirects` option) |
+| `headers_ms` | from the start of the request (DNS, TCP and TLS included, and every hop of a redirect) until the status line and headers were in |
 | `elapsed_ms` | from the start until the end of the body, as the script received it: the body comes to core 1 4 KB per main-loop pass, so a large one adds a few milliseconds per 4 KB |
 | `tls.handshake_ms` | the TLS handshake, from the TCP connection to the handshake done |
 | `tls.longest_step_us` | the longest single wolfSSL call, in microseconds: how long the main loop was held up at most |
@@ -395,6 +400,21 @@ data [, raw])` its HMAC with `key` (up to 4 KB; an empty key is allowed, as HMAC
 true. `alg` is `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. They run in wolfCrypt on core 0, the
 code TLS uses: about 8 ms for each 4 KB of data (40 KB in 81 ms with SHA-256, 95 ms with
 SHA-512, measured on the board), which a long hash spends without stopping anything else. Failures (not enough memory) return `nil` and a message.
+
+`sos.hashfile(path [, alg [, raw]])` returns the digest of the file at `path` (relative to the
+script's working directory, as for `sos.read`), with the same `alg` (default `"sha256"`) and `raw`.
+Core 0 opens the file and reads and hashes it for up to 20 ms per request, so the bytes never
+reach core 1: a file of any size takes none of the script's memory, and it's the same digest
+`sha256sum` prints. The file stays open (and the card can't be formatted or unmounted) until
+the hash ends. Ctrl-C stops it between requests. Errors (`no such file`, `is a directory`, a
+read error) return `nil` and a message.
+
+```lua
+-- check a download against the hash published with it ("<hex>  update.bin")
+local want = sos.read("/fw/update.bin.sha256"):match("^%x+")
+local got, err = sos.hashfile("/fw/update.bin")
+print(got == want and "OK" or ("FAILED: " .. (got or err)))
+```
 
 `sos.base64.encode(s [, "url"])` and `sos.base64.decode(s [, "url"])` convert to and from base64:
 the standard alphabet with `=` padding, or with `"url"` the URL-safe one (`-` and `_`) without

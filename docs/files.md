@@ -64,7 +64,8 @@ sha256sum -c --ignore-missing SHA256SUMS
   are refused (`unsafe path`): a list from a server can't make the board read outside its
   directory.
 - A job like `cat`: one file at a time, 4 KB per step, Ctrl-C stops it. Hashing is wolfCrypt's,
-  in software on core 0.
+  in software on core 0, except that `sha256sum` (and `fetch`'s SHA-256) uses the RP2350's
+  SHA-256 block when no other shell is using it: the same result, faster.
 
 ## gzip files
 

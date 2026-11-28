@@ -186,6 +186,22 @@ sha256sum -c <list>
   with a lock: `sha256sum` and `fetch` take the block when it's free and use wolfCrypt when it
   isn't (TLS and SSH keep wolfCrypt). wolfSSL's Thumb-2 SHA-256/512 assembly is the alternative
   that also speeds up SHA-512; the measurement decides which, or neither.
+- **Done (phase 8):** `files/sha256hw.c` wraps `pico_sha256`. The lock is the SDK's: the
+  bootrom's SHA-256 boot lock, a hardware lock that both cores and the bootrom respect, tried
+  without waiting. `sha256sum` takes the block when it opens a file and releases it when the
+  file is closed (finished, read error, Ctrl-C, session end); `fetch` takes it when the body
+  starts and releases it in `finish()`, which every end goes through. A second shell meanwhile
+  hashes with wolfCrypt, with the same result. Fed by the CPU a word at a time, not DMA: each
+  4 KB chunk is waited for anyway, and DMA would claim a channel. The first use hashes two
+  FIPS 180-2 vectors on the block; a wrong answer is logged once and the block is never used
+  again. SHA-1, SHA-512, Lua's `sos.hash` (rarely large data, and a script could keep the block
+  taken), TLS and SSH stay on wolfCrypt.
+  Speed with the block, measured on dev-1 (2026-11-28, #281, same card and file): `sha256sum`
+  14.6 s (0.72 MB/s) against 23.0 s in wolfCrypt, 1.6 times as fast; what is left is mostly the
+  encrypted card's read. SHA-1 (17.5 s) and SHA-512 (25.5 s) are unchanged. Two shells hashing at
+  once: both correct, one on the block (22.8 s) and one on wolfCrypt (31 s), sharing the card.
+  After Ctrl-C, a dropped SSH session and a reboot, the next `sha256sum` was fast again (block
+  released); the self-check logged nothing.
 
 ## 5. gzip, gunzip, zcat
 
@@ -426,7 +442,12 @@ continues.
   to 8, so 16 open `DIR`s would starve the log writer and SFTP: at most 4 levels are open at a
   time. Going deeper closes the outermost open level; coming back to it opens it again and
   reads past the entries it already gave, one per piece of work. A directory changed meanwhile
-  may then lose or repeat an entry, a race GNU tar has too.)
+  may then lose or repeat an entry, a race GNU tar has too.
+  Review: when a walk is deeper than the 4 directories kept open, each reopen re-reads past the
+  entries already taken, so a wide directory below that depth costs quadratic reads on the way
+  back, which is fine at SD-card scales. Archiving a directory that changes during the walk (an
+  SFTP upload into it, say) can miss or repeat an entry, as GNU tar can; a file being written is
+  skipped.)
 - Headers: ustar; a name over 100 bytes that `prefix` can't hold gets a pax `x` record (`path`).
   Size, mtime from the FAT date, mode `0644` files and `0755` directories, uid/gid 0, no user
   names. (Phase 7: `tar_write.c`, pure C. The FAT date is UTC already: the SD library's
@@ -472,6 +493,22 @@ scripts) so they can be remade. Fuzz corpora are replayed in ctest like the othe
 Not in the first phases. Candidates, each a small PR after the commands: `sos.hash` over a file
 (`sos.hashfile(path, "sha256")`), redirects in `sos.http` (opt-in option), and file-to-file
 `sos.gunzip`/`sos.untar`. They run on core 0 as `sos.hash` does.
+
+(Phase 8, done:)
+- `sos.hashfile(path [, alg [, raw]])`: `alg` `"sha256"` by default, or what `sos.hash` takes.
+  An `LR_HASH` step of its own: core 0 opens the file (holding it, `files_hold()`), reads and
+  hashes it 4 KB at a time for up to 20 ms per request (`sums.c`'s step), and answers the bytes
+  hashed; the bytes never go to core 1, so a file of any size costs the script nothing. Ctrl-C
+  between requests; errors are `nil` and a message, as for the other file functions. Host test:
+  `tests/test_lua_hash.c`, over a card in memory.
+- `sos.http`'s `redirects = n` option (0 to `HTTP_REDIRECTS_MAX`, default 0): passed to
+  `http_opts_t.max_redirects`, with `http_start()`'s rules (GET and HEAD only, no body, content
+  type or headers; its refusal is the call's `nil` and message). `allow_plain` stays false, so a
+  redirect to http fails the request. Every response gets `url` (`http_url()`, the last hop's)
+  and `redirects` (the number followed).
+- Not done: `sos.gunzip` and `sos.untar`. Each would be a long-running job on core 0 driven by
+  requests, with the `gunzip` and `tar x` jobs' state and rules; nothing needs them from a script
+  yet, and `lua` can't run shell commands.
 
 ## 9. Phases
 
