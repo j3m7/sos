@@ -91,6 +91,10 @@ static bool script_alive(void) {
 
 // --- answering requests ----------------------------------------------------------------------
 
+// Core 0's messages reach the script whole (#220). The longest are http_error()'s, bounded by
+// HTTP_ERROR_MAX; the rest (FatFs, paths, "interrupted") are shorter.
+_Static_assert(sizeof(lua_req.error) >= HTTP_ERROR_MAX, "lua_req.error must hold any HTTP error");
+
 static bool req_error(const char *msg) {
     snprintf(lua_req.error, sizeof(lua_req.error), "%s", msg);
     lua_req.result = -1;
@@ -297,8 +301,25 @@ static void serve_reboot(void) {
     wdog_reboot();
 }
 
-// sos.hash, sos.hmac: one step (lua_hash.c).
+// sos.hashfile: one request reads and hashes for at most this long (sums.c's STEP_US).
+#define HASH_FILE_STEP_US 20000
+
+// sos.hash, sos.hmac, sos.hashfile: one step (lua_hash.c).
 static void serve_hash(void) {
+    if (lua_req.offset == LUA_HASH_FILE) {      // result: the bytes hashed, 0 at the end
+        char path[LUA_PATH_MAX];
+        uint64_t got;
+        if (!req_path(path)) {
+            lua_hash_drop();
+            return;
+        }
+        const char *err = lua_hash_file(path, lua_req.data, LUA_REQ_DATA, HASH_FILE_STEP_US, &got);
+        if (err)
+            req_error(err);
+        else
+            lua_req.result = (int64_t)got;
+        return;
+    }
     if (lua_req.len > LUA_REQ_DATA) {
         req_error("too long");
         return;
@@ -421,16 +442,18 @@ static bool serve_http_request(void) {
     return true;
 }
 
-_Static_assert(sizeof(lua_http_stats_t) <= LUA_REQ_DATA, "the timings must fit in one answer");
+_Static_assert(sizeof(lua_http_stats_t) + HTTP_URL_MAX + 1 <= LUA_REQ_DATA,
+               "the timings and the URL must fit in one answer");
 
 static uint32_t clamp_u32(uint64_t v) {
     return v > UINT32_MAX ? UINT32_MAX : (uint32_t)v;
 }
 
-// The finished request's timings, into the answer that ends its body (the handshake is truncated
-// to whole milliseconds on core 1, as the `http` command prints it).
+// The finished request's timings and last URL, into the answer that ends its body (the handshake
+// is truncated to whole milliseconds on core 1, as the `http` command prints it).
 static void http_stats(void) {
     lua_http_stats_t s = {
+        .redirects = http_redirects(http),
         .headers_ms = http_headers_ms(http),
         .elapsed_ms = http_elapsed_ms(http),
     };
@@ -448,6 +471,7 @@ static void http_stats(void) {
         memcpy(s.cert_issuer, ts->cert_issuer, sizeof(s.cert_issuer));
     }
     memcpy(lua_req.data, &s, sizeof(s));
+    snprintf((char *)lua_req.data + sizeof(s), HTTP_URL_MAX + 1, "%s", http_url(http));
 }
 
 // Answer LR_HTTP_READ with as much of the body as there is now, up to a full answer.
@@ -889,6 +913,7 @@ static bool repl_step(shell_t *sh, void *arg, bool cancel) {
     if (lua_job.repl_cmd || lua_out.head != lua_out.tail)
         return true;
     http_drop();                                // one that an error in the line left open
+    lua_hash_drop();                            // and a hash (sos.hashfile's file) it left
     repl_more = lua_job.repl_incomplete;
     repl_ask(sh);
     return false;
