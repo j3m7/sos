@@ -396,12 +396,15 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
 6. `lua -e 'local r = sos.http.get("https://letsencrypt.org/") print(r.status, #r.body)'`
    You should see: `200` and the body's size.
 7. `lua -e 'local r = sos.http.get("https://letsencrypt.org/docs") print(r.status, r.redirects)'`
-   You should see: `301` and `0`: without the `redirects` option a script gets the redirect
-   itself.
-8. `lua -e 'local r = sos.http.get("https://letsencrypt.org/docs", {redirects = 2}) print(r.status, r.redirects, r.url)'`
-   You should see: `200`, `1` and `https://letsencrypt.org/docs/` (where the redirect led).
+   You should see: `301` and `0`, tab-separated: without the `redirects` option a script gets
+   the redirect itself.
+8. `lua -e 'local r = sos.http.get("https://letsencrypt.org/docs", {redirects = 5}) print(r.status, r.redirects, r.url)'`
+   You should see, tab-separated: `200`, the number of hops (1 or 2: that depends on how the
+   site redirects that day, not on SOS) and `https://letsencrypt.org/docs/`, where they led.
 9. `lua -e 'print(sos.hashfile("/review/r.bin"))'`
-   You should see: the same SHA-256 as section 11 gave for `r.bin`.
+   You should see: the same SHA-256 as section 11 gave for `r.bin`, after a few seconds
+   (`sos.hashfile` always hashes in software, about 20 s for 10 MB; the SHA-256 hardware isn't
+   given to Lua).
    `lua -e 'print(sos.hashfile("/review/r.bin", "sha512"))'` gives the file's SHA-512.
 10. `lua -e 'print(sos.date("%Y-%m-%d %H:%M:%S"), sos.localdate("%H:%M %Z"))'`
    You should see: UTC now, and local time in the board's zone.
