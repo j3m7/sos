@@ -74,6 +74,12 @@ typedef struct {
 tzbundle_result_t tzbundle_find(tzbundle_read_fn read, void *ctx, const char *name,
                                 tzbundle_find_t *out);
 
+// Each zone's name, in the bundle's order, to fn (the name is only valid during the call);
+// lines that aren't zones are skipped, rules aren't parsed. False, with no call, if it isn't a
+// bundle. For Tab after `time zone`.
+bool tzbundle_names(tzbundle_read_fn read, void *ctx, void (*fn)(const char *name, void *arg),
+                    void *arg);
+
 // How far `query` is from `name`, for suggestions: the fewest letters to add, drop or change
 // (case aside, ' ' as '_') to make query into the whole name or into its last part ("madrid"
 // is 0 from "Europe/Madrid"), or 1 if query is inside the name. Capped at 99.
