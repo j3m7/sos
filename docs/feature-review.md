@@ -12,7 +12,7 @@ last ones change or erase things and are marked.
 - What each feature does in detail is in its manual page (`man <command>` on the board, or
   [man/](../man/)) and the guides listed in the [README](../README.md#documentation). Where a
   step says "as `man x` says", that page is the reference.
-- Expect about three hours for sections 1 to 16. Sections 17 and 18 are optional.
+- Expect about three hours for sections 1 to 18. Sections 19 and 20 are optional.
 
 ## Before you start
 
@@ -364,7 +364,48 @@ configuration; follow [docs/tls.md](tls.md#trusted-root-certificates) if you wan
 6. `ls /`
    You should see: the card mounts again and lists.
 
-## 17. Security state (read only)
+## 17. Setup on a configured board
+
+`setup` is how a new board gets its console password, Wi-Fi network and SSH key. On a board
+that already has them it asks only for the network and a key, and Enter keeps what's saved, so
+this walk changes nothing. The full first-time setup, from an empty configuration, is in
+[section 20](#20-disruptive-steps-optional).
+
+1. **[ssh]** `setup`
+   You should see: refused as console only.
+2. **[console]** `setup`
+   You should see: `SOS setup. Press Enter to keep the value in brackets, Ctrl-C to cancel.`
+   It doesn't ask for a console password (one is set), and asks
+   `Wi-Fi network (SSID) [<saved network>]: `.
+3. Press Tab twice.
+   You should see: the networks around, strongest first, with their signal. Clear what Tab
+   typed, if anything, so the line is empty.
+4. Press Enter on the empty line.
+   You should see: no password question (the saved network is kept), then `Trusted keys: <n>.`
+   and a `Public key: ` question.
+5. Press Ctrl-C.
+   You should see: `setup cancelled; nothing changed`.
+6. `setup` again, Enter at the network, Enter at the key.
+   You should see: `saved:` and the configuration, as `config` shows it. Wi-Fi doesn't
+   reconnect (the network didn't change) and your SSH session stays up.
+7. `dmesg -f auth | tail 3`
+   You should see: `config: setup completed`.
+
+## 18. Provisioning from a file (build only)
+
+The other way to set a board up is a provisioning file written on this machine and loaded over
+USB ([docs/configuration.md](configuration.md#provisioning)). Loading one replaces the board's
+whole configuration, so here you only build and check the image.
+
+1. **[host]** In the repository, on current main: `cp provision.conf.example ~/sos-review/p.conf`,
+   and fill in `wifi_ssid`, `hostname`, `ssh_key` (your public key) and a `console_password`.
+   Add `tz = Europe/Madrid`.
+2. **[host]** `tools/provision.sh -n ~/sos-review/p.conf`
+   You should see: the record built and checked, and nothing written to a board. A
+   5-character `console_password` is refused.
+3. **[host]** `rm ~/sos-review/p.conf` (it holds a password in the clear).
+
+## 19. Security state (read only)
 
 Each command here only reads.
 
@@ -378,7 +419,7 @@ Each command here only reads.
 
 If `glitch` shows a detector reset you didn't cause, note it: issue #100 tracks them.
 
-## 18. Disruptive steps (optional)
+## 20. Disruptive steps (optional)
 
 These restart the board, erase data or change its identity. Do only the ones you mean to, one
 at a time, and tell the Reviewer before you start this section.
@@ -401,9 +442,37 @@ at a time, and tell the Reviewer before you start this section.
   contents you can lose.
 - **Format the card: Stop and ask first.** `sd format` erases everything on dev-1's card
   (log files, man pages, the time zone bundle) and shows a new recovery key once.
-- **Erase the configuration: don't, on dev-1.** `config reset` makes the board a new owner:
-  a new SSH host key, the encrypted card locked, the console password and Wi-Fi gone. It
-  needs a full re-provision afterwards. Review it on a spare board if at all.
+- **First-time setup: on a spare board, not dev-1.** It starts from an empty configuration,
+  and getting there (`config reset`, provisioning, or erasing the configuration over USB) makes
+  the board a new owner: a new SSH host key, the console password and Wi-Fi gone, and the
+  cards it encrypted locked for good (readable only with the key shown when each was
+  formatted). On dev-1 that means its card and its current setup; do it there only after
+  agreeing a way back with the Reviewer. On a spare board flashed with main:
+  1. **[console]** `config reset` (skip on a board that has never been set up).
+     You should see: a warning that the encrypted cards will be locked, and a `yes` question.
+  2. Press Enter on the console.
+     You should see: no password question; the board goes straight into `setup`, starting with
+     `This board has no console password yet.` and `New console password`.
+  3. Type a 7-character password, then an 8-character one twice.
+     You should see: the short one refused; the second accepted (not echoed).
+  4. At the network question, Tab twice, pick your network, then its password.
+  5. At `Public key:`, paste one line of your `~/.ssh/id_ed25519.pub`.
+     You should see: `saved:` and the configuration. Shortly after, the log shows
+     `wifi: connected, ip ...` and `sshd: listening on port 22 ... host key ssh-ed25519
+     SHA256:...`.
+  6. **[host]** `ssh <its address>`.
+     You should see: if you logged in to this board before, your client warns that the host key
+     changed (it is a new owner). Check the fingerprint against the log line, then
+     `ssh-keygen -R <its address>` and log in.
+  7. **[console]** `sd`
+     You should see: a card it encrypted before is refused as locked; `sd format` makes it
+     usable again (and erases it).
+  8. `logout`, then press Enter.
+     You should see: the console asks for the new password.
+  9. To provision the same board from a file instead, make the file again as in section 18,
+     then `tools/provision.sh -s <serial> ~/sos-review/p.conf`, and remove the file after. You should see: the board reboots into BOOTSEL
+     and back, `provision.sh` warns the encrypted cards are locked, and after login `config`
+     shows the file's settings, including the time zone.
 - **Never** run `rootsecret forget` or any `picotool otp` command during this review.
 
 ## Coming soon (not on main yet)
