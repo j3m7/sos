@@ -172,6 +172,32 @@ includes, no SOS warnings).
   `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
   caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).
 
+## `tar.c`, `tar_parse.c`: tar tf and tar xf
+
+[Design](../../docs/design/archives.md) §6.
+
+- **`tar_parse.c` (pure C, host tested and fuzzed):** an archive's bytes in, in pieces of any
+  size, its entries and their data out (`tar_feed()`: header, data pointing into the input, end,
+  error). ustar (with its prefix), GNU (`L`/`K` long names, base-256 numbers), pax (`x`: path,
+  size, linkpath; `g` skipped) and v7 headers; the checksum unsigned or signed; two zero blocks
+  end it. No allocation: long names and pax records go into fixed buffers (`TAR_NAME_MAX`,
+  `TAR_PAX_MAX`), and an entry whose name doesn't fit comes with `refused` set rather than a
+  cut name. `tar_name_clean()` is §6.3's name rules as a pure function (leading `/`, `..`, `.`
+  and empty components, `path_name_check()` on each component). `tests/test_tar_parse.c` reads
+  the archives GNU tar, bsdtar and python's tarfile made in `tests/data/archives/tar/`
+  (`tools/make-archive-fixtures.sh`, `tools/craft-tar.py`) whole and in pieces;
+  `tests/fuzz/fuzz_tar.c` checks that any input reads the same in pieces and that every name
+  the rules accept stays under the target.
+- **`tar.c`:** the command, as a shell job: each step reads 4 KB, inflates into 4 KB when the
+  archive starts with gzip's magic (`gz.c`), feeds the parser, or writes an entry's data to its
+  `<name>.part`, until `STEP_US`. Each file is renamed into place by `files_install_part()`
+  (`-f`: the old one moved aside first). The joined path is checked again with
+  `path_resolve()`, every create goes through `files_write_allowed()`, and the archive itself
+  is never a target. Case clashes: the paths this run created are kept as sorted 64-bit hashes;
+  when a path exists, the name FatFs has stored for it (a stat per component) is looked up
+  there. Dates via `f_utime()` (FatFs built with `FF_USE_CHMOD 1`: `config/fatfs/ffconf.h`).
+  `tests/test_tar.c` runs it over a card in memory whose names compare ignoring case.
+
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`
@@ -183,13 +209,13 @@ includes, no SOS warnings).
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
 - **`path_name_check()`** checks one name that came from outside (the name a download's URL
-  suggests; later the names in an archive) before anything is created under it: not empty,
+  suggests, each component of a name in a tar archive) before anything is created under it: not empty,
   `.` or `..`, no `/`, `\`, control characters (C1 too) or `"*:<>?|`, not ending in a space
   or a dot (FatFs would drop them), valid UTF-8, at most 255 UTF-16 units.
 
 ## `bigjob.c`: one archive job at a time (pure C, host tested)
 
-`fetch`, and later `gunzip`, `zcat`, `gzip` and `tar` ([archives.md](../../docs/design/archives.md)
+`fetch`, `gunzip`, `zcat`, `tar`, and later `gzip` ([archives.md](../../docs/design/archives.md)
 §5.2), each hold tens of KB of heap while they run, so they take turns across all shells:
 `bigjob_try_begin(name)` admits one (NULL) or names the one running, which the command reports
 with `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`); `bigjob_end()` when

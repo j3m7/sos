@@ -47,4 +47,4 @@ MEMORY
     running in another shell'.
 
 SEE ALSO
-    zcat, cp, ls, mem
+    zcat, tar, cp, ls, mem

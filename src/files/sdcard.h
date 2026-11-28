@@ -32,6 +32,9 @@ bool sdcard_mount_retry(void);
 // Is a card mounted now? Never mounts one.
 bool sdcard_mounted(void);
 
+// Is the mounted card exFAT (files over 4 GB minus 1 allowed)? False if none is mounted.
+bool sdcard_exfat(void);
+
 // What `sd info` shows, as values (for Lua's sos.sd.info()). Mounts the card if it can; false
 // (and *info zeroed) if there's no card or it won't mount. total and free are the volume's bytes;
 // free_ok is false if counting the free space failed.

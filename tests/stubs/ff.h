@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// Host-test stand-in for FatFs's ff.h: the types, flags and functions src/files/files.c
+// Host-test stand-in for FatFs's ff.h: the types, flags and functions src/files/files.c, tar.c
 // and src/ssh/sftp_fs.c use, with the names and meanings FatFs gives them. The tests
-// (tests/test_files.c, tests/test_sftp_fs.c) implement the functions over a card in memory.
+// (tests/test_files.c, tests/test_sftp_fs.c, ...) implement the functions over a card in memory.
 #pragma once
 
 #include <stdint.h>
@@ -62,3 +62,4 @@ FRESULT f_closedir(DIR *dp);
 FRESULT f_mkdir(const char *path);
 FRESULT f_unlink(const char *path);
 FRESULT f_rename(const char *path_old, const char *path_new);
+FRESULT f_utime(const char *path, const FILINFO *fno);

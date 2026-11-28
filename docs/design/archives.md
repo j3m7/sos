@@ -49,7 +49,8 @@ tar xf pkg-1.2.tar.gz -C /apps
   check every change with `files_write_allowed()`, and sync files being written once a second
   (`files_sync_if_due()`).
 - **FatFs:** long names (`FF_MAX_LFN` 255), exFAT and FAT32, `FF_FS_LOCK` 16, and
-  `FF_USE_CHMOD 0`: no `f_utime()`, so a file's date can't be set (§6.5).
+  `FF_USE_CHMOD 0`: no `f_utime()`, so a file's date can't be set (§6.5; since phase 5 SOS
+  builds FatFs with `FF_USE_CHMOD 1`).
 - **The heap:** about 345 KB, shared (`heap_free()`). A TLS handshake needs ~64 KB free; an SSH
   session up to ~100 KB while transferring.
 - **The shell has no exit status.** A command reports failure by what it prints.
@@ -317,7 +318,12 @@ continues.
   over the path limit): refused.
 - **Case:** FAT is case-insensitive. A second entry differing only in case from one written in
   this run: refused (`<name>: same name as <other> on FAT`), not written over it. Entries named
-  the same exactly (a tar can hold a file twice): the later one wins, as Unix tar.
+  the same exactly (a tar can hold a file twice): the later one wins, as Unix tar. (Phase 5: the
+  run keeps a sorted 64-bit hash of each path it created, 8 bytes each, up to 8192 of them; when
+  an entry's path exists, the name FatFs stored for it, read with a stat per component, is looked
+  up there, so FatFs's own case folding decides, non-ASCII letters included. Past the limit, or
+  short of heap, it says so once and existing files are then only replaced with `-f`. Only the
+  entry's own path is checked: `a/x` then `A/y` puts `y` in `a/`.)
 - **Protected paths:** every create goes through `files_write_allowed()`, so `/certs` needs the
   console as for every file command, and `tar` can't do what `cp` couldn't.
 - **The archive itself** is never written over (same path as an entry: refused).
@@ -347,14 +353,31 @@ continues.
   The check is that FatFs's own objects see the same header: one definition, or `FIL`'s layout
   would differ between them and SOS. If that can't be made to hold, dates stay the extraction
   time and this note says so.
+- **Outcome (phase 5): it holds, and dates are kept.** `config/fatfs/ffconf.h` is first on the
+  no-OS-FatFS target's include path. Rather than a copy it is a wrapper: `#include_next
+  "ffconf.h"` takes the library's file, then `FF_USE_CHMOD` is redefined to 1, so the library's
+  other settings follow its updates. The library's sources are `INTERFACE` sources compiled in
+  the `sos` target with the same path, so there is one configuration: in
+  `build/compile_commands.json` all 523 compile commands that have the library's include
+  directory have `config/fatfs` before it, and the dependency output (`-M`) of `ff.c` and of
+  SOS's `files.c` both list `config/fatfs/ffconf.h` then the library's. `f_utime` links (164 bytes
+  of flash; `f_chmod`, unused, is dropped by the linker). The host tests use their own
+  `ff.h` stub and are unaffected.
+- The header's mtime is UTC and SOS keeps file dates in UTC (`get_fattime()` reads the UTC
+  clock; `ls` shows them as UTC), so the date is stored as it is, rounded down to FAT's 2 s.
+  Dates FAT can't hold (before 1980, after 2107) leave the extraction time. Directories made from
+  a directory entry get its date; directories made because a file's path needed them get the
+  extraction time.
 - Modes, owners and groups are ignored. The FAT read-only attribute isn't set from the mode.
 
 ### 6.6 Listing (`tf`)
 
 - One line per entry: type letter (`-`, `d`, `l`, `h`, other), size, date (from the header, UTC,
-  shown in the configured zone like `ls`), name. Names with control characters are shown with
+  shown as `ls` shows dates: in UTC, since zones are display-only and `ls` doesn't apply them),
+  name, and `-> <target>` for a link. Names with control characters are shown with
   them as `?`. Long names and pax names shown in full. Refused entries are listed with the reason
-  `x` would give, so `tf` shows what `xf` would do.
+  `x` would give, so `tf` shows what `xf` would do, as far as the archive alone decides it: a
+  case clash and an existing file depend on the card, and only `xf` says them.
 - Through `shell_write()`, so `tar tf x.tgz | grep foo` and `| more` work.
 
 ### 6.7 Creating (`c`)

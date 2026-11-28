@@ -452,7 +452,7 @@ MEMORY
     running in another shell'.
 
 SEE ALSO
-    zcat, cp, ls, mem
+    zcat, tar, cp, ls, mem
 @@ head
 NAME
     head - the first lines of a command's output, then stop it
@@ -1674,6 +1674,79 @@ NOTES
 
 SEE ALSO
     head, grep, wc, more
+@@ tar
+NAME
+    tar - list and extract tar archives on the card
+
+SYNOPSIS
+    tar tf <archive>
+    tar xf <archive> [-C <dir>] [-f]
+
+DESCRIPTION
+    'tar tf' lists an archive; 'tar xf' extracts it into the working
+    directory, or into <dir> with -C (which must exist). Plain .tar,
+    .tar.gz and .tgz are all read the same way: gzip is recognised by the
+    file's first bytes and decompressed in the same pass, with no
+    temporary .tar. The archive itself is never changed.
+
+    The mode word is written as on Unix: tf, xf, and also -tf, -xf, xzf,
+    tzf; z isn't needed, and v (xvf) prints each name as it is extracted.
+    Archives made by GNU tar, bsdtar and others are read: ustar, GNU (long
+    names), pax (long names and sizes) and old v7 headers.
+
+    'tar tf' prints a line per entry: its type (- file, d directory, l
+    symlink, h hard link, c b p devices and FIFOs, ? other), size, date
+    (UTC, as 'ls' shows dates) and name, and a link's target. An entry
+    that 'tar xf' would skip has the reason after it in brackets. It goes
+    through pipes: 'tar tf pkg.tgz | grep README', 'tar tf x.tar | more'.
+
+SAFETY
+    An archive comes from elsewhere, so every name is checked before
+    anything is created; an entry that fails is skipped, said, and
+    counted, and extraction goes on:
+    - a leading / is removed (said once): names stay under the target
+    - a name with '..' in it: 'unsafe path'
+    - a name FAT can't store as given ("*:<>?|\, control characters,
+      ending in a space or a dot, over 255 characters): 'not a valid FAT
+      name' or 'name too long'
+    - FAT ignores case: a name that differs only in case from one written
+      in this run is skipped ('same name as <other> on FAT'). The same
+      name twice: the later one wins, as on Unix
+    - links (FAT has none), devices and FIFOs are skipped, never written
+      as files, never followed
+    - protected paths (/certs, /var/log) only from the console, as for cp
+    - the archive itself is never written over
+    The names in long-name and pax records follow the same rules.
+
+WRITING
+    Each file is written to '<name>.part' and renamed at its end, so an
+    interrupted extraction leaves no half-written file under a real name.
+    Directories are made as needed. Files and directories get the date
+    stored in the archive; modes and owners are ignored.
+
+    An existing file is not replaced: it is skipped with 'exists (-f
+    replaces it)'. Note that -f here means overwrite, unlike Unix tar,
+    where -f names the archive (here the archive is always the word after
+    the mode). With -f the old file is moved aside to '<name>.old' until
+    the new one has its name. An existing directory is merged into.
+
+    At the end: '<n> files, <n> directories, <n> skipped'. Ctrl-C, a read
+    error, a full card or a damaged archive stops it with 'stopped:
+    <why>': the current .part is removed and what was extracted stays.
+    An archive that ends without its two end blocks stops with 'archive
+    ends early'. A file over 4 GB minus 1 byte is skipped on a FAT32 card
+    ('too large for FAT32'); exFAT takes it.
+
+MEMORY
+    About 21 KB of heap while it runs, and 40 KB more for a gzipped archive
+    (zlib, shown as 'zlib' in 'mem'); 8 bytes more per file written, to
+    catch case clashes. It is refused when that would leave less than 64
+    KB free. One of tar, gunzip, zcat and fetch runs at a time across all
+    shells; another is refused with 'busy: <command> is running in another
+    shell'.
+
+SEE ALSO
+    gunzip, fetch, sha256sum, ls, mkdir
 @@ tee
 NAME
     tee - write a command's output to a file and pass it on
