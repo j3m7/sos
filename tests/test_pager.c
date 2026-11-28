@@ -89,6 +89,17 @@ static char *numbered(int n, const char *tail) {
         }                                                                                   \
     } while (0)
 
+// Row r's reverse-video cells, as t_rev_line() shows them ('^' under each).
+#define CHECK_REV(r, expected) do {                                                         \
+        const char *l_ = t_rev_line(r);                                                     \
+        test_checks++;                                                                      \
+        if (strcmp(l_, (expected))) {                                                       \
+            test_failures++;                                                                \
+            fprintf(stderr, "%s:%d: %s: row %d inverted \"%s\", expected \"%s\"\n",         \
+                    __FILE__, __LINE__, test_current, (r), l_, (expected));                 \
+        }                                                                                   \
+    } while (0)
+
 // --- tests ---------------------------------------------------------------------------------------
 
 TEST(shows_text_and_status) {
@@ -211,7 +222,7 @@ TEST(a_small_window_reads_the_text_in_pieces) {
     keys("/line 250 \r");                   // across many windows
     draw();
     CHECK_LINE(0, "line 250 of the text");
-    CHECK(strstr(status(), "lines 250-258/300") != NULL);
+    CHECK(strstr(status(), "found on line 250") != NULL);
     CHECK(source.reads > 50);               // it really went through the window
     CHECK(source.largest <= 64);
     pager_free(&pg);
@@ -245,22 +256,27 @@ TEST(a_match_across_the_window_edge) {
     memset(text, '0', 60);
     strcpy(text + 60, "needle\nmore\nlast\n");           // "needle" at 60..65 crosses 64
     open_text(text, 6, 80, 64);
-    keys("/needle\r");                     // none after line 1: around, through the edge
+    keys("/needle\r");                     // on the top line, through the edge
     draw();
     CHECK_EQ(pg.top, 0);
-    CHECK(strstr(status(), "search wrapped around") != NULL);
+    CHECK(strstr(status(), "found on line 1") != NULL);
+    CHECK_EQ(pg.hit, 60);
     pager_free(&pg);
 
     memset(text, '0', 62);
     strcpy(text + 62, "\nmore\nlast\n");                 // a match starting with the '\n' at 62
     open_text(text, 6, 80, 64);
-    key('j');                               // top: "more", at 63
     strcpy(pg.last_find, "\nmore");          // (a '\n' can't be typed at the prompt)
     key('n');
     draw();
+    CHECK_EQ(pg.hit, 62);
     CHECK_EQ(pg.top, 0);                    // the line holding the match's start
     CHECK_EQ(pg.top_line, 0);
-    CHECK(strstr(status(), "search wrapped around") != NULL);
+    CHECK(strstr(status(), "found on line 1") != NULL);
+    key('n');                               // past it: none, around to the same one
+    draw();
+    CHECK_EQ(pg.hit, 62);
+    CHECK(strstr(status(), "search wrapped around: found on line 1") != NULL);
     pager_free(&pg);
 }
 
@@ -284,7 +300,11 @@ TEST(search_forward_wraps_and_fails) {
     open_text(text, 6, 40, 0);                 // 5 text rows
     keys("/line 4\r");
     draw();
-    CHECK_LINE(0, "line 4");               // from the line after the top one
+    CHECK_LINE(0, "line 4");
+    CHECK(strstr(status(), "found on line 4") != NULL);
+    key('j');                               // any key: the status row is back
+    key('k');
+    draw();
     CHECK(strstr(status(), "lines 4-8") != NULL);
     key('n');
     draw();
@@ -304,6 +324,9 @@ TEST(search_forward_wraps_and_fails) {
     draw();
     CHECK_LINE(0, "line 56");
     CHECK_LINE(3, "line 59");
+    CHECK(strstr(status(), "found on line 59") != NULL);
+    key('x');                               // a key that does nothing clears the message
+    draw();
     CHECK(strstr(status(), "lines 56-60/60 END") != NULL);
     keys("/nothing here\r");
     draw();
@@ -324,6 +347,152 @@ TEST(search_forward_wraps_and_fails) {
     CHECK(!pg.finding);
     pager_free(&pg);
     free(text);
+}
+
+TEST(a_match_on_a_page_shorter_than_the_screen_is_shown) {
+    open_text("NAME\n    cat - show a file\nDESCRIPTION\n    a secure secure boot\n    more\n", 10, 40, 0);
+    keys("/secure\r");
+    draw();
+    CHECK_EQ(pg.top, 0);                    // nothing to scroll
+    CHECK(strstr(status(), "found on line 4") != NULL);
+    CHECK_LINE(3, "    a secure secure boot");
+    CHECK_REV(3, "      ^^^^^^ ^^^^^^");     // every match on screen
+    CHECK_REV(1, "");
+    CHECK(!t_rev_on);                       // switched off at the end of each one
+    key('n');                               // the next one, on the same line
+    draw();
+    CHECK_EQ(pg.hit, (size_t)(strstr(source.text, "secure secure") - source.text) + 7);
+    CHECK(strstr(status(), "found on line 4") != NULL);
+    key('n');                               // none after: around to the first
+    draw();
+    CHECK(strstr(status(), "search wrapped around: found on line 4") != NULL);
+    keys("/e\r");                           // no capital: NAME's E matches too
+    draw();
+    CHECK_REV(0, "   ^");
+    CHECK_REV(1, "                    ^");    // "show a file": the 'e'
+    pager_free(&pg);
+
+    open_text("aaaa b aa\n", 5, 40, 0);     // overlapping matches: one span
+    keys("/aa\r");
+    draw();
+    CHECK_REV(0, "^^^^   ^^");
+    pager_free(&pg);
+}
+
+TEST(a_new_search_starts_on_the_top_line) {
+    char *text = numbered(30, "");
+    open_text(text, 6, 40, 0);
+    keys("/line 1\r");
+    draw();
+    CHECK_LINE(0, "line 1");
+    CHECK_EQ(pg.hit, 0);
+    CHECK(strstr(status(), "found on line 1") != NULL);
+    CHECK_REV(0, "^^^^^^");
+    key('n');                               // then past it
+    draw();
+    CHECK_LINE(0, "line 10");
+    key('j');
+    key('j');
+    keys("/line 1\r");                      // a new search: from the top line shown, line 12
+    draw();
+    CHECK_LINE(0, "line 12");
+    pager_free(&pg);
+    free(text);
+}
+
+TEST(n_goes_through_the_last_screenful_and_wraps) {
+    char *text = numbered(30, "");
+    open_text(text, 6, 40, 0);              // 5 text rows: the last screenful is lines 26-30
+    keys("/line 2\r");
+    draw();
+    CHECK_LINE(0, "line 2");
+    for (int i = 20; i <= 26; i++) {
+        key('n');
+        draw();
+        char want[16];
+        snprintf(want, sizeof(want), "line %d", i);
+        CHECK_LINE(0, want);
+    }
+    // The view is on the last screenful: n still goes on, line by line, without moving it.
+    for (int i = 27; i <= 29; i++) {
+        key('n');
+        draw();
+        char want[32];
+        snprintf(want, sizeof(want), "found on line %d", i);
+        CHECK(strstr(status(), want) != NULL);
+        CHECK_LINE(0, "line 26");
+        CHECK_REV(i - 26, "^^^^^^");
+    }
+    key('n');                               // none after line 29: around to line 2
+    draw();
+    CHECK_LINE(0, "line 2");
+    CHECK(strstr(status(), "search wrapped around: found on line 2") != NULL);
+    key('G');                               // scrolled away from the match: n starts at the top
+    key('k');
+    key('k');                               // top: line 24
+    key('n');
+    draw();
+    CHECK_LINE(0, "line 24");
+    CHECK(strstr(status(), "found on line 24") != NULL);
+    pager_free(&pg);
+    free(text);
+}
+
+TEST(a_search_without_capitals_ignores_case) {
+    open_text("Secure boot\nSECURE\nsecure\n", 6, 40, 0);
+    keys("/secure\r");
+    draw();
+    CHECK(strstr(status(), "found on line 1") != NULL);
+    CHECK_REV(0, "^^^^^^");
+    CHECK_REV(1, "^^^^^^");
+    CHECK_REV(2, "^^^^^^");
+    keys("/SECURE\r");                      // a capital: exact
+    draw();
+    CHECK(strstr(status(), "found on line 2") != NULL);
+    CHECK_REV(0, "");
+    CHECK_REV(1, "^^^^^^");
+    CHECK_REV(2, "");
+    keys("/Boot\r");
+    draw();
+    CHECK(strstr(status(), "not found") != NULL);
+    pager_free(&pg);
+}
+
+TEST(a_match_cut_by_an_edge_leaves_nothing_inverted) {
+    open_text("0123456789abcdefghijklmnopqrstuvwxyz\nshort\n", 4, 20, 0);
+    keys("/hijklm\r");                      // cut by the right edge
+    draw();
+    CHECK_REV(0, "                 ^^^");
+    CHECK(!t_rev_on);
+    key(KEY_RIGHT);                         // and by the left one: columns 10.. shown
+    draw();
+    CHECK_LINE(0, "abcdefghijklmnopqrst");
+    CHECK_REV(0, "       ^^^^^^");
+    CHECK(!t_rev_on);
+    key(KEY_RIGHT);                         // only its end is shown: columns 20..
+    keys("/fghijk\r");
+    draw();
+    CHECK_LINE(0, "klmnopqrstuvwxyz");
+    CHECK_REV(0, "^");
+    CHECK(!t_rev_on);
+    pager_free(&pg);
+}
+
+TEST(matches_in_wide_and_marked_text) {
+    // "日本" is two wide characters; "é" a letter with a combining mark (one column).
+    open_text("ab 日本 x e\xcc\x81" "e\xcc\x81 z\n", 4, 20, 0);
+    keys("/日本\r");
+    draw();
+    CHECK_REV(0, "   ^^^^");
+    keys("/e\r");                           // matches the letter: the unit is shown inverted
+    draw();
+    CHECK_REV(0, "          ^^");
+    keys("/\xcc\x81" "e\r");                // starts on a mark, inside a unit
+    draw();
+    CHECK(strstr(status(), "found on line 1") != NULL);
+    CHECK_REV(0, "          ^^");
+    CHECK(!t_rev_on);
+    pager_free(&pg);
 }
 
 TEST(long_lines_scroll_sideways) {
@@ -673,6 +842,12 @@ TEST_MAIN(
     RUN(a_match_across_the_window_edge);
     RUN(a_taller_terminal_pulls_the_view_back_to_the_end);
     RUN(search_forward_wraps_and_fails);
+    RUN(a_match_on_a_page_shorter_than_the_screen_is_shown);
+    RUN(a_new_search_starts_on_the_top_line);
+    RUN(n_goes_through_the_last_screenful_and_wraps);
+    RUN(a_search_without_capitals_ignores_case);
+    RUN(a_match_cut_by_an_edge_leaves_nothing_inverted);
+    RUN(matches_in_wide_and_marked_text);
     RUN(long_lines_scroll_sideways);
     RUN(controls_and_wide_characters);
     RUN(quit_resize_and_log_messages);

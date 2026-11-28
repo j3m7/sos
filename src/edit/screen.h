@@ -22,9 +22,12 @@
 #define SCREEN_TAB       8
 // The bytes one column can hold: a character of up to 4 bytes with its marks.
 #define SCREEN_UNIT_MAX  (4 * (1 + SCREEN_MAX_MARKS))
-// Most output one screen row can take: positioning, then one unit per column. A row goes out in
-// pieces if the channel has less room than this.
-#define SCREEN_ROW_BYTES (16 + SCREEN_COLS_MAX * SCREEN_UNIT_MAX)
+// A switch of the attributes a unit is drawn with (the pager's reverse-video matches: on is
+// ESC [ 7 m, off ESC [ m), at most one before each unit, and one off at the row's end.
+#define SCREEN_ATTR_MAX  4
+// Most output one screen row can take: positioning, then one unit per column, each perhaps with
+// an attribute switch. A row goes out in pieces if the channel has less room than this.
+#define SCREEN_ROW_BYTES (16 + SCREEN_COLS_MAX * (SCREEN_UNIT_MAX + SCREEN_ATTR_MAX) + SCREEN_ATTR_MAX)
 
 // --- layout --------------------------------------------------------------------------------------
 
