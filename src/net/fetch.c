@@ -12,6 +12,9 @@
 // Over https, or plain http (archives.md §3.3). The transport is http.c's business: this file
 // only warns that a plain hop isn't encrypted, and says when a plain body's size wasn't known
 // (it ended at the TCP close, which a cut connection also gives): the hash is the check.
+//
+// The running SHA-256 is on the RP2350's SHA-256 block when it's free as the body starts
+// (files/sha256hw.h), held until finish(), which every end goes through; else wolfCrypt's.
 
 #include "net/fetch.h"
 
@@ -30,6 +33,7 @@
 #include "files/files.h"
 #include "files/path.h"
 #include "files/sdcard.h"
+#include "files/sha256hw.h"
 #include "net/http.h"
 #include "shell/termtext.h"
 
@@ -61,6 +65,7 @@ typedef struct {
     FIL f;
     wc_Sha256 sha;
     bool sha_ok;                    // sha initialised
+    bool sha_hw;                    // hashing on the SHA-256 block instead (held until the end)
     char path[PATH_LEN];
     char part[PATH_LEN];
     uint64_t body_us, drawn_us, synced_at;
@@ -68,7 +73,7 @@ typedef struct {
     uint64_t written;               // ... and written to the card
     size_t buf_len;
     union {
-        uint8_t buf[BUF_SIZE];
+        _Alignas(4) uint8_t buf[BUF_SIZE];  // the block takes aligned data a word at a time
         struct {                    // before the job starts: the URL and the name it gives
             http_url_t url;
             char name[NAME_MAX_UTF8];
@@ -158,7 +163,10 @@ static FRESULT flush(fetch_job_t *j) {
         fr = FR_DENIED;                         // card full
     if (fr != FR_OK)
         return fr;
-    wc_Sha256Update(&j->sha, j->u.buf, (word32)j->buf_len);
+    if (j->sha_hw)
+        sha256hw_update(j->u.buf, j->buf_len);
+    else
+        wc_Sha256Update(&j->sha, j->u.buf, (word32)j->buf_len);
     j->written += j->buf_len;
     j->buf_len = 0;
     return files_sync_if_due(&j->f, &j->synced_at);
@@ -183,7 +191,12 @@ static void print_summary(shell_t *sh, fetch_job_t *j) {
     uint64_t us = time_us_64() - j->body_us;
     uint8_t digest[WC_SHA256_DIGEST_SIZE];
     char hex[2 * WC_SHA256_DIGEST_SIZE + 1];
-    wc_Sha256Final(&j->sha, digest);
+    if (j->sha_hw) {
+        sha256hw_finish(digest);
+        j->sha_hw = false;
+    } else {
+        wc_Sha256Final(&j->sha, digest);
+    }
     for (size_t i = 0; i < sizeof(digest); i++)
         snprintf(hex + 2 * i, 3, "%02x", digest[i]);
     shell_printf(sh, "saved %s: %llu bytes in %llu.%01llu s (%u KB/s)\n", j->path,
@@ -235,6 +248,8 @@ static bool finish(shell_t *sh, fetch_job_t *j, fetch_end_t how, const char *why
     } else if (how == END_STOPPED) {
         shell_printf(sh, "fetch: stopped; nothing saved\n");
     }
+    if (j->sha_hw)
+        sha256hw_abort();                       // not finished: an error, Ctrl-C, the session
     if (j->sha_ok)
         wc_Sha256Free(&j->sha);
     http_close(j->req);
@@ -261,11 +276,14 @@ static bool headers_in(shell_t *sh, fetch_job_t *j) {
         return false;
     }
     j->open = j->created = true;
-    if (wc_InitSha256(&j->sha) != 0) {
-        shell_printf(sh, "fetch: the hash couldn't start\n");
-        return false;
+    j->sha_hw = sha256hw_begin();
+    if (!j->sha_hw) {
+        if (wc_InitSha256(&j->sha) != 0) {
+            shell_printf(sh, "fetch: the hash couldn't start\n");
+            return false;
+        }
+        j->sha_ok = true;
     }
-    j->sha_ok = true;
     j->phase = F_BODY;
     j->body_us = j->synced_at = time_us_64();
     j->drawn_us = j->body_us;                   // the first line after DRAW_US
