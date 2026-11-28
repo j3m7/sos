@@ -268,3 +268,10 @@ reply, and the statistics and their text (pure C, host tested).
   callback, so the main loop's pace (5 ms) doesn't count in the round trip.
 - **Ctrl-C** prints the summary. The same cancel ends a run when its SSH session goes away;
   its output then goes nowhere (`ssh_session_write()` refuses a closed session), as with `chat`.
+
+## Commands
+
+`wifi_cmd.c` holds the `wifi` and `net` commands (`wifi_command()`, `net_command()`, and their
+Tab words); `ping.c` holds `ping` and the hosts Tab offers for it. `shell/shell.c` lists them in
+its command table, which keeps the order Tab shows (docs/design/build-features.md §4.1).
+`wifi_show()` and `wifi_ask_ssid()` are also used by `config` and `setup`.

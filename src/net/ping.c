@@ -17,6 +17,7 @@
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #include "lwip/dns.h"
+#include "lwip/netif.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/raw.h"
@@ -24,6 +25,7 @@
 #include "core/heaptag.h"
 #include "net/ping_msg.h"
 #include "net/wifi.h"
+#include "time/time_cmd.h"
 
 #define PING_MAX_RUNS   5           // a shell each (the console and 3 SSH sessions) and a Lua
                                     // script. lwipopts.h has MEMP_NUM_RAW_PCB 5 raw PCBs for
@@ -389,3 +391,20 @@ void ping_command(shell_t *sh, char *args) {
     }
     shell_run_job(sh, ping_step, r);
 }
+
+// `ping <host>`: the NTS servers and the gateway, while Wi-Fi is up.
+static void tab_ping_hosts(shell_t *sh, shell_value_fn fn, void *arg) {
+    (void)sh;
+    time_nts_servers(fn, arg);
+    if (!wifi_up())
+        return;
+    char gw[IP4ADDR_STRLEN_MAX] = "";
+    cyw43_arch_lwip_begin();
+    if (netif_default && !ip4_addr_isany_val(*netif_ip4_gw(netif_default)))
+        ip4addr_ntoa_r(netif_ip4_gw(netif_default), gw, sizeof(gw));
+    cyw43_arch_lwip_end();
+    if (gw[0])
+        fn(gw, "gateway", arg);
+}
+
+const shell_values_t ping_hosts = SHELL_VALUES_INIT(tab_ping_hosts);

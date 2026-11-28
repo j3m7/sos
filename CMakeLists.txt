@@ -299,6 +299,7 @@ set(SOS_SOURCES
     src/man/man_topic.c
     src/chat/chat.c
     src/net/wifi.c
+    src/net/wifi_cmd.c
     src/net/wifistat.c
     src/net/wifi_pick.c
     src/net/wifi_names.c
@@ -308,6 +309,7 @@ set(SOS_SOURCES
     src/net/ping.c
     src/net/ping_msg.c
     src/ssh/sshd.c
+    src/ssh/ssh_cmd.c
     src/ssh/hostkey.c
     src/ssh/hostkey_record.c
     src/ssh/sftp_fs.c
@@ -336,6 +338,7 @@ set(SOS_SOURCES
     src/time/timeconv.c
     src/time/utc_libc.c
     src/time/timesync.c
+    src/time/time_cmd.c
     src/time/tzrule.c
     src/time/tzbundle.c
     src/time/tzzone.c
@@ -343,6 +346,7 @@ set(SOS_SOURCES
     src/time/nts_ke.c
     src/time/nts_ntp.c
     src/tls/tls.c
+    src/tls/tls_cmd.c
     src/tls/tls_admit.c
     src/tls/tls_roots.c
     src/tls/certstore.c
