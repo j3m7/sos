@@ -196,8 +196,12 @@ sha256sum -c <list>
   FIPS 180-2 vectors on the block; a wrong answer is logged once and the block is never used
   again. SHA-1, SHA-512, Lua's `sos.hash` (rarely large data, and a script could keep the block
   taken), TLS and SSH stay on wolfCrypt.
-  Speed with the block: to be measured on dev-1 (`sha256sum` of the same 10 MB file; 23.0 s
-  above).
+  Speed with the block, measured on dev-1 (2026-11-28, #281, same card and file): `sha256sum`
+  14.6 s (0.72 MB/s) against 23.0 s in wolfCrypt, 1.6 times as fast; what is left is mostly the
+  encrypted card's read. SHA-1 (17.5 s) and SHA-512 (25.5 s) are unchanged. Two shells hashing at
+  once: both correct, one on the block (22.8 s) and one on wolfCrypt (31 s), sharing the card.
+  After Ctrl-C, a dropped SSH session and a reboot, the next `sha256sum` was fast again (block
+  released); the self-check logged nothing.
 
 ## 5. gzip, gunzip, zcat
 
