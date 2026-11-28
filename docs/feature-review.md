@@ -7,7 +7,7 @@ last ones change or erase things and are marked.
 - **This is a review, not a test gate.** If what you see differs from "You should see", write
   it in the [notes](#notes) at the end (section and step number, what you saw) and go on. Stop
   only where a step says **Stop**.
-- Board: dev-1 (serial `F94525FD61D9A1CC`), on a main image at or after `11112a8`, with an SD
+- Board: dev-1 (serial `F94525FD61D9A1CC`), on a main image at or after `6a99ef1` (#284), with an SD
   card in. Another board works too: change the serial below.
 - What each feature does in detail is in its manual page (`man <command>` on the board, or
   [man/](../man/)) and the guides listed in the [README](../README.md#documentation). Where a
@@ -20,7 +20,8 @@ last ones change or erase things and are marked.
   (other PRs' board runs, the #275 drift reading) around it, and check nothing else is using
   the board.
 - [ ] The board runs current main: `version` on its console names a commit at or after
-  `11112a8`. If not, flash main in your slot first.
+  `6a99ef1`. If not, flash main in your slot first (while a drift measurement runs on dev-1,
+  only images with #284 may go on it).
 - [ ] You know the console password, and your SSH key is one the board trusts.
 - [ ] You have `sftp`, `ssh` and `picocom` on this machine, and a terminal at least 80x24.
 
@@ -84,7 +85,7 @@ All in **[console]**; each also works over SSH.
 |---|---|---|
 | 1 | `version` | commit, board serial `F94525FD61D9A1CC`, chip revision A2, and how it is secured: secure boot, debug port, root secret, console-only setup (the key hash is `bootkey`'s, section 19) |
 | 2 | `uptime` | time since boot and the last reset's cause |
-| 3 | `uptime history` | the recent resets, each with its cause and how long the board had been up |
+| 3 | `uptime history` | the recent resets, each with its cause and how long the board had been up, and RTC events such as `rtc set (no cal, 12.5 pF)` |
 | 4 | `temp` | chip temperature, lowest and highest since boot, then either `Calibrated ...` or `Uncalibrated:` |
 | 5 | `power` | supply voltage, and USB power present |
 | 6 | `mem` | heap and stack use, by feature; core 0 stack high-water mark |
@@ -325,27 +326,37 @@ Keep one SSH session open beside the console.
 1. **[console]** `time`
    You should see: the UTC time and where it came from (RTC, NTS or SNTP), the RTC reading and
    battery state, the calibration, the drift line, the last sync, the server and periodic
-   settings, and a local time line if a zone is set.
-2. `time sync`: **on dev-1, ask the Reviewer first whether an RTC drift measurement is
-   running (#275).** A manual sync starts the measurement over and loses the hours measured so
-   far; skip this step while one runs.
+   settings, and a local time line if a zone is set. The RTC line ends with the crystal load
+   (#284), and the drift line names the calibration and load, for example:
+   ```
+   rtc:    2026-11-28 15:55:18 UTC; crystal load 12.5 pF
+   drift:  rtc measured at the next sync (no cal, 12.5 pF)
+   ```
+   or a measured rate (`rtc +103+-35 ppm in 8 h ...`) once two syncs have run.
+2. `health run rtc-drift`
+   You should see: the check's result. Right after a sync it is `SKIP  RTC set <n> min ago (no
+   cal, 12.5 pF): drift at the next sync`; with a measurement it reads like `WARN  RTC
+   +103+-35 ppm in 8 h, no cal: try time cal 103.1`. It only reads: it doesn't sync.
+3. `time sync`: **on dev-1, ask the Reviewer first whether an RTC drift measurement is
+   running (#275; one runs until about 06:30 UTC on 2026-11-29).** A manual sync starts the
+   measurement over and loses the hours measured so far; skip this step while one runs.
    You should see: a sync over NTS within a few seconds; `time` then shows its correction and
    round trip.
-3. `nts`
+4. `nts`
    You should see: cookies, the last key exchange and query.
-4. `nts ke`, then `nts query`
+5. `nts ke`, then `nts query`
    You should see: each step succeeds; neither sets the clock.
-5. `time zone`
+6. `time zone`
    You should see: the zone and its rule, or UTC, and the bundle's tzdata release.
-6. `time zone list europe/ | more`
+7. `time zone list europe/ | more`
    You should see: the zones with their POSIX rules, paged. q quits.
-7. `time zone madrid`
+8. `time zone madrid`
    You should see: refused, with `Europe/Madrid` offered.
-8. `time zone Europe/Ma` and Tab twice.
+9. `time zone Europe/Ma` and Tab twice.
    You should see: `Europe/Madrid`, `Europe/Malta`, `Europe/Mariehamn`.
-9. If you change the zone here, note the old one and set it back after (`time zone <old>` or
+10. If you change the zone here, note the old one and set it back after (`time zone <old>` or
    `time zone utc`).
-10. `time auto`, `time server`, `time cal`
+11. `time auto`, `time server`, `time cal`
    You should see: each setting shown, unchanged (`time cal` is off on dev-1). Don't change
    it: the drift readings on #275 (the RTC runs about 100 ppm fast) are for you to decide a
    calibration from, and a change starts the measurement over.
