@@ -273,21 +273,23 @@ Keep one SSH session open beside the console.
     then `sftp $B`, `put pkg.tgz /review/pkg.tgz`, `put bad.tar /review/bad.tar`, `bye`.
 11. **[console]** `tar tf /review/pkg.tgz`
     You should see: one line per entry with its type (`d`, `-`, `l`), size, UTC date and name;
-    the link shows its target and, in brackets, why `tar xf` would skip it. The gzip is
+    the link reads `pkg/link -> README  (link skipped (FAT has no links))`. The gzip is
     recognised without `z`.
-12. `tar tf /review/pkg.tgz | grep README`
-    You should see: only the `pkg/README` line.
+12. `tar tf /review/pkg.tgz | grep docs/`
+    You should see: only the `pkg/docs/` and `pkg/docs/a.txt` lines.
 13. `mkdir /review/out`, then `tar xvf /review/pkg.tgz -C /review/out`
-    You should see: each name as it is extracted; the link skipped; one of `README`/`readme`
-    skipped as `same name as ... on FAT`; then `<n> files, <n> directories, <n> skipped`.
+    You should see: each name as it is extracted; skips as `tar: <name>: <why>`: the link, and
+    one of `README`/`readme` as `same name as pkg/README on FAT` (or the other way round); then
+    `<n> files, <n> directories, <n> skipped`.
 14. `cat /review/out/pkg/docs/a.txt`
     You should see: `hello`.
 15. The same `tar xvf` again.
-    You should see: each file skipped with `exists (-f replaces it)`. With `-f` added after
-    the archive they are replaced (on this board `-f` means overwrite; the archive is always
+    You should see: each file, `README` and `readme` both, skipped with `exists (-f replaces
+    it)`. With `-f` added after the archive they are replaced, except the second of the case
+    pair, which is again `same name as ...` (on this board `-f` means overwrite; the archive is always
     the word after the mode).
 16. `tar xf /review/bad.tar -C /review/out`
-    You should see: the entry skipped as `unsafe path`, and the count of skipped entries.
+    You should see: the entry skipped as `unsafe path`, then `0 files, 0 directories, 1 skipped`.
 
 ## 13. Time
 
