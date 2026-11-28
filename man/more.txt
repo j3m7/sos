@@ -38,7 +38,8 @@ KEYS
                                 search again), wrapping around to the start;
                                 Ctrl-C cancels. Text with no capital letter
                                 ignores case ('/error' finds Error and
-                                ERROR); with one it must match exactly
+                                ERROR); with one it must match exactly.
+                                Only ASCII letters: '/é' doesn't find É
     n                           the next match: after the one before while
                                 that is on screen, else from the top line
     F                           follow: stay on the end as output arrives
