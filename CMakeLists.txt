@@ -324,6 +324,7 @@ set(SOS_SOURCES
     src/files/gzip.c
     src/files/gzw.c
     src/files/path.c
+    src/files/sha256hw.c
     src/files/sums.c
     src/files/sums_parse.c
     src/files/tar.c
@@ -458,6 +459,7 @@ target_link_libraries(sos
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     zlib
     pico_multicore          # Lua on core 1 (also makes malloc mutex-protected)
+    pico_sha256             # the SHA-256 block for sha256sum and fetch (files/sha256hw.h)
 )
 
 pico_set_program_name(sos "SOS")
