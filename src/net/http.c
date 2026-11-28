@@ -23,7 +23,7 @@ struct http_req {
     http_url_t url;
     char url_text[HTTP_URL_MAX + 1];    // url as text (http_url())
     uint8_t max_redirects, redirects;
-    bool allow_downgrade;
+    bool allow_plain, allow_downgrade;
     uint32_t timeout_ms;
     tls_conn_t *tls;
 
@@ -94,7 +94,8 @@ static const char *begin(http_req_t *r, const char *content_type, const char *co
     r->state = HTTP_CONNECTING;
     // No ALPN: HTTP/1.1 is the default without it, and tls/ would refuse a server that
     // doesn't do ALPN at all.
-    r->tls = tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
+    r->tls = r->url.plain ? tls_open_plain(r->url.host, r->url.port, r->timeout_ms, TLS_USER)
+                          : tls_open(r->url.host, r->url.port, NULL, r->timeout_ms, TLS_USER);
     if (!r->tls) {
         heap_release(HEAP_HTTP, r->out);
         r->out = NULL;
@@ -118,7 +119,8 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
         *err = "out of memory";
         return NULL;
     }
-    *err = http_url_parse(o->url, &r->url);
+    r->allow_plain = o->allow_plain;
+    *err = http_url_parse_any(o->url, &r->url, r->allow_plain);
     if (*err) {
         heap_release(HEAP_HTTP, r);
         return NULL;
@@ -133,7 +135,7 @@ http_req_t *http_start(const http_opts_t *o, const char **err) {
         }
         r->max_redirects = o->max_redirects < HTTP_REDIRECTS_MAX ? o->max_redirects
                                                                  : HTTP_REDIRECTS_MAX;
-        r->allow_downgrade = o->allow_downgrade;
+        r->allow_downgrade = o->allow_plain && o->allow_downgrade;
     }
     http_url_format(&r->url, r->url_text, sizeof(r->url_text));
     r->timeout_ms = o->timeout_ms ? o->timeout_ms : HTTP_DEFAULT_TIMEOUT;
@@ -159,18 +161,21 @@ static int fill(http_req_t *r) {
     }
     if (n == 0)
         return 0;
-    if (tls_poll(r->tls) == TLS_CLOSED) {
-        // close_notify: the server ended the connection cleanly.
-        if (http_resp_eof(&r->resp))
-            finish(r);
-        else
-            fail(r, "%s", r->resp.error);
-    } else if (r->resp.state == HTTP_P_BODY_TO_CLOSE) {
-        // A body that runs to the close, and no close_notify: it may have been cut short.
-        fail(r, "connection closed without close_notify: the response may be incomplete");
-    } else {
-        fail(r, "connection ended before the response did (%s)", tls_error(r->tls));
-    }
+    // The connection ended: TLS_CLOSED is close_notify, or the FIN on plain http; TLS_FAILED is
+    // a FIN without close_notify on https (or a reset: wolfSSL can't tell them apart), or a
+    // reset on plain http. http_resp_end() says whether that completes the response.
+    bool plain = r->url.plain;
+    bool closed = tls_poll(r->tls) == TLS_CLOSED;
+    http_end_t how = closed ? (plain ? HTTP_END_FIN : HTTP_END_CLOSE_NOTIFY)
+                            : (plain ? HTTP_END_RESET : HTTP_END_FIN);
+    bool to_close = r->resp.state == HTTP_P_BODY_TO_CLOSE;
+    const char *why = http_resp_end(&r->resp, plain, how);
+    if (!why)
+        finish(r);
+    else if (closed || (to_close && !plain))
+        fail(r, "%s", why);
+    else
+        fail(r, "%s (%s)", why, tls_error(r->tls));
     return -1;
 }
 
@@ -205,8 +210,8 @@ static void follow_redirect(http_req_t *r) {
         fail(r, "redirect refused: Location too long");
         return;
     }
-    const char *why = http_redirect_target(&r->url, loc, r->allow_downgrade, r->url_text,
-                                           sizeof(r->url_text));
+    const char *why = http_redirect_target(&r->url, loc, r->allow_plain, r->allow_downgrade,
+                                           r->url_text, sizeof(r->url_text));
     if (why) {
         fail(r, "redirect refused: %s", why);
         return;
@@ -332,7 +337,11 @@ const char *http_error(const http_req_t *r) {
 }
 
 const tls_stats_t *http_tls_stats(const http_req_t *r) {
-    return r->tls ? tls_stats(r->tls) : NULL;
+    return r->tls && !tls_is_plain(r->tls) ? tls_stats(r->tls) : NULL;
+}
+
+bool http_plain(const http_req_t *r) {
+    return r->url.plain;
 }
 
 uint32_t http_headers_ms(const http_req_t *r) {

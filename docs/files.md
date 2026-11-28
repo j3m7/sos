@@ -11,10 +11,11 @@ working directory:
 | `cat <file>` | print a file |
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
-| `fetch [-f] <url> [<file>]` | download a file over HTTPS, with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
+| `fetch [-f] [-k] <url> [<file>]` | download a file over HTTPS (or plain HTTP), with its SHA-256 ([TLS and HTTPS](tls.md#downloading-files)) |
 | `echo <text>` | print the text; `> file` / `>> file` after any command (the shell's redirect) writes / appends its output to a file |
 | `sha256sum <file>...`, `sha256sum -c <list>` | print files' SHA-256, or check files against a checksum list (also `sha1sum`, `sha512sum`; [below](#checksums)) |
 | `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |
+| `gzip [-k] [-f] [-1..-9] <file>...` | compress `x` to `x.gz` ([below](#gzip-files)) |
 | `tar tf <archive>`, `tar xf <archive> [-C <dir>] [-f]` | list or extract a tar archive, plain or gzipped ([below](#tar-archives)) |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
@@ -23,9 +24,10 @@ working directory:
 | `sd check` | console only, on an unmounted card: check its file system (exFAT or FAT32), reporting problems without writing |
 | `sd check fix` | console only, on an unmounted card: check, show what it would repair, and after `yes` repair what loses no data (FAT32 for now) |
 
-- **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip`, `zcat` and `tar` do a little work per
-  pass of the main loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops
-  them (a stopped `cp` removes its partial copy). Commands typed meanwhile run afterwards.
+- **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip`, `zcat`, `gzip` and `tar` do a
+  little work per pass of the main loop, so SSH sessions, the console and the watchdog keep going;
+  Ctrl-C stops them (a stopped `cp` removes its partial copy). Commands typed meanwhile run
+  afterwards.
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
   at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **A file being written is synced once a second.** `tee`, `> file`, `cp` and SFTP uploads sync
@@ -75,10 +77,21 @@ run as jobs (Ctrl-C stops them) and read what GNU gzip writes, including joined 
   (`card full`) or Ctrl-C deletes the `.part` and keeps the input. An existing `x` is replaced
   only with `-f`.
 - **Memory:** about 50 KB while it runs (`zlib` in `mem` is zlib's state and 32 KB window); it
-  is refused when that would leave less than 64 KB free. One of gunzip and zcat runs at a time
-  across all shells; another is refused with `busy: gunzip is running in another shell`.
-- Files are made with gzip on a computer for now (`gzip` on the board comes later), and put on
-  the card over SFTP.
+  is refused when that would leave less than 64 KB free. One of gunzip, zcat and gzip runs at a
+  time across all shells; another is refused with `busy: gunzip is running in another shell`.
+
+`gzip x` compresses to `x.gz` and deletes `x` (`-k` keeps it); `-1` (fastest) to `-9`
+(smallest), 6 by default. The output is standard gzip with no name and date 0 in its header
+(like `gzip -n`), so `gunzip` on a computer reads it after an SFTP download.
+
+- **Nothing half-written:** it writes `x.gz.part` and renames it to `x.gz` at the end; an error,
+  a full card (`card full`) or Ctrl-C deletes the `.part` and keeps `x`. An existing `x.gz` is
+  replaced only with `-f`. Names ending in `.gz` or `.tgz` and directories are refused.
+- **Smaller memory, slightly bigger files:** a 4 KB window and zlib's memory level 6 take about
+  54 KB (about 65 KB in all while it runs, with the same 64 KB kept free), where a computer's
+  gzip settings would take 262 KB. Files come out larger than with `gzip` on a computer: about
+  5 % for logs, up to 20 % for prose and source code
+  ([measurements](design/archives.md#54-gzip)).
 
 ## tar archives
 

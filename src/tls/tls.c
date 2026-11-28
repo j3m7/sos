@@ -41,6 +41,7 @@ struct tls_conn {
     char alpn[TLS_ALPN_MAX + 1];    // "" = none
     uint16_t port;
     tls_use_t use;
+    bool plain;                     // plain TCP (tls_open_plain()): no wolfSSL at all
     uint64_t deadline_us;
     uint64_t connected_us;
 
@@ -398,10 +399,12 @@ static void start_connect(tls_conn_t *c) {
     // Everything slow comes first (trusted roots, the SD card's root file): a server starts
     // timing us when it accepts the connection, so the ClientHello must follow at once.
     uint64_t t0 = time_us_64();
-    if (!setup_session(c))
-        return;
-    log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
-            "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
+    if (!c->plain) {
+        if (!setup_session(c))
+            return;
+        log_msg(SOS_LOG_DAEMON | SOS_LOG_DEBUG,
+                "tls: session setup %lu ms", (unsigned long)((time_us_64() - t0) / 1000));
+    }
     if (ssh_ringbuffer_init(&c->rx, NULL, TCP_WND) != 0) {
         fail(c, "out of memory");
         return;
@@ -413,7 +416,8 @@ static void start_connect(tls_conn_t *c) {
         tcp_recv(pcb, tcp_recv_cb);
         tcp_err(pcb, tcp_err_cb);
         // TLS records are written whole; with Nagle, a record waits for the previous one to be
-        // acknowledged (e.g. the first request behind the handshake's Finished).
+        // acknowledged (e.g. the first request behind the handshake's Finished). A plain
+        // request is written whole too.
         tcp_nagle_disable(pcb);
         if (tcp_connect(pcb, &c->addr, c->port, tcp_connected_cb) != ERR_OK) {
             tcp_abort(pcb);
@@ -518,8 +522,8 @@ static void handshake_step(tls_conn_t *c) {
 
 // --- public --------------------------------------------------------------------------------------
 
-tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
-                     tls_use_t use) {
+static tls_conn_t *conn_open(const char *host, uint16_t port, const char *alpn,
+                             uint32_t timeout_ms, tls_use_t use, bool plain) {
     size_t free_heap = heap_free();         // before this connection's own allocation
     tls_conn_t *c = heap_zalloc(HEAP_NET, sizeof(*c));
     if (!c)
@@ -528,6 +532,7 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     snprintf(c->alpn, sizeof(c->alpn), "%s", alpn ? alpn : "");
     c->port = port;
     c->use = use;
+    c->plain = plain;
     c->deadline_us = time_us_64() + (uint64_t)timeout_ms * 1000;
     c->heap_base = heap_now;
     c->state = TLS_RESOLVING;
@@ -546,10 +551,11 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
             open++;
             open_user += conns[i]->use == TLS_USER;
             tls_state_t st = conns[i]->state;              // its handshake's peak still to come
-            opening += st == TLS_RESOLVING || st == TLS_CONNECTING || st == TLS_HANDSHAKE;
+            opening += !conns[i]->plain &&
+                       (st == TLS_RESOLVING || st == TLS_CONNECTING || st == TLS_HANDSHAKE);
         }
     }
-    const char *refused = tls_admit(open, open_user, opening, use, free_heap);
+    const char *refused = tls_admit(open, open_user, opening, use, plain, free_heap);
     if (refused)
         slot = TLS_MAX_CONNS;
     if (slot < TLS_MAX_CONNS) {
@@ -565,6 +571,19 @@ tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t
     if (slot == TLS_MAX_CONNS)
         fail(c, "%s", refused ? refused : "too many TLS connections open");
     return c;
+}
+
+tls_conn_t *tls_open(const char *host, uint16_t port, const char *alpn, uint32_t timeout_ms,
+                     tls_use_t use) {
+    return conn_open(host, port, alpn, timeout_ms, use, false);
+}
+
+tls_conn_t *tls_open_plain(const char *host, uint16_t port, uint32_t timeout_ms, tls_use_t use) {
+    return conn_open(host, port, NULL, timeout_ms, use, true);
+}
+
+bool tls_is_plain(const tls_conn_t *c) {
+    return c->plain;
 }
 
 tls_state_t tls_poll(tls_conn_t *c) {
@@ -584,6 +603,10 @@ tls_state_t tls_poll(tls_conn_t *c) {
             cyw43_arch_lwip_begin();
             c->connected_us = c->tcp_connected_us;
             cyw43_arch_lwip_end();
+            if (c->plain) {
+                c->state = TLS_READY;           // nothing to negotiate
+                break;
+            }
             c->state = TLS_HANDSHAKE;
             handshake_step(c);
         }
@@ -601,9 +624,64 @@ tls_state_t tls_poll(tls_conn_t *c) {
     return c->state;
 }
 
+// --- plain connections (main loop): the TCP payload as it is ------------------------------------
+
+// Take what has arrived, reopening the window by as much (pull, not push: what isn't taken stays
+// in rx, and the server waits once rx is full). With rx empty, the end: the FIN once everything
+// before it has been read (TLS_CLOSED), or a reset or other error (TLS_FAILED).
+static int plain_read(tls_conn_t *c, uint8_t *buf, size_t len) {
+    cyw43_arch_lwip_begin();
+    size_t n = ssh_ringbuffer_used(&c->rx);
+    if (n > len)
+        n = len;
+    if (n) {
+        ssh_ringbuffer_read(&c->rx, buf, n);
+        if (c->pcb)
+            tcp_recved(c->pcb, (u16_t)n);       // n <= rx size < 64K
+        cyw43_arch_lwip_end();
+        return (int)n;
+    }
+    bool fin = c->peer_closed, failed = c->tcp_failed;
+    err_t tcp_err = c->tcp_err;
+    cyw43_arch_lwip_end();
+    if (failed) {
+        fail(c, "the connection was reset or failed (tcp error %d)", (int)tcp_err);
+        return -1;
+    }
+    if (fin) {
+        c->state = TLS_CLOSED;
+        return -1;
+    }
+    return 0;
+}
+
+static int plain_write(tls_conn_t *c, const uint8_t *buf, size_t len) {
+    cyw43_arch_lwip_begin();
+    if (!c->pcb) {
+        err_t tcp_err = c->tcp_err;
+        cyw43_arch_lwip_end();
+        fail(c, "the connection was reset or failed (tcp error %d)", (int)tcp_err);
+        return -1;
+    }
+    u16_t room = tcp_sndbuf(c->pcb);
+    u16_t n = len < room ? (u16_t)len : room;
+    err_t err = n ? tcp_write(c->pcb, buf, n, TCP_WRITE_FLAG_COPY) : ERR_MEM;
+    if (err == ERR_OK)
+        tcp_output(c->pcb);
+    cyw43_arch_lwip_end();
+    if (err == ERR_OK)
+        return n;
+    if (err == ERR_MEM)
+        return 0;                               // queue full: try again later
+    fail(c, "TCP write failed (%d)", (int)err);
+    return -1;
+}
+
 int tls_read(tls_conn_t *c, void *buf, size_t len) {
     if (c->state != TLS_READY)
         return -1;
+    if (c->plain)
+        return plain_read(c, buf, len);
     int r = wolfSSL_read(c->ssl, buf, (int)len);
     if (r > 0)
         return r;
@@ -620,6 +698,8 @@ int tls_read(tls_conn_t *c, void *buf, size_t len) {
 int tls_write(tls_conn_t *c, const void *buf, size_t len) {
     if (c->state != TLS_READY)
         return -1;
+    if (c->plain)
+        return plain_write(c, buf, len);
     int r = wolfSSL_write(c->ssl, buf, (int)len);
     if (r > 0)
         return r;
