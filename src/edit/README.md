@@ -13,8 +13,9 @@ text in RAM (`edit_view()`).
   (up to `SCREEN_MAX_MARKS`, 2) are one unit, and a mark beyond that or with no letter to go on
   shows as `?`. A wide character cut by either edge of the screen shows as spaces. All of this is
   one function, `screen_unit()`, so layout, cursor and drawing agree; and since each column holds
-  one unit of at most 12 bytes, a row's output is bounded (`SCREEN_ROW_BYTES`, 4816 bytes at the
-  400-column limit) whatever the text holds. Controls, invalid UTF-8 and the code points
+  one unit of at most 12 bytes, with at most one attribute switch (4 bytes: the pager's
+  reverse-video search matches) before it, a row's output is bounded (`SCREEN_ROW_BYTES`, 6420
+  bytes at the 400-column limit) whatever the text holds. Controls, invalid UTF-8 and the code points
   `termtext_hidden()` names show as `?`, so nothing in a file can send the terminal a sequence or
   hide what its bytes are. Lines don't wrap; the view scrolls sideways.
 - **Frames** (`screen_draw()`): the program gives three callbacks (start of a frame, render row
