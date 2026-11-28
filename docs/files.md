@@ -12,6 +12,7 @@ working directory:
 | `cp <from> <to>`, `mv <from> <to>` | copy, move or rename (to a directory: keeps the name) |
 | `rm <path>`, `mkdir <dir>` | delete a file or an empty directory, create a directory |
 | `echo <text>` | print the text; `> file` / `>> file` after any command (the shell's redirect) writes / appends its output to a file |
+| `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
@@ -19,9 +20,9 @@ working directory:
 | `sd check` | console only, on an unmounted card: check its file system (exFAT or FAT32), reporting problems without writing |
 | `sd check fix` | console only, on an unmounted card: check, show what it would repair, and after `yes` repair what loses no data (FAT32 for now) |
 
-- **Long commands run in steps.** `ls`, `cat` and `cp` do a little work per pass of the main
-  loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops them (a stopped
-  `cp` removes its partial copy). Commands typed meanwhile run afterwards.
+- **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip` and `zcat` do a little work per
+  pass of the main loop, so SSH sessions, the console and the watchdog keep going; Ctrl-C stops
+  them (a stopped `cp` removes its partial copy). Commands typed meanwhile run afterwards.
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
   at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **A file being written is synced once a second.** `tee`, `> file`, `cp` and SFTP uploads sync
@@ -36,6 +37,23 @@ working directory:
 - No card-detect switch is wired by default (solder jumper SJ1 connects it to GP15), so SOS
   doesn't notice a card swap: run `sd unmount` before taking the card out; the next file command
   initializes and mounts the new card.
+
+## gzip files
+
+`gunzip x.gz` decompresses to `x` and deletes `x.gz` (`-k` keeps it); `x.tgz` gives `x.tar`.
+`zcat x.gz` prints it decompressed without changing it (`zcat old.log.gz | grep error`). Both
+run as jobs (Ctrl-C stops them) and read what GNU gzip writes, including joined files
+(`cat a.gz b.gz > c.gz`) and zero padding after the end.
+
+- **Nothing half-written:** gunzip writes `x.part` and renames it to `x` only when the whole
+  file has been read and its CRC-32 and length checked. A corrupt or cut file, a full card
+  (`card full`) or Ctrl-C deletes the `.part` and keeps the input. An existing `x` is replaced
+  only with `-f`.
+- **Memory:** about 50 KB while it runs (`zlib` in `mem` is zlib's state and 32 KB window); it
+  is refused when that would leave less than 64 KB free. One of gunzip and zcat runs at a time
+  across all shells; another is refused with `busy: gunzip is running in another shell`.
+- Files are made with gzip on a computer for now (`gzip` on the board comes later), and put on
+  the card over SFTP.
 
 ## Checking the card
 
