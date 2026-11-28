@@ -65,7 +65,8 @@ coroutine libraries, `require` (see [Modules](#modules)), and `sos`:
 | `sos.stat(path)`, `sos.exists(path)` | `{size=, dir=, time=}` (`time` in seconds since 1970, from the card's timestamp) or `nil` and `"no such file"`; `true` or `false` |
 | `sos.sd.info()` | what `sd info` shows: `{mounted=, card=, card_bytes=, encrypted=, fs=, total=, free=, cluster=}` (bytes; `mounted` false and nothing else without a card). On a FAT32 card the first call counts the free space, which can take seconds on a large card (later ones are quick; exFAT is always quick) |
 | `sos.time()`, `sos.uptime()` | seconds since 1970 (UTC), seconds since boot |
-| `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but always in UTC (see [Dates and the clock](#dates-and-the-clock)) |
+| `sos.date([format [, t]])`, `sos.time(table)` | dates, as Lua's `os.date` and `os.time` but in UTC (see [Dates and the clock](#dates-and-the-clock)) |
+| `sos.localdate([format [, t]])`, `sos.localtime(table)`, `sos.zone()` | the same in the board's time zone (`time zone`), and that zone's name and rule (the same section) |
 | `sos.clock()` | the clock's state: set or not, the last sync, the RTC (the same section) |
 | `sos.clock_sync()` | start an NTS sync, as `time sync` does: `true`, or `nil` and why (one is already running, or a script started one less than 5 minutes ago). `sos.clock()` shows the result |
 | `sos.who()` | who is logged in, as `who` lists them: `{ {slot=, name=, from=, seconds=, chat=}, ... }` |
@@ -192,7 +193,9 @@ if not r then print("failed: " .. err) elseif r.status ~= 200 then print(r.statu
 
 ## Dates and the clock
 
-SOS keeps time in UTC and has no time zones, so these always work in UTC.
+SOS keeps time in UTC, and `sos.date` and `sos.time` work in UTC whatever the board's time
+zone is: what a script writes into a file, a log or a request stays UTC. Local time is there
+only when a script asks for it, with `sos.localdate` and `sos.localtime` (below).
 
 `sos.date([format [, t]])` is Lua's `os.date`: the time `t` (seconds since 1970; the time now
 if not given) as text, with strftime's conversions (`%Y-%m-%d %H:%M:%S` if no format is given),
@@ -219,6 +222,36 @@ local d = sos.date("*t", now)
 local next3 = sos.time{year = d.year, month = d.month, day = d.day + (d.hour >= 3 and 1 or 0),
                        hour = 3}
 print(next3 - now)
+```
+
+### Local time
+
+`sos.localdate([format [, t]])` and `sos.localtime(table)` are `sos.date` and `sos.time(table)`
+in the board's time zone, the one `time zone` sets (see
+[Time zones](time.md#time-zones)). Without a zone they are the same as the UTC ones.
+
+- `sos.localdate`'s fields are local time; `%Z` is the zone's abbreviation (`CET`), `%z` its
+  offset (`+0100`), and `"*t"`'s `isdst` says whether daylight saving time is in force. `%s` is
+  still seconds since 1970 UTC. A `!` before the format means UTC, as in `os.date`.
+- `sos.localtime(table)` reads the table as local time. On the night the clock goes back, an
+  hour comes twice: the earlier is taken, unless the table's `isdst` says which (`true` the
+  first, daylight saving one; `false` the second). On the night it goes forward, an hour never
+  comes: a time in it is read with the offset before the change, so `02:30` on a night that
+  skips from `02:00` to `03:00` is `03:30`.
+- `sos.zone()` returns the zone's name and POSIX rule (`"Europe/Madrid"`,
+  `"CET-1CEST,M3.5.0,M10.5.0/3"`), or `"UTC"` and `nil` when none is set.
+
+A script uses the zone the board had when it started: changing it with `time zone` while the
+script runs changes nothing for that script.
+
+```lua
+print(sos.localdate("%H:%M %Z"))                -- 15:03 CET
+-- seconds until the next 07:00 local time
+local now = sos.time()
+local d = sos.localdate("*t", now)
+local t = sos.localtime{year = d.year, month = d.month, day = d.day, hour = 7}
+if t <= now then t = sos.localtime{year = d.year, month = d.month, day = d.day + 1, hour = 7} end
+print(t - now)
 ```
 
 `sos.clock()` returns what `time` shows:

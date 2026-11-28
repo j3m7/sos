@@ -226,8 +226,10 @@ add_test(NAME certbundle COMMAND test_certbundle)
 
 # tools/host/mkconfig.c: the provisioning file and the config image written by tools/provision.sh.
 add_executable(test_mkconfig test_mkconfig.c ${SOS_ROOT}/tools/host/mkconfig.c ${SOS_ROOT}/src/core/config.c
-    ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/core/sensors.c)
-target_compile_definitions(test_mkconfig PRIVATE MKCONFIG_NO_MAIN)
+    ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/core/sensors.c
+    ${SOS_ROOT}/src/time/tzbundle.c ${SOS_ROOT}/src/time/tzrule.c)
+target_compile_definitions(test_mkconfig PRIVATE MKCONFIG_NO_MAIN
+    TZ_BUNDLE="${SOS_ROOT}/tz/zones.bundle")
 target_include_directories(test_mkconfig PRIVATE ${SOS_ROOT}/src ${SOS_ROOT}/tools/host)
 add_test(NAME mkconfig COMMAND test_mkconfig)
 
@@ -385,7 +387,7 @@ if (EXISTS ${LUA_ROOT}/lua.h)
     target_link_libraries(test_lua_info PRIVATE lua_host)
     add_test(NAME lua_info COMMAND test_lua_info)
     add_executable(test_lua_date test_lua_date.c ${SOS_ROOT}/src/lua/lua_date.c
-                   ${SOS_ROOT}/src/time/timeconv.c)
+                   ${SOS_ROOT}/src/time/timeconv.c ${SOS_ROOT}/src/time/tzrule.c)
     target_include_directories(test_lua_date PRIVATE ${SOS_ROOT}/src)
     target_link_libraries(test_lua_date PRIVATE lua_host)
     add_test(NAME lua_date COMMAND test_lua_date)
