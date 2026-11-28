@@ -6,13 +6,16 @@
 // same entries, the same data (compared by a hash) and the same verdict. Data never comes from
 // outside the input, nor more of it than the entry's size. Every name that tar_name_clean()
 // accepts is relative, has no "..", "." or empty components, and stays under the target directory
-// when joined to it and resolved (§6.3 of docs/design/archives.md).
+// when joined to it and resolved (§6.3 of docs/design/archives.md). And the input taken as a name
+// (up to tar_write.c's limit, no NUL, not ending in '/'), tar_write.c's header for it reads back as that name, as a
+// file and as a directory.
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "files/path.h"
 #include "files/tar_parse.h"
+#include "files/tar_write.h"
 #include "fuzz.h"
 
 // Checked in every build (NDEBUG or not).
@@ -96,11 +99,40 @@ static uint64_t run(const uint8_t *data, size_t size, size_t piece) {
     }
 }
 
+// tar_write.c's headers for `name` read back as it, in one piece.
+static void round_trip(const uint8_t *data, size_t size) {
+    static char name[TAR_NAME_MAX];
+    static uint8_t h[TARW_HEADER_MAX];
+    if (!size || size > TAR_NAME_MAX - 2 || memchr(data, '\0', size) || data[size - 1] == '/') {
+        if (size && size < sizeof(name)) {
+            memcpy(name, data, size);
+            name[size] = '\0';
+            MUST(strlen(name) < size || tarw_header(h, name, false, 0, 0) == 0);
+        }
+        return;
+    }
+    memcpy(name, data, size);
+    name[size] = '\0';
+    for (int dir = 0; dir < 2; dir++) {
+        size_t len = tarw_header(h, name, dir, 1234, 1772600767);
+        MUST(len > 0 && len <= sizeof(h) && len % TAR_BLOCK == 0);
+        tar_init(&t);
+        const uint8_t *p = h;
+        size_t left = len;
+        MUST(tar_feed(&t, &p, &left) == TAR_HEADER && left == 0);
+        MUST(!t.entry.refused && !strncmp(t.entry.name, name, size));
+        MUST(!strcmp(t.entry.name + size, dir ? "/" : ""));
+        MUST(t.entry.kind == (dir ? TAR_DIR : TAR_FILE) && t.entry.mtime == 1772600767);
+        MUST(t.entry.size == (dir ? 0 : 1234));
+    }
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     // [piece - 1] then the archive.
     size_t piece = (size_t)fuzz_byte(&data, &size) * 3 + 1;
     uint64_t a = run(data, size, size ? size : 1);
     uint64_t b = run(data, size, piece);
     MUST(a == b);
+    round_trip(data, size);
     return 0;
 }

@@ -17,6 +17,7 @@ working directory:
 | `gunzip [-k] [-f] <file>...`, `zcat <file>` | decompress `x.gz` to `x` (`x.tgz` to `x.tar`); print a gzip file decompressed ([below](#gzip-files)) |
 | `gzip [-k] [-f] [-1..-9] <file>...` | compress `x` to `x.gz` ([below](#gzip-files)) |
 | `tar tf <archive>`, `tar xf <archive> [-C <dir>] [-f]` | list or extract a tar archive, plain or gzipped ([below](#tar-archives)) |
+| `tar cf <archive> [-C <dir>] [-f] <path>...`, `tar czf ...` | make a tar archive, plain or gzipped ([below](#making-an-archive)) |
 | `sd` | card and volume information, whether it's encrypted, SPI clock |
 | `sd format [exfat\|fat32] [plain]` | console only: erase the card and format it (one partition), encrypted unless `plain`; an encrypted format shows the card's key once, for offline recovery |
 | `sd test [KB [keep]]`, `sd speed [MHz]` | console only: write/read benchmark (everything else waits meanwhile); SPI clock |
@@ -25,9 +26,9 @@ working directory:
 | `sd check fix` | console only, on an unmounted card: check, show what it would repair, and after `yes` repair what loses no data (FAT32 for now) |
 
 - **Long commands run in steps.** `ls`, `cat`, `cp`, `gunzip`, `zcat`, `gzip` and `tar` do a
-  little work per pass of the main loop, so SSH sessions, the console and the watchdog keep going;
-  Ctrl-C stops them (a stopped `cp` removes its partial copy). Commands typed meanwhile run
-  afterwards.
+  little work per pass of the main loop, so SSH sessions, the console and the watchdog keep
+  going; Ctrl-C stops them (a stopped `cp` removes its partial copy). Commands typed meanwhile
+  run afterwards.
 - **A slow SSH client** slows `cat` down instead of losing output. Printing a file over SSH runs
   at about 130 KB/s (encryption-bound); copying on an unencrypted card at about 580 KB/s.
 - **A file being written is synced once a second.** `tee`, `> file`, `cp` and SFTP uploads sync
@@ -110,8 +111,24 @@ Full rules in `man tar`; design: [docs/design/archives.md](design/archives.md) Â
   overwrite, not "archive file" as on Unix).
 - **Dates are kept:** files and directories get the archive's dates (UTC, like every file
   date on the card). Modes and owners are ignored.
-- **Memory:** about 21 KB, plus 40 KB for a gzipped archive; one of `tar`, `gunzip`, `zcat`
-  and `fetch` runs at a time.
+- **Memory:** about 21 KB, plus 40 KB for a gzipped archive; one of `tar`, `gunzip`, `zcat`,
+  `gzip` and `fetch` runs at a time.
+
+### Making an archive
+
+`tar cf www.tar -C /apps www` makes an archive of `/apps/www` with names starting `www/`;
+`tar czf` makes it gzipped. Paths are relative to `-C` (or the working directory), stored as
+given without a leading `/`; directories are taken whole, up to 16 levels deep. The archive is
+ustar with pax records for long names (mode 0644 for files, 0755 for directories, owner 0, the
+card's UTC dates), so `tar xf` on a computer reads it after an SFTP download.
+
+- **Skipped and said:** the archive itself, files being written (what `ls` shows as `being
+  written`, or open for writing elsewhere, e.g. an SFTP upload or `tee`), unreadable files,
+  paths that don't exist. A path with `..` is refused.
+- **Nothing half-written:** it writes `<archive>.part` and renames it at the end; Ctrl-C, an
+  error or a full card deletes the `.part`, and so does an archive with nothing in it. An
+  existing archive is replaced only with `-f`.
+- **Memory:** about 15 KB, plus 56 KB with `z`.
 
 ## Checking the card
 

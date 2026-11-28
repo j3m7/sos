@@ -208,6 +208,7 @@ bool pager_init(pager_t *p, const char *name, pager_source_t src, size_t window)
     p->src = src;
     p->lines = -1;
     p->end_top = NO_POS;
+    p->hit = NO_POS;
     if (!window)
         window = PAGER_WINDOW;
     p->growing = src.growing;
@@ -299,13 +300,32 @@ static void go_end(pager_t *p) {
     p->top_line = end_line(p);
 }
 
-// Does the text at off start with q (qn bytes)?
-static bool matches(pager_t *p, size_t off, const char *q, size_t qn) {
+static unsigned char fold_byte(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
+}
+
+// Is c the first byte of last_find (case folded when p->fold)?
+static bool first_byte(const pager_t *p, unsigned char c) {
+    return (p->fold ? fold_byte(c) : c) == (unsigned char)p->last_find[0];
+}
+
+// Do the n bytes at s equal q (case folded when p->fold; q then has no capitals)?
+static bool same(const pager_t *p, const unsigned char *s, const char *q, size_t n) {
+    if (!p->fold)
+        return !memcmp(s, q, n);
+    for (size_t i = 0; i < n; i++)
+        if (fold_byte(s[i]) != (unsigned char)q[i])
+            return false;
+    return true;
+}
+
+// Does the text at off start with last_find (qn bytes)? May move the window.
+static bool matches(pager_t *p, size_t off, size_t qn) {
     if (off + qn > p->src.size)
         return false;
     size_t avail;
     const unsigned char *s = at(p, off, qn, false, &avail);
-    return s && avail >= qn && !memcmp(s, q, qn);
+    return s && avail >= qn && same(p, s, p->last_find, qn);
 }
 
 // Search [from, stop) for last_find: *hit is where it starts and *nls the '\n's before it from
@@ -323,16 +343,15 @@ static bool search(pager_t *p, size_t from, size_t stop, size_t *hit, long *nls)
             avail = stop - off;
         size_t i = 0;
         while (i < avail) {
-            if (s[i] == (unsigned char)q[0]) {
+            if (first_byte(p, s[i])) {
                 if (i + qn <= avail) {
-                    if (!memcmp(s + i, q, qn)) {
+                    if (same(p, s + i, q, qn)) {
                         *hit = off + i;
                         *nls = count;
                         return true;
                     }
                 } else {                    // across the window's edge: at() may move it
-                    bool m = matches(p, off + i, q, qn);
-                    if (m) {
+                    if (matches(p, off + i, qn)) {
                         *hit = off + i;
                         *nls = count;
                         return true;
@@ -364,27 +383,52 @@ static void show_line(pager_t *p, size_t hit, long line) {
     }
 }
 
-// From the line after the top one, wrapping around to the start.
-static void find_next(pager_t *p) {
-    const char *q = p->find_len ? p->find : p->last_find;
-    size_t qn = strlen(q);
-    if (!qn) {
+// Just past the last line on screen (the end of the text if it is on screen).
+static size_t screen_end(pager_t *p) {
+    size_t pos = p->top;
+    for (int r = 0; r < text_rows(p) && pos < p->src.size; r++)
+        pos = next_line(p, pos);
+    return pos;
+}
+
+// Search for what was typed at the prompt (from the top line shown), or for the last search
+// again (`again`: n, or Enter at an empty prompt) from just past its match while that is on
+// screen. Wraps around to the start.
+static void find_next(pager_t *p, bool again) {
+    if (p->find_len) {
+        memcpy(p->last_find, p->find, p->find_len + 1);
+        p->fold = true;
+        for (const char *c = p->last_find; *c; c++)
+            if (*c >= 'A' && *c <= 'Z')
+                p->fold = false;
+        p->hit = NO_POS;
+        again = false;
+    }
+    const char *q = p->last_find;
+    if (!q[0]) {
         pager_message(p, "");
         return;
     }
-    if (q != p->last_find)
-        memcpy(p->last_find, q, qn + 1);
-    size_t from = next_line(p, p->top), hit;
-    long nls;
+    size_t from = p->top, hit;
+    long from_line = p->top_line, nls;
+    if (again && p->hit != NO_POS && p->hit >= p->top && p->hit < screen_end(p)) {
+        from = p->hit + 1;                  // a match starting with '\n' ends its line
+        from_line = p->hit_line + (q[0] == '\n' ? 1 : 0);
+    }
+    char msg[64];
     if (search(p, from, p->src.size, &hit, &nls)) {
-        show_line(p, hit, p->top_line + (from > p->top ? 1 : 0) + nls);
-        pager_message(p, "");
+        p->hit_line = from_line + nls;
+        snprintf(msg, sizeof(msg), "found on line %ld", p->hit_line + 1);
     } else if (search(p, 0, from, &hit, &nls)) {
-        show_line(p, hit, nls);
-        pager_message(p, "search wrapped around");
+        p->hit_line = nls;
+        snprintf(msg, sizeof(msg), "search wrapped around: found on line %ld", p->hit_line + 1);
     } else {
         pager_message(p, "not found");
+        return;
     }
+    p->hit = hit;
+    show_line(p, hit, p->hit_line);
+    pager_message(p, msg);
 }
 
 // --- keys ----------------------------------------------------------------------------------------
@@ -392,7 +436,7 @@ static void find_next(pager_t *p) {
 static pager_action_t find_key(pager_t *p, int key) {
     if (key == '\r') {
         p->finding = false;
-        find_next(p);
+        find_next(p, true);
     } else if (key == CTRL('C') || key == CTRL('Q') || key == CTRL('G') || key == CTRL('F')) {
         p->finding = false;
         pager_message(p, "");
@@ -489,7 +533,7 @@ pager_action_t pager_key(pager_t *p, int key) {
         break;
     case 'n':
         p->find_len = 0;
-        find_next(p);
+        find_next(p, true);
         break;
     case CTRL('L'):
         screen_invalidate(&p->scr);
@@ -513,19 +557,43 @@ static void begin_frame(void *ctx) {
     (void)ctx;
 }
 
-// One text row: the line starting at pos, from column col_off, through the window.
+// One text row: the line starting at pos, from column col_off, through the window. The matches
+// of the last search are in reverse video: switched on and off only beside a unit that is shown
+// (so a row's escapes stay within SCREEN_ROW_BYTES however many matches are scrolled off to the
+// left), and always off at the row's end, so a match cut by the edge leaves nothing inverted.
 static size_t text_row(pager_t *p, size_t pos, char *out, size_t n) {
     size_t col = 0, left = p->col_off, right = left + (size_t)p->scr.cols;
+    size_t qn = strlen(p->last_find), lit_end = pos;   // matches cover [.., lit_end)
+    bool lit = false;                                   // reverse video is on
     while (pos < p->src.size && col < right) {
         size_t avail;
         const unsigned char *s = at(p, pos, SCREEN_UNIT_MAX, false, &avail);
         if (!s || !avail || s[0] == '\n')
             break;
         unit_t u = screen_unit(s, avail, col);
+        if (qn) {
+            unsigned starts = 0;            // bytes of the unit that may start a match
+            for (size_t k = 0; k < u.len; k++)
+                if (first_byte(p, s[k]))
+                    starts |= 1u << k;
+            for (size_t k = 0; starts; k++, starts >>= 1)
+                if ((starts & 1) && matches(p, pos + k, qn) && pos + k + qn > lit_end)
+                    lit_end = pos + k + qn;
+            s = at(p, pos, u.len, false, &avail);           // matches() may move the window
+            if (!s || avail < u.len)
+                break;
+        }
+        bool want = pos < lit_end;
+        if (want != lit && col + u.width > left && col < right) {
+            n = want ? screen_put(out, n, "\x1b[7m", 4) : screen_put(out, n, "\x1b[m", 3);
+            lit = want;
+        }
         n = screen_unit_out(out, n, s, u, col, left, right);
         col += u.width;
         pos += u.len;
     }
+    if (lit)
+        n = screen_put(out, n, "\x1b[m", 3);
     return n;
 }
 

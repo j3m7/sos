@@ -327,7 +327,9 @@ set(SOS_SOURCES
     src/files/sums.c
     src/files/sums_parse.c
     src/files/tar.c
+    src/files/tar_create.c
     src/files/tar_parse.c
+    src/files/tar_write.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c
