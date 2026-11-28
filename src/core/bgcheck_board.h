@@ -15,7 +15,6 @@
 health_step_t bgcheck_resets_step(void **state, bool cancel, health_result_t *out);  // boot tier
 health_step_t bgcheck_drift_step(void **state, bool cancel, health_result_t *out);
 health_step_t bgcheck_heap_step(void **state, bool cancel, health_result_t *out);
-health_step_t bgcheck_core1_step(void **state, bool cancel, health_result_t *out);
 
 // POWMAN's BOD register, for `supply` (bgcheck_judge_bod()).
 uint32_t bgcheck_bod_register(void);

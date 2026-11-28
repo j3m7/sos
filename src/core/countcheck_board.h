@@ -12,9 +12,6 @@
 
 #include "core/health.h"
 
-health_step_t countcheck_wifi_step(void **state, bool cancel, health_result_t *out);
-health_step_t countcheck_sd_step(void **state, bool cancel, health_result_t *out);
-health_step_t countcheck_pools_step(void **state, bool cancel, health_result_t *out);
 
 #ifdef SOS_TEST_COMMANDS
 // `health fault wifi timeout|bus <n>`: n driver errors counted as the driver's hooks count them

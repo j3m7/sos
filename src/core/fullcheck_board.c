@@ -27,7 +27,6 @@
 #include "core/heaptag.h"
 #include "core/log.h"
 #include "core/memtest.h"
-#include "files/sdcard.h"
 
 #ifdef SOS_TEST_COMMANDS
 static int ram_fault_armed;             // 1: once, 2: twice (health fault ram)
@@ -439,70 +438,6 @@ health_step_t fullcheck_image_step(void **state, bool cancel, health_result_t *o
     bool ok = wc_Sha256Final(&st->sha, digest) == 0;
     image_judge(st, ok ? digest : NULL, out);
     image_free(state);
-    return HEALTH_DONE;
-}
-
-// --- sd-check ------------------------------------------------------------------------------------
-
-typedef struct {
-    fsck_result_t res;
-    bool encrypted;
-    uint64_t t0;
-} sd_state_t;
-
-health_step_t fullcheck_sd_step(void **state, bool cancel, health_result_t *out) {
-    sd_state_t *st = *state;
-    if (cancel) {
-        if (st) {
-            fsck_result_t res;
-            bool enc;
-            sdcard_check_health_step(true, &res, &enc);
-            heap_release(HEAP_HEALTH, st);
-        }
-        *state = NULL;
-        return HEALTH_DONE;
-    }
-    if (!st) {
-        st = heap_zalloc(HEAP_HEALTH, sizeof(*st));
-        if (!st) {
-            out->status = HEALTH_SKIP;
-            snprintf(out->text, sizeof(out->text), "no memory to check the card");
-            return HEALTH_DONE;
-        }
-        st->t0 = time_us_64();
-        char why[FSCK_LINE_MAX];
-        // Opens the card as a mount does: the one step allowed to take longer than 10 ms.
-        sdcard_check_start_t s = sdcard_check_health_begin(why, sizeof(why));
-        if (s != SDCARD_CHECK_STARTED) {
-            fullcheck_sd_t in = {
-                .state = s == SDCARD_CHECK_MOUNTED      ? FULLCHECK_SD_MOUNTED
-                         : s == SDCARD_CHECK_NOT_BY_HAND ? FULLCHECK_SD_NOT_BY_HAND
-                         : s == SDCARD_CHECK_BUSY        ? FULLCHECK_SD_BUSY
-                                                         : FULLCHECK_SD_NOT_OPENED,
-                .why = why,
-            };
-            fullcheck_judge_sd(&in, out);
-            heap_release(HEAP_HEALTH, st);
-            return HEALTH_DONE;
-        }
-        *state = st;
-        return HEALTH_MORE;
-    }
-    int r = sdcard_check_health_step(false, &st->res, &st->encrypted);
-    if (r == FSCK_MORE)
-        return HEALTH_MORE;
-    fullcheck_sd_t in = {
-        .state = r == FSCK_DONE ? FULLCHECK_SD_DONE : FULLCHECK_SD_FAILED,
-        .res = &st->res, .encrypted = st->encrypted,
-        .ms = (uint32_t)((time_us_64() - st->t0) / 1000),
-    };
-    if (r == SDCARD_CHECK_ENDED) {      // nothing was running: shouldn't happen
-        in.state = FULLCHECK_SD_NOT_OPENED;
-        in.why = "the check ended early";
-    }
-    fullcheck_judge_sd(&in, out);
-    heap_release(HEAP_HEALTH, st);
-    *state = NULL;
     return HEALTH_DONE;
 }
 

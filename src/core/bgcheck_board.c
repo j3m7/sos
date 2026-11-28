@@ -21,13 +21,8 @@
 #include "core/history.h"
 #include "core/log.h"
 #include "core/resetwhy.h"
-#include "lua/lua_bridge.h"
-#include "lua/lua_host.h"
+#include "lua/lua_check.h"
 #include "time/timesync.h"
-
-_Static_assert((int)BGCHECK_WAIT_CORE0 == (int)LUA_WAIT_CORE0 &&
-               (int)BGCHECK_WAIT_OUTPUT == (int)LUA_WAIT_OUTPUT &&
-               (int)BGCHECK_WAIT_LINE == (int)LUA_WAIT_LINE, "the heartbeat's waits");
 
 // --- resets ------------------------------------------------------------------------------------------
 
@@ -112,43 +107,6 @@ health_step_t bgcheck_heap_step(void **state, bool cancel, health_result_t *out)
         bgcheck_heap_t h;
         heap_gather(&h);
         bgcheck_judge_heap(&h, out);
-    }
-    return HEALTH_DONE;
-}
-
-// --- core1 -------------------------------------------------------------------------------------------
-
-static bgcheck_core1_state_t core1_state;
-
-static const char *script_name(void) {
-    if (lua_job.repl)
-        return "lua prompt";
-    if (lua_job.code)
-        return "lua -e";
-    const char *slash = strrchr(lua_job.path, '/');
-    return slash ? slash + 1 : lua_job.path;
-}
-
-static void core1_gather(bgcheck_core1_in_t *in) {
-    int st = lua_job.state;
-    bool running = st == LJ_START || st == LJ_RUNNING;
-    *in = (bgcheck_core1_in_t){
-        .running = running,
-        .cancel = lua_job.cancel,
-        .waiting = running ? (bgcheck_wait_t)lua_beat.waiting : BGCHECK_WAIT_NONE,
-        .beats = lua_beat.beats,
-        .now_us = time_us_64(),
-        .run_s = lua_host_job_seconds(),
-        .name = running ? script_name() : NULL,
-    };
-}
-
-health_step_t bgcheck_core1_step(void **state, bool cancel, health_result_t *out) {
-    (void)state;
-    if (!cancel) {
-        bgcheck_core1_in_t in;
-        core1_gather(&in);
-        bgcheck_judge_core1(&core1_state, &in, out);
     }
     return HEALTH_DONE;
 }
@@ -324,10 +282,6 @@ void bgcheck_board_dump(health_print_fn print, void *arg) {
          (unsigned)h.a.arena, (unsigned)h.a.tags, (unsigned long)h.start, (unsigned long)h.end,
          (unsigned long)h.limit, (unsigned long)h.msplim);
 
-    bgcheck_core1_in_t c;
-    core1_gather(&c);
-    dump(print, arg, "core1: running %d, cancel %d, waiting %d, beats %lu, for %lu s, %s",
-         c.running, c.cancel, c.waiting, (unsigned long)c.beats, (unsigned long)c.run_s,
-         c.name ? c.name : "-");
+    lua_check_dump(print, arg);
 }
 #endif

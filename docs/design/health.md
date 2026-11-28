@@ -18,6 +18,12 @@ changes, #255), built (§9.6), waiting for its board run. Phase 5, the full tier
 §9.7 (approved, #262, with the image hash source decided by the user), built (§9.8), waiting
 for its board run. Phase 6, the counters: designed in §9.9 (approved with changes, #268),
 built (§9.10), waiting for its board run.
+
+Since docs/design/build-features.md phase 2b (2026-11-28) the reads of the checks that belong to
+a feature live in that feature: `hostkey` in `ssh/hostkey_check.c`, `card` and `sd-bus` in
+`files/card_check.c`, `wifi` and `net-pools` in `net/net_check.c`, `core1` in `lua/lua_check.c`,
+and `sd-check` (with its judging) in `files/fsck_check.c` and `files/fsck_check_board.c`. The
+sections below name the `*_board.c` files they were first written in.
 Tracking issue: #233. Revised after Reviewer's review
 of #235: §2, §6, §7, §9 and §10. Stack guards, which #233 planned as a phase, turned out to be in
 place already.

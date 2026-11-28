@@ -543,7 +543,9 @@ host's wolfCrypt by `tests/test_selftest.c`).
 - **Checks of stored state** (phase 3, docs/design/health.md §9.3): `config`, `rootsecret`,
   `otp`, `failcount`, `hostkey` (hourly, first run 40 to 60 s after boot) and `card` (every 6
   hours, first at 90 s), background checks that hold no gate and read only. The judging is pure
-  in `statecheck.c` (`tests/test_statecheck.c`); `statecheck_board.c` gathers what each reads:
+  in `statecheck.c` (`tests/test_statecheck.c`); `statecheck_board.c` gathers what each reads
+  (the `hostkey` and `card` reads are their subsystems': `ssh/hostkey_check.c`,
+  `files/card_check.c`, docs/design/build-features.md §4.3):
   each config slot through `settings_config_slot()` (`config_slot_info()`: kind and sequence
   number, never contents, with the seal key `settings.c` already holds), what
   `rootsource_init()` recorded and the OTP page's soft-lock register, the named OTP rows only
@@ -554,7 +556,8 @@ host's wolfCrypt by `tests/test_selftest.c`).
   `/certs` and `/certs/roots.pem` (2 KB per step, under `files_hold()`), yielding to `sd check`,
   a format, a card unmounted by hand and open files (`sdcard_health_state()`, `files_busy()`).
 - **The background tier** (phase 4, docs/design/health.md §9.5), judged in `bgcheck.c`
-  (`tests/test_bgcheck.c`) and read in `bgcheck_board.c`; none holds a gate:
+  (`tests/test_bgcheck.c`) and read in `bgcheck_board.c` (`core1` in `lua/lua_check.c`); none
+  holds a gate:
   - `resets` (boot) uses `resetwhy.c`'s one decoding of the last reset (fault record, watchdog
     REASON, POWMAN CHIP_RESET: power-on, reboot, reset pin, brownout, watchdog timeout, fault,
     glitch detector, debugger), which `main.c`'s boot line, `uptime`, the log files' marker and
@@ -571,7 +574,8 @@ host's wolfCrypt by `tests/test_selftest.c`).
     (`timeconv.c` has the arithmetic).
 - **The full tier** (phase 5, docs/design/health.md §9.7), run only by `health full` or
   `health run <name>`, judged in `fullcheck.c` (`tests/test_fullcheck.c`) and run in
-  `fullcheck_board.c`:
+  `fullcheck_board.c` (`sd-check`: judged in `files/fsck_check.c`, run in
+  `files/fsck_check_board.c`):
   - `ram`: `memtest.c`'s March C- over six data backgrounds (pure, `tests/test_memtest.c` over a
     simulated memory with faults), on 4 KB heap blocks allocated under `HEAP_HEALTH` while 96 KB
     stays free (interrupts on), then SCRATCH_Y in place, 1 KB at a time with interrupts off,
@@ -586,7 +590,8 @@ host's wolfCrypt by `tests/test_selftest.c`).
   - `sd-check`: `sd check`'s job without a shell (`sdcard_check_health_begin()` and `_step()`),
     only on a card unmounted by hand, steps aimed at 6 ms; no gate.
 - **The counters** (phase 6, docs/design/health.md §9.9), background checks every 10 minutes,
-  judged in `countcheck.c` (`tests/test_countcheck.c`) and read in `countcheck_board.c`; none
+  judged in `countcheck.c` (`tests/test_countcheck.c`) and read by their subsystems
+  (`net/net_check.c`: `wifi`, `net-pools`; `files/card_check.c`: `sd-bus`); none
   holds a gate, none touches the Wi-Fi chip or the card. Errors are judged over a window of an
   hour (`countcheck_window()`: a sample at most every 10 minutes, eight kept, from the newest
   at least an hour old):

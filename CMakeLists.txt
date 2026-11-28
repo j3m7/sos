@@ -302,6 +302,7 @@ set(SOS_SOURCES
     src/net/wifi.c
     src/net/wifi_cmd.c
     src/net/wifistat.c
+    src/net/net_check.c
     src/net/wifi_pick.c
     src/net/wifi_names.c
     src/net/fetch.c
@@ -312,12 +313,16 @@ set(SOS_SOURCES
     src/ssh/sshd.c
     src/ssh/ssh_cmd.c
     src/ssh/hostkey.c
+    src/ssh/hostkey_check.c
     src/ssh/hostkey_record.c
     src/ssh/sftp_fs.c
     src/files/sd_stubs.c
     src/files/sdcard.c
     src/files/sdstat.c
     src/files/fsck.c
+    src/files/fsck_check.c
+    src/files/fsck_check_board.c
+    src/files/card_check.c
     src/files/fsck_exfat.c
     src/files/fsck_plan.c
     src/files/fsck_repair.c
@@ -360,6 +365,7 @@ set(SOS_SOURCES
     src/lua/lua_date.c
     src/lua/lua_hash.c
     src/lua/lua_health.c
+    src/lua/lua_check.c
     src/lua/lua_health_table.c
     src/lua/lua_info.c
     src/lua/lua_net.c

@@ -332,8 +332,8 @@ first runs. Under decision 10 it splits in the same way as the commands:
   logins); X25519 by SSH and by TLS's key exchange. So the Ed25519 tests are built with SSH,
   X25519 with SSH or TLS, and `crypto-ssh` (renamed `crypto-keyx` or similar) exists when
   either does. Without both, wolfSSL trimming (§5) can drop the code and its tests together.
-- `heap-sum` names the running Lua job and `stack` reads core 1's stack peak: with LUA off they
-  use the stand-ins in §4.4 and report core 0 alone.
+- `stack` reads core 1's stack peak: with LUA off it uses the stand-in in §4.4 and reports
+  core 0 alone. (`heap-sum` reads no Lua state; only `core1` does, and it moves with LUA.)
 - `statecheck_board.c`'s `card` text names approved roots (`certstore`): that part follows
   TLS + FILES.
 - `fullcheck.h` includes `files/fsck.h` for a type; the type moves out of the header, so that
@@ -626,8 +626,16 @@ other ranges; leave those out too.
      (`settings_on_owner_gone()`). The hooks now run in the order added (SSH, then the card);
      the two don't depend on each other, and SSH still stops before its host key is forgotten.
      Cost: 128 bytes of code, 24 of static RAM.
-   - **2b** (§4.3): the health checks' read steps moved to their features, with the `sd-check`
-     judging and `fullcheck.h`'s use of `fsck.h`.
+   - **2b** (§4.3): the health checks' read steps moved to their features, cut between their
+     own section markers: `hostkey` → `ssh/hostkey_check.c`; `card` and `sd-bus` →
+     `files/card_check.c`; `wifi` and `net-pools` (and `health fault wifi`) →
+     `net/net_check.c`; `core1` → `lua/lua_check.c`; `sd-check`'s read step →
+     `files/fsck_check_board.c` and its judging (pure, still in `test_fullcheck`) →
+     `files/fsck_check.c`, so `core/fullcheck.h` no longer includes `files/fsck.h`. The judging
+     of the others stays in the core (`statecheck.c`, `countcheck.c`, `bgcheck.c`: pure, no
+     feature includes). The table in `health_board.c` names the moved steps; the state dump
+     still prints its lines in the same order, through the core files' dispatchers, which is
+     where phase 3's `#if`s go. Without test commands the image is byte for byte 2a's size.
    The stand-in headers (§4.4) move to phase 3: they need `SOS_HAVE_<X>`, which phase 3 adds.
 3. **`cmake/features.cmake` with NET, SSH, LUA** and the presets that use them, plus
    `just features`. The first options are the ones that pay most. Includes the board split

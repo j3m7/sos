@@ -18,7 +18,6 @@ void fullcheck_boot(void);
 
 health_step_t fullcheck_ram_step(void **state, bool cancel, health_result_t *out);
 health_step_t fullcheck_image_step(void **state, bool cancel, health_result_t *out);
-health_step_t fullcheck_sd_step(void **state, bool cancel, health_result_t *out);
 
 #ifdef SOS_TEST_COMMANDS
 // `health fault ram once|twice` and `health fault image`: a fault for the next run of that

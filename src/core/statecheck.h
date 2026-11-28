@@ -173,8 +173,6 @@ health_step_t statecheck_config_step(void **state, bool cancel, health_result_t 
 health_step_t statecheck_root_step(void **state, bool cancel, health_result_t *out);
 health_step_t statecheck_otp_step(void **state, bool cancel, health_result_t *out);
 health_step_t statecheck_failcount_step(void **state, bool cancel, health_result_t *out);
-health_step_t statecheck_hostkey_step(void **state, bool cancel, health_result_t *out);
-health_step_t statecheck_card_step(void **state, bool cancel, health_result_t *out);
 
 // health state-dump's lines: print `line` in pieces of at most `cols` characters, each broken
 // after the last "; " or ", " that fits, the pieces after the first indented by two spaces; a

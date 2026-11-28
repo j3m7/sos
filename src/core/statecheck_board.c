@@ -14,9 +14,8 @@
 //   otpread.h's unguarded aliases, which can't write and don't fault; never the root secret's
 //   pages. The running image's key hashed as `bootkey` does.
 // - failcount: the sector in place.
-// - hostkey: hostkey.c's digest of the stored page against the page now, never opened.
-// - card: yields to whatever owns the card, never mounts one; hashes /certs/roots.pem 2 KB a
-//   step, holding the files layer (files_hold) in between so a format or unmount waits.
+// The hostkey and card checks are their subsystems' (ssh/hostkey_check.c, files/card_check.c;
+// docs/design/build-features.md §4.3); the state dump still prints their lines in this order.
 
 #include "core/statecheck.h"
 
@@ -40,11 +39,8 @@
 #include "core/rootflash.h"
 #include "core/rootsource.h"
 #include "core/settings.h"
-#include "files/files.h"
-#include "files/sdcard.h"
-#include "ssh/hostkey.h"
-#include "ssh/sshd.h"
-#include "tls/certstore.h"
+#include "files/card_check.h"
+#include "ssh/hostkey_check.h"
 
 _Static_assert(STATECHECK_CRIT1_ROW == OTP_DATA_CRIT1_ROW &&
                STATECHECK_CRIT1_ROW + STATECHECK_CRIT1_COPIES - 1 == OTP_DATA_CRIT1_R7_ROW &&
@@ -189,170 +185,6 @@ health_step_t statecheck_failcount_step(void **state, bool cancel, health_result
     return HEALTH_DONE;
 }
 
-// --- hostkey ---------------------------------------------------------------------------------
-
-static void hostkey_gather(statecheck_hostkey_t *h) {
-    hostkey_health_t k;
-    hostkey_health(&k);
-    h->have_owner = settings_has_owner_secret();
-    h->have_key = k.have_key;
-    h->gave_up = k.gave_up;
-    h->unsealed = k.unsealed;
-    h->page_matches = k.page_matches;
-    h->erased = k.erased;
-    const char *fp = sshd_host_fingerprint();
-    h->fingerprint = fp && fp[0] ? fp : NULL;
-}
-
-health_step_t statecheck_hostkey_step(void **state, bool cancel, health_result_t *out) {
-    (void)state;
-    if (!cancel) {
-        statecheck_hostkey_t h;
-        hostkey_gather(&h);
-        statecheck_judge_hostkey(&h, out);
-    }
-    return HEALTH_DONE;
-}
-
-// --- card ------------------------------------------------------------------------------------
-
-#define CARD_CHUNK 2048                 // bytes of roots.pem hashed per step
-
-typedef struct {
-    statecheck_card_t seen;
-    FIL file;
-    wc_Sha256 sha;
-    uint32_t generation;                // the mount being read
-    uint8_t buf[CARD_CHUNK];
-} card_state_t;
-
-static bool approved(void) {
-    const uint8_t *h = settings()->certs_hash;
-    for (unsigned i = 0; i < CONFIG_CERTS_HASH_LEN; i++)
-        if (h[i])
-            return true;
-    return false;
-}
-
-static statecheck_path_t path_kind(const char *path) {
-    FILINFO fi;
-    FRESULT fr = f_stat(path, &fi);
-    if (fr == FR_NO_FILE || fr == FR_NO_PATH)
-        return STATECHECK_PATH_MISSING;
-    if (fr != FR_OK)
-        return STATECHECK_PATH_ERROR;
-    return fi.fattrib & AM_DIR ? STATECHECK_PATH_DIR : STATECHECK_PATH_FILE;
-}
-
-// Whatever owns the card now, or NULL: the card check then leaves it alone.
-static const char *card_yield(const sdcard_health_t *sd) {
-    if (sd->busy)
-        return sd->busy;
-    if (sd->mounted && files_busy())
-        return "files open (a file command or SFTP); next run";
-    return NULL;
-}
-
-static void card_free(void **state, bool close) {
-    card_state_t *c = *state;
-    if (c) {
-        if (close) {
-            f_close(&c->file);
-            files_release();
-        }
-        wc_Sha256Free(&c->sha);
-        heap_release(HEAP_FILES, c);
-    }
-    *state = NULL;
-}
-
-// The first step: who owns the card, the two directories, and the start of the roots file.
-static health_step_t card_start(void **state, health_result_t *out) {
-    statecheck_card_t seen;
-    memset(&seen, 0, sizeof(seen));
-    sdcard_health_t sd;
-    sdcard_health_state(&sd);
-    seen.yield = card_yield(&sd);
-    seen.mounted = sd.mounted;
-    seen.locked = sd.locked;
-    seen.fs = sd.fs;
-    seen.encrypted = sd.encrypted;
-    if (seen.yield || !seen.mounted) {
-        statecheck_judge_card(&seen, out);
-        return HEALTH_DONE;
-    }
-    seen.var_log = path_kind(LOGFILE_DIR);
-    seen.certs = path_kind("/certs");
-    seen.approved = approved();
-    if (!seen.approved || seen.var_log != STATECHECK_PATH_DIR ||
-        seen.certs == STATECHECK_PATH_FILE || seen.certs == STATECHECK_PATH_ERROR) {
-        statecheck_judge_card(&seen, out);
-        return HEALTH_DONE;
-    }
-    card_state_t *c = heap_zalloc(HEAP_FILES, sizeof(*c));
-    if (!c) {
-        out->status = HEALTH_SKIP;
-        snprintf(out->text, sizeof(out->text), "no memory to read roots.pem; next run");
-        return HEALTH_DONE;
-    }
-    c->seen = seen;
-    c->generation = sd.generation;
-    FRESULT fr = f_open(&c->file, CERTSTORE_FILE, FA_READ);
-    if (fr != FR_OK || f_size(&c->file) > CERTSTORE_FILE_MAX) {
-        if (fr == FR_OK)
-            f_close(&c->file);
-        c->seen.roots = fr == FR_NO_FILE || fr == FR_NO_PATH ? STATECHECK_ROOTS_MISSING
-                      : fr == FR_OK ? STATECHECK_ROOTS_TOO_BIG : STATECHECK_ROOTS_UNREADABLE;
-        statecheck_judge_card(&c->seen, out);
-        heap_release(HEAP_FILES, c);
-        return HEALTH_DONE;
-    }
-    files_hold();                       // a format or unmount waits for this, as for any file
-    *state = c;
-    if (wc_InitSha256(&c->sha) != 0) {
-        c->seen.roots = STATECHECK_ROOTS_UNREADABLE;
-        statecheck_judge_card(&c->seen, out);
-        card_free(state, true);
-        return HEALTH_DONE;
-    }
-    return HEALTH_MORE;
-}
-
-health_step_t statecheck_card_step(void **state, bool cancel, health_result_t *out) {
-    if (cancel) {
-        card_free(state, true);
-        return HEALTH_DONE;
-    }
-    card_state_t *c = *state;
-    if (!c)
-        return card_start(state, out);
-    // The card may have gone between steps (unmounted, remounted, taken by sd check).
-    sdcard_health_t sd;
-    sdcard_health_state(&sd);
-    if (!sd.mounted || sd.busy || sd.generation != c->generation) {
-        out->status = HEALTH_SKIP;
-        snprintf(out->text, sizeof(out->text), "the card changed during the check; next run");
-        card_free(state, false);        // that file is gone with its mount: nothing to close
-        files_release();
-        return HEALTH_DONE;
-    }
-    UINT got = 0;
-    FRESULT fr = f_read(&c->file, c->buf, sizeof(c->buf), &got);
-    if (fr != FR_OK || wc_Sha256Update(&c->sha, c->buf, got) != 0) {
-        c->seen.roots = STATECHECK_ROOTS_UNREADABLE;
-    } else if (got == sizeof(c->buf)) {
-        return HEALTH_MORE;
-    } else {
-        uint8_t hash[32];
-        c->seen.roots = wc_Sha256Final(&c->sha, hash) == 0 &&
-                                !memcmp(hash, settings()->certs_hash, sizeof(hash))
-                            ? STATECHECK_ROOTS_MATCH : STATECHECK_ROOTS_CHANGED;
-    }
-    statecheck_judge_card(&c->seen, out);
-    card_free(state, true);
-    return HEALTH_DONE;
-}
-
 // --- health state-dump -----------------------------------------------------------------------
 
 #ifdef SOS_TEST_COMMANDS
@@ -453,28 +285,14 @@ static void dump_failcount(health_print_fn print, void *arg) {
          (unsigned)FAILCOUNT_CAPACITY);
 }
 
-static void dump_hostkey(health_print_fn print, void *arg) {
-    statecheck_hostkey_t h;
-    hostkey_gather(&h);
-    dump(print, arg, "hostkey: owner %d, key %d, gave up %d, unsealed %d, page as loaded %d, %s",
-         h.have_owner, h.have_key, h.gave_up, h.unsealed, h.page_matches,
-         h.fingerprint ? h.fingerprint : "(sshd not started)");
-}
 
-static void dump_card(health_print_fn print, void *arg) {
-    sdcard_health_t sd;
-    sdcard_health_state(&sd);
-    dump(print, arg, "card: mounted %d, %s, encrypted %d, locked %d, busy %s, files open %d, "
-         "roots approved %d (not read here)", sd.mounted, sd.fs ? sd.fs : "-", sd.encrypted,
-         sd.locked, sd.busy ? sd.busy : "no", files_busy(), approved());
-}
 
 void statecheck_board_dump(health_print_fn print, void *arg) {
     dump_config(print, arg);
     dump_root(print, arg);
     dump_otp(print, arg);
     dump_failcount(print, arg);
-    dump_hostkey(print, arg);
-    dump_card(print, arg);
+    hostkey_check_dump(print, arg);
+    card_check_dump(print, arg);
 }
 #endif
