@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// HTTP/1.1 messages for the HTTPS client (net/http.c): URL parsing, request building and an
+// HTTP/1.1 messages for the HTTP client (net/http.c): URL parsing, request building and an
 // incremental response parser. Pure C (no SDK, no heap), so it's unit tested on the host.
 //
 // The parser takes the response bytes in whatever pieces they arrive and hands back the body
@@ -28,8 +28,9 @@
 // --- URLs ----------------------------------------------------------------------------------------
 
 typedef struct {
+    bool plain;                     // http:// (only from http_url_parse_any()); else https://
     char host[HTTP_HOST_MAX + 1];
-    uint16_t port;                  // 443 unless given
+    uint16_t port;                  // 443 (80 for http://) unless given
     char path[HTTP_PATH_MAX + 1];   // starts with '/', includes the query; no fragment
 } http_url_t;
 
@@ -38,8 +39,14 @@ typedef struct {
 // Returns NULL, or what's wrong.
 const char *http_url_parse(const char *url, http_url_t *out);
 
-// Write a parsed URL back as text: "https://host[:port]/path?query" (the port only when it isn't
-// 443). size HTTP_URL_MAX + 1 always holds it. Returns the length, or 0 if it didn't fit.
+// http_url_parse(), and with allow_plain also "http://..." (port 80 unless given; out->plain
+// set). Plain http is for callers that check what they get some other way (fetch: the hash);
+// without allow_plain an http:// URL is refused as by http_url_parse().
+const char *http_url_parse_any(const char *url, http_url_t *out, bool allow_plain);
+
+// Write a parsed URL back as text: "https://host[:port]/path?query", or "http://..." (the port
+// only when it isn't the scheme's default). size HTTP_URL_MAX + 1 always holds it. Returns the
+// length, or 0 if it didn't fit.
 size_t http_url_format(const http_url_t *u, char *out, size_t size);
 
 // --- redirects -----------------------------------------------------------------------------------
@@ -48,7 +55,7 @@ size_t http_url_format(const http_url_t *u, char *out, size_t size);
 bool http_status_redirects(int status);
 
 // Resolve a Location header's value against the URL of the request that got it (RFC 3986 §5.2):
-// absolute ("https://h/p"), without the scheme ("//h/p"), an absolute path ("/p"), a query ("?q")
+// absolute ("https://h/p"), without the scheme ("//h/p", the base's scheme), an absolute path ("/p"), a query ("?q")
 // or a relative path ("../p", "p"), with "." and ".." segments removed. A fragment is dropped.
 // The result goes to out as text. Returns NULL, or what's wrong: an empty Location, characters
 // that must be percent-encoded (spaces, controls, non-ASCII), or a result over HTTP_URL_MAX or
@@ -56,12 +63,13 @@ bool http_status_redirects(int status);
 const char *http_url_resolve(const http_url_t *base, const char *location, char *out, size_t size);
 
 // The next hop of a redirect: `url` holds the request's URL and gets the target's. Resolves
-// `location` (http_url_resolve(), text in `text`), refuses a target that isn't https (from
-// https to http only with allow_downgrade, and plain http isn't supported yet, so that is
-// refused too, with its own message), then parses it (http_url_parse(): no user:password@, no
-// IPv6, the limits). Returns NULL, or what's wrong; on failure *url is unspecified.
-const char *http_redirect_target(http_url_t *url, const char *location, bool allow_downgrade,
-                                 char *text, size_t size);
+// `location` (http_url_resolve(), text in `text`), checks the target's scheme, then parses it
+// (http_url_parse_any(): no user:password@, no IPv6, the limits). https is always allowed (from
+// http too). Plain http only with allow_plain, and from an https URL also only with
+// allow_downgrade (fetch -k), each refusal with its own message. Any other scheme is refused.
+// Returns NULL, or what's wrong; on failure *url is unspecified.
+const char *http_redirect_target(http_url_t *url, const char *location, bool allow_plain,
+                                 bool allow_downgrade, char *text, size_t size);
 
 // The file name a URL's path suggests: its last segment (before any query), percent-decoded,
 // into out. Returns NULL, or what's wrong: no segment ("https://h/" or ".../dir/"), bad
@@ -103,6 +111,7 @@ typedef enum {
 typedef struct {
     http_parse_state_t state;
     bool head;                      // response to HEAD: no body whatever the headers say
+    bool ended_by_close;            // the body had no length and ended at the close (eof)
     int status;                     // e.g. 200, once the headers are in
     int minor;                      // HTTP/1.<minor>
     char reason[HTTP_REASON_MAX + 1];
@@ -138,6 +147,21 @@ size_t http_resp_feed(http_resp_t *p, const uint8_t *in, size_t len, size_t max_
 // The connection ended (cleanly). True if that completes the response; otherwise the response
 // was cut short and the parser moves to HTTP_P_ERROR.
 bool http_resp_eof(http_resp_t *p);
+
+// How a connection ended, as the transport saw it.
+typedef enum {
+    HTTP_END_CLOSE_NOTIFY,          // https: the server ended TLS cleanly
+    HTTP_END_FIN,                   // the TCP connection was closed (https: without close_notify)
+    HTTP_END_RESET,                 // reset, or another error
+} http_end_t;
+
+// The connection ended before the parser was done: does that complete the response? A body
+// without a length (HTTP_P_BODY_TO_CLOSE) ends at close_notify on https, and at the FIN on plain
+// http (where nothing protects it: the caller should say so, see ended_by_close); a FIN without
+// close_notify on https, or a reset on either, cuts it short. A body with a length or chunks is
+// complete only if it all arrived, as http_resp_eof() says. Returns NULL if the response is
+// complete (HTTP_P_DONE), or why not (HTTP_P_ERROR).
+const char *http_resp_end(http_resp_t *p, bool plain, http_end_t how);
 
 // True once the status line and all headers are in (state past HTTP_P_HEADERS).
 bool http_resp_headers_done(const http_resp_t *p);

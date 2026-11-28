@@ -43,6 +43,12 @@ def http():
     write("http", "location", b"../x/./pkg%201.2.tar.gz?q=/a/../b#frag")
     write("http", "location-host", b"//cdn.example.org:444/d/SHA256SUMS")
     write("http", "name", b"https://example.org/dl/caf%C3%A9%2Etar.gz?raw=1")
+    # Plain http (fetch): a URL, a downgrade, a scheme-relative hop from an http base, and a body
+    # without a length ending at the FIN (flags: eof, plain, HTTP_END_FIN) or a reset.
+    write("http", "plain-url", b"http://example.org:8080/pkg-1.2.tar.gz?x=1#f")
+    write("http", "plain-location", b"HTTP://cdn.example.org/d/f.bin")
+    write("http", "plain-to-close-fin", bytes([2 | 4 | (1 << 3), 64, 7]) + responses["to-close"])
+    write("http", "plain-to-close-reset", bytes([2 | 4 | (2 << 3), 64, 7]) + responses["to-close"])
 
 
 # --- nts_ke: the server's records --------------------------------------------------------------

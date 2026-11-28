@@ -9,8 +9,9 @@
 // redirect goes, the name a URL suggests, whether a name can be a file) are in http_msg.c and
 // files/path.c, host tested.
 //
-// Over https only for now. The transport is http.c's business: when plain http comes
-// (archives.md §3.3), this file adds its warning and the "size not known" case, nothing else.
+// Over https, or plain http (archives.md §3.3). The transport is http.c's business: this file
+// only warns that a plain hop isn't encrypted, and says when a plain body's size wasn't known
+// (it ended at the TCP close, which a cut connection also gives): the hash is the check.
 
 #include "net/fetch.h"
 
@@ -39,6 +40,7 @@
 #define DRAW_US       500000        // the progress line is redrawn at most this often
 #define ERROR_BODY    256           // body bytes shown after a status that isn't 2xx
 #define NAME_MAX_UTF8 (FF_MAX_LFN * 3 + 1)
+#define PLAIN_WARNING "http: not encrypted; check its hash\n"
 
 typedef enum {
     F_HEADERS,                      // connecting, redirects, waiting for the headers
@@ -127,6 +129,8 @@ static void report_hops(shell_t *sh, fetch_job_t *j) {
     shell_write(sh, "-> ", 3);
     shell_write(sh, url, strlen(url));
     shell_write(sh, "\n", 1);
+    if (http_plain(j->req))
+        shell_printf(sh, PLAIN_WARNING);
 }
 
 // After a failed request: if the handshake failed for want of a trusted root, say which and
@@ -220,6 +224,9 @@ static void print_summary(shell_t *sh, fetch_job_t *j) {
                  (unsigned long long)j->written, (unsigned long long)(us / 1000000),
                  (unsigned long long)(us / 100000 % 10), rate_kbs(j->written, us));
     shell_printf(sh, "sha256: %s\n", hex);
+    // Plain http without a length ended at the TCP close: a cut connection looks the same.
+    if (http_plain(j->req) && http_response(j->req)->ended_by_close)
+        shell_printf(sh, "size not known: check its hash\n");
 }
 
 typedef enum {
@@ -447,7 +454,7 @@ void fetch_command(shell_t *sh, int argc, char **argv) {
         return;
     }
     j->force = force;
-    const char *err = http_url_parse(url, &j->u.setup.url);
+    const char *err = http_url_parse_any(url, &j->u.setup.url, true);
     if (err) {
         shell_printf(sh, "fetch: %s\n", err);
         goto fail;
@@ -458,6 +465,7 @@ void fetch_command(shell_t *sh, int argc, char **argv) {
         .method = "GET",
         .url = url,
         .max_redirects = HTTP_REDIRECTS_MAX,
+        .allow_plain = true,
         .allow_downgrade = downgrade,
     };
     j->req = http_start(&o, &err);
@@ -465,6 +473,8 @@ void fetch_command(shell_t *sh, int argc, char **argv) {
         shell_printf(sh, "fetch: %s\n", err);
         goto fail;
     }
+    if (http_plain(j->req))
+        shell_printf(sh, PLAIN_WARNING);
     j->progress = sh->io->admin && !shell_output_piped(sh);
     j->buf_len = 0;                             // the setup data is done with
     files_hold();

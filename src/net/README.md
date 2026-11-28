@@ -1,4 +1,4 @@
-# net: Wi-Fi, HTTPS and ping
+# net: Wi-Fi, HTTP(S) and ping
 
 `wifi.c` keeps the station connection up, without ever blocking the main loop. lwIP and the
 CYW43 driver come from the Pico SDK (`pico_cyw43_arch_lwip_threadsafe_background`: network
@@ -130,9 +130,10 @@ power. By the chip's counters a third to a half of its transmissions went unackn
 the loss is in the air at the access point's end (the network was on channel 5, which
 overlaps channels 1 and 6). `LWIP_TCP_RTO_TIME` (1 s) is what keeps TCP working through it.
 
-## HTTPS client
+## HTTP client
 
-`http.c` makes one HTTPS request per connection (HTTP/1.1, `Connection: close`) over `tls/`.
+`http.c` makes one HTTPS request per connection (HTTP/1.1, `Connection: close`) over `tls/`, or
+a plain http one for a caller that opts in (`fetch`).
 It's the base for talking to web services (issue #17): notifications, JSON APIs, and later
 Lua's networking.
 
@@ -159,15 +160,25 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
   transfer codings) is refused.
 - **End of the body:** a body without a length is trusted only if the server ends TLS with
   `close_notify`. Otherwise the request fails, since an attacker could cut it short by closing
-  the TCP connection.
+  the TCP connection. On plain http it ends at the TCP close (FIN); a reset fails it. Which
+  ending completes which body is `http_resp_end()` (`http_msg.c`, host tested and fuzzed).
+- **Transport:** a `tls_conn_t` from `tls/`: `tls_open()` for https, `tls_open_plain()` for
+  http, both read and written through `tls_read()`/`tls_write()` with the same states, flow
+  control, timeouts and connection slots (two user requests at once, plain ones included).
+- **Plain http, opt-in:** with `allow_plain`, `http_url_parse_any()` takes `http://` (port 80)
+  and redirects may go to http (from https only with `allow_downgrade` too: `fetch -k`). Nothing
+  protects the bytes or the end of a body without a length (`http_resp_t.ended_by_close`), so
+  only `fetch` opts in, where the printed hash is the check; `http get|head|post` and `sos.http`
+  refuse `http://` as before (docs/design/archives.md §3.3). `http_plain()` says whether the
+  current hop is plain; `http_tls_stats()` is NULL for it.
 - **Timeout:** `timeout_ms` (default 30 s) runs until the headers arrive, then between pieces
   of the body.
 - **Redirects, opt-in:** with `max_redirects` set (at most 5), a `301`, `302`, `303`, `307` or
   `308` with a `Location` is followed inside `http.c`: the 3xx's body is dropped, the
   connection closed, and the same request (GET or HEAD only) made to the new URL on a new
   connection, with its own certificate check and timeout. `http_msg.c` resolves the `Location`
-  against the request's URL (RFC 3986, dots removed) and refuses a target that isn't https (from
-  https to http only with `allow_downgrade`, and not until plain http exists), one with
+  against the request's URL (RFC 3986, dots removed) and refuses a target that isn't https (or
+  http with `allow_plain`, from https only with `allow_downgrade` as well), one with
   `user:password@`, or one longer than the URL parser takes (`HTTP_URL_MAX`). Requests with
   extra headers or a body can't opt in, so a header such as `Authorization` never goes to a
   host a server names. `http_redirects()` and `http_url()` tell the caller each hop. Without
@@ -175,8 +186,7 @@ http_start() → HTTP_CONNECTING (tls/: DNS, TCP, handshake) → HTTP_SENDING �
 - **Untrusted roots:** when the handshake fails because no trusted root signs the chain,
   `tls/` notes the issuer it couldn't verify (`tls_stats_t.untrusted_issuer`), for messages
   that say which root to add.
-- **Not done yet:** keep-alive, compression, proxies, plain http (docs/design/archives.md
-  §3.3).
+- **Not done yet:** keep-alive, compression, proxies.
 
 `http get|head|post` (any shell, `docs/commands.md`) runs a request as a shell job, for
 testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), from any shell.
@@ -185,7 +195,10 @@ testing. Lua scripts use the client through `sos.http` (`src/lua/README.md`), fr
 `cp`: it follows redirects (printing `-> <url>` per hop), writes a `2xx` body through a 4 KB
 buffer to `<file>.part`, hashing it with wolfCrypt's SHA-256 as it writes, and renames the
 `.part` only when `http.c` says the response is complete (`HTTP_DONE`: the `Content-Length`
-reached, the last chunk, or `close_notify`). Any failure or Ctrl-C deletes the `.part`. Writes
+reached, the last chunk, `close_notify`, or the FIN on plain http). Any failure or Ctrl-C
+deletes the `.part`. For an `http://` URL or hop it prints `http: not encrypted; check its hash`,
+and after a plain body without a length `size not known: check its hash`; `-k` lets a redirect
+go from https to http. Writes
 pass `files_write_allowed()`, the job holds the card (`files_hold()`) and syncs once a second
 (`files_sync_if_due()`). The progress line is drawn only on the console (`io->admin`) and not
 into a pipe. One archive job runs at a time (`files/bigjob.h`). The pure parts (Location,
