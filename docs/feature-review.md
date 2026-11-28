@@ -326,8 +326,9 @@ Keep one SSH session open beside the console.
    You should see: the UTC time and where it came from (RTC, NTS or SNTP), the RTC reading and
    battery state, the calibration, the drift line, the last sync, the server and periodic
    settings, and a local time line if a zone is set.
-2. `time sync`: **skip on dev-1 until #275's drift reading is done (ask the Reviewer).** A
-   manual sync restarts the RTC drift measurement and loses the hours measured so far.
+2. `time sync`: **on dev-1, ask the Reviewer first whether an RTC drift measurement is
+   running (#275).** A manual sync starts the measurement over and loses the hours measured so
+   far; skip this step while one runs.
    You should see: a sync over NTS within a few seconds; `time` then shows its correction and
    round trip.
 3. `nts`
@@ -345,8 +346,9 @@ Keep one SSH session open beside the console.
 9. If you change the zone here, note the old one and set it back after (`time zone <old>` or
    `time zone utc`).
 10. `time auto`, `time server`, `time cal`
-   You should see: each setting shown, unchanged. Don't change `time cal`: dev-1's drift
-   measurement depends on it.
+   You should see: each setting shown, unchanged (`time cal` is off on dev-1). Don't change
+   it: the drift readings on #275 (the RTC runs about 100 ppm fast) are for you to decide a
+   calibration from, and a change starts the measurement over.
 
 ## 14. TLS and HTTPS
 
