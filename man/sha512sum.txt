@@ -1,0 +1,14 @@
+NAME
+    sha512sum - print or check SHA-512 checksums of files
+
+SYNOPSIS
+    sha512sum <file>...
+    sha512sum -c [--ignore-missing] <list>
+
+DESCRIPTION
+    Like sha256sum, with SHA-512: 128 hex digits, and BSD list lines start
+    with 'SHA512 ('. 'man sha256sum' describes the forms, the list format
+    and the results. SHA-512 runs slower than SHA-256 on the board.
+
+SEE ALSO
+    sha256sum, sha1sum

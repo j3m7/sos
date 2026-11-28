@@ -110,6 +110,12 @@ add_executable(test_pager test_pager.c ${SOS_ROOT}/src/edit/pager.c ${SOS_ROOT}/
 target_include_directories(test_pager PRIVATE ${SOS_ROOT}/src)
 add_test(NAME pager COMMAND test_pager)
 
+# src/files/sums_parse.c: sha256sum's names, checksum lists and their lines, and which names a
+# list may give.
+add_executable(test_sums_parse test_sums_parse.c ${SOS_ROOT}/src/files/sums_parse.c)
+target_include_directories(test_sums_parse PRIVATE ${SOS_ROOT}/src)
+add_test(NAME sums_parse COMMAND test_sums_parse)
+
 # src/files/path.c: path resolution for the file commands.
 add_executable(test_path test_path.c ${SOS_ROOT}/src/files/path.c)
 target_include_directories(test_path PRIVATE ${SOS_ROOT}/src)
@@ -361,6 +367,14 @@ if (EXISTS ${WOLFSSL_ROOT}/wolfcrypt/src/aes.c)
     target_link_libraries(test_lua_hash PRIVATE wolfcrypt_host)
     add_test(NAME lua_hash COMMAND test_lua_hash)
 
+    # src/files/sums.c: sha1sum, sha256sum, sha512sum and -c, over a card in memory (tests/stubs).
+    add_executable(test_sums test_sums.c ${SOS_ROOT}/src/files/sums.c
+        ${SOS_ROOT}/src/files/sums_parse.c ${SOS_ROOT}/src/files/path.c
+        ${SOS_ROOT}/src/shell/words.c ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
+    target_include_directories(test_sums PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
+    target_link_libraries(test_sums PRIVATE wolfcrypt_host)
+    add_test(NAME sums COMMAND test_sums)
+
     # src/core/selftest.c: the crypto known-answer tests of the `crypto` health check, run against
     # the host's wolfCrypt, with a fault made in each test in turn to see it caught.
     add_executable(test_selftest test_selftest.c ${SOS_ROOT}/src/core/selftest.c
@@ -566,3 +580,4 @@ sos_fuzz(tzbundle ${SOS_ROOT}/src/time/tzbundle.c ${SOS_ROOT}/src/time/tzrule.c
 sos_fuzz(fsck ${SOS_ROOT}/src/files/fsck.c ${SOS_ROOT}/src/files/fsck_exfat.c
     ${SOS_ROOT}/src/files/fsck_repair.c)
 sos_fuzz(fsck_exfat ${SOS_ROOT}/src/files/fsck_exfat.c)
+sos_fuzz(sums ${SOS_ROOT}/src/files/sums_parse.c)

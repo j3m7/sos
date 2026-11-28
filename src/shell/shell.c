@@ -59,6 +59,7 @@
 #include "man/man.h"
 #include "files/files.h"
 #include "files/sdcard.h"
+#include "files/sums.h"
 #include "lua/lua_core1.h"
 #include "lua/lua_host.h"
 #include "net/http.h"
@@ -2673,7 +2674,8 @@ static const shell_cmd_t commands[] = {
 #undef W
 #undef END
 
-static const shell_cmd_t *const command_tables[] = {commands, files_commands, NULL};
+static const shell_cmd_t *const command_tables[] = {commands, files_commands, sums_commands,
+                                                       NULL};
 
 // Debug builds, once at startup: every command has one handler, and those that take paths take
 // words (shell.h). The host tests check files_commands; this checks commands[] too.
