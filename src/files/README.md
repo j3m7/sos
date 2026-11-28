@@ -127,6 +127,29 @@ its own working directory (`shell_t.cwd`).
   (`sh->io->admin`). SFTP and Lua pass no shell (`NULL`), so they're refused there. The log
   writer itself writes through FatFs directly.
 
+## `gzip.c`, `gz.c`, `bigjob.c`: gunzip and zcat
+
+[Design](../../docs/design/archives.md) §5. zlib is the submodule `lib/zlib`, built from the list
+in `cmake/zlib.cmake` for both the firmware and the host tests (`Z_SOLO`, `ZLIB_CONST`, SYSTEM
+includes, no SOS warnings).
+
+- **`gz.c` (pure C, host tested and fuzzed):** a gzip file's bytes in, the data out, on
+  `inflate` (windowBits 15 + 16). It reads the members one after the other, looks at the bytes
+  between them itself (another member's `1f 8b`, zero padding, or garbage), and never makes more
+  output per call than the caller's buffer holds, whatever the pieces the input comes in. zlib's
+  memory (~40 KB: its state and 32 KB window) comes from `gz_zalloc()`, under `HEAP_ZLIB`.
+  `tests/test_gz.c` decodes the files GNU gzip made in `tests/data/archives/`
+  (`tools/make-archive-fixtures.sh`) in pieces of many sizes; `tests/fuzz/fuzz_gz.c` checks that
+  any input decodes the same in one piece and in pieces.
+- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates into 4 KB, or writes
+  that out (gunzip: to `<name>.part`, synced once a second; zcat: as `shell_write_space()`
+  allows), until `STEP_US`, at least one of them a step. The .part is renamed into place only
+  after `gz_finish()`; an error, Ctrl-C or the session ending deletes it. Refused when the heap
+  would keep less than 64 KB free. `tests/test_gzip.c` runs both over a card in memory.
+- **`bigjob.c`:** one big file job at a time across the shells (gunzip and zcat now; gzip, tar
+  and fetch later): `bigjob_begin()` refuses while another holds the slot, and the caller says
+  `busy: <command> is running in another shell`.
+
 ## `path.c`: paths (pure C, host tested)
 
 - **`path_resolve()`** turns a path typed in a shell into an absolute one, with `.` and `..`

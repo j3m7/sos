@@ -523,6 +523,16 @@ target_compile_options(test_gz PRIVATE -O2)         # thousands of decodes, the 
 target_link_libraries(test_gz PRIVATE zlib_host)
 add_test(NAME gz COMMAND test_gz)
 
+# src/files/gzip.c: gunzip and zcat as commands, over the card in memory of tests/stubs, with the
+# real files.c, gz.c and bigjob.c.
+add_executable(test_gzip test_gzip.c ${SOS_ROOT}/src/files/gzip.c ${SOS_ROOT}/src/files/gz.c
+    ${SOS_ROOT}/src/files/bigjob.c ${SOS_ROOT}/src/files/files.c ${SOS_ROOT}/src/files/path.c
+    ${SOS_ROOT}/src/shell/cmdcheck.c ${SOS_ROOT}/src/core/heaptag.c)
+target_include_directories(test_gzip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${SOS_ROOT}/src)
+target_compile_definitions(test_gzip PRIVATE ARCHIVES_DIR="${SOS_ARCHIVES_DIR}")
+target_link_libraries(test_gzip PRIVATE zlib_host)
+add_test(NAME gzip COMMAND test_gzip)
+
 # src/man/man_topic.c: manual page topics, and the topic a file in /man holds (Tab after `man`).
 add_executable(test_man_topic test_man_topic.c ${SOS_ROOT}/src/man/man_topic.c)
 target_include_directories(test_man_topic PRIVATE ${SOS_ROOT}/src)
