@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// gunzip and zcat: gzip files on the SD card, decompressed as shell jobs (files/gz.h does the
-// decoding). docs/design/archives.md §5.
+// gunzip, zcat and gzip: gzip files on the SD card, decompressed and made as shell jobs
+// (files/gz.h does the decoding, files/gzw.h the encoding). docs/design/archives.md §5.
 
 #ifndef SOS_GZIP_H
 #define SOS_GZIP_H

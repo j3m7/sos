@@ -722,6 +722,10 @@ bool sdcard_mounted(void) {
     return card.state.mounted;
 }
 
+bool sdcard_exfat(void) {
+    return card.state.mounted && card.state.fatfs.fs_type == FS_EXFAT;
+}
+
 uint32_t sdcard_generation(void) {
     return mount_generation;
 }

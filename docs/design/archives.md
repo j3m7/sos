@@ -49,7 +49,8 @@ tar xf pkg-1.2.tar.gz -C /apps
   check every change with `files_write_allowed()`, and sync files being written once a second
   (`files_sync_if_due()`).
 - **FatFs:** long names (`FF_MAX_LFN` 255), exFAT and FAT32, `FF_FS_LOCK` 16, and
-  `FF_USE_CHMOD 0`: no `f_utime()`, so a file's date can't be set (§6.5).
+  `FF_USE_CHMOD 0`: no `f_utime()`, so a file's date can't be set (§6.5; since phase 5 SOS
+  builds FatFs with `FF_USE_CHMOD 1`).
 - **The heap:** about 345 KB, shared (`heap_free()`). A TLS handshake needs ~64 KB free; an SSH
   session up to ~100 KB while transferring.
 - **The shell has no exit status.** A command reports failure by what it prints.
@@ -238,15 +239,46 @@ gzip [-k] [-f] [-1..-9] <file>...
 - `<name>` gives `<name>.gz`. Refused: a name already ending in `.gz` or `.tgz`, a directory.
 - **Memory decides the settings.** zlib's deflate needs `(1 << (windowBits + 2)) +
   (1 << (memLevel + 9))` plus ~6 KB. The defaults (15, 8) need ~262 KB, most of the heap. SOS uses
-  `windowBits 12` (4 KB window) and `memLevel 6`: ~54 KB, plus 2 × 4 KB buffers. The output is
-  standard gzip any gunzip reads. Files come out a few percent larger than with the defaults;
-  phase 6 measures how much on logs and on a source tree, and records it here.
+  `windowBits 12` (4 KB window) and `memLevel 6`: ~54 KB (55 160 bytes measured under
+  `HEAP_ZLIB` on the host, 64-bit; `GZW_HEAP` is 56 KB), plus 2 × 4 KB buffers. The output is
+  standard gzip any gunzip reads. Files come out larger than with GNU gzip's defaults: a little
+  on a log of short varied lines, 15 to 20 % on prose and source, where repeats are often more
+  than 4 KB apart. Measured on the host with this zlib and these settings (`gzip -n -N` for GNU
+  gzip 1.15):
+
+  | Input | Size | Level | SOS | GNU gzip | Larger by |
+  |---|---:|---:|---:|---:|---:|
+  | log (generated: 60 000 lines of Wi-Fi, SSH, time, fetch messages) | 4 463 446 | 1 | 1 104 135 | 1 061 964 | 4.0 % |
+  | | | 6 | 911 365 | 873 913 | 4.3 % |
+  | | | 9 | 903 677 | 845 250 | 6.9 % |
+  | text (all `docs/**/*.md` concatenated) | 483 362 | 1 | 225 875 | 208 799 | 8.2 % |
+  | | | 6 | 207 094 | 177 651 | 16.6 % |
+  | | | 9 | 207 076 | 177 177 | 16.9 % |
+  | source tree (`git archive` of `src/` as .tar) | 2 385 920 | 1 | 846 710 | 758 771 | 11.6 % |
+  | | | 6 | 752 826 | 623 273 | 20.8 % |
+  | | | 9 | 750 326 | 617 915 | 21.4 % |
+
+  The window, not memLevel, is what costs: at level 6, memLevel 8 gains under 1 %, while each
+  doubling of the window gains ~5 % on text and source and costs its own heap (windowBits 13:
+  ~70 KB, text +10 %, source +12 %; 14: ~102 KB, +5 % and +6 %; 15 with memLevel 6: ~166 KB,
+  +0.4 % and +0.4 %). Level 9 buys almost nothing over 6 with a 4 KB window.
 - `-1` to `-9`: zlib's levels, default 6. The level changes speed, not memory.
 - Output to `<name>.gz.part`, renamed at the end; the input deleted unless `-k`. The gzip header
   holds no name and date 0 (`gzip -n`), since FatFs dates are local and coarse.
 - Heap check as `gunzip`, with ~62 KB.
-- Speed: measured in phase 6 per level. Expected well under 1 MB/s; each step yields after
-  `STEP_US`, so the shell stays responsive whatever the speed.
+- Speed, measured on dev-1 (2026-11-28, #273, debug build, XTS-AES encrypted exFAT card, read
+  and write included; GNU gzip's sizes for the same 10 MB text file in brackets):
+
+  | Input | Level | Output | Time | Rate |
+  |---|---|---|---|---|
+  | 10 MB text (docs and C) | 1 | 3,818,889 (3,500,222) | 42.0 s | 244 KB/s |
+  | 10 MB text | 6 | 3,374,462 (2,882,389) | 45.4 s | 225 KB/s |
+  | 10 MB text | 9 | 3,365,406 (2,860,403) | 48.7 s | 210 KB/s |
+  | 1 MB random | 6 | 1,049,914 | 6.9 s | 148 KB/s |
+
+  zlib held 55,004 bytes of heap while it ran. The level barely changes the time: the encrypted
+  card's read and write take most of it. Each step yields after `STEP_US`, so the shell stays
+  responsive; another shell's `mem` and `gunzip` (busy) answered at once during a run.
 
 ## 6. tar
 
@@ -317,7 +349,12 @@ continues.
   over the path limit): refused.
 - **Case:** FAT is case-insensitive. A second entry differing only in case from one written in
   this run: refused (`<name>: same name as <other> on FAT`), not written over it. Entries named
-  the same exactly (a tar can hold a file twice): the later one wins, as Unix tar.
+  the same exactly (a tar can hold a file twice): the later one wins, as Unix tar. (Phase 5: the
+  run keeps a sorted 64-bit hash of each path it created, 8 bytes each, up to 8192 of them; when
+  an entry's path exists, the name FatFs stored for it, read with a stat per component, is looked
+  up there, so FatFs's own case folding decides, non-ASCII letters included. Past the limit, or
+  short of heap, it says so once and existing files are then only replaced with `-f`. Only the
+  entry's own path is checked: `a/x` then `A/y` puts `y` in `a/`.)
 - **Protected paths:** every create goes through `files_write_allowed()`, so `/certs` needs the
   console as for every file command, and `tar` can't do what `cp` couldn't.
 - **The archive itself** is never written over (same path as an entry: refused).
@@ -347,30 +384,71 @@ continues.
   The check is that FatFs's own objects see the same header: one definition, or `FIL`'s layout
   would differ between them and SOS. If that can't be made to hold, dates stay the extraction
   time and this note says so.
+- **Outcome (phase 5): it holds, and dates are kept.** `config/fatfs/ffconf.h` is first on the
+  no-OS-FatFS target's include path. Rather than a copy it is a wrapper: `#include_next
+  "ffconf.h"` takes the library's file, then `FF_USE_CHMOD` is redefined to 1, so the library's
+  other settings follow its updates. The library's sources are `INTERFACE` sources compiled in
+  the `sos` target with the same path, so there is one configuration: in
+  `build/compile_commands.json` all 523 compile commands that have the library's include
+  directory have `config/fatfs` before it, and the dependency output (`-M`) of `ff.c` and of
+  SOS's `files.c` both list `config/fatfs/ffconf.h` then the library's. `f_utime` links (164 bytes
+  of flash; `f_chmod`, unused, is dropped by the linker). The host tests use their own
+  `ff.h` stub and are unaffected.
+- The header's mtime is UTC and SOS keeps file dates in UTC (`get_fattime()` reads the UTC
+  clock; `ls` shows them as UTC), so the date is stored as it is, rounded down to FAT's 2 s.
+  Dates FAT can't hold (before 1980, after 2107) leave the extraction time. Directories made from
+  a directory entry get its date; directories made because a file's path needed them get the
+  extraction time.
 - Modes, owners and groups are ignored. The FAT read-only attribute isn't set from the mode.
 
 ### 6.6 Listing (`tf`)
 
 - One line per entry: type letter (`-`, `d`, `l`, `h`, other), size, date (from the header, UTC,
-  shown in the configured zone like `ls`), name. Names with control characters are shown with
+  shown as `ls` shows dates: in UTC, since zones are display-only and `ls` doesn't apply them),
+  name, and `-> <target>` for a link. Names with control characters are shown with
   them as `?`. Long names and pax names shown in full. Refused entries are listed with the reason
-  `x` would give, so `tf` shows what `xf` would do.
+  `x` would give, so `tf` shows what `xf` would do, as far as the archive alone decides it: a
+  case clash and an existing file depend on the card, and only `xf` says them.
 - Through `shell_write()`, so `tar tf x.tgz | grep foo` and `| more` work.
 
 ### 6.7 Creating (`c`)
 
 - `<path>...` relative to `-C <dir>` (default the working directory), stored as given, without
-  a leading `/`. Directories are walked recursively, in directory order.
+  a leading `/` (said once, as for `x`). Directories are walked recursively, in directory order.
+  (Phase 7: a path is cleaned with `tar_name_clean()`, so `.` and empty components are dropped
+  and a path with `..` is refused, `<path>: unsafe path`, since `x` would refuse to extract it;
+  `.` alone is `-C`'s directory, whose contents go in with no entry of its own. `-C` and `-f`
+  may come anywhere after the archive.)
 - The walk keeps its stack on the heap (one `DIR` and the path, per level; at most 16 levels,
   deeper: refused for that directory), not the C stack (`-Wstack-usage=1536`).
+  (Phase 7: the path per level is the length of its prefix in the current path. FatFs counts
+  each open subdirectory in its lock table, `FF_FS_LOCK` 16 shared by everyone, SFTP alone up
+  to 8, so 16 open `DIR`s would starve the log writer and SFTP: at most 4 levels are open at a
+  time. Going deeper closes the outermost open level; coming back to it opens it again and
+  reads past the entries it already gave, one per piece of work. A directory changed meanwhile
+  may then lose or repeat an entry, a race GNU tar has too.)
 - Headers: ustar; a name over 100 bytes that `prefix` can't hold gets a pax `x` record (`path`).
-  Size, mtime from the FAT date (local time converted to UTC with the configured zone), mode
-  `0644` files and `0755` directories, uid/gid 0, no user names.
+  Size, mtime from the FAT date, mode `0644` files and `0755` directories, uid/gid 0, no user
+  names. (Phase 7: `tar_write.c`, pure C. The FAT date is UTC already: the SD library's
+  `get_fattime()` calls `localtime_r()`, and SOS sets no zone (zones are display-only, #240), so
+  no conversion. Sizes from 8 GB in GNU base-256, which GNU tar, bsdtar and `tar_parse.c` read.
+  Names longer than `TAR_NAME_MAX` - 2 bytes, what `x` reads back, are skipped with a note.
+  The pax header itself is named `PaxHeaders/<last component>`.)
+- The end: two zero blocks, then zeros up to GNU tar's 10240-byte record, so a plain archive is
+  a whole number of records as GNU writes them (at most 10 KB more; gzip shrinks it to a few
+  bytes).
 - Skipped with a note: the archive itself (and its `.part`), files being written by someone else
-  (open for writing: what `ls` shows as `being written`), anything not readable.
-- Output to `<archive>.part`, renamed at the end. Not replaced without `-f`.
+  (open for writing: what `ls` shows as `being written`, `files_being_written()`, or `FR_LOCKED`
+  from FatFs at the open, which a synced file still open for writing gives), anything not
+  readable. A file that ends early while read is padded with zeros to its header's size, as GNU
+  does, and said. Paths that don't exist: said and skipped. Nothing added: `nothing to archive`,
+  nothing installed.
+- Output to `<archive>.part`, renamed at the end (`files_install_part()`). Not replaced without
+  `-f`. Ctrl-C or an error deletes the `.part`. Summary: `<archive>: <n> files, <n>
+  directories, <size> bytes (<n> skipped)`, the size the archive's on the card.
+- `cz`: through `gzw.c` (§5.4 settings); heap: the job (~14 KB) + `GZW_HEAP` + 64 KB free.
 - Host tests: archives made here are listed and extracted by GNU tar and bsdtar, and theirs by
-  ours (§7).
+  ours (§7); ours extract ours with the same contents and dates.
 
 ## 7. Tests
 

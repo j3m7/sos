@@ -1,0 +1,50 @@
+NAME
+    gzip - compress files on the card
+
+SYNOPSIS
+    gzip [-k] [-f] [-1..-9] <file>...
+
+DESCRIPTION
+    Compresses each file: 'x' gives 'x.gz'. A name already ending in '.gz'
+    or '.tgz' (in any case) is refused ('already has a .gz suffix'), and so
+    is a directory. The output is standard gzip that any gunzip reads, on
+    the board or on a computer. Like 'gzip -n' on a computer, its header
+    holds no file name and the date 0: gunzip names the output after the
+    .gz file anyway.
+
+    The output is written to 'x.gz.part' and renamed to 'x.gz' only when
+    the whole input has been read. Any error deletes the .part and keeps
+    the input. The input is deleted after success unless -k is given. With
+    several files, a file that fails is reported and the next one is
+    compressed. At the end it says the sizes, the time and the speed of
+    the input: 'x.gz: <n> bytes from <n> (<percent>%) in <ms> ms (<n> KB/s)'.
+
+    A job: Ctrl-C stops it and removes the .part, as does the session
+    ending. A full card stops it with 'card full'. The .part is synced to
+    the card about once a second, so 'ls' shows how far it has got.
+
+    Memory decides the settings: a 4 KB window and zlib's memory level 6
+    instead of the 32 KB window and level 8 a computer's gzip uses, which
+    would take most of the heap. Files come out larger than with gzip on a
+    computer: about 5% for logs, up to 20% for prose and source code. To
+    save the most, compress there.
+
+OPTIONS
+    -k     keep the input file
+    -f     replace an existing 'x.gz' (without it, gzip refuses: 'already
+           exists'). The old file is moved aside to 'x.gz.old' until the
+           output has taken its name, as with 'gunzip -f'.
+    -1..-9 zlib's level: -1 is the fastest, -9 the smallest; 6 if none is
+           given. The level changes the speed, not the memory.
+    Options come before the files, alone or together (-k9); '--' ends
+    them, for a file whose name starts with '-'.
+
+MEMORY
+    About 65 KB of heap while it runs (zlib's ~54 KB shows as 'zlib' in
+    'mem'). It is refused when that would leave less than 64 KB free, so a
+    TLS handshake still fits. One of gzip, gunzip and zcat runs at a time
+    across all shells; another is refused with 'busy: gzip is running in
+    another shell'.
+
+SEE ALSO
+    gunzip, zcat, mem

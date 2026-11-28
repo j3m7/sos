@@ -467,12 +467,63 @@ OPTIONS
 MEMORY
     About 50 KB of heap while it runs (zlib's 32 KB window and its state
     show as 'zlib' in 'mem'). It is refused when that would leave less than
-    64 KB free, so a TLS handshake still fits. One of gunzip and zcat runs
-    at a time across all shells; another is refused with 'busy: gunzip is
-    running in another shell'.
+    64 KB free, so a TLS handshake still fits. One of gunzip, zcat and gzip
+    runs at a time across all shells; another is refused with 'busy: gunzip
+    is running in another shell'.
 
 SEE ALSO
-    zcat, cp, ls, mem
+    zcat, gzip, tar, cp, ls, mem
+@@ gzip
+NAME
+    gzip - compress files on the card
+
+SYNOPSIS
+    gzip [-k] [-f] [-1..-9] <file>...
+
+DESCRIPTION
+    Compresses each file: 'x' gives 'x.gz'. A name already ending in '.gz'
+    or '.tgz' (in any case) is refused ('already has a .gz suffix'), and so
+    is a directory. The output is standard gzip that any gunzip reads, on
+    the board or on a computer. Like 'gzip -n' on a computer, its header
+    holds no file name and the date 0: gunzip names the output after the
+    .gz file anyway.
+
+    The output is written to 'x.gz.part' and renamed to 'x.gz' only when
+    the whole input has been read. Any error deletes the .part and keeps
+    the input. The input is deleted after success unless -k is given. With
+    several files, a file that fails is reported and the next one is
+    compressed. At the end it says the sizes, the time and the speed of
+    the input: 'x.gz: <n> bytes from <n> (<percent>%) in <ms> ms (<n> KB/s)'.
+
+    A job: Ctrl-C stops it and removes the .part, as does the session
+    ending. A full card stops it with 'card full'. The .part is synced to
+    the card about once a second, so 'ls' shows how far it has got.
+
+    Memory decides the settings: a 4 KB window and zlib's memory level 6
+    instead of the 32 KB window and level 8 a computer's gzip uses, which
+    would take most of the heap. Files come out larger than with gzip on a
+    computer: about 5% for logs, up to 20% for prose and source code. To
+    save the most, compress there.
+
+OPTIONS
+    -k     keep the input file
+    -f     replace an existing 'x.gz' (without it, gzip refuses: 'already
+           exists'). The old file is moved aside to 'x.gz.old' until the
+           output has taken its name, as with 'gunzip -f'.
+    -1..-9 zlib's level: -1 is the fastest, -9 the smallest; 6 if none is
+           given. The level changes the speed, not the memory.
+    Options come before the files, alone or together (-k9); '--' ends
+    them, for a file whose name starts with '-'.
+
+MEMORY
+    About 65 KB of heap while it runs (zlib's ~54 KB shows as 'zlib' in
+    'mem'). It is refused when that would leave less than 64 KB free, so a
+    TLS handshake still fits. One of gzip, gunzip and zcat runs at a time
+    across all shells; another is refused with 'busy: gzip is running in
+    another shell'.
+
+SEE ALSO
+    gunzip, zcat, mem
 @@ head
 NAME
     head - the first lines of a command's output, then stop it
@@ -1077,8 +1128,8 @@ DESCRIPTION
 
     The heap is about 345 KB and is shared: an SSH session uses up to ~100 KB
     while transferring, a TLS handshake needs about 64 KB free, a Lua script
-    may take 128 KB, the editor takes the file plus 32 KB of room, and
-    gunzip or zcat about 50 KB.
+    may take 128 KB, the editor takes the file plus 32 KB of room, gunzip
+    or zcat about 50 KB, and gzip about 65 KB.
 
 SEE ALSO
     ssh, lua, edit
@@ -1118,6 +1169,11 @@ DESCRIPTION
     with the total once it is known: after G, or once the end has been on
     screen) and how far in you are, or END.
 
+    A search brings the line with the match to the top (near the end, the
+    last screen is shown instead), shows every match on screen in reverse
+    video, and says on the bottom row which line the match is on ('found on
+    line 42'), so a match on a page that fits the screen is shown too.
+
 KEYS
     Space, f, PgDn / b, PgUp    a screen forward / back
     d / u                       half a screen forward / back
@@ -1126,11 +1182,15 @@ KEYS
                                 on a large file counts its lines, about a
                                 second per megabyte)
     Left / Right                half a screen sideways, for long lines
-    / (Ctrl-F)                  find: type the text, Enter finds the next
-                                match from the line after the top one (empty:
-                                the last search again), wrapping around to
-                                the start; Ctrl-C cancels
-    n                           the next match
+    / (Ctrl-F)                  find: type the text, Enter finds the first
+                                match from the top line on (empty: the last
+                                search again), wrapping around to the start;
+                                Ctrl-C cancels. Text with no capital letter
+                                ignores case ('/error' finds Error and
+                                ERROR); with one it must match exactly.
+                                Only ASCII letters: '/é' doesn't find É
+    n                           the next match: after the one before while
+                                that is on screen, else from the top line
     F                           follow: stay on the end as output arrives
                                 ('<command> | more' while the command runs;
                                 any movement key leaves it)
@@ -1718,6 +1778,108 @@ NOTES
 
 SEE ALSO
     head, grep, wc, more
+@@ tar
+NAME
+    tar - list, extract and make tar archives on the card
+
+SYNOPSIS
+    tar tf <archive>
+    tar xf <archive> [-C <dir>] [-f]
+    tar cf <archive> [-C <dir>] [-f] <path>...
+    tar czf <archive> [-C <dir>] [-f] <path>...
+
+DESCRIPTION
+    'tar tf' lists an archive; 'tar xf' extracts it into the working
+    directory, or into <dir> with -C (which must exist). Plain .tar,
+    .tar.gz and .tgz are all read the same way: gzip is recognised by the
+    file's first bytes and decompressed in the same pass, with no
+    temporary .tar. Reading never changes the archive.
+
+    'tar cf' makes an archive of files and directories; 'tar czf' makes it
+    gzipped (.tar.gz or .tgz, as you name it).
+
+    The mode word is written as on Unix: tf, xf, cf, and also -tf, -xf,
+    xzf, tzf, czf; z is needed only to make a gzipped archive, and v (xvf,
+    cvf) prints each name as it is extracted or added.
+    Archives made by GNU tar, bsdtar and others are read: ustar, GNU (long
+    names), pax (long names and sizes) and old v7 headers.
+
+    'tar tf' prints a line per entry: its type (- file, d directory, l
+    symlink, h hard link, c b p devices and FIFOs, ? other), size, date
+    (UTC, as 'ls' shows dates) and name, and a link's target. An entry
+    that 'tar xf' would skip has the reason after it in brackets. It goes
+    through pipes: 'tar tf pkg.tgz | grep README', 'tar tf x.tar | more'.
+
+SAFETY
+    An archive comes from elsewhere, so every name is checked before
+    anything is created; an entry that fails is skipped, said, and
+    counted, and extraction goes on:
+    - a leading / is removed (said once): names stay under the target
+    - a name with '..' in it: 'unsafe path'
+    - a name FAT can't store as given ("*:<>?|\, control characters,
+      ending in a space or a dot, over 255 characters): 'not a valid FAT
+      name' or 'name too long'
+    - FAT ignores case: a name that differs only in case from one written
+      in this run is skipped ('same name as <other> on FAT'). The same
+      name twice: the later one wins, as on Unix
+    - links (FAT has none), devices and FIFOs are skipped, never written
+      as files, never followed
+    - protected paths (/certs, /var/log) only from the console, as for cp
+    - the archive itself is never written over
+    The names in long-name and pax records follow the same rules.
+
+WRITING
+    Each file is written to '<name>.part' and renamed at its end, so an
+    interrupted extraction leaves no half-written file under a real name.
+    Directories are made as needed. Files and directories get the date
+    stored in the archive; modes and owners are ignored.
+
+    An existing file is not replaced: it is skipped with 'exists (-f
+    replaces it)'. Note that -f here means overwrite, unlike Unix tar,
+    where -f names the archive (here the archive is always the word after
+    the mode). With -f the old file is moved aside to '<name>.old' until
+    the new one has its name. An existing directory is merged into.
+
+    At the end: '<n> files, <n> directories, <n> skipped'. Ctrl-C, a read
+    error, a full card or a damaged archive stops it with 'stopped:
+    <why>': the current .part is removed and what was extracted stays.
+    An archive that ends without its two end blocks stops with 'archive
+    ends early'. A file over 4 GB minus 1 byte is skipped on a FAT32 card
+    ('too large for FAT32'); exFAT takes it.
+
+MEMORY
+    Reading: about 21 KB of heap while it runs, and 40 KB more for a
+    gzipped archive (zlib, shown as 'zlib' in 'mem'); 8 bytes more per file
+    written, to catch case clashes. Making: about 15 KB, and 56 KB more
+    with z. It is refused when that would leave less than 64 KB free. One
+    of tar, gunzip, zcat, gzip and fetch runs at a time across all shells;
+    another is refused with 'busy: <command> is running in another shell'.
+
+CREATING
+    'tar cf <archive> <path>...' puts each path in, a directory with all
+    it holds, in the order the card lists them; up to 16 directories deep
+    (a deeper one is skipped and said). Paths are relative to -C <dir>, or
+    to the working directory, and stored as given: 'tar cf a.tar -C /apps
+    x' stores 'x/...'. A leading / is removed (said once); a path with
+    '..' is refused, since 'tar xf' would refuse to extract it. The
+    archive is ustar, with pax records for names over 100 characters, so
+    any tar on a computer reads it: files have mode 0644, directories
+    0755, owner 0, and the card's dates (UTC).
+
+    Skipped, said and counted, while the rest goes in: the archive itself
+    and its .part, a file being written (as 'ls' shows it, or open for
+    writing in another shell or over SFTP), a file that can't be read, a
+    path that doesn't exist, a name longer than 'tar xf' reads back.
+
+    The archive is written to '<archive>.part' and renamed at the end; an
+    existing archive is replaced only with -f. Ctrl-C, a write error or a
+    full card stops it ('stopped: <why>; <archive> not made') and removes
+    the .part; so does an archive with nothing in it ('nothing to
+    archive'). At the end: '<archive>: <n> files, <n> directories, <size>
+    bytes (<n> skipped)'.
+
+SEE ALSO
+    gunzip, gzip, fetch, sha256sum, ls, mkdir
 @@ tee
 NAME
     tee - write a command's output to a file and pass it on
