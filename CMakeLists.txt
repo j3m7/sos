@@ -129,6 +129,9 @@ endforeach()
 # uses) prints doubles with ~10 digits and trailing zeros, so Lua uses the C library's.
 set_source_files_properties(${LUA_SOURCES} PROPERTIES
     COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/lua/lua_port.h;-Dsnprintf=__real_snprintf")
+# sos.json.encode formats numbers itself (src/lua/lua_json.c) and must write what tostring does,
+# so it uses the C library's snprintf too.
+set_property(SOURCE src/lua/lua_json.c APPEND PROPERTY COMPILE_DEFINITIONS snprintf=__real_snprintf)
 
 include(cmake/wolfssl_pico.cmake)
 include(cmake/wolfssh_pico.cmake)
