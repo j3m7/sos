@@ -198,12 +198,12 @@ Keep one SSH session open beside the console.
    You should see: the page in the pager. Space and b page, j and k scroll, g and G go to the
    ends.
 3. Still in the pager: `/quoting`, Enter.
-   You should see: the line with the match brought to the top, every match on screen in
-   reverse video, and `found on line <n>` on the bottom row. Lower-case text ignores case, so
+   You should see: every match on screen in reverse video (the match's line brought to the
+   top, unless it is in the last screenful), and `found on line <n>` on the bottom row. Lower-case text ignores case, so
    it finds QUOTING.
 4. Press `n` a few times.
-   You should see: each press goes on past the previous match, wrapping round to the start
-   after the last.
+   You should see: each press goes on past the previous match; after the last (the page has
+   two) the bottom row says `search wrapped around: found on line <n>`.
 5. `/Quoting`, Enter.
    You should see: `not found` on the bottom row: with a capital letter the text must match
    exactly, and the page has only QUOTING. q quits.
