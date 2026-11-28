@@ -38,6 +38,9 @@ static void count_fail(int res, const char *func) {
     st.last_at_s = (uint32_t)(time_us_64() / 1000000);
 }
 
+// Called at every error return in the driver, including from its interrupt-context poll, with
+// interrupts off for a few instructions. It must never log, allocate or wait: it only counts.
+// (CYW43_WARN's lines go to the log through wifistat_warn(), whose log path stores only.)
 int wifistat_fail(int res, const char *func) {
     if (res < 0) {
         uint32_t saved = save_and_disable_interrupts();
