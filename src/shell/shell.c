@@ -56,6 +56,7 @@
 #include "edit/edit.h"
 #include "man/man.h"
 #include "files/files.h"
+#include "files/gzip.h"
 #include "files/sdcard.h"
 #include "files/sums.h"
 #include "lua/lua_core1.h"
@@ -287,6 +288,7 @@ static void cmd_help(shell_t *sh) {
     shell_printf(sh, "wifi stats [chip] signal, noise, packet and pool counters [and the chip's]\n");
     shell_printf(sh, "sd [info]         SD card status (also: sd speed)\n");
     files_help(sh);
+    gzip_help(sh);
     shell_printf(sh, "edit <file>       full-screen text editor (Ctrl-S saves, Ctrl-Q quits)\n");
     shell_printf(sh, "more <file>       read a file a screen at a time (q quits, h lists the keys)\n");
     shell_printf(sh, "<command> | more  read any command's output the same way (dmesg | more)\n");
@@ -2639,7 +2641,7 @@ static const shell_cmd_t commands[] = {
 #undef END
 
 static const shell_cmd_t *const command_tables[] = {commands, files_commands, sums_commands,
-                                                       NULL};
+                                                      gzip_commands, NULL};
 
 // Debug builds, once at startup: every command has one handler, and those that take paths take
 // words (shell.h). The host tests check files_commands; this checks commands[] too.

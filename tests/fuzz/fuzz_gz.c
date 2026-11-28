@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Julio Martinez
+//
+// src/files/gz.c: what gunzip and zcat read from a file on the card, which can hold anything.
+// Any input is decoded or refused, and the same way whatever the pieces it comes in and the
+// output buffer: decoded once in one piece into gunzip's 4 KB buffer, and once in pieces and
+// into a buffer chosen by the first two bytes, both give the same verdict, the same error and
+// the same output (compared by length and CRC-32). No call makes more than its buffer holds or
+// stops with input left unless its buffer is full. Output past OUT_MAX isn't compared (a small
+// input can inflate a thousandfold; the decoder's bound per call is what matters).
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "core/heaptag.h"
+#include "files/gz.h"
+#include "fuzz.h"
+
+// Checked in every build (NDEBUG or not).
+#define MUST(x) do { if (!(x)) abort(); } while (0)
+
+#define OUT_MAX (1u << 20)
+
+typedef struct {
+    bool ok, cut;               // cut: stopped at OUT_MAX, no verdict
+    const char *error;
+    bool zeros;
+    uint64_t len;
+    uLong crc;
+} run_t;
+
+static run_t decode(const uint8_t *data, size_t size, size_t piece, size_t cap) {
+    static uint8_t buf[4096];
+    run_t r = {.crc = crc32(0, NULL, 0)};
+    gz_t g;
+    MUST(gz_init(&g));
+    size_t pos = 0;
+    bool failed = false;
+    while (!failed && !r.cut) {
+        size_t n = size - pos < piece ? size - pos : piece;
+        const uint8_t *p = data + pos;
+        size_t left = n;
+        if (!n && !gz_pending(&g))
+            break;
+        do {
+            size_t made;
+            bool fed = gz_feed(&g, &p, &left, buf, cap, &made);
+            MUST(made <= cap);
+            MUST(!fed || !left || made == cap);
+            size_t take = r.len + made > OUT_MAX ? OUT_MAX - r.len : made;
+            r.crc = crc32(r.crc, buf, (uInt)take);
+            r.len += take;
+            if (r.len == OUT_MAX)
+                r.cut = true;
+            failed = !fed;
+            if (failed)
+                MUST(g.error && g.state == GZ_FAILED);
+        } while (!failed && !r.cut && (left || gz_pending(&g)));
+        pos += n - left;
+    }
+    if (!r.cut) {
+        r.ok = !failed && gz_finish(&g);
+        r.error = r.ok ? NULL : g.error;
+        MUST(r.ok || r.error);
+        MUST(g.in_total <= size);
+        r.zeros = g.trailing_zeros;
+    }
+    gz_end(&g);
+    MUST(heap_tag_used(HEAP_ZLIB) == 0);
+    return r;
+}
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    // [piece - 1][buffer / 16 - 1] then the file.
+    size_t piece = (size_t)fuzz_byte(&data, &size) + 1;
+    size_t cap = ((size_t)fuzz_byte(&data, &size) + 1) * 16;
+    run_t a = decode(data, size, size ? size : 1, 4096);
+    run_t b = decode(data, size, piece, cap);
+    if (a.cut || b.cut) {
+        MUST(a.cut && b.cut && a.crc == b.crc);
+        return 0;
+    }
+    MUST(a.ok == b.ok && a.len == b.len && a.crc == b.crc && a.zeros == b.zeros);
+    MUST(a.ok || !strcmp(a.error, b.error));
+    return 0;
+}
