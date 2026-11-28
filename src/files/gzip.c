@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Julio Martinez
 //
-// gunzip and zcat (docs/design/archives.md §5.2, §5.3): gzip files on the card, decoded by
-// files/gz.h (zlib's inflate) as shell jobs.
+// gunzip, zcat and gzip (docs/design/archives.md §5): gzip files on the card, decoded by
+// files/gz.h (zlib's inflate) and made by files/gzw.h (zlib's deflate) as shell jobs.
 //
-// Each step does a bounded amount of work for STEP_US: a 4 KB read from the card, inflate into a
-// 4 KB buffer, or that buffer's write (gunzip: to <name>.part; zcat: to the terminal, as fast as
-// shell_write_space() lets it, like cat). A small input that inflates to a lot (a "zip bomb")
-// only makes many steps; the card's free space is the limit, and a full card stops gunzip with
-// "card full". The output is renamed from <name>.part to <name> only when the input ended
-// cleanly; any error, Ctrl-C or the session ending deletes the .part. The input is deleted after
-// success unless -k. An existing <name> is not replaced without -f, and with -f it is moved
-// aside while the output takes its name (files_install_part()).
+// Each step does a bounded amount of work for STEP_US: a 4 KB read from the card, inflate or
+// deflate into a 4 KB buffer, or that buffer's write (gunzip: to <name>.part; gzip: to
+// <name>.gz.part; zcat: to the terminal, as fast as shell_write_space() lets it, like cat). A
+// small input that inflates to a lot (a "zip bomb") only makes many steps; the card's free space
+// is the limit, and a full card stops gunzip (or gzip) with "card full". The output is renamed
+// from <name>.part to <name> only when the input ended cleanly; any error, Ctrl-C or the session
+// ending deletes the .part. The input is deleted after success unless -k. An existing <name> is
+// not replaced without -f, and with -f it is moved aside while the output takes its name
+// (files_install_part()). gzip works the same way the other way round: <name> to
+// <name>.gz.part, renamed to <name>.gz at the end of the input.
 //
-// Memory: the job (two FatFs files, three paths, the two buffers: ~10 KB) and zlib's ~40 KB.
+// Memory: the job (two FatFs files, three paths, the two buffers: ~10 KB) and zlib's: ~40 KB to
+// decode (GZ_HEAP), ~54 KB to encode (GZW_HEAP).
 // Refused when that would leave less than HEAP_KEEP free, so time sync, a TLS handshake and an
 // `http` request still fit; and one at a time across the shells (files/bigjob.h).
 
@@ -32,6 +35,7 @@
 #include "files/bigjob.h"
 #include "files/files.h"
 #include "files/gz.h"
+#include "files/gzw.h"
 #include "files/path.h"
 #include "files/sdcard.h"
 
@@ -42,8 +46,9 @@
 #define PART        ".part"
 
 typedef struct {
-    const char *cmd;                // "gunzip" or "zcat": messages, and the bigjob slot
-    bool zcat, keep, force;
+    const char *cmd;                // "gunzip", "zcat" or "gzip": messages, and the bigjob slot
+    bool zcat, gzip, keep, force;
+    int level;                      // gzip: 1 to 9
     char **names;                   // the file arguments as typed (copies), names[n] NULL
     int n, next;                    // how many; the next to start
 
@@ -52,7 +57,10 @@ typedef struct {
     const char *arg;                // as typed, for messages
     FIL in, out;
     char out_path[PATH_LEN], part_path[PATH_LEN], in_path[PATH_LEN];
-    gz_t gz;
+    union {
+        gz_t gz;                    // gunzip, zcat
+        gzw_t gzw;                  // gzip
+    };
     const char *failed;             // zcat: the decoder's error, said once its output is printed
     bool eof;                       // the input file has been read to its end
     size_t in_pos, in_len;          // in_buf[in_pos..in_len): read, not yet decoded
@@ -73,7 +81,10 @@ static FRESULT close_file(gzjob_t *j, bool keep_output) {
         if (!keep_output || fr != FR_OK)
             f_unlink(j->part_path);
     }
-    gz_end(&j->gz);
+    if (j->gzip)
+        gzw_end(&j->gzw);
+    else
+        gz_end(&j->gz);
     j->open = false;
     return fr;
 }
@@ -83,42 +94,82 @@ static void file_failed(shell_t *sh, gzjob_t *j, const char *why) {
     shell_printf(sh, "%s%s: %s: %s\n", j->zcat ? "\n" : "", j->cmd, j->arg, why);
 }
 
-// The input ended cleanly: gunzip renames the .part into place and deletes the input.
+// The input ended cleanly: gunzip and gzip rename the .part into place and delete the input.
 static void file_done(shell_t *sh, gzjob_t *j) {
-    bool zeros = j->gz.trailing_zeros;
-    uint64_t bytes = j->gz.out_total;
+    bool zeros = !j->gzip && j->gz.trailing_zeros;
+    uint64_t in_bytes = j->gzip ? j->gzw.in_total : j->gz.in_total;
+    uint64_t out_bytes = j->gzip ? j->gzw.out_total : j->gz.out_total;
     FRESULT fr = close_file(j, true);
     if (j->zcat)
         return;
     if (fr != FR_OK) {
-        shell_printf(sh, "gunzip: %s: %s\n", j->arg, files_error((int)fr));
+        shell_printf(sh, "%s: %s: %s\n", j->cmd, j->arg, files_error((int)fr));
         return;
     }
     const char *why;
-    files_install_t r = files_install_part(sh, "gunzip", "output", j->part_path, j->out_path,
+    files_install_t r = files_install_part(sh, j->cmd, "output", j->part_path, j->out_path,
                                            j->force, &why);
     if (r != FILES_INSTALLED) {
         if (r == FILES_NOT_INSTALLED)
             f_unlink(j->part_path);
-        shell_printf(sh, "gunzip: %s: %s\n", j->out_path, why);
+        shell_printf(sh, "%s: %s: %s\n", j->cmd, j->out_path, why);
         return;                             // the input is kept
     }
     if (zeros)
         shell_printf(sh, "gunzip: %s: ignoring trailing zeros\n", j->arg);
     if (!j->keep && (fr = f_unlink(j->in_path)) != FR_OK)
-        shell_printf(sh, "gunzip: %s: not deleted: %s\n", j->arg, files_error((int)fr));
+        shell_printf(sh, "%s: %s: not deleted: %s\n", j->cmd, j->arg, files_error((int)fr));
     uint64_t us = time_us_64() - j->t0;
+    unsigned long long ms = (unsigned long long)(us / 1000);
+    if (j->gzip) {                          // speed: of the input, as for gunzip's output
+        shell_printf(sh, "%s: %llu bytes from %llu (%llu%%) in %llu ms (%llu KB/s)\n",
+                     path_basename(j->out_path), (unsigned long long)out_bytes,
+                     (unsigned long long)in_bytes,
+                     (unsigned long long)(in_bytes ? out_bytes * 100 / in_bytes : 100), ms,
+                     (unsigned long long)(us ? in_bytes * 1000000 / 1024 / us : 0));
+        return;
+    }
     shell_printf(sh, "%s: %llu bytes in %llu ms (%llu KB/s)\n", path_basename(j->out_path),
-                 (unsigned long long)bytes, (unsigned long long)(us / 1000),
-                 (unsigned long long)(us ? bytes * 1000000 / 1024 / us : 0));
+                 (unsigned long long)out_bytes, ms,
+                 (unsigned long long)(us ? out_bytes * 1000000 / 1024 / us : 0));
 }
 
-// For gunzip: may this shell change `path`? Says so if not.
-static bool may_write(shell_t *sh, const char *path) {
+// For gunzip and gzip: may this shell change `path`? Says so if not.
+static bool may_write(shell_t *sh, const gzjob_t *j, const char *path) {
     if (files_write_allowed(sh, path))
         return true;
-    shell_printf(sh, "gunzip: %s: not allowed to change this path\n", path);
+    shell_printf(sh, "%s: %s: not allowed to change this path\n", j->cmd, path);
     return false;
+}
+
+// The output's name for gunzip (<x>.gz to <x>) or gzip (<x> to <x>.gz), and its .part. False
+// after saying why.
+static bool output_names(shell_t *sh, gzjob_t *j) {
+    if (j->gzip) {
+        FILINFO fi;
+        if (f_stat(j->in_path, &fi) == FR_OK && (fi.fattrib & AM_DIR)) {
+            shell_printf(sh, "gzip: %s: is a directory\n", j->arg);
+            return false;
+        }
+        if (gzw_has_gz_suffix(j->in_path)) {
+            shell_printf(sh, "gzip: %s: already has a .gz suffix\n", j->arg);
+            return false;
+        }
+        if (!gzw_output_name(j->in_path, j->out_path, sizeof(j->out_path))) {
+            shell_printf(sh, "gzip: %s: path too long\n", j->arg);
+            return false;
+        }
+    } else if (!gz_output_name(j->in_path, j->out_path, sizeof(j->out_path))) {
+        shell_printf(sh, "gunzip: %s: unknown suffix (.gz or .tgz)\n", j->arg);
+        return false;
+    }
+    if (strlen(j->out_path) + strlen(PART) >= sizeof(j->part_path)) {
+        shell_printf(sh, "%s: %s: path too long\n", j->cmd, j->arg);
+        return false;
+    }
+    strcpy(j->part_path, j->out_path);
+    strcat(j->part_path, PART);
+    return true;
 }
 
 // Open the next file and its output. False after saying why (the job goes on to the next).
@@ -131,27 +182,19 @@ static bool start_file(shell_t *sh, gzjob_t *j) {
     if (!sdcard_mount(sh))
         return false;
     if (!j->zcat) {
-        if (!gz_output_name(j->in_path, j->out_path, sizeof(j->out_path))) {
-            shell_printf(sh, "gunzip: %s: unknown suffix (.gz or .tgz)\n", j->arg);
+        if (!output_names(sh, j))
             return false;
-        }
-        if (strlen(j->out_path) + strlen(PART) >= sizeof(j->part_path)) {
-            shell_printf(sh, "gunzip: %s: path too long\n", j->arg);
-            return false;
-        }
-        strcpy(j->part_path, j->out_path);
-        strcat(j->part_path, PART);
-        if (!may_write(sh, j->out_path) || !may_write(sh, j->part_path) ||
-            (!j->keep && !may_write(sh, j->in_path)))
+        if (!may_write(sh, j, j->out_path) || !may_write(sh, j, j->part_path) ||
+            (!j->keep && !may_write(sh, j, j->in_path)))
             return false;
         FILINFO fi;                         // checked again at the end (files_install_part())
         bool exists = f_stat(j->out_path, &fi) == FR_OK;
         if (exists && (fi.fattrib & AM_DIR)) {
-            shell_printf(sh, "gunzip: %s: is a directory\n", path_basename(j->out_path));
+            shell_printf(sh, "%s: %s: is a directory\n", j->cmd, path_basename(j->out_path));
             return false;
         }
         if (exists && !j->force) {
-            shell_printf(sh, "gunzip: %s: already exists (-f replaces it)\n",
+            shell_printf(sh, "%s: %s: already exists (-f replaces it)\n", j->cmd,
                          path_basename(j->out_path));
             return false;
         }
@@ -162,13 +205,14 @@ static bool start_file(shell_t *sh, gzjob_t *j) {
         return false;
     }
     if (!j->zcat && (fr = f_open(&j->out, j->part_path, FA_WRITE | FA_CREATE_ALWAYS)) != FR_OK) {
-        shell_printf(sh, "gunzip: %s: %s\n", path_basename(j->part_path), files_error((int)fr));
+        shell_printf(sh, "%s: %s: %s\n", j->cmd, path_basename(j->part_path),
+                     files_error((int)fr));
         f_close(&j->in);
         return false;
     }
-    if (!gz_init(&j->gz)) {
+    if (j->gzip ? !gzw_init(&j->gzw, j->level) : !gz_init(&j->gz)) {
         j->open = true;
-        file_failed(sh, j, j->gz.error);
+        file_failed(sh, j, j->gzip ? j->gzw.error : j->gz.error);
         return false;
     }
     j->open = true;
@@ -179,8 +223,9 @@ static bool start_file(shell_t *sh, gzjob_t *j) {
     return true;
 }
 
-// Write what is decoded. gunzip: all of it to the .part. zcat: what the terminal takes now
-// (half its space: "\n" becomes "\r\n"). False after an error (the file is closed then).
+// Write what is decoded or encoded. gunzip, gzip: all of it to the .part. zcat: what the
+// terminal takes now (half its space: "\n" becomes "\r\n"). False after an error (the file is
+// closed then).
 static bool put_out(shell_t *sh, gzjob_t *j) {
     size_t n = j->out_len - j->out_pos;
     if (j->zcat) {
@@ -209,8 +254,24 @@ static bool put_out(shell_t *sh, gzjob_t *j) {
     return true;
 }
 
-// One bounded piece of work on the open file: write, read, or decode. Returns false when zcat
-// must wait for the terminal.
+// gzip's piece of work once input is read: deflate it (a 4 KB buffer's worth at most), or, at
+// the end of the input, the member's end; when that has been written, install the output.
+static void encode(shell_t *sh, gzjob_t *j) {
+    if (gzw_done(&j->gzw)) {
+        file_done(sh, j);
+        return;
+    }
+    const uint8_t *in = j->in_buf + j->in_pos;
+    size_t left = j->in_len - j->in_pos;
+    bool ok = gzw_feed(&j->gzw, &in, &left, j->eof, j->out_buf, sizeof(j->out_buf), &j->out_len);
+    j->in_pos = j->in_len - left;
+    j->out_pos = 0;
+    if (!ok)
+        file_failed(sh, j, j->gzw.error);
+}
+
+// One bounded piece of work on the open file: write, read, decode or encode. Returns false when
+// zcat must wait for the terminal.
 static bool advance(shell_t *sh, gzjob_t *j) {
     if (j->out_pos < j->out_len) {
         size_t before = j->out_pos;
@@ -232,6 +293,10 @@ static bool advance(shell_t *sh, gzjob_t *j) {
         j->in_pos = 0;
         j->in_len = br;
         j->eof = br == 0;
+        return true;
+    }
+    if (j->gzip) {
+        encode(sh, j);
         return true;
     }
     if (j->in_pos < j->in_len || gz_pending(&j->gz)) {
@@ -269,7 +334,8 @@ static bool gz_step(shell_t *sh, void *arg, bool cancel) {
         if (j->open) {
             close_file(j, false);
             if (!j->zcat)
-                shell_printf(sh, "gunzip: stopped; %s removed\n", path_basename(j->part_path));
+                shell_printf(sh, "%s: stopped; %s removed\n", j->cmd,
+                             path_basename(j->part_path));
         }
         return job_end(j);
     }
@@ -305,8 +371,10 @@ static char **copy_names(int n, char **argv) {
     return names;
 }
 
-static void start(shell_t *sh, const char *cmd, bool keep, bool force, int n, char **files) {
-    size_t need = sizeof(gzjob_t) + GZ_HEAP;
+static void start(shell_t *sh, const char *cmd, bool keep, bool force, int level, int n,
+                  char **files) {
+    bool gzip = !strcmp(cmd, "gzip");
+    size_t need = sizeof(gzjob_t) + (gzip ? GZW_HEAP : GZ_HEAP);
     size_t free_now = heap_free();
     if (free_now < need + HEAP_KEEP) {
         shell_printf(sh, "%s: not enough memory: needs %u KB and keeps %u KB free; %u KB free\n",
@@ -328,6 +396,8 @@ static void start(shell_t *sh, const char *cmd, bool keep, bool force, int n, ch
     }
     j->cmd = cmd;
     j->zcat = !strcmp(cmd, "zcat");
+    j->gzip = gzip;
+    j->level = level;
     j->keep = keep;
     j->force = force;
     j->names = names;
@@ -336,9 +406,12 @@ static void start(shell_t *sh, const char *cmd, bool keep, bool force, int n, ch
     shell_run_job(sh, gz_step, j);
 }
 
-// gunzip [-k] [-f] <file>...: options first, single or together (-kf); `--` ends them.
-static void run_gunzip(shell_t *sh, int argc, char **argv) {
+// gunzip [-k] [-f] <file>... and gzip [-k] [-f] [-1..-9] <file>...: options first, single or
+// together (-kf9); `--` ends them. The last level given counts.
+static void run_options(shell_t *sh, const char *cmd, int argc, char **argv) {
+    bool gzip = !strcmp(cmd, "gzip");
     bool keep = false, force = false, ok = true;
+    int level = GZW_LEVEL;
     int i = 1;
     for (; ok && i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
         if (!strcmp(argv[i], "--")) {
@@ -350,6 +423,8 @@ static void run_gunzip(shell_t *sh, int argc, char **argv) {
                 keep = true;
             else if (*o == 'f')
                 force = true;
+            else if (gzip && *o >= '1' && *o <= '9')
+                level = *o - '0';
             else
                 ok = false;
         }
@@ -357,10 +432,19 @@ static void run_gunzip(shell_t *sh, int argc, char **argv) {
     for (int k = i; ok && k < argc; k++)
         ok = argv[k][0] != '\0';
     if (!ok || i == argc) {
-        shell_printf(sh, "usage: gunzip [-k] [-f] <file>...\n");
+        shell_printf(sh, "usage: %s\n", gzip ? "gzip [-k] [-f] [-1..-9] <file>..."
+                                             : "gunzip [-k] [-f] <file>...");
         return;
     }
-    start(sh, "gunzip", keep, force, argc - i, argv + i);
+    start(sh, cmd, keep, force, level, argc - i, argv + i);
+}
+
+static void run_gunzip(shell_t *sh, int argc, char **argv) {
+    run_options(sh, "gunzip", argc, argv);
+}
+
+static void run_gzip(shell_t *sh, int argc, char **argv) {
+    run_options(sh, "gzip", argc, argv);
 }
 
 static void run_zcat(shell_t *sh, int argc, char **argv) {
@@ -368,16 +452,18 @@ static void run_zcat(shell_t *sh, int argc, char **argv) {
         shell_printf(sh, "usage: zcat <file>\n");
         return;
     }
-    start(sh, "zcat", false, false, 1, argv + 1);
+    start(sh, "zcat", false, false, 0, 1, argv + 1);
 }
 
 const shell_cmd_t gzip_commands[] = {
     {"gunzip", NULL, run_gunzip, NULL, SHELL_PATH},
     {"zcat", NULL, run_zcat, NULL, SHELL_PATH},
+    {"gzip", NULL, run_gzip, NULL, SHELL_PATH},
     {0},
 };
 
 void gzip_help(shell_t *sh) {
     shell_printf(sh, "gunzip [-k] [-f] <file>...  decompress x.gz to x (-k keeps x.gz)\n");
     shell_printf(sh, "zcat <file>       print a gzip file decompressed (Ctrl-C stops)\n");
+    shell_printf(sh, "gzip [-k] [-f] [-1..-9] <file>...  compress x to x.gz (-k keeps x)\n");
 }

@@ -149,7 +149,7 @@ length), and `sums_name_safe()`: no absolute name, no `..` component (split at `
 FatFs splits, and dots-and-spaces components FatFs may read as `..`), no `:` or control
 character. `tests/test_sums_parse.c`; fuzz target `sums`.
 
-## `gzip.c`, `gz.c`, `bigjob.c`: gunzip and zcat
+## `gzip.c`, `gz.c`, `gzw.c`, `bigjob.c`: gunzip, zcat and gzip
 
 [Design](../../docs/design/archives.md) §5. zlib is the submodule `lib/zlib`, built from the list
 in `cmake/zlib.cmake` for both the firmware and the host tests (`Z_SOLO`, `ZLIB_CONST`, SYSTEM
@@ -163,14 +163,66 @@ includes, no SOS warnings).
   `tests/test_gz.c` decodes the files GNU gzip made in `tests/data/archives/`
   (`tools/make-archive-fixtures.sh`) in pieces of many sizes; `tests/fuzz/fuzz_gz.c` checks that
   any input decodes the same in one piece and in pieces.
-- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates into 4 KB, or writes
-  that out (gunzip: to `<name>.part`, synced once a second; zcat: as `shell_write_space()`
-  allows), until `STEP_US`, at least one of them a step. The .part is renamed into place only
-  after `gz_finish()`; an error, Ctrl-C or the session ending deletes it. Refused when the heap
-  would keep less than 64 KB free. `tests/test_gzip.c` runs both over a card in memory.
+- **`gzw.c` (pure C, host tested and fuzzed):** the other way, data in and one gzip member out,
+  on `deflate` with windowBits 12 + 16 and memLevel 6 (~54 KB, `GZW_HEAP`, under `HEAP_ZLIB`;
+  zlib's defaults would take ~262 KB). The header is `gzip -n`'s: no name, date 0. Never more
+  output per call than the caller's buffer. `tests/test_gzw.c` reads its output back with
+  `gz.c` and GNU gunzip (when the host has it) at every level; the gz fuzz target round-trips
+  its input through both.
+- **`gzip.c`:** the commands, as shell jobs: each step reads 4 KB, inflates or deflates into
+  4 KB, or writes that out (gunzip: to `<name>.part`, gzip: to `<name>.gz.part`, synced once a
+  second; zcat: as `shell_write_space()` allows), until `STEP_US`, at least one of them a step.
+  The .part is installed (`files_install_part()`) only after `gz_finish()` or `gzw_done()`; an
+  error, Ctrl-C or the session ending deletes it. Refused when the heap would keep less than
+  64 KB free. `tests/test_gzip.c` runs all three over a card in memory.
 - **`bigjob.c`** (shared with `fetch`): one archive job at a time across the shells.
   `bigjob_try_begin()` returns the running job's name when another holds the slot, and the
   caller prints `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`).
+
+## `tar.c`, `tar_parse.c`, `tar_create.c`, `tar_write.c`: tar tf, xf, cf and czf
+
+[Design](../../docs/design/archives.md) §6.
+
+- **`tar_parse.c` (pure C, host tested and fuzzed):** an archive's bytes in, in pieces of any
+  size, its entries and their data out (`tar_feed()`: header, data pointing into the input, end,
+  error). ustar (with its prefix), GNU (`L`/`K` long names, base-256 numbers), pax (`x`: path,
+  size, linkpath; `g` skipped) and v7 headers; the checksum unsigned or signed; two zero blocks
+  end it. No allocation: long names and pax records go into fixed buffers (`TAR_NAME_MAX`,
+  `TAR_PAX_MAX`), and an entry whose name doesn't fit comes with `refused` set rather than a
+  cut name. `tar_name_clean()` is §6.3's name rules as a pure function (leading `/`, `..`, `.`
+  and empty components, `path_name_check()` on each component). `tests/test_tar_parse.c` reads
+  the archives GNU tar, bsdtar and python's tarfile made in `tests/data/archives/tar/`
+  (`tools/make-archive-fixtures.sh`, `tools/craft-tar.py`) whole and in pieces;
+  `tests/fuzz/fuzz_tar.c` checks that any input reads the same in pieces and that every name
+  the rules accept stays under the target.
+- **`tar.c`:** the command, as a shell job: each step reads 4 KB, inflates into 4 KB when the
+  archive starts with gzip's magic (`gz.c`), feeds the parser, or writes an entry's data to its
+  `<name>.part`, until `STEP_US`. Each file is renamed into place by `files_install_part()`
+  (`-f`: the old one moved aside first). The joined path is checked again with
+  `path_resolve()`, every create goes through `files_write_allowed()`, and the archive itself
+  is never a target. Case clashes: the paths this run created are kept as sorted 64-bit hashes;
+  when a path exists, the name FatFs has stored for it (a stat per component) is looked up
+  there. Dates via `f_utime()` (FatFs built with `FF_USE_CHMOD 1`: `config/fatfs/ffconf.h`).
+  `tests/test_tar.c` runs it over a card in memory whose names compare ignoring case.
+- **`tar_write.c` (pure C, host tested):** the other way: the header blocks for a file or a
+  directory (ustar, 0644/0755, uid/gid 0, no user names; the name split into ustar's prefix
+  where it can be, a pax `x` record with `path` where it can't; sizes from 8 GB in base-256)
+  and the end (two zero blocks, padded to GNU's 10240-byte record). `tests/test_tar_write.c`
+  reads its headers back with `tar_parse.c` in any split and has GNU tar and bsdtar list and
+  extract them (`tests/tar_tools.h`; skipped when the host lacks them); the tar fuzz target
+  round-trips its input as a name.
+- **`tar_create.c`:** `tar cf`/`czf` as a shell job (`tar.c` reads the words): each step
+  reads a directory entry and writes its header, or reads 4 KB of a file and writes it (through
+  `gzw.c` for `cz`), until `STEP_US`. The walk's stack is in the job: per level a `DIR`, the
+  entries read from it and its path's length, at most 16 levels; at most 4 directories are
+  open at a time, because FatFs counts open subdirectories in its 16-entry lock table (SFTP
+  alone may hold 8): a level closed to make room is opened again on the way back and read
+  past what it gave. Skips the archive and its `.part`, files being written
+  (`files_being_written()`, the test `ls` uses, or `FR_LOCKED` at the open), unreadable files.
+  Output to `<archive>.part`, put in place by `files_install_part()`. FAT dates are UTC on the
+  card (the library's `get_fattime()` calls `localtime_r()` with no zone set), so they go into
+  the headers unconverted. `tests/test_tar.c` makes archives on the card in memory, has GNU tar
+  and bsdtar list and extract them, and extracts them again with `tar xf`.
 
 ## `path.c`: paths (pure C, host tested)
 
@@ -183,13 +235,13 @@ includes, no SOS warnings).
 - **Fails closed:** a path too long to check, or one with a drive prefix (`:`), counts as
   protected.
 - **`path_name_check()`** checks one name that came from outside (the name a download's URL
-  suggests; later the names in an archive) before anything is created under it: not empty,
+  suggests, each component of a name in a tar archive) before anything is created under it: not empty,
   `.` or `..`, no `/`, `\`, control characters (C1 too) or `"*:<>?|`, not ending in a space
   or a dot (FatFs would drop them), valid UTF-8, at most 255 UTF-16 units.
 
 ## `bigjob.c`: one archive job at a time (pure C, host tested)
 
-`fetch`, and later `gunzip`, `zcat`, `gzip` and `tar` ([archives.md](../../docs/design/archives.md)
+`fetch`, `gunzip`, `zcat`, `tar`, and later `gzip` ([archives.md](../../docs/design/archives.md)
 §5.2), each hold tens of KB of heap while they run, so they take turns across all shells:
 `bigjob_try_begin(name)` admits one (NULL) or names the one running, which the command reports
 with `BIGJOB_BUSY_FMT` (`busy: <command> is running in another shell`); `bigjob_end()` when

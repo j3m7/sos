@@ -95,7 +95,11 @@ target_sources(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
     ${SDCARD_ROOT}/src/src/util.c
 )
 # SYSTEM: third-party headers, kept out of SOS's warnings (cmake/warnings.cmake).
+# config/fatfs first: its ffconf.h wraps the library's (in src/include) with FF_USE_CHMOD 1 for
+# f_utime() (tar's dates). The library's sources are compiled in the sos target with this same
+# path, so FatFs and SOS see one configuration.
 target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico SYSTEM INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/config/fatfs
     ${SDCARD_ROOT}/src/ff15/source
     ${SDCARD_ROOT}/src/sd_driver
     ${SDCARD_ROOT}/src/include
@@ -139,7 +143,8 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES
 # so it uses the C library's snprintf too.
 set_property(SOURCE src/lua/lua_json.c APPEND PROPERTY COMPILE_DEFINITIONS snprintf=__real_snprintf)
 
-# zlib (lib/zlib by default; cmake/zlib.cmake): gunzip and zcat (src/files/gz.c).
+# zlib (lib/zlib by default; cmake/zlib.cmake): gunzip and zcat (src/files/gz.c), gzip
+# (src/files/gzw.c).
 include(cmake/zlib.cmake)
 add_library(zlib INTERFACE)
 target_sources(zlib INTERFACE ${ZLIB_SOURCES})
@@ -317,9 +322,14 @@ set(SOS_SOURCES
     src/files/files.c
     src/files/gz.c
     src/files/gzip.c
+    src/files/gzw.c
     src/files/path.c
     src/files/sums.c
     src/files/sums_parse.c
+    src/files/tar.c
+    src/files/tar_create.c
+    src/files/tar_parse.c
+    src/files/tar_write.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c

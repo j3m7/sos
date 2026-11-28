@@ -146,6 +146,8 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | `sha512sum <file>...`<br>`sha512sum -c [--ignore-missing] <list>` | any | print or check SHA-512 checksums of files ([page](../man/sha512sum.txt)) |
 | `gunzip [-k] [-f] <file>...` | any | decompress gzip files on the card ([page](../man/gunzip.txt)) |
 | `zcat <file>` | any | print a gzip file decompressed ([page](../man/zcat.txt)) |
+| `gzip [-k] [-f] [-1..-9] <file>...` | any | compress files on the card ([page](../man/gzip.txt)) |
+| `tar tf <archive>`<br>`tar xf <archive> [-C <dir>] [-f]`<br>`tar cf <archive> [-C <dir>] [-f] <path>...`<br>`tar czf <archive> [-C <dir>] [-f] <path>...` | any | list, extract and make tar archives on the card ([page](../man/tar.txt)) |
 | `sd`<br>`sd info`<br>`sd speed [<MHz>]` *(console only to change)*<br>`sd unmount` *(console only)*<br>`sd check` *(console only)*<br>`sd check fix` *(console only)*<br>`sd test [<KB> [keep]]` *(console only)*<br>`sd format [exfat \| fat32] [plain]` *(console only)* | any (marked forms: console only) | the SD card: information, speed, unmounting, checks, benchmark, format ([page](../man/sd.txt)) |
 
 ## Editor
