@@ -137,6 +137,15 @@ They cover:
 `tests/test.h` is a minimal harness; add a suite as `tests/test_<name>.c` and register it in
 `tests/CMakeLists.txt`.
 
+Host tests use the host's C library, so they can't catch a difference in the board's. In
+particular, on the board SOS's own code gets the Pico SDK's lightweight `snprintf`, which
+prints doubles with about 10 digits. The Lua sources get the C library's instead, through
+`-Dsnprintf=__real_snprintf` in `CMakeLists.txt`. An SOS file whose output must match Lua's
+number text (`tostring`) needs the same definition. `src/lua/lua_json.c` has it, as a
+`COMPILE_DEFINITIONS` entry, because the firmware warnings overwrite every SOS source's
+`COMPILE_OPTIONS`. Such a file also needs a check on the board against `tostring`: the host
+tests pass either way.
+
 ### Hardware tests
 
 Hardware tests run against a board that is flashed with SOS and on the network:
