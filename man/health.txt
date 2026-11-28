@@ -55,7 +55,8 @@ DESCRIPTION
         core1       every 10 s while a Lua script runs: WARN when core 1 has
                     run no Lua for 30 s and isn't waiting for anything (a long
                     C call: Ctrl-C waits for it); FAIL when a stop was asked
-                    and nothing has moved for 10 s (no scripts until reboot)
+                    and nothing has moved for 10 s (no new script until the
+                    call returns, or a reboot)
         heap-sum    every 5 minutes: the heap's totals agree (what the
                     features hold is within what is in use; in use plus free
                     is the arena); FAIL if the heap reaches the stack guard

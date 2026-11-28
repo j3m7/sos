@@ -416,7 +416,7 @@ TEST(core1_paths) {
     in.now_us = S(175);
     bgcheck_judge_core1(&st, &in, &r);
     CHECK_EQ(r.status, HEALTH_FAIL);
-    CHECK(is("core 1 ignored stop for 40 s: no scripts until reboot"));
+    CHECK(is("core 1 ignored stop for 40 s: no new script until it returns"));
 
     // It ends at last.
     in.running = false;

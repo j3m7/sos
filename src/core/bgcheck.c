@@ -256,7 +256,7 @@ void bgcheck_judge_core1(bgcheck_core1_state_t *st, const bgcheck_core1_in_t *in
     if (in->cancel && in->now_us - st->stop_us >= BGCHECK_CORE1_STOP_US &&
         still >= BGCHECK_CORE1_STOP_US) {
         st->troubled = true;
-        set(out, HEALTH_FAIL, "core 1 ignored stop for %lu s: no scripts until reboot",
+        set(out, HEALTH_FAIL, "core 1 ignored stop for %lu s: no new script until it returns",
             (unsigned long)((in->now_us - st->stop_us) / 1000000));
     } else if (!in->cancel && still >= BGCHECK_CORE1_WARN_US) {
         st->troubled = true;

@@ -282,10 +282,21 @@ static void dump_history(health_print_fn print, void *arg) {
             dump(print, arg, "history: rtc set to %lu, cal steps %d, %s", (unsigned long)r->wall,
                  r->cal_steps, r->confirmed ? "confirmed" : "unconfirmed");
         else if (r->kind == HISTORY_KIND_BOOT)
-            dump(print, arg, "history: boot %u, %s, up %ld s before, at %ld, extra 0x%02x",
-                 r->boot_no, resetwhy_name((resetwhy_t)r->reason),
-                 r->uptime_s == HISTORY_NONE ? -1L : (long)r->uptime_s,
-                 r->wall == HISTORY_NONE ? -1L : (long)r->wall, r->extra);
+        {
+            // "?" for what isn't known, as `uptime history` shows it (a brownout, power-on or
+            // reset-pin boot keeps no uptime; a boot before the clock was set has no time).
+            char up[16], at[16];
+            if (r->uptime_s == HISTORY_NONE)
+                snprintf(up, sizeof(up), "?");
+            else
+                snprintf(up, sizeof(up), "%lu", (unsigned long)r->uptime_s);
+            if (r->wall == HISTORY_NONE)
+                snprintf(at, sizeof(at), "?");
+            else
+                snprintf(at, sizeof(at), "%lu", (unsigned long)r->wall);
+            dump(print, arg, "history: boot %u, %s, up %s s before, at %s, extra 0x%02x",
+                 r->boot_no, resetwhy_name((resetwhy_t)r->reason), up, at, r->extra);
+        }
         else
             dump(print, arg, "history: test record");
     }

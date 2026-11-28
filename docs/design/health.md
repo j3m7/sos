@@ -1384,7 +1384,7 @@ JSON, hashing a few hundred KB) is well under a second.
 | PASS | a script runs and `beats` moved since the last run | `loop.lua running 42 s, 9800 hooks/s` |
 | PASS | core 1 is waiting for core 0, the output or a line | `loop.lua waiting for core 0 (http) for 12 s` |
 | WARN | no beat for 30 s, not waiting, no stop asked | `loop.lua in one C call for 31 s: Ctrl-C waits for it` |
-| FAIL | a stop was asked 10 s ago or more, and no beat since and still running | `core 1 ignored stop for 40 s: no scripts until reboot` |
+| FAIL | a stop was asked 10 s ago or more, and no beat since and still running | `core 1 ignored stop for 40 s: no new script until it returns` (seen on dev-1: the stuck call returning frees core 1 again, and the check says so; a call that never returns needs a reboot) |
 | PASS | the script ended after this check had WARNed or FAILed (logged as the change back) | `core 1 free again: script ended after 52 s` |
 | SKIP | no script running (the usual case) | `no script running` |
 
