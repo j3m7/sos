@@ -141,6 +141,9 @@ instead of the screen ('dmesg > /d.txt'); '>>' appends to it.
 | `rm <path>` | any | delete a file or an empty directory ([page](../man/rm.txt)) |
 | `mkdir <dir>` | any | create a directory ([page](../man/mkdir.txt)) |
 | `echo <text>` | any | print text ([page](../man/echo.txt)) |
+| `sha256sum <file>...`<br>`sha256sum -c [--ignore-missing] <list>` | any | print or check SHA-256 checksums of files ([page](../man/sha256sum.txt)) |
+| `sha1sum <file>...`<br>`sha1sum -c [--ignore-missing] <list>` | any | print or check SHA-1 checksums of files ([page](../man/sha1sum.txt)) |
+| `sha512sum <file>...`<br>`sha512sum -c [--ignore-missing] <list>` | any | print or check SHA-512 checksums of files ([page](../man/sha512sum.txt)) |
 | `sd`<br>`sd info`<br>`sd speed [<MHz>]` *(console only to change)*<br>`sd unmount` *(console only)*<br>`sd check` *(console only)*<br>`sd check fix` *(console only)*<br>`sd test [<KB> [keep]]` *(console only)*<br>`sd format [exfat \| fat32] [plain]` *(console only)* | any (marked forms: console only) | the SD card: information, speed, unmounting, checks, benchmark, format ([page](../man/sd.txt)) |
 
 ## Editor

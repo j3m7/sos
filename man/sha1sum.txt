@@ -1,0 +1,19 @@
+NAME
+    sha1sum - print or check SHA-1 checksums of files
+
+SYNOPSIS
+    sha1sum <file>...
+    sha1sum -c [--ignore-missing] <list>
+
+DESCRIPTION
+    Like sha256sum, with SHA-1: 40 hex digits, and BSD list lines start
+    with 'SHA1 ('. 'man sha256sum' describes the forms, the list format and
+    the results.
+
+    SHA-1 is broken for collisions: someone who makes a file can make
+    another with the same SHA-1. sha1sum is here for old published lists;
+    don't rely on it for files from others. Use sha256sum where the list
+    offers it.
+
+SEE ALSO
+    sha256sum, sha512sum

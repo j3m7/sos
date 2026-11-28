@@ -252,6 +252,8 @@ set(SOS_SOURCES
     src/files/bigjob.c
     src/files/files.c
     src/files/path.c
+    src/files/sums.c
+    src/files/sums_parse.c
     src/files/sdcrypt.c
     src/files/cardkey.c
     src/time/rtc.c
