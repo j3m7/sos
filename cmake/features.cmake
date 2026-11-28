@@ -2,10 +2,11 @@
 # Copyright (C) 2026 Julio Martinez
 #
 # Build features (docs/design/build-features.md): one option per feature, SOS_FEATURE_<NAME>,
-# ON by default except where the board can't have it or something it needs is off. Asking for a
-# feature whose dependency is off is a configure error, never a silent drop (decision 2). The C code sees SOS_HAVE_<NAME> defined to
-# 0 or 1 on every source of the target and tests it with #if (decision 4), and the image says
-# which features it has (`version`, `health`, sos.features()) from SOS_FEATURE_LIST.
+# AUTO by default: on, except where the board can't have it or something it needs is off.
+# Asking for a feature whose dependency is off is a configure error, never a silent drop
+# (decision 2). The C code sees SOS_HAVE_<NAME> defined to 0 or 1 on every source of the target
+# and tests it with #if (decision 4), and the image says which features it has (`version`,
+# `health`, sos.features()) from SOS_FEATURE_LIST.
 #
 # Included after pico_sdk_init(): PICO_CYW43_SUPPORTED, which says whether the board has the
 # Wi-Fi chip, exists only once the SDK has read the board header.
@@ -13,20 +14,38 @@
 set(SOS_FEATURES "")
 
 # sos_feature(<NAME> "<what it is>" [DEFAULT <ON|OFF>] [NEEDS <NAME>...])
-# A feature defaults to ON, or to DEFAULT, but to OFF while something it needs is off: a plain
-# Pico 2 (no Wi-Fi chip, so NET off) builds without TLS, HTTP, NTS and SSH unless told otherwise.
-# An explicit ON with a need off is still an error (sos_features_apply()).
+#
+# The cache holds only what the builder asked for: AUTO (the default), ON or OFF. AUTO is worked
+# out again at every configure, never cached: ON, or DEFAULT, but OFF while something it needs is
+# off, so a plain Pico 2 (no Wi-Fi chip, so NET off) builds without TLS, HTTP, NTS and SSH unless
+# told otherwise. Had the worked-out value been cached, a directory configured once with NET off
+# would keep SSH off after NET came back on, without a word (the stale-cache trap of #102). An
+# explicit ON with a need off is an error (sos_features_apply()). The resolved value is the
+# normal variable SOS_FEATURE_<NAME>, which hides the cache entry from here on.
 function(sos_feature name doc)
     cmake_parse_arguments(F "" "DEFAULT" "NEEDS" ${ARGN})
     if (NOT DEFINED F_DEFAULT)
         set(F_DEFAULT ON)
     endif()
-    foreach(n ${F_NEEDS})
-        if (NOT SOS_FEATURE_${n})
-            set(F_DEFAULT OFF)
-        endif()
-    endforeach()
-    option(SOS_FEATURE_${name} "${doc}" ${F_DEFAULT})
+    set(SOS_FEATURE_${name} AUTO CACHE STRING "${doc} (AUTO, ON or OFF)")
+    set_property(CACHE SOS_FEATURE_${name} PROPERTY STRINGS AUTO ON OFF)
+    set(asked "$CACHE{SOS_FEATURE_${name}}")
+    string(TOUPPER "${asked}" asked)
+    if (asked STREQUAL "AUTO")
+        set(value ${F_DEFAULT})
+        foreach(n ${F_NEEDS})
+            if (NOT SOS_FEATURE_${n})
+                set(value OFF)
+            endif()
+        endforeach()
+    elseif (asked MATCHES "^(ON|YES|TRUE|Y|1)$")
+        set(value ON)
+    elseif (asked MATCHES "^(OFF|NO|FALSE|N|0)$")
+        set(value OFF)
+    else()
+        message(FATAL_ERROR "SOS_FEATURE_${name} is '${asked}': give AUTO, ON or OFF")
+    endif()
+    set(SOS_FEATURE_${name} ${value} PARENT_SCOPE)
     set(SOS_FEATURE_NEEDS_${name} "${F_NEEDS}" PARENT_SCOPE)
     set(SOS_FEATURES ${SOS_FEATURES} ${name} PARENT_SCOPE)
 endfunction()

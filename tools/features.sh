@@ -8,7 +8,7 @@
 # Pico 2 too, even with no such board at hand.
 #
 #   tools/features.sh              all the combinations (`just features`)
-#   tools/features.sh <name>...    only those (names as listed below)
+#   tools/features.sh <name>...    only those (names as listed below, or `cache`)
 #
 # Each configure starts from the debug preset and clears the cached SOS_FEATURE_* choices, so a
 # combination gets what its flags and the defaults say, not what an earlier run left. Extra
@@ -36,6 +36,43 @@ combos=(
 
 want=("$@")
 failed=0
+
+# The cache check (decision 2): a directory configured with NET off, then on again, gets back
+# the features nobody turned off; a feature asked for explicitly makes NET off an error. Only
+# configures. Runs with every full run, or alone as `tools/features.sh cache`.
+cache_check() {
+    local dir=build-features/cache log=build-features/cache.log
+    rm -rf "$dir"
+    mkdir -p build-features
+    # shellcheck disable=SC2086
+    if ! cmake --preset debug -B "$dir" ${SOS_CMAKE_ARGS:-} -DSOS_FEATURE_NET=OFF >"$log" 2>&1 ||
+            ! cmake --preset debug -B "$dir" ${SOS_CMAKE_ARGS:-} -DSOS_FEATURE_NET=ON >>"$log" 2>&1; then
+        printf '%-14s configure failed: %s\n' cache "$log"
+        return 1
+    fi
+    if [[ $(grep 'SOS features' "$log" | tail -1) != "-- SOS features: NET TLS HTTP NTS SSH"* ]]; then
+        printf '%-14s NET back on did not bring TLS, HTTP, NTS and SSH back: %s\n' cache "$log"
+        return 1
+    fi
+    rm -rf "$dir"
+    # shellcheck disable=SC2086
+    if cmake --preset debug -B "$dir" ${SOS_CMAKE_ARGS:-} -DSOS_FEATURE_SSH=ON \
+            -DSOS_FEATURE_NET=OFF >>"$log" 2>&1; then
+        printf '%-14s SSH=ON with NET=OFF configured instead of failing: %s\n' cache "$log"
+        return 1
+    fi
+    if ! grep -q 'SOS_FEATURE_SSH needs SOS_FEATURE_NET' "$log"; then
+        printf '%-14s SSH=ON with NET=OFF failed, but not on the dependency: %s\n' cache "$log"
+        return 1
+    fi
+    rm -rf "$dir"
+    printf '%-14s ok: NET off then on brings SSH back; SSH=ON with NET=OFF is refused\n' cache
+}
+
+if ((${#want[@]} == 0)) || [[ " ${want[*]} " == *" cache "* ]]; then
+    cache_check || failed=1
+fi
+
 printf '%-14s %10s %8s  %s\n' combination text bss features
 for entry in "${combos[@]}"; do
     name=${entry%%:*}

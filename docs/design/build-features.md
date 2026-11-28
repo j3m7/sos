@@ -107,11 +107,13 @@ without the network stack, the SSH server and the TLS client cannot be reached o
    build stays exactly today's image; nobody's build changes until they turn something off.
 2. **Asking for a feature whose dependency is off is a configure error, not a silent drop.**
    `-DSOS_FEATURE_SSH=ON` with NET off stops with "SOS_FEATURE_SSH needs SOS_FEATURE_NET: turn
-   it off too". An image never loses something its builder asked for. A feature nobody set
-   follows its dependencies: its default is OFF while one of them is off (as built in phase 3:
-   a plain Pico 2, which has no Wi-Fi chip, would otherwise stop at configure for TLS, HTTP,
-   NTS and SSH). A build directory keeps what it was given (CMake's cache), so a feature turned
-   on there earlier and a dependency turned off later is the error case. Presets (§6) make the
+   it off too". An image never loses something its builder asked for. Each option is AUTO, ON
+   or OFF, AUTO by default, and the cache keeps only that: AUTO is worked out again at every
+   configure (on, but off while a dependency is off) and never cached. So a plain Pico 2, which
+   has no Wi-Fi chip, configures without TLS, HTTP, NTS and SSH, and a directory configured
+   once with NET off gets them back when NET is turned on again. (Caching the worked-out value,
+   phase 3's first version, dropped SSH silently in that second case: Reviewer found it, the
+   stale-cache trap of #102. `just features` now checks both sequences.) Presets (§6) make the
    common combinations one word.
 3. **Parts that only glue two features follow them automatically and have no option of their
    own.** Lua's `http` table exists when both LUA and HTTP do; SFTP when SSH and FILES do;
@@ -661,7 +663,8 @@ other ranges; leave those out too.
 
 ### 10.1 Phase 3 as built
 
-- `cmake/features.cmake`: `sos_feature()` declares an option with its `NEEDS` and default;
+- `cmake/features.cmake`: `sos_feature()` declares an option (AUTO, ON or OFF) with its
+  `NEEDS` and default, and resolves AUTO without caching it;
   `sos_features_apply()` checks the needs, defines `SOS_HAVE_<NAME>` 0 or 1 and
   `SOS_FEATURE_LIST` on the target, and prints `SOS features: ...` at configure. NET defaults to
   `PICO_CYW43_SUPPORTED`; a feature defaults to off while a need is off (decision 2).
