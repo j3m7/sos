@@ -25,7 +25,7 @@ static bool says(const char *part) {
 
 static statecheck_config_t cfg(config_slot_kind_t a, uint32_t seq_a, config_slot_kind_t b,
                                uint32_t seq_b) {
-    statecheck_config_t c = {true, {{a, 2, 2188, seq_a}, {b, 2, 2188, seq_b}}};
+    statecheck_config_t c = {true, {{a, 2, 2292, seq_a}, {b, 2, 2292, seq_b}}};
     return c;
 }
 

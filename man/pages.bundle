@@ -838,22 +838,22 @@ DESCRIPTION
     Scripts have the base, string, table, math, utf8 and coroutine libraries,
     'require' (modules from /lib and the working directory, Lua source only),
     and the 'sos' library: sos.read/write/append/list/remove/mkdir,
-    rename/copy/stat/exists and sos.sd.info for files;
-    sos.time, sos.uptime, sos.date (os.date's formats, in UTC), sos.clock,
+    rename/copy/stat/exists and sos.sd.info for files; sos.time, sos.uptime,
+    sos.date (os.date's formats, in UTC), sos.localdate, sos.localtime and
+    sos.zone (the same in the board's time zone, 'time zone'), sos.clock,
     sos.clock_sync, sos.who, sos.ssh.status, sos.tls.roots, sos.wall,
     sos.random, sos.sleep, sos.log; timers sos.every/after/cancel (a
     background script keeps going while timers are left); sos.wifi.scan,
     sos.net.resolve and sos.ping; sos.http.get/post/head/request and
-    sos.http.download (into a file) for HTTPS (the response includes how
-    long the request took); tables about the board: sos.sensors, sos.mem,
-    sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and
-    sos.health (the self-checks' latest results);
-    sos.dmesg for the system log (with a cursor, for only the newer lines);
-    sos.hash, sos.hmac (SHA-1, SHA-2), sos.base64 and sos.json; and
-    sos.reboot([why]), refused until the board has been up 10 minutes.
-    There is no io, os or debug. Failures return nil and a message. Each
-    script may allocate up to 128 KB. Full details: docs/lua.md in the
-    repository.
+    sos.http.download (into a file) for HTTPS (the response includes how long
+    the request took); tables about the board: sos.sensors, sos.mem,
+    sos.version, sos.reset_reason, sos.glitch, sos.wifi.status and sos.health
+    (the self-checks' latest results); sos.dmesg for the system log (with a
+    cursor, for only the newer lines); sos.hash, sos.hmac (SHA-1, SHA-2),
+    sos.base64 and sos.json; and sos.reboot([why]), refused until the board
+    has been up 10 minutes. There is no io, os or debug. Failures return nil
+    and a message. Each script may allocate up to 128 KB. Full details:
+    docs/lua.md in the repository.
 
 SEE ALSO
     dmesg, logger, http, mem, health
@@ -1515,15 +1515,19 @@ SYNOPSIS
     time auto [<hours> | off]           (change: console only)
     time cal [<ppm> | off]              (change: console only)
     time server [<name> | default]      (change: console only)
+    time zone [<name> | utc]            (change: console only)
+    time zone list [<prefix>]
+    time zone install
 
 DESCRIPTION
-    All times are UTC. The RTC (a PCF8523 on the Adalogger, with its coin
-    cell) is the source of truth: at boot the clock is set from it. Network
-    time comes from NTS (Network Time Security, authenticated NTP): a TLS key
-    exchange with the NTS server on port 4460, then NTP queries that only
-    accept replies that check out under the server's key. There is no
-    fallback to plain NTP: without NTS and without an RTC time, the clock
-    stays unset.
+    All times are UTC: the clock, the RTC, file times, logs. A time zone only
+    adds a line of local time to 'time' (see TIME ZONES). The RTC (a PCF8523
+    on the Adalogger, with its coin cell) is the source of truth: at boot the
+    clock is set from it. Network time comes from NTS (Network Time Security,
+    authenticated NTP): a TLS key exchange with the NTS server on port 4460,
+    then NTP queries that only accept replies that check out under the
+    server's key. There is no fallback to plain NTP: without NTS and without
+    an RTC time, the clock stays unset.
 
     'time' shows the date and time and where it came from (RTC, NTS or SNTP),
     the RTC's reading and backup-battery state, the calibration, the drift
@@ -1560,6 +1564,36 @@ DESCRIPTION
     new drift. The next sync after a change starts a new measurement. 'time
     cal off' removes it. Saved, and written into the RTC at boot if the chip
     doesn't have it.
+
+TIME ZONES
+    'time zone <name>' sets the zone 'time' shows local time in, by its IANA
+    name (Europe/Madrid, America/New_York; case doesn't matter, and a space
+    may stand for '_'). The name is looked up in /tz/zones.bundle on the
+    card, and the name and the zone's rule (a POSIX TZ string such as
+    CET-1CEST,M3.5.0,M10.5.0/3) are saved, so local time shows with the card
+    out too. A name that isn't found gets the closest ones. 'time zone utc'
+    clears it. Then 'time' adds a line:
+
+        local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
+
+    'time zone' shows the zone, its rule, local time, and the tzdata release
+    of the card's bundle; if the card's rule for the zone differs from the
+    saved one, it says so, and 'time zone <name>' again takes the card's.
+
+    'time zone list' lists the zones on the card with their rules, those
+    starting with <prefix> if one is given; 'time zone list europe/ | more'
+    pages them.
+
+    'time zone install' downloads tz/zones.bundle from the main branch of
+    the SOS repository on GitHub into /tz (the board needs the network),
+    checks every line of it, and says whether the saved zone's rule changed.
+    It works from any shell, SSH included, on purpose: the card can be
+    written over SFTP anyway, and only 'time zone <name>' on the console
+    changes the setting. From a computer, tools/tz-install.sh <host> copies
+    it over SFTP. The bundle is built from IANA's signed tzdata releases.
+
+    Only what is shown changes. Log files, file times (ls, SFTP), chat and
+    wall stamps and log rotation stay UTC and say so.
 
 SEE ALSO
     nts, tls, config

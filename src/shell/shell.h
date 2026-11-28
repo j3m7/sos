@@ -312,6 +312,11 @@ bool shell_busy(const shell_t *sh);
 // Bytes of output the channel takes now without waiting (jobs size their output by it).
 int shell_write_space(shell_t *sh);
 
+// For commands outside shell.c that change the configuration: true on an admin channel (the
+// console), else false after saying why; and settings_save(), saying so if it fails.
+bool shell_require_admin(shell_t *sh);
+void shell_save_settings(shell_t *sh);
+
 // The channel is gone (session ended): cancel a running job so it frees its resources, and
 // wipe the command history.
 void shell_end(shell_t *sh);

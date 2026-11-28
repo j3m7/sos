@@ -130,6 +130,33 @@ TEST(console_password_line) {
     CHECK_EQ(cfg.console_password[0], '\0');
 }
 
+// tz = <name> is looked up in tz/zones.bundle, as on the board, and both fields go into the image.
+TEST(time_zone_line) {
+    sos_config_t cfg, back;
+    mkconfig_set_bundle(TZ_BUNDLE);
+    CHECK(!parse("wifi_ssid = net\ntz = europe/madrid\n", &cfg));
+    CHECK(!strcmp(cfg.tz_name, "Europe/Madrid"));
+    CHECK(!strcmp(cfg.tz_rule, "CET-1CEST,M3.5.0,M10.5.0/3"));
+    static uint8_t image[MKCONFIG_IMAGE_SIZE];
+    CHECK(mkconfig_image(&cfg, image));
+    const config_store_t store = {rd, wr, image, NULL, false};
+    CHECK(config_load(&store, &back, NULL));
+    CHECK(!strcmp(back.tz_name, "Europe/Madrid"));
+    CHECK(!strcmp(back.tz_rule, "CET-1CEST,M3.5.0,M10.5.0/3"));
+    CHECK(!parse("tz = Europe/Madrid\ntz = UTC\n", &cfg));
+    CHECK_EQ(cfg.tz_name[0], '\0');
+    const char *err = parse("wifi_ssid = net\ntz = Europe/Madird\n", &cfg);
+    CHECK(err && strstr(err, "line 2: tz: no zone Europe/Madird") &&
+          strstr(err, "did you mean Europe/Madrid"));
+    err = parse("tz = A234567890123456789012345678901234567890\n", &cfg);
+    CHECK(err && strstr(err, "that long"));
+    mkconfig_set_bundle(NULL);
+    err = parse("tz = Europe/Madrid\n", &cfg);
+    CHECK(err && strstr(err, "can't be read"));
+    CHECK(!parse("wifi_ssid = net\n", &cfg));            // no tz line: no bundle needed
+    CHECK_EQ(cfg.tz_name[0], '\0');
+}
+
 TEST(glitch_detector_line) {
     sos_config_t cfg;
     CHECK(!parse("wifi_ssid = net\n", &cfg));
@@ -194,6 +221,7 @@ TEST(bad_wifi_lists_name_the_line) {
 }
 
 TEST_MAIN(
+    RUN(time_zone_line);
     RUN(several_wifi_networks_in_order);
     RUN(password_before_the_ssid);
     RUN(bad_wifi_lists_name_the_line);

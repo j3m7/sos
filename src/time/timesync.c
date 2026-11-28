@@ -18,6 +18,7 @@
 #include "time/nts.h"
 #include "time/rtc.h"
 #include "time/timeconv.h"
+#include "time/tzzone.h"
 
 // Set by CMake: the configure time (or SOURCE_DATE_EPOCH). No valid time can be earlier.
 #ifndef SOS_BUILD_EPOCH
@@ -541,6 +542,7 @@ void timesync_status(shell_t *sh) {
     } else {
         timeconv_format(now_us() / 1000000, buf, sizeof(buf));
         shell_printf(sh, "time:   %s UTC (%s)\n", buf, names[source]);
+        tzzone_print_local(sh, now_us() / 1000000);
     }
 
     int64_t t;

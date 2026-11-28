@@ -25,6 +25,7 @@
 #include "core/fault.h"
 #include "core/heaptag.h"
 #include "core/log.h"
+#include "core/settings.h"
 #include "core/wdog.h"
 #include "files/files.h"
 #include "files/path.h"
@@ -947,6 +948,8 @@ static const char *start_job(shell_t *sh, const char *code, const char *path, co
         snprintf(job_tag, sizeof(job_tag), "lua prompt");
     }
     snprintf(lua_job.cwd, sizeof(lua_job.cwd), "%s", cwd);
+    snprintf(lua_job.tz_name, sizeof(lua_job.tz_name), "%s", settings()->tz_name);
+    snprintf(lua_job.tz_rule, sizeof(lua_job.tz_rule), "%s", settings()->tz_rule);
     lua_job.mem_limit = LUA_MEM_LIMIT;
     lua_out.head = lua_out.tail = 0;
     lua_req.pending = lua_req.done = false;

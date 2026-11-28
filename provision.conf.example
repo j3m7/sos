@@ -35,6 +35,8 @@ ssh_key = ssh-ed25519 AAAA... user@host
 # glitch_detector = watch 3      (glitch detector: "off"; a sensitivity 0-3, armed: a trigger resets
 #                                 the board; or "watch" and a sensitivity: a trigger is only
 #                                 logged. Default: armed at 3, the highest)
+# tz = Europe/Madrid             (time zone `time` shows local time in, by IANA name, from
+#                                 tz/zones.bundle; default none: UTC only. Times kept stay UTC)
 # rtc_cal_ppm = 92               (how fast the RTC runs, in ppm; negative: slow; default 0)
 # temp_cal = 1.8                 (degrees added to the chip temperature, as `temp cal` measured
 #                                 it; -15.0 to 15.0; default 0 = uncalibrated)

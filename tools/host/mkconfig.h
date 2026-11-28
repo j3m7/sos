@@ -19,9 +19,13 @@
 // wifi_password (may repeat: up to 5 networks, in the order preferred; each wifi_ssid starts a
 // network and the wifi_password after it, if any, is its password), wifi_powersave (on|off),
 // hostname, ssh_user (only older firmware uses it), ssh_key (an authorized_keys line; may
-// repeat), nts_server, nts_sync_hours.
+// repeat), nts_server, nts_sync_hours, tz (a zone's IANA name, looked up in the bundle given to
+// mkconfig_set_bundle(); "utc" for none).
 // Returns NULL, or a message (in errbuf) naming the line.
 const char *mkconfig_parse(char *text, sos_config_t *cfg, char *errbuf, size_t errlen);
+
+// Where `tz` lines look zones up: tz/zones.bundle (NULL: a tz line is an error).
+void mkconfig_set_bundle(const char *path);
 
 // The flash image for the two config slots: cfg saved in the first, the second erased (0xff), so
 // whatever the board had saved before is gone. False if the record doesn't read back.

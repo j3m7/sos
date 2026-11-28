@@ -214,37 +214,70 @@ static int l_reboot(lua_State *L) {
     return fail(L);
 }
 
-// sos.time(): seconds since 1970 (UTC), or nil and why if the clock isn't set. sos.time(table):
-// that date and time in seconds, as os.time() (lua_date.c; no clock needed).
-static int l_time(lua_State *L) {
-    if (!lua_isnoneornil(L, 1)) {
-        lua_pushinteger(L, (lua_Integer)lua_date_from_table(L, 1));
-        return 1;
-    }
+// The zone the script started with (lua_job.tz_rule), parsed into *r: r, or NULL for UTC (none
+// set, or a saved rule that doesn't parse, which `time` reports).
+static const tzrule_t *zone(tzrule_t *r) {
+    return lua_job.tz_name[0] && tzrule_parse(lua_job.tz_rule, r, NULL) ? r : NULL;
+}
+
+// The time now into *t; false if the clock isn't set (lua_req.error says so).
+static bool now(int64_t *t) {
     lua_req.type = LR_TIME;
     request();
-    if (lua_req.result <= 0)
+    *t = lua_req.result;
+    return lua_req.result > 0;
+}
+
+// sos.time(): seconds since 1970 (UTC), or nil and why if the clock isn't set. sos.time(table):
+// that date and time (UTC) in seconds, as os.time() (lua_date.c; no clock needed).
+// sos.localtime(table): the same with the table read as local time in the board's zone.
+static int time_of(lua_State *L, bool local) {
+    tzrule_t r;
+    if (local || !lua_isnoneornil(L, 1)) {
+        lua_pushinteger(L, (lua_Integer)lua_date_from_table(L, 1, local ? zone(&r) : NULL));
+        return 1;
+    }
+    int64_t t;
+    if (!now(&t))
         return fail(L);
-    lua_pushinteger(L, (lua_Integer)lua_req.result);
+    lua_pushinteger(L, (lua_Integer)t);
     return 1;
 }
 
+static int l_time(lua_State *L) { return time_of(L, false); }
+static int l_localtime(lua_State *L) { return time_of(L, true); }
+
 // sos.date([format [, t]]): like os.date, in UTC (lua_date.c). Without t, the time now: nil and
-// why if the clock isn't set.
-static int l_date(lua_State *L) {
+// why if the clock isn't set. sos.localdate: the same in the board's zone ("!" still means UTC).
+static int date_of(lua_State *L, bool local) {
     const char *fmt = luaL_optstring(L, 1, LUA_DATE_DEFAULT);
     int64_t t;
     if (lua_isnoneornil(L, 2)) {
-        lua_req.type = LR_TIME;
-        request();
-        if (lua_req.result <= 0)
+        if (!now(&t))
             return fail(L);
-        t = lua_req.result;
     } else {
         t = (int64_t)luaL_checkinteger(L, 2);
     }
-    lua_date_push(L, fmt, t);
+    tzrule_t r;
+    lua_date_push(L, fmt, t, local ? zone(&r) : NULL);
     return 1;
+}
+
+static int l_date(lua_State *L) { return date_of(L, false); }
+static int l_localdate(lua_State *L) { return date_of(L, true); }
+
+// sos.zone(): the board's time zone as the script started with it: its name and POSIX rule, or
+// "UTC" and nil when none is set (or its saved rule isn't usable).
+static int l_zone(lua_State *L) {
+    tzrule_t r;
+    if (!zone(&r)) {
+        lua_pushliteral(L, "UTC");
+        lua_pushnil(L);
+        return 2;
+    }
+    lua_pushstring(L, lua_job.tz_name);
+    lua_pushstring(L, lua_job.tz_rule);
+    return 2;
 }
 
 static int l_uptime(lua_State *L) {
@@ -1287,6 +1320,7 @@ static const luaL_Reg sos_lib[] = {
     {"cancel", l_cancel}, {"sensors", l_sensors}, {"mem", l_mem},     {"version", l_version},
     {"reset_reason", l_reset_reason},           {"glitch", l_glitch}, {"dmesg", l_dmesg},
     {"reboot", l_reboot}, {"date", l_date},     {"clock", l_clock},   {"hash", l_hash},
+    {"localdate", l_localdate},                 {"localtime", l_localtime}, {"zone", l_zone},
     {"hmac", l_hmac},     {"health", l_health}, {"who", l_who},       {"wall", l_wall},
     {"clock_sync", l_clock_sync},               {"random", l_random}, {"rename", l_rename},
     {"copy", l_copy},     {"stat", l_stat},     {"exists", l_exists}, {"ping", l_ping},

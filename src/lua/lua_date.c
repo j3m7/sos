@@ -11,6 +11,7 @@
 #include "lauxlib.h"
 #include "lua.h"
 #include "time/timeconv.h"
+#include "time/tzrule.h"
 
 static const char *const wday_names[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
                                          "Thursday", "Friday", "Saturday"};
@@ -61,12 +62,42 @@ static int yday_of(const timeconv_cal_t *c) {
                  timeconv_days_from_civil(c->year, 1, 1)) + 1;
 }
 
-static bool format(buf_t *b, const char *fmt, const timeconv_cal_t *cal, int64_t t,
-                   const char **bad);
+// The time being formatted: its calendar fields (local, when a zone is given), the UTC seconds
+// (%s), and the offset and abbreviation in force (%z, %Z).
+typedef struct {
+    timeconv_cal_t cal;
+    int64_t t;
+    int32_t offset;
+    const char *abbr;
+    bool dst;
+} when_t;
+
+static when_t when_of(int64_t t, const tzrule_t *zone) {
+    when_t w = {.t = t, .abbr = "UTC"};
+    if (zone) {
+        tzrule_local_t l = tzrule_at(zone, t);
+        w.offset = l.offset;
+        w.abbr = l.abbr;
+        w.dst = l.dst;
+    }
+    timeconv_to_cal(t + w.offset, &w.cal);
+    return w;
+}
+
+// %z: +hhmm (an offset's seconds, which no zone in the bundle has, are dropped as strftime does).
+static void put_offset(buf_t *b, int32_t offset) {
+    uint32_t a = offset < 0 ? (uint32_t)-(int64_t)offset : (uint32_t)offset;
+    puts_(b, offset < 0 ? "-" : "+");
+    put2(b, (int)(a / 3600 % 100));
+    put2(b, (int)(a / 60 % 60));
+}
+
+static bool format(buf_t *b, const char *fmt, const when_t *w, const char **bad);
 
 // One conversion (the character after '%'); false if it isn't one this formatter knows.
 // Composite ones are formats of their own (what the C locale gives).
-static bool convert(buf_t *b, char c, const timeconv_cal_t *cal, int64_t t) {
+static bool convert(buf_t *b, char c, const when_t *w) {
+    const timeconv_cal_t *cal = &w->cal;
     const char *sub = NULL;
     switch (c) {
     case 'a': put(b, wday_names[cal->wday], 3); break;
@@ -90,7 +121,7 @@ static bool convert(buf_t *b, char c, const timeconv_cal_t *cal, int64_t t) {
     case 'p': puts_(b, cal->hour < 12 ? "AM" : "PM"); break;
     case 'r': sub = "%I:%M:%S %p"; break;
     case 'R': sub = "%H:%M"; break;
-    case 's': putnum(b, (long long)t, 1, '0'); break;
+    case 's': putnum(b, (long long)w->t, 1, '0'); break;
     case 'S': put2(b, cal->sec); break;
     case 't': puts_(b, "\t"); break;
     case 'T':
@@ -99,23 +130,22 @@ static bool convert(buf_t *b, char c, const timeconv_cal_t *cal, int64_t t) {
     case 'w': putnum(b, cal->wday, 1, '0'); break;
     case 'y': put2(b, cal->year % 100); break;
     case 'Y': putnum(b, cal->year, 1, '0'); break;
-    case 'z': puts_(b, "+0000"); break;
-    case 'Z': puts_(b, "UTC"); break;
+    case 'z': put_offset(b, w->offset); break;
+    case 'Z': puts_(b, w->abbr); break;
     case '%': puts_(b, "%"); break;
     default: return false;
     }
     const char *unused;
-    return !sub || format(b, sub, cal, t, &unused);
+    return !sub || format(b, sub, w, &unused);
 }
 
-static bool format(buf_t *b, const char *fmt, const timeconv_cal_t *cal, int64_t t,
-                   const char **bad) {
+static bool format(buf_t *b, const char *fmt, const when_t *w, const char **bad) {
     for (const char *p = fmt; *p && !b->full; p++) {
         if (*p != '%') {
             put(b, p, 1);
             continue;
         }
-        if (!convert(b, p[1], cal, t)) {
+        if (!convert(b, p[1], w)) {
             *bad = p;
             return false;
         }
@@ -124,11 +154,11 @@ static bool format(buf_t *b, const char *fmt, const timeconv_cal_t *cal, int64_t
     return true;
 }
 
-int lua_date_format(char *out, size_t cap, const char *fmt, int64_t t, const char **bad) {
-    timeconv_cal_t cal;
-    timeconv_to_cal(t, &cal);
+int lua_date_format_in(char *out, size_t cap, const char *fmt, int64_t t, const tzrule_t *zone,
+                       const char **bad) {
+    when_t w = when_of(t, zone);
     buf_t b = {out, cap, 0, cap == 0};
-    if (!format(&b, fmt, &cal, t, bad))
+    if (!format(&b, fmt, &w, bad))
         return -1;
     if (b.full) {
         *bad = fmt + strlen(fmt);
@@ -138,35 +168,41 @@ int lua_date_format(char *out, size_t cap, const char *fmt, int64_t t, const cha
     return (int)b.len;
 }
 
+int lua_date_format(char *out, size_t cap, const char *fmt, int64_t t, const char **bad) {
+    return lua_date_format_in(out, cap, fmt, t, NULL, bad);
+}
+
 static void set_int(lua_State *L, const char *name, lua_Integer v) {
     lua_pushinteger(L, v);
     lua_setfield(L, -2, name);
 }
 
-void lua_date_push(lua_State *L, const char *fmt, int64_t t) {
+void lua_date_push(lua_State *L, const char *fmt, int64_t t, const tzrule_t *zone) {
     if (t < LUA_DATE_MIN || t > LUA_DATE_MAX)
         luaL_error(L, "time out of range (years 1 to 9999)");
-    if (*fmt == '!')
-        fmt++;                                  // always UTC
+    if (*fmt == '!') {
+        fmt++;                                  // UTC, as os.date
+        zone = NULL;
+    }
     if (!strcmp(fmt, "*t")) {
-        timeconv_cal_t c;
-        timeconv_to_cal(t, &c);
+        when_t w = when_of(t, zone);
+        const timeconv_cal_t *c = &w.cal;
         lua_createtable(L, 0, 9);
-        set_int(L, "year", c.year);
-        set_int(L, "month", c.month);
-        set_int(L, "day", c.day);
-        set_int(L, "hour", c.hour);
-        set_int(L, "min", c.min);
-        set_int(L, "sec", c.sec);
-        set_int(L, "wday", c.wday + 1);
-        set_int(L, "yday", yday_of(&c));
-        lua_pushboolean(L, 0);
+        set_int(L, "year", c->year);
+        set_int(L, "month", c->month);
+        set_int(L, "day", c->day);
+        set_int(L, "hour", c->hour);
+        set_int(L, "min", c->min);
+        set_int(L, "sec", c->sec);
+        set_int(L, "wday", c->wday + 1);
+        set_int(L, "yday", yday_of(c));
+        lua_pushboolean(L, w.dst);
         lua_setfield(L, -2, "isdst");
         return;
     }
     char out[LUA_DATE_OUT_MAX];
     const char *bad;
-    int n = lua_date_format(out, sizeof(out), fmt, t, &bad);
+    int n = lua_date_format_in(out, sizeof(out), fmt, t, zone, &bad);
     if (n < 0) {
         if (*bad)
             luaL_error(L, "invalid conversion '%%%c' to 'sos.date'", bad[1] ? bad[1] : ' ');
@@ -194,7 +230,24 @@ static int field(lua_State *L, int idx, const char *name, int def) {
     return (int)v;
 }
 
-int64_t lua_date_from_table(lua_State *L, int idx) {
+// The UTC time of wall time w (calendar seconds, as if UTC) in zone. A wall time that comes twice
+// (the clock set back) is the earlier, unless isdst (-1: not given) picks; one the clock skipped
+// (set forward) is read with the offset before the change, so it lands that much later.
+int64_t lua_date_wall_to_utc(int64_t w, const tzrule_t *zone, int isdst) {
+    if (!zone || !zone->dst[0])
+        return w - (zone ? zone->std_off : 0);
+    int64_t ts = w - zone->std_off, td = w - zone->dst_off;
+    bool std_ok = !tzrule_at(zone, ts).dst, dst_ok = tzrule_at(zone, td).dst;
+    if (std_ok && dst_ok)
+        return isdst == 1 ? td : isdst == 0 ? ts : (ts < td ? ts : td);
+    if (std_ok)
+        return ts;
+    if (dst_ok)
+        return td;
+    return ts > td ? ts : td;                   // skipped: the smaller offset, the one before
+}
+
+int64_t lua_date_from_table(lua_State *L, int idx, const tzrule_t *zone) {
     luaL_checktype(L, idx, LUA_TTABLE);
     int year = field(L, idx, "year", -1), month = field(L, idx, "month", -1);
     int day = field(L, idx, "day", -1), hour = field(L, idx, "hour", 12);
@@ -202,6 +255,14 @@ int64_t lua_date_from_table(lua_State *L, int idx) {
     if (year < 1 - 10000 || year > 10000 + 9999)
         luaL_error(L, "time out of range (years 1 to 9999)");
     int64_t t = timeconv_from_tm(year - 1900, month - 1, day, hour, min, sec);
+    if (zone) {
+        int isdst = -1;
+        if (lua_getfield(L, idx, "isdst") != LUA_TNIL)
+            isdst = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+        if (t >= LUA_DATE_MIN && t <= LUA_DATE_MAX)
+            t = lua_date_wall_to_utc(t, zone, isdst);
+    }
     if (t < LUA_DATE_MIN || t > LUA_DATE_MAX)
         luaL_error(L, "time out of range (years 1 to 9999)");
     return t;

@@ -250,6 +250,9 @@ set(SOS_SOURCES
     src/time/timeconv.c
     src/time/utc_libc.c
     src/time/timesync.c
+    src/time/tzrule.c
+    src/time/tzbundle.c
+    src/time/tzzone.c
     src/time/nts.c
     src/time/nts_ke.c
     src/time/nts_ntp.c

@@ -3,7 +3,8 @@
 The Adalogger's PCF8523 RTC (I2C0: SDA GP4, SCL GP5), kept running by its CR1220 coin cell,
 is the source of truth for wall-clock time. At boot SOS sets the system clock (`time()`,
 `gettimeofday()`) from it and turns on the chip's battery switch-over, which is off by default.
-All times are UTC.
+All times are UTC. A time zone only adds local time to what `time` shows (see
+[Time zones](#time-zones)).
 
 Network time comes from **NTS** (Network Time Security, RFC 8915): NTP whose replies are
 authenticated. SOS does a TLS key exchange with the NTS server (TCP port 4460), then sends
@@ -101,3 +102,48 @@ never judges while the uncertainty straddles a line.
 After running older firmware: an older image's sync sets the RTC without recording it, so the
 first measurement back reads too small (nearer zero) once; that sync starts a new baseline. Sync
 twice after running older firmware before trusting the figure.
+
+## Time zones
+
+Everything the board keeps is UTC: the clock, the RTC, file times, log files and log rotation.
+Chat and wall stamps and `ls` say `UTC`. A time zone only changes what `time` shows: one more
+line, after the UTC one.
+
+```
+time:   2026-11-27 13:03:05 UTC (from nts, authenticated)
+local:  2026-11-27 14:03:05 CET (UTC+01:00, Europe/Madrid)
+```
+
+- **`time zone <name>`** (console only) sets it by IANA name (`Europe/Madrid`,
+  `America/New_York`). Case doesn't matter, and a space can stand for `_`. The name is looked up
+  in `/tz/zones.bundle` on the card. A name that isn't there gets the closest ones (`madrid`
+  offers `Europe/Madrid`). The name and the zone's rule, a POSIX TZ string such as
+  `CET-1CEST,M3.5.0,M10.5.0/3`, are saved in the configuration, so local time shows with the
+  card out too.
+- **`time zone utc`** (console only) clears it.
+- **`time zone`** shows the zone, its rule, local time, and the tzdata release of the card's
+  bundle. If the card's rule for the zone differs from the saved one (the card has a newer
+  release), it says so, and `time zone <name>` again takes the card's rule.
+- **`time zone list [<prefix>]`** lists the card's zones with their rules. `time zone list
+  europe/ | more` pages them.
+- **`time zone install`** downloads `tz/zones.bundle` from this repository's main branch on
+  GitHub (not from the firmware's commit, so a board gets a tzdata update without a reflash). It
+  writes `/tz/zones.~new`, checks that every line is a zone with a rule the board can use, then
+  renames it into place, so a failed download leaves the old bundle. It then says whether the
+  saved zone's rule changed. It works from any shell, SSH included, because the card can be
+  written over SFTP anyway and only `time zone <name>` on the console changes the setting. It
+  isn't available while `sd check` has the card. On dev-1 (an encrypted exFAT card) it took
+  about 0.8 s in all. Each pass over the bundle (the check here, or a `time zone` lookup) is
+  about 100 ms, done in one go.
+- **`tools/tz-install.sh [user@]<host>`** copies the same file over SFTP.
+- **`tz = <name>`** in the provisioning file sets it when provisioning: `tools/provision.sh`
+  looks the name up in the repository's `tz/zones.bundle`, so a new board shows local time
+  before any card is in.
+- **Lua scripts** get UTC from `sos.date` and `sos.time`, and local time only by asking:
+  `sos.localdate`, `sos.localtime` and `sos.zone()` (see [Local time](lua.md#local-time)).
+
+The bundle holds each zone's current rule, not its history: local time is right from the
+release's date onwards, which is what a clock needs. It is built from IANA's signed tzdata
+release (see "Time zone bundle" in [development.md](development.md#time-zone-bundle)). A rule
+is the footer `zic` writes into each compiled zone; `src/time/tzrule.c` reads it, with
+RFC 9636's extensions, and is checked against the C library for every zone in the bundle.
