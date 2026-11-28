@@ -13,9 +13,13 @@ SYNOPSIS
 
 DESCRIPTION
     'sd' (or 'sd info') shows the card and volume information, the SPI clock,
-    and whether the card is encrypted, with its card id. 'sd speed' shows the
-    SPI clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
-    reinitializes the card; not saved.
+    and whether the card is encrypted, with its card id, then the bus's errors
+    since the card was last started and since boot: reads and writes that
+    failed after the driver's retries, errors it retried, and timeouts (what
+    the sd-bus health check judges; see 'health'). 'sd speed' shows the SPI
+    clock, set and actual; 'sd speed <MHz>' sets it (1 to 75) and
+    reinitializes the card; not saved. Above 25 MHz, the SD standard's limit,
+    any error the driver has to retry is a health warning.
 
     'sd unmount' unmounts the card before it is taken out; refused while a
     file is open. No card-detect switch is wired by default, so the board

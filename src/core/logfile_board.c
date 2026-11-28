@@ -144,7 +144,7 @@ static void retry_mount(void) { sdcard_mount_retry(); }
 
 static const logfile_hooks_t hooks = {
     now_us, wall_us, sdcard_mounted, sdcard_generation, append, boot_text, retry_mount,
-    rotate_file, load_rotated, save_rotated,
+    rotate_file, load_rotated, save_rotated, sdcard_last_mount_us,
 };
 
 void logfile_apply_settings(void) {

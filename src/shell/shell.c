@@ -37,6 +37,8 @@
 #include "core/heaptag.h"
 #include "core/history.h"
 #include "core/bgcheck_board.h"
+#include "core/countcheck.h"
+#include "core/countcheck_board.h"
 #include "core/fullcheck_board.h"
 #include "core/log.h"
 #ifdef SOS_TEST_COMMANDS
@@ -66,6 +68,7 @@
 #include "net/http.h"
 #include "net/ping.h"
 #include "net/wifi.h"
+#include "net/wifistat.h"
 #include "ssh/hostkey.h"
 #include "ssh/sshd.h"
 #include "time/nts.h"
@@ -950,6 +953,17 @@ static void wifi_stats(shell_t *sh, bool chip) {
                  (unsigned)seg.max, (unsigned)seg.avail, (unsigned)seg.err, (unsigned)pcb.max,
                  (unsigned)pcb.avail, (unsigned)pcb.err, (unsigned)st.mem.max,
                  (unsigned)st.mem.avail, (unsigned)st.mem.err);
+    // The driver's errors and the link's drops (docs/design/health.md §9.9: the `wifi` check).
+    wifistat_t ws;
+    wifistat_get(&ws);
+    wifi_counts_t wc;
+    wifi_counts(&wc);
+    char fw[16];
+    countcheck_fw_version(wc.ver, fw, sizeof(fw));
+    shell_printf(sh, "driver: %u timeouts, %u bus, %u io, %u tx, %u other since boot; %u link "
+                     "drops; firmware %s\n", (unsigned)ws.timeout, (unsigned)ws.bus,
+                 (unsigned)ws.io, (unsigned)ws.tx, (unsigned)ws.other, (unsigned)wc.drops,
+                 fw[0] ? fw : "unknown");
     if (!chip)
         return;
     // The chip's counters come as a version/length word and 32-bit values. Their layout differs
@@ -1107,6 +1121,19 @@ static void cmd_wifi(shell_t *sh, char *args) {
                 "wifi: keepalive %s (until reboot)", wifi_keepalive() ? "on" : "off");
     } else if (!strcmp(args, "stats") || !strcmp(args, "stats chip")) {
         wifi_stats(sh, args[5] != 0);
+#ifdef SOS_TEST_COMMANDS
+    } else if (!strcmp(args, "fault drop")) {
+        // Test builds (docs/design/health.md §9.9): a link drop nobody asked for, as the `wifi`
+        // check counts one; wifi.c sees the link go and reconnects.
+        if (!require_admin(sh))
+            return;
+        if (wifi_fault_drop()) {
+            log_msg(SOS_LOG_DAEMON | SOS_LOG_NOTICE, "wifi: fault: link dropped (test command)");
+            shell_printf(sh, "dropped: wifi reconnects as after a real drop\n");
+        } else {
+            shell_printf(sh, "not connected\n");
+        }
+#endif
     } else if (!strncmp(args, "iovar ", 6)) {
         // Debugging only: `wifi iovar <name> [value]` reads or writes a chip variable.
         if (!require_admin(sh))
@@ -2345,11 +2372,15 @@ static void cmd_health(shell_t *sh, char *args) {
         statecheck_board_dump(health_print_wrapped, sh);
         bgcheck_board_dump(health_print_wrapped, sh);
         fullcheck_board_dump(health_print_wrapped, sh);
+        countcheck_board_dump(health_print_wrapped, sh);
         return;
     }
     bool walk = w1 && !strcmp(w1, "heap-walk") && !w2;
     bool fill = w1 && !strcmp(w1, "history-fill") && !w2;
-    bool fault = w1 && !strcmp(w1, "fault") && w2 && !w4;
+    // `health fault wifi timeout|bus <n>` takes a fourth word; the others at most three.
+    bool fault_wifi = w1 && !strcmp(w1, "fault") && w2 && !strcmp(w2, "wifi") &&
+                      !strtok(NULL, " ");
+    bool fault = w1 && !strcmp(w1, "fault") && w2 && (!w4 || fault_wifi);
 #else
     bool inject = false, times = false, diag = false, walk = false, fill = false, fault = false;
     (void)w4;
@@ -2369,11 +2400,15 @@ static void cmd_health(shell_t *sh, char *args) {
         return;
     }
     // §9.7: a fault for the next run of `ram` or `image` only.
+    // §9.9: driver errors counted now, as the Wi-Fi driver's hooks count them.
     if (fault) {
-        if (fullcheck_board_arm_fault(w2, w3))
+        if (fault_wifi && countcheck_board_wifi_fault(w3, w4))
+            shell_printf(sh, "counted as the driver's: health run wifi judges them\n");
+        else if (!fault_wifi && !w4 && fullcheck_board_arm_fault(w2, w3))
             shell_printf(sh, "armed for the next run of %s\n", w2);
         else
-            shell_printf(sh, "usage: health fault ram once|twice | health fault image\n");
+            shell_printf(sh, "usage: health fault ram once|twice | health fault image | "
+                             "health fault wifi timeout|bus <n>\n");
         return;
     }
     // Measurements for a board run (docs/design/health.md §9.2): they hold the loop a moment.
@@ -2548,6 +2583,9 @@ static const shell_word_t wifi_words[] = {
     {"country", (const shell_word_t[]){W("worldwide"), END}, SHELL_ADMIN},
     {"keepalive", on_off, SHELL_ADMIN},
     {"iovar", NULL, SHELL_ADMIN},
+#ifdef SOS_TEST_COMMANDS
+    {"fault", (const shell_word_t[]){W("drop"), END}, SHELL_ADMIN | SHELL_HIDDEN},
+#endif
     END};
 static const shell_word_t sd_words[] = {
     W("info"),
@@ -2557,7 +2595,8 @@ static const shell_word_t sd_words[] = {
     {"unmount", NULL, SHELL_ADMIN},
     {"check", (const shell_word_t[]){W("fix"), END}, SHELL_ADMIN},
 #ifdef SOS_TEST_COMMANDS
-    {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("off"), END}, SHELL_ADMIN},
+    {"fault", (const shell_word_t[]){W("fail"), W("reboot"), W("read"), W("off"), END},
+     SHELL_ADMIN},
 #endif
     END};
 static const shell_word_t lua_words[] = {

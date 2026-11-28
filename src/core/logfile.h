@@ -64,6 +64,12 @@ typedef struct {
     // none) and write.
     bool (*load_rotated)(int64_t *unix_s);
     bool (*save_rotated)(int64_t unix_s, const char **why);
+    // When the last attempt to mount a card, by anyone, ended (time since boot); NULL: unknown.
+    // A failed mount can hold the main loop for seconds (a card that won't initialise: about 4 s
+    // at 75 MHz, two driver inits of one 2 s timeout each), so the quiet retry waits
+    // LOGFILE_RETRY_MS after any attempt, not only its own: a retry in the same main-loop pass
+    // as `sd speed`'s failed mount made 8 s, the watchdog's limit, and reset the board.
+    uint64_t (*last_mount_us)(void);
 } logfile_hooks_t;
 
 typedef enum {

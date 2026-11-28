@@ -8,9 +8,10 @@
 #include <stdint.h>
 
 // Test builds only (-DSOS_TEST_COMMANDS=ON): faults injected into SD card writes, for testing
-// repair on a board (`sd fault`, docs/design/sd-check.md §10.4). This file counts and decides;
-// files/sdcard.c asks it once per write and does the failing or the reset. Pure C, so the host
-// tests run it.
+// repair on a board (`sd fault`, docs/design/sd-check.md §10.4), and into reads, for the
+// `sd-bus` health check (docs/design/health.md §9.9). This file counts and decides;
+// files/sdcard.c asks it once per write (and read) and does the failing or the reset. Pure C, so
+// the host tests run it.
 //
 // The count: one per write request that reaches the card driver (write_blocks_fed() in
 // sdcard.c). That is one FatFs disk_write on a plain card, one chunk of up to 8 sectors on an
@@ -53,5 +54,17 @@ void sdfault_off(void);
 sdfault_action_t sdfault_write(void);
 
 const sdfault_state_t *sdfault_state(void);
+
+// A read fault (`sd fault read <N>`, docs/design/health.md §9.9), counted apart from the writes:
+// read request N from now (one per read_blocks_logged() call in sdcard.c) fails with a CRC error
+// without reaching the card. A read changes nothing on the card. Arming replaces an armed read
+// fault; sdfault_off() disarms both. False (nothing changes) if n is 0 or over SDFAULT_MAX_N.
+bool sdfault_arm_read(uint32_t n);
+
+// One read request is about to go to the card: true to fail it instead. Fires once.
+bool sdfault_read(void);
+
+// The read fault armed: the read it fires at, and reads since arming; 0 at if none is armed.
+void sdfault_read_state(uint32_t *at, uint32_t *reads);
 
 #endif

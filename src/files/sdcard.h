@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "files/fsck.h"
+#include "files/sdstat.h"
 #include "shell/shell.h"
 
 // `sd [info|test [KB [keep]]|speed [MHz]|format [exfat|fat32] [plain]|unmount|check [fix]]`;
@@ -34,6 +35,10 @@ bool sdcard_mounted(void);
 
 // Is the mounted card exFAT (files over 4 GB minus 1 allowed)? False if none is mounted.
 bool sdcard_exfat(void);
+
+// When the last mount attempt ended (time since boot, us; 0: none yet), whoever asked and
+// however it ended: the log writer's quiet retry waits a minute after it (core/logfile.h).
+uint64_t sdcard_last_mount_us(void);
 
 // What `sd info` shows, as values (for Lua's sos.sd.info()). Mounts the card if it can; false
 // (and *info zeroed) if there's no card or it won't mount. total and free are the volume's bytes;
@@ -65,6 +70,14 @@ typedef struct {
     uint32_t generation;        // sdcard_generation()
 } sdcard_health_t;
 void sdcard_health_state(sdcard_health_t *out);
+
+// The card's bus, counted for the `sd-bus` health check (docs/design/health.md §9.9). From
+// sdcard.c's own wrappers around the driver (sectors moved, reads and writes that failed after the
+// driver's retries, initialisations) and from the driver's report lines (the retried errors:
+// CRC, commands, refused blocks, timeouts), counted by function (core/countcheck_names.h). Reads
+// RAM and the SPI block's divider: never touches the card or the driver, never mounts, so it is
+// safe while `sd check` or a format runs.
+void sdcard_counters(sdcard_counters_t *out);
 
 // The `sd-check` health check (docs/design/health.md §9.7): `sd check`'s job without a shell, its
 // report lines counted but not printed, its steps aimed at 6 ms. It starts only on a card that
